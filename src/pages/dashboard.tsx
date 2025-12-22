@@ -237,12 +237,12 @@ export default function Dashboard() {
 
   return (
     <div className="dashboard-shell">
-      <header className={`dash-nav ${scrollActive ? "scrolled" : ""}`}>
+      <aside className={`dash-nav ${scrollActive ? "scrolled" : ""}`}>
         <div className="brand">
           <span className="brand-mark">S2YD</span>
           <span className="brand-text">Stick2YourDreams</span>
         </div>
-        <div className="nav-actions">
+        <div className="nav-actions" style={{ flexDirection: "column", alignItems: "flex-start" }}>
           {user && (
             <span className="nav-user">
               {greeting}, {user.username}
@@ -259,9 +259,21 @@ export default function Dashboard() {
             Logout
           </button>
         </div>
-      </header>
+        <div className="nav-links">
+          <button className="btn ghost nav-btn" type="button" onClick={() => navigate("/")}>
+            Dashboard
+          </button>
+          <button className="btn ghost nav-btn" type="button" onClick={() => navigate("/friends")}>
+            Friends
+          </button>
+          <button className="btn ghost nav-btn" type="button" onClick={() => navigate("/me")}>
+            Me
+          </button>
+        </div>
+      </aside>
 
-      <div className="dash-hero">
+      <div className="main-content">
+        <div className="dash-hero">
         <div className="dash-hero__text">
           <p className="eyebrow">Stick2YourDreams</p>
           <h1>Posts</h1>
@@ -515,6 +527,7 @@ export default function Dashboard() {
           </div>
       </>
     )}
-  </div>
+      </div>
+      </div>
   );
 }
