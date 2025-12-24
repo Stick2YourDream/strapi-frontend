@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "start": "npx serve -s dist -l 4173"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
@@ -21,7 +22,8 @@
     "globals": "^16.5.0",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.46.4",
-    "vite": "npm:rolldown-vite@7.2.5"
+    "vite": "npm:rolldown-vite@7.2.5",
+    "serve": "^14.2.1"
   },
   "overrides": {
     "vite": "npm:rolldown-vite@7.2.5"
