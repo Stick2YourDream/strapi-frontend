@@ -7,23 +7,26 @@ import Dashboard from "../pages/dashboard";
 import ProtectedRoute from "../components/ProtectedRoute";
 import Friends from "../pages/friends";
 import Me from "../pages/me";
+import Landing from "../pages/landing";
 
 export default function AppRoutes(): JSX.Element {
   return (
     <Routes>
-      {/* Default landing page */}
+      {/* Public landing / home page */}
+      <Route path="/" element={<Landing />} />
+      <Route path="/home" element={<Landing />} />
+
+      {/* Login and Register pages */}
+      <Route path="/login" element={<Login />} />
+      <Route path="/register" element={<Register />} />
       <Route
-        path="/"
+        path="/dashboard"
         element={
           <ProtectedRoute>
             <Dashboard />
           </ProtectedRoute>
         }
       />
-
-      {/* Login and Register pages */}
-      <Route path="/login" element={<Login />} />
-      <Route path="/register" element={<Register />} />
       <Route
         path="/friends"
         element={
@@ -42,14 +45,7 @@ export default function AppRoutes(): JSX.Element {
       />
 
       {/* Optional additional routes */}
-      <Route
-        path="/dashboard"
-        element={
-          <ProtectedRoute>
-            <Dashboard />
-          </ProtectedRoute>
-        }
-      />
+      <Route path="/landing" element={<Landing />} />
     </Routes>
   );
 }

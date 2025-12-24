@@ -27,7 +27,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       if (new Date().getTime() < parseInt(expiresAt)) {
         setUser(JSON.parse(storedUser));
       } else {
-        localStorage.clear();
+        localStorage.removeItem("user");
+        localStorage.removeItem("token");
+        localStorage.removeItem("expiresAt");
       }
     }
 
@@ -63,7 +65,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const logout = () => {
     setUser(null);
-    localStorage.clear();
+    localStorage.removeItem("user");
+    localStorage.removeItem("token");
+    localStorage.removeItem("expiresAt");
   };
 
   return (

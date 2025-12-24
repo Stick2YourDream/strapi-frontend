@@ -1,10 +1,10 @@
 // src/pages/Me.tsx
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import "../css/dashboard.css";
 import { useAuth } from "../context/AuthContext";
 import api from "../api/strapi";
 import axios from "axios";
+import Sidebar from "../components/Sidebar";
 
 type Profile = {
   firstName: string;
@@ -16,6 +16,7 @@ type Profile = {
   occupation: string;
   bio: string;
   handle?: string;
+  avatarUrl?: string;
 };
 
 type MediaPost = {
@@ -25,8 +26,7 @@ type MediaPost = {
 };
 
 export default function Me() {
-  const { user, logout } = useAuth();
-  const navigate = useNavigate();
+  const { user } = useAuth();
 
   const [profileId, setProfileId] = useState<number | null>(null);
   const [profileDocId, setProfileDocId] = useState<string | null>(null);
@@ -122,6 +122,7 @@ export default function Me() {
         }
         if (mine?.attributes) {
           const attrs = normalize(mine);
+          const avatarUrl = pickMediaUrl(attrs.avatar);
           setProfileId(mine.id ?? null);
           setProfileDocId(mine.documentId ?? attrs.documentId ?? null);
           setProfile({
@@ -134,10 +135,12 @@ export default function Me() {
             occupation: attrs.occupation || "",
             bio: attrs.bio || "",
             handle: attrs.handle || "",
+            avatarUrl,
           });
           setEditing(false);
         } else if (mine) {
           const attrs = normalize(mine);
+          const avatarUrl = pickMediaUrl(attrs.avatar);
           setProfile({
             firstName: attrs.firstName || "",
             lastName: attrs.lastName || "",
@@ -148,6 +151,7 @@ export default function Me() {
             occupation: attrs.occupation || "",
             bio: attrs.bio || "",
             handle: attrs.handle || "",
+            avatarUrl,
           });
           setProfileId(mine.id ?? null);
           setProfileDocId(mine.documentId ?? attrs.documentId ?? null);
@@ -244,6 +248,7 @@ export default function Me() {
       }
 
       let avatarId: number | undefined;
+      let avatarUrl: string | undefined;
       if (avatarFile) {
         const fd = new FormData();
         fd.append("files", avatarFile);
@@ -251,6 +256,7 @@ export default function Me() {
           headers: { "Content-Type": "multipart/form-data" },
         });
         avatarId = uploadRes.data?.[0]?.id;
+        avatarUrl = pickMediaUrl(uploadRes.data?.[0]);
       }
 
       const data = { ...profile, firstName: safeFirst, handle: handleValue };
@@ -285,6 +291,9 @@ export default function Me() {
         });
         setProfileId(createRes.data?.data?.id || null);
         setProfileDocId(createRes.data?.data?.documentId || null);
+      }
+      if (avatarUrl) {
+        setProfile((prev) => ({ ...prev, avatarUrl }));
       }
       setSuccess("Profile saved successfully.");
       setSuccessModal("Profile saved successfully.");
@@ -415,41 +424,25 @@ export default function Me() {
           </div>
         </div>
       )}
-      <aside className="dash-nav">
-        <div className="brand">
-          <span className="brand-mark">S2YD</span>
-          <span className="brand-text">Stick2YourDreams</span>
-        </div>
-        <div className="nav-actions" style={{ flexDirection: "column", alignItems: "flex-start" }}>
-          <span className="nav-user">Me (@{user.username})</span>
-          <button
-            className="btn ghost nav-btn"
-            onClick={() => {
-              logout();
-              navigate("/login");
-            }}
-          >
-            Logout
-          </button>
-        </div>
-        <div className="nav-links">
-          <button className="btn ghost nav-btn" onClick={() => navigate("/")}>
-            Dashboard
-          </button>
-          <button className="btn ghost nav-btn" onClick={() => navigate("/friends")}>
-            Friends
-          </button>
-          <button className="btn ghost nav-btn" onClick={() => navigate("/me")}>
-            Me
-          </button>
-        </div>
-      </aside>
+      <Sidebar active="me" />
 
       <div className="main-content">
         <div className="dash-hero">
           <div className="dash-hero__text">
             <p className="eyebrow">Profile</p>
-            <h1>{profile.firstName || profile.lastName ? `${profile.firstName} ${profile.lastName}` : user.username}</h1>
+            <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+              {profile.avatarUrl && (
+                <img
+                  src={profile.avatarUrl}
+                  alt={profile.handle || user.username}
+                  className="avatar-octagon"
+                  style={{ width: 72, height: 72 }}
+                />
+              )}
+              <h1 style={{ margin: 0 }}>
+                {profile.firstName || profile.lastName ? `${profile.firstName} ${profile.lastName}` : user.username}
+              </h1>
+            </div>
             <p className="subhead">Edit your details and share media or text updates.</p>
           </div>
         </div>
@@ -457,6 +450,21 @@ export default function Me() {
         {loading && <p className="status">Loading profile…</p>}
         {error && <p className="status status-error">{error}</p>}
         {success && <p className="status status-success">{success}</p>}
+        {profile.avatarUrl && (
+          <div className="panel-grid" style={{ marginBottom: "12px" }}>
+            <section className="panel" style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+              <img
+                src={profile.avatarUrl}
+                alt={profile.handle || user.username}
+                style={{ width: 96, height: 96, borderRadius: "50%", objectFit: "cover", border: "2px solid rgba(255,255,255,0.1)" }}
+              />
+              <div>
+                <p className="eyebrow">Profile image</p>
+                <p className="subhead" style={{ margin: 0 }}>This is the avatar shown with your posts and messages.</p>
+              </div>
+            </section>
+          </div>
+        )}
         <div className="panel-grid">
           <section className="panel">
             <div className="panel-header">

@@ -5,6 +5,7 @@ import api from "../api/strapi";
 import axios from "axios";
 import "../css/dashboard.css";
 import { useAuth } from "../context/AuthContext";
+import Sidebar from "../components/Sidebar";
 
 type CommentItem = {
   id: string | number;
@@ -32,11 +33,10 @@ export default function Dashboard() {
   const [formFile, setFormFile] = useState<File | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [scrollActive, setScrollActive] = useState(false);
   const [commentInputs, setCommentInputs] = useState<Record<string | number, string>>({});
 
   const navigate = useNavigate();
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
 
   useEffect(() => {
     let cancelled = false;
@@ -103,15 +103,8 @@ export default function Dashboard() {
     };
 
     loadPosts();
-
-    const onScroll = () => {
-      setScrollActive(window.scrollY > 10);
-    };
-    window.addEventListener("scroll", onScroll);
-
     return () => {
       cancelled = true;
-      window.removeEventListener("scroll", onScroll);
     };
   }, [navigate]);
 
@@ -237,40 +230,7 @@ export default function Dashboard() {
 
   return (
     <div className="dashboard-shell">
-      <aside className={`dash-nav ${scrollActive ? "scrolled" : ""}`}>
-        <div className="brand">
-          <span className="brand-mark">S2YD</span>
-          <span className="brand-text">Stick2YourDreams</span>
-        </div>
-        <div className="nav-actions" style={{ flexDirection: "column", alignItems: "flex-start" }}>
-          {user && (
-            <span className="nav-user">
-              {greeting}, {user.username}
-            </span>
-          )}
-          <button
-            className="btn ghost nav-btn"
-            type="button"
-            onClick={() => {
-              logout();
-              navigate("/login");
-            }}
-          >
-            Logout
-          </button>
-        </div>
-        <div className="nav-links">
-          <button className="btn ghost nav-btn" type="button" onClick={() => navigate("/")}>
-            Dashboard
-          </button>
-          <button className="btn ghost nav-btn" type="button" onClick={() => navigate("/friends")}>
-            Friends
-          </button>
-          <button className="btn ghost nav-btn" type="button" onClick={() => navigate("/me")}>
-            Me
-          </button>
-        </div>
-      </aside>
+      <Sidebar active="dashboard" />
 
       <div className="main-content">
         <div className="dash-hero">

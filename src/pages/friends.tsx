@@ -1,9 +1,9 @@
 // src/pages/Friends.tsx
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import "../css/dashboard.css";
 import { useAuth } from "../context/AuthContext";
 import api from "../api/strapi";
+import Sidebar from "../components/Sidebar";
 
 type FriendPost = {
   id: number | string;
@@ -29,16 +29,30 @@ type FriendRelation = {
   status: "pending" | "accepted" | "blocked" | string;
 };
 
+const CHAT_STORE_KEY = "chatLogs_v1";
+const CHAT_TTL_MS = 4 * 365 * 24 * 60 * 60 * 1000; // ~4 years
+
 export default function Friends() {
-  const navigate = useNavigate();
   const { user } = useAuth();
 
   const [query, setQuery] = useState("");
   const [addHandle, setAddHandle] = useState("");
   const [profiles, setProfiles] = useState<FriendProfile[]>([]);
   const [friends, setFriends] = useState<FriendRelation[]>([]);
-  const [messages, setMessages] = useState<Record<string | number, string>>({});
+  const [messages, setMessages] = useState<Record<string, string>>({});
   const [postsByOwner, setPostsByOwner] = useState<Record<number, FriendPost[]>>({});
+  const [activeFriend, setActiveFriend] = useState<FriendProfile | null>(null);
+  const [popoutMinimized, setPopoutMinimized] = useState(false);
+  const [gifInput, setGifInput] = useState("");
+  const [chatLogs, setChatLogs] = useState<
+    Record<string, { id: string; body: string; from: "me" | "them"; at: string }[]>
+  >({});
+  const [linkMeta, setLinkMeta] = useState<Record<string, { title?: string; thumb?: string }>>({});
+  const linkMetaRef = useRef(linkMeta);
+
+  useEffect(() => {
+    linkMetaRef.current = linkMeta;
+  }, [linkMeta]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -260,18 +274,31 @@ export default function Friends() {
     }
   };
 
-  const sendMessage = async (recipientId?: number) => {
+  const sendMessage = async (recipientId?: string, overrideBody?: string) => {
     if (!recipientId) return;
-    const body = messages[recipientId] || "";
+    const body = overrideBody ?? messages[recipientId] ?? "";
     if (!body.trim()) return;
     try {
       await api.post("/messages", {
         data: {
           body,
-          recipient: recipientId,
+          recipient: Number(recipientId),
         },
       });
       setMessages((prev) => ({ ...prev, [recipientId]: "" }));
+      setGifInput("");
+      setChatLogs((prev) => ({
+        ...prev,
+        [recipientId]: [
+          ...(prev[recipientId] || []),
+          {
+            id: `${recipientId}-${Date.now()}`,
+            body,
+            from: "me",
+            at: new Date().toISOString(),
+          },
+        ],
+      }));
     } catch (err) {
       setError("Failed to send message");
     }
@@ -297,25 +324,174 @@ export default function Friends() {
     [friends, profiles, user?.id]
   );
 
+  const friendKey = (f: FriendProfile) => {
+    if (f.userId) return String(f.userId);
+    if (typeof f.id === "number") return String(f.id);
+    return undefined;
+  };
+
+  const fetchPreviewMeta = useCallback(
+    async (url: string, thumb?: string) => {
+      if (linkMetaRef.current[url]?.title) return;
+      let title: string | undefined = undefined;
+      try {
+        const res = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`);
+        if (res.ok) {
+          const data = await res.json();
+          title = data?.title || title;
+        }
+      } catch {
+        // ignore; fallback below
+      }
+      if (!title) {
+        try {
+          const u = new URL(url);
+          title = u.hostname.replace(/^www\./, "");
+        } catch {
+          title = "Link";
+        }
+      }
+      setLinkMeta((prev) => ({ ...prev, [url]: { title, thumb } }));
+    },
+    []
+  );
+
+  const extractLinks = (text: string) => {
+    const regex = /(https?:\/\/[^\s]+)/g;
+    return text.match(regex) || [];
+  };
+
+  const parseYouTubeId = (url: string) => {
+    try {
+      const u = new URL(url);
+      if (u.hostname.includes("youtube.com")) {
+        return u.searchParams.get("v");
+      }
+      if (u.hostname === "youtu.be") {
+        return u.pathname.replace("/", "") || null;
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  };
+
+  const pruneLogs = useCallback((logs: typeof chatLogs) => {
+    const cutoff = Date.now() - CHAT_TTL_MS;
+    const pruned: typeof chatLogs = {};
+    Object.entries(logs).forEach(([key, msgs]) => {
+      const filtered = msgs.filter((m) => {
+        const t = new Date(m.at).getTime();
+        return Number.isFinite(t) ? t >= cutoff : true;
+      });
+      if (filtered.length) pruned[String(key)] = filtered;
+    });
+    return pruned;
+  }, []);
+
+  // Load chat history from localStorage (persist ~4 years)
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(CHAT_STORE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      const data = parsed?.data ?? parsed;
+      if (data && typeof data === "object") {
+        const pruned = pruneLogs(data);
+        setChatLogs(pruned);
+      }
+    } catch {
+      // ignore malformed storage
+    }
+  }, [pruneLogs]);
+
+  // Persist chat history
+  useEffect(() => {
+    const pruned = pruneLogs(chatLogs);
+    localStorage.setItem(CHAT_STORE_KEY, JSON.stringify({ savedAt: Date.now(), data: pruned }));
+  }, [chatLogs, pruneLogs]);
+
+  const openChat = (f: FriendProfile) => {
+    const key = friendKey(f);
+    if (!key) return;
+    setActiveFriend(f);
+    setPopoutMinimized(false);
+    setChatLogs((prev) => {
+      if (prev[key]?.length) return prev;
+      const intro = {
+        id: `${key}-intro`,
+        body: "Start a conversation with text, emojis, GIF links, or media URLs.",
+        from: "them" as const,
+        at: new Date().toISOString(),
+      };
+      return { ...prev, [key]: [intro] };
+    });
+  };
+
+  useEffect(() => {
+    if (!activeFriend) return;
+    const key = friendKey(activeFriend);
+    if (!key) return;
+    const urls = (chatLogs[key] || []).flatMap((m) => extractLinks(m.body));
+    urls.forEach((url) => {
+      const ytId = parseYouTubeId(url);
+      const thumb = ytId ? `https://img.youtube.com/vi/${ytId}/hqdefault.jpg` : undefined;
+      if (!linkMetaRef.current[url]) {
+        fetchPreviewMeta(url, thumb);
+      } else if (thumb && !linkMetaRef.current[url].thumb) {
+        setLinkMeta((prev) => ({ ...prev, [url]: { ...prev[url], thumb } }));
+      }
+    });
+  }, [activeFriend, chatLogs, fetchPreviewMeta]);
+
+  // Pull conversation from API when opening a friend
+  useEffect(() => {
+    const loadMessages = async () => {
+      if (!user || !activeFriend) return;
+      const key = friendKey(activeFriend);
+      if (!key) return;
+      try {
+        const friendId = Number(key);
+        const res = await api.get(
+          `/messages?filters[$or][0][$and][0][sender][id][$eq]=${user.id}&filters[$or][0][$and][1][recipient][id][$eq]=${friendId}&filters[$or][1][$and][0][sender][id][$eq]=${friendId}&filters[$or][1][$and][1][recipient][id][$eq]=${user.id}&sort=createdAt:asc&pagination[pageSize]=200`
+        );
+        const mapped =
+          res.data?.data?.map((m: any) => {
+            const attrs = normalize(m);
+            const senderId =
+              attrs.sender?.data?.id ?? attrs.sender?.id ?? attrs.senderId ?? null;
+            return {
+              id: String(m.id ?? attrs.documentId ?? `${Math.random()}`),
+              body: attrs.body || "",
+              from: senderId === user.id ? "me" : "them",
+              at: attrs.createdAt || new Date().toISOString(),
+            };
+          }) || [];
+        setChatLogs((prev) => ({
+          ...prev,
+          [key]: mapped.length
+            ? mapped
+            : prev[key] && prev[key].length
+            ? prev[key]
+            : [
+                {
+                  id: `${key}-intro`,
+                  body: "Start a conversation with text, emojis, GIF links, or media URLs.",
+                  from: "them",
+                  at: new Date().toISOString(),
+                },
+              ],
+        }));
+      } catch {
+        // ignore fetch errors for now; keep local cache
+      }
+    };
+    loadMessages();
+  }, [activeFriend, user]);
+
   return (
     <div className="dashboard-shell">
-      <aside className="dash-nav">
-        <div className="brand">
-          <span className="brand-mark">S2YD</span>
-          <span className="brand-text">Stick2YourDreams</span>
-        </div>
-        <div className="nav-links">
-          <button className="btn ghost nav-btn" onClick={() => navigate("/")}>
-            Dashboard
-          </button>
-          <button className="btn ghost nav-btn" onClick={() => navigate("/friends")}>
-            Friends
-          </button>
-          <button className="btn ghost nav-btn" onClick={() => navigate("/me")}>
-            Me
-          </button>
-        </div>
-      </aside>
+      <Sidebar active="friends" />
 
       <div className="main-content">
         <div className="dash-hero">
@@ -422,8 +598,14 @@ export default function Friends() {
           {filtered.map((f) => {
             const status = relationStatusFor(f);
             const ownerPosts = f.userId ? postsByOwner[f.userId] : undefined;
+            const key = friendKey(f);
             return (
-              <article key={f.id} className="post-card">
+              <article
+                key={f.id}
+                className="post-card"
+                onClick={() => key && openChat(f)}
+                style={{ cursor: key ? "pointer" : "default" }}
+              >
                 <div className="post-body">
                   <div className="post-meta">
                     <span className="pill subtle">Friend</span>
@@ -440,7 +622,10 @@ export default function Friends() {
                       status === "pending" ||
                       status === "accepted"
                     }
-                    onClick={() => addFriend(f)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      addFriend(f);
+                    }}
                   >
                     {status === "accepted" ? "Friends" : status === "pending" ? "Requested" : "Add / Request"}
                   </button>
@@ -462,24 +647,17 @@ export default function Friends() {
                       <p className="status">No posts yet.</p>
                     )}
                   </div>
-                  <div className="auth-actions" style={{ marginTop: "8px" }}>
-                    <input
-                      className="auth-input"
-                      placeholder="Message..."
-                      value={messages[f.id] || ""}
-                      onChange={(e) =>
-                        setMessages((prev) => ({
-                          ...prev,
-                          [f.id]: e.target.value,
-                        }))
-                      }
-                    />
+                  <div className="auth-actions" style={{ marginTop: "8px", gap: "8px", flexWrap: "wrap" }}>
                     <button
                       className="btn primary"
                       type="button"
-                      onClick={() => sendMessage(f.userId || (typeof f.id === "number" ? f.id : undefined))}
+                      disabled={!key}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openChat(f);
+                      }}
                     >
-                      Send
+                      Message
                     </button>
                   </div>
                 </div>
@@ -488,6 +666,151 @@ export default function Friends() {
           })}
         </div>
       </div>
+
+      {activeFriend && (
+        <div className={`message-popout ${popoutMinimized ? "minimized" : ""}`}>
+          <div className="message-popout__header">
+            <div>
+              <p className="eyebrow">Chat</p>
+              <strong>@{activeFriend.handle}</strong>
+            </div>
+            <div className="message-popout__actions">
+              <button className="btn ghost" type="button" onClick={() => setPopoutMinimized((v) => !v)}>
+                {popoutMinimized ? "Expand" : "Minimize"}
+              </button>
+              <button className="btn ghost" type="button" onClick={() => setActiveFriend(null)}>
+                Close
+              </button>
+            </div>
+          </div>
+          {!popoutMinimized && (
+            <>
+              <div className="message-popout__body">
+                {(friendKey(activeFriend) && chatLogs[friendKey(activeFriend)!] || []).length === 0 ? (
+                  <div className="status">No messages yet.</div>
+                ) : (
+                  (friendKey(activeFriend) && chatLogs[friendKey(activeFriend)!] || []).map((m) => (
+                    <div
+                      key={m.id}
+                      className={`message-bubble ${m.from === "me" ? "outgoing" : "incoming"}`}
+                    >
+                      <div className="message-meta">
+                        <span>{m.from === "me" ? "You" : `@${activeFriend.handle}`}</span>
+                        <span>{new Date(m.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                      </div>
+                      <div className="comment-body" style={{ whiteSpace: "pre-wrap" }}>
+                        {m.body}
+                      </div>
+                      {extractLinks(m.body).map((url) => {
+                        const ytId = parseYouTubeId(url);
+                        const thumb = ytId ? `https://img.youtube.com/vi/${ytId}/hqdefault.jpg` : null;
+                        const title = ytId ? "YouTube video" : url.replace(/^https?:\/\//, "");
+                        return (
+                          <div
+                      key={`${m.id}-${url}`}
+                      style={{
+                        marginTop: "8px",
+                        border: "1px solid rgba(255,255,255,0.08)",
+                        borderRadius: "10px",
+                              overflow: "hidden",
+                              background: "rgba(255,255,255,0.03)",
+                            }}
+                          >
+                          {thumb && (
+                            <a href={url} target="_blank" rel="noreferrer" style={{ display: "block" }}>
+                              <img
+                                src={thumb}
+                                alt={title}
+                                  style={{ width: "100%", height: "auto", display: "block" }}
+                                  loading="lazy"
+                                />
+                              </a>
+                            )}
+                            <div style={{ padding: "8px 10px" }}>
+                              <a href={url} target="_blank" rel="noreferrer" style={{ color: "#8fb5ff" }}>
+                                {linkMeta[url]?.title || title}
+                              </a>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="message-popout__friends">
+                <p className="eyebrow">Quick reactions</p>
+                <EmojiBar
+                  onPick={(emoji) => {
+                    const k = friendKey(activeFriend);
+                    if (!k) return;
+                    setMessages((prev) => ({
+                      ...prev,
+                      [k]: `${prev[k] || ""}${emoji}`,
+                    }));
+                  }}
+                />
+              </div>
+              <div className="message-popout__footer">
+                <input
+                  className="auth-input"
+                  placeholder="Paste a GIF / image / video URL (optional)"
+                  value={gifInput}
+                  onChange={(e) => setGifInput(e.target.value)}
+                />
+                <input
+                  className="auth-input"
+                  placeholder={`Message @${activeFriend.handle}...`}
+                  value={(friendKey(activeFriend) ? messages[friendKey(activeFriend)!] : "") || ""}
+                  onChange={(e) => {
+                    const k = friendKey(activeFriend);
+                    if (!k) return;
+                    setMessages((prev) => ({ ...prev, [k]: e.target.value }));
+                  }}
+                />
+                <div className="auth-actions" style={{ justifyContent: "space-between" }}>
+                  <button className="btn ghost" type="button" onClick={() => setActiveFriend(null)}>
+                    Close
+                  </button>
+                  <button
+                      className="btn primary"
+                      type="button"
+                      disabled={!friendKey(activeFriend)}
+                      onClick={() => {
+                        const k = friendKey(activeFriend);
+                        if (!k) return;
+                        const body = `${messages[k] || ""}${gifInput ? `\n${gifInput}` : ""}`;
+                        sendMessage(k, body);
+                      }}
+                    >
+                      Send
+                    </button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Chat popout (emoji-friendly) rendered at the root of this page
+function EmojiBar({ onPick }: { onPick: (emoji: string) => void }) {
+  const emojis = ["😊", "😂", "🔥", "🎉", "🤝", "❤️", "👍", "🥳", "🚀", "✨"];
+  return (
+    <div className="message-popout__chips">
+      {emojis.map((e) => (
+        <button
+          key={e}
+          className="btn ghost"
+          type="button"
+          onClick={() => onPick(e)}
+          style={{ padding: "6px 10px" }}
+        >
+          {e}
+        </button>
+      ))}
     </div>
   );
 }
