@@ -6,6 +6,16 @@ import type { RegisterResponse } from "../types/auth";
 import axios from "axios";
 import "../css/register.css";
 
+const slugifyHandle = (value: string) =>
+  value
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replace(/^@+/, "")
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
 export default function Register() {
   const [form, setForm] = useState({ username: "", email: "", password: "" });
   const [error, setError] = useState<string | null>(null);
@@ -25,6 +35,21 @@ export default function Register() {
     try {
       // ✅ custom route POST /api/register
       const res = await api.post<RegisterResponse>("/register", form);
+
+      // Best-effort: immediately create a linked profile with the chosen handle (username)
+      const lockedHandle = slugifyHandle(form.username || form.email);
+      try {
+        await api.post("/profiles", {
+          data: {
+            handle: lockedHandle,
+            firstName: form.username,
+            user: res.data.user.id,
+            locale: "en",
+          },
+        });
+      } catch {
+        // ignore if profile already exists or creation fails (created on first edit instead)
+      }
 
       setInfo(
         res.data.message ||

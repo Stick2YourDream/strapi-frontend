@@ -68,7 +68,7 @@ export default function Dashboard() {
           user: userRes.data?.data ?? [],
           comments: allComments,
         });
-      } catch (err) {
+      } catch (err: unknown) {
         if (cancelled) return;
 
         if (axios.isAxiosError(err)) {
@@ -353,7 +353,7 @@ export default function Dashboard() {
                           user: userRes.data?.data ?? [],
                           comments: commentsRes.data?.data ?? [],
                         });
-                      } catch (err) {
+                      } catch (err: unknown) {
                         if (axios.isAxiosError(err)) {
                           const msg =
                             err.response?.data?.error?.message ||
@@ -426,7 +426,7 @@ export default function Dashboard() {
                                         (cc: any) => cc.id !== c.id
                                       ),
                                     }));
-                                  } catch (err) {
+                                  } catch (err: unknown) {
                                     console.error("Delete comment failed", err);
                                     setError("Failed to delete comment");
                                   }
@@ -471,7 +471,7 @@ export default function Dashboard() {
                               comments: res.data?.data ?? [],
                             }));
                             setCommentInputs((prev) => ({ ...prev, [post.id]: "" }));
-                          } catch (err) {
+                          } catch (err: unknown) {
                             console.error("Add comment failed", err);
                             setError("Failed to add comment");
                           }

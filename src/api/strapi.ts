@@ -1,11 +1,14 @@
 // src/api/strapi.ts
-import axios, { type AxiosRequestHeaders } from "axios";
+import axios, {
+  type AxiosRequestHeaders,
+  type InternalAxiosRequestConfig,
+} from "axios";
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL, // http://localhost:1337/api
 });
 
-api.interceptors.request.use((config) => {
+api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const token = localStorage.getItem("token");
   const url = config.url || "";
 

@@ -41,7 +41,7 @@ export default function Login() {
 
       login(res.data.user, res.data.jwt);
       navigate("/dashboard");
-    } catch (err) {
+    } catch (err: unknown) {
       if (!axios.isAxiosError(err)) {
         setError("Login failed");
         return;

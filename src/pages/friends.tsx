@@ -420,7 +420,7 @@ export default function Friends() {
       if (prev[key]?.length) return prev;
       const intro = {
         id: `${key}-intro`,
-        body: "Start a conversation with text, emojis, GIF links, or media URLs.",
+        body: "Message Me!",
         from: "them" as const,
         at: new Date().toISOString(),
       };
@@ -443,51 +443,6 @@ export default function Friends() {
       }
     });
   }, [activeFriend, chatLogs, fetchPreviewMeta]);
-
-  // Pull conversation from API when opening a friend
-  useEffect(() => {
-    const loadMessages = async () => {
-      if (!user || !activeFriend) return;
-      const key = friendKey(activeFriend);
-      if (!key) return;
-      try {
-        const friendId = Number(key);
-        const res = await api.get(
-          `/messages?filters[$or][0][$and][0][sender][id][$eq]=${user.id}&filters[$or][0][$and][1][recipient][id][$eq]=${friendId}&filters[$or][1][$and][0][sender][id][$eq]=${friendId}&filters[$or][1][$and][1][recipient][id][$eq]=${user.id}&sort=createdAt:asc&pagination[pageSize]=200`
-        );
-        const mapped =
-          res.data?.data?.map((m: any) => {
-            const attrs = normalize(m);
-            const senderId =
-              attrs.sender?.data?.id ?? attrs.sender?.id ?? attrs.senderId ?? null;
-            return {
-              id: String(m.id ?? attrs.documentId ?? `${Math.random()}`),
-              body: attrs.body || "",
-              from: senderId === user.id ? "me" : "them",
-              at: attrs.createdAt || new Date().toISOString(),
-            };
-          }) || [];
-        setChatLogs((prev) => ({
-          ...prev,
-          [key]: mapped.length
-            ? mapped
-            : prev[key] && prev[key].length
-            ? prev[key]
-            : [
-                {
-                  id: `${key}-intro`,
-                  body: "Start a conversation with text, emojis, GIF links, or media URLs.",
-                  from: "them",
-                  at: new Date().toISOString(),
-                },
-              ],
-        }));
-      } catch {
-        // ignore fetch errors for now; keep local cache
-      }
-    };
-    loadMessages();
-  }, [activeFriend, user]);
 
   return (
     <div className="dashboard-shell">

@@ -1,5 +1,5 @@
 // src/pages/Me.tsx
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import "../css/dashboard.css";
 import { useAuth } from "../context/AuthContext";
 import api from "../api/strapi";
@@ -15,21 +15,32 @@ type Profile = {
   hobbies: string;
   occupation: string;
   bio: string;
+  phone?: string;
   handle?: string;
   avatarUrl?: string;
 };
 
 type MediaPost = {
-  id: number;
+  id: number | string;
   text: string;
   media?: string;
 };
 
+const slug = (s: string) =>
+  (s || "")
+    .toString()
+    .trim()
+    .toLowerCase()
+    .replace(/^@+/, "")
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
 export default function Me() {
   const { user } = useAuth();
 
-  const [profileId, setProfileId] = useState<number | null>(null);
-  const [profileDocId, setProfileDocId] = useState<string | null>(null);
+  const [profileDocumentId, setProfileDocumentId] = useState<string | null>(null);
+
   const [profile, setProfile] = useState<Profile>({
     firstName: "",
     lastName: "",
@@ -41,6 +52,7 @@ export default function Me() {
     bio: "",
     handle: "",
   });
+
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [mediaInput, setMediaInput] = useState("");
   const [mediaFile, setMediaFile] = useState<File | null>(null);
@@ -53,33 +65,102 @@ export default function Me() {
   const [successModal, setSuccessModal] = useState<string | null>(null);
   const [editing, setEditing] = useState(true);
 
-  // Strapi v4/v5 compatibility helpers (v5 flattens attributes)
   const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
-  const slugifyHandle = (value: string) =>
-    value
-      .toString()
-      .trim()
-      .toLowerCase()
-      .replace(/^@+/, "")
-      .replace(/[^a-z0-9_-]+/g, "-")
-      .replace(/-+/g, "-")
-      .replace(/^-+|-+$/g, "");
+
+  // ✅ stable unique handle: username/email + numeric user id
+  const lockedUniqueHandle = useMemo(() => {
+    if (!user) return "";
+    const base = slug(user.username || user.email || "user");
+    return `${base || "user"}-${user.id}`;
+  }, [user]);
+
   const pickMediaUrl = (mediaField: any): string | undefined => {
     if (!mediaField) return undefined;
+
     const candidate =
       (Array.isArray(mediaField?.data) ? mediaField.data[0] : mediaField?.data) ??
       (Array.isArray(mediaField) ? mediaField[0] : mediaField);
+
     if (!candidate) return undefined;
+
     const attrs = normalize(candidate);
-    let url =
+    const url =
       attrs.url ||
       attrs.formats?.large?.url ||
       attrs.formats?.medium?.url ||
       attrs.formats?.small?.url ||
       attrs.formats?.thumbnail?.url;
+
     if (!url) return undefined;
     return url.startsWith("/") ? `${apiBase}${url}` : url;
+  };
+
+  const setProfileFromEntry = (entry: any) => {
+    if (!entry) return;
+    const attrs = normalize(entry);
+
+    setProfileDocumentId(entry.documentId ?? null);
+
+    setProfile({
+      firstName: attrs.firstName || "",
+      lastName: attrs.lastName || "",
+      age: attrs.age || "",
+      gender: attrs.gender || "",
+      religion: attrs.religion || "",
+      hobbies: attrs.hobbies || "",
+      occupation: attrs.occupation || "",
+      bio: attrs.bio || "",
+      phone: attrs.phone || "",
+      handle: attrs.handle || "",
+      avatarUrl: pickMediaUrl(attrs.avatar),
+    });
+  };
+
+  const fetchMyProfileByUser = async () => {
+    if (!user) return null;
+    const res = await api.get(
+      `/profiles?filters[user][id][$eq]=${user.id}&populate=avatar&sort=updatedAt:desc&pagination[pageSize]=1`
+    );
+    return res.data?.data?.[0] ?? null;
+  };
+
+  // ✅ fallback: if the old profile wasn’t linked to user, we still find it by unique handle
+  const fetchMyProfileByHandle = async () => {
+    if (!lockedUniqueHandle) return null;
+    const res = await api.get(
+      `/profiles?filters[handle][$eq]=${encodeURIComponent(lockedUniqueHandle)}&populate=avatar&sort=updatedAt:desc&pagination[pageSize]=1`
+    );
+    return res.data?.data?.[0] ?? null;
+  };
+
+  const fetchMyProfile = async () => {
+    return (await fetchMyProfileByUser()) || (await fetchMyProfileByHandle());
+  };
+
+  const fetchProfileByDocumentId = async (documentId: string) => {
+    const res = await api.get(`/profiles/${documentId}?populate=avatar`);
+    return res.data?.data ?? null;
+  };
+
+  const fetchMyPosts = async () => {
+    if (!user) return;
+
+    const postsRes = await api.get(
+      `/users-posts?filters[owner][id][$eq]=${user.id}&populate=Users_Pictures&sort=createdAt:desc`
+    );
+
+    const mappedPosts: MediaPost[] = (postsRes.data?.data ?? []).map((p: any) => {
+      const attrs = normalize(p);
+      const pic = pickMediaUrl(attrs.Users_Pictures);
+      return {
+        id: p.documentId ?? p.id ?? attrs.documentId,
+        text: attrs.Users_Content || "",
+        media: pic,
+      };
+    });
+
+    setPosts(mappedPosts);
   };
 
   useEffect(() => {
@@ -88,20 +169,10 @@ export default function Me() {
       setLoading(true);
       setError(null);
       setSuccess(null);
+
       try {
-        // Try by user relation
-        const byUser = await api.get(
-          `/profiles?filters[user][id][$eq]=${user.id}&populate=avatar`
-        );
-        let mine = byUser.data?.data?.[0];
-        // Fallback: by handle (username/email) if not linked to user
-        if (!mine && user.username) {
-          const byHandle = await api.get(
-            `/profiles?filters[handle][$eq]=${encodeURIComponent(user.username)}&populate=avatar`
-          );
-          mine = byHandle.data?.data?.[0];
-        }
-        // If still nothing, show empty form for this user (avoid showing someone else's profile)
+        const mine = await fetchMyProfile();
+
         if (!mine) {
           setProfile({
             firstName: "",
@@ -112,208 +183,169 @@ export default function Me() {
             hobbies: "",
             occupation: "",
             bio: "",
-            handle: "",
+            phone: "",
+            handle: lockedUniqueHandle, // show the locked handle even if empty profile
           });
-          setProfileId(null);
-          setProfileDocId(null);
+          setProfileDocumentId(null);
           setEditing(true);
-          setLoading(false);
+          await fetchMyPosts();
           return;
         }
-        if (mine?.attributes) {
-          const attrs = normalize(mine);
-          const avatarUrl = pickMediaUrl(attrs.avatar);
-          setProfileId(mine.id ?? null);
-          setProfileDocId(mine.documentId ?? attrs.documentId ?? null);
-          setProfile({
-            firstName: attrs.firstName || "",
-            lastName: attrs.lastName || "",
-            age: attrs.age || "",
-            gender: attrs.gender || "",
-            religion: attrs.religion || "",
-            hobbies: attrs.hobbies || "",
-            occupation: attrs.occupation || "",
-            bio: attrs.bio || "",
-            handle: attrs.handle || "",
-            avatarUrl,
-          });
-          setEditing(false);
-        } else if (mine) {
-          const attrs = normalize(mine);
-          const avatarUrl = pickMediaUrl(attrs.avatar);
-          setProfile({
-            firstName: attrs.firstName || "",
-            lastName: attrs.lastName || "",
-            age: attrs.age || "",
-            gender: attrs.gender || "",
-            religion: attrs.religion || "",
-            hobbies: attrs.hobbies || "",
-            occupation: attrs.occupation || "",
-            bio: attrs.bio || "",
-            handle: attrs.handle || "",
-            avatarUrl,
-          });
-          setProfileId(mine.id ?? null);
-          setProfileDocId(mine.documentId ?? attrs.documentId ?? null);
-          setEditing(false);
-        }
 
-        // Load my posts
-        const postsRes = await api.get(
-          `/users-posts?filters[owner][id][$eq]=${user.id}&populate=Users_Pictures`
-        );
-        const mappedPosts: MediaPost[] = (postsRes.data?.data ?? []).map((p: any) => {
-          const attrs = normalize(p);
-          const pic = pickMediaUrl(attrs.Users_Pictures);
-          return {
-            id: p.id ?? attrs.documentId,
-            text: attrs.Users_Content || "",
-            media: pic,
-          };
-        });
-        setPosts(mappedPosts);
-      } catch (err) {
+        setProfileFromEntry(mine);
+        setEditing(false);
+        await fetchMyPosts();
+      } catch {
         setError("Failed to load profile");
       } finally {
         setLoading(false);
       }
     };
+
     load();
-  }, [user]);
+  }, [user?.id, lockedUniqueHandle]);
 
   const saveProfile = async () => {
     if (!user) return;
+
     setError(null);
     setErrorModal(null);
     setSuccess(null);
     setSuccessModal(null);
+
     try {
-      // refresh latest ids before saving to avoid stale docId/id mismatches
-      try {
-        const latest = await api.get(
-          `/profiles?filters[user][id][$eq]=${user.id}&populate=avatar`
-        );
-        const current = latest.data?.data?.[0];
-        if (current) {
-          const attrs = normalize(current);
-          setProfileId(current.id ?? null);
-          setProfileDocId(current.documentId ?? attrs.documentId ?? null);
-        }
-      } catch {
-        // best-effort refresh; continue
-      }
-
       const safeFirst = profile.firstName || user.username || user.email || "user";
-      const baseHandle = user.username || user.email || `user-${user.id}`;
-      const desiredHandle = slugifyHandle(profile.handle || baseHandle) || `user-${user.id}`;
 
-      // Upsert safety: check if profile already exists for this user to avoid duplicate handle errors
-      let idToUse = profileId;
-      let docIdToUse = profileDocId;
-      if (!idToUse) {
-        const check = await api.get(
-          `/profiles?filters[user][id][$eq]=${user.id}&populate=avatar`
-        );
-        const existing = check.data?.data?.[0];
-        if (existing) {
-          const attrs = normalize(existing);
-          idToUse = existing.id ?? idToUse ?? null;
-          docIdToUse = existing.documentId ?? attrs.documentId ?? docIdToUse ?? null;
-          setProfileId(existing.id ?? null);
-          setProfileDocId(docIdToUse ?? null);
-          setProfile({
-            firstName: attrs.firstName || "",
-            lastName: attrs.lastName || "",
-            age: attrs.age || "",
-            gender: attrs.gender || "",
-            religion: attrs.religion || "",
-            hobbies: attrs.hobbies || "",
-            occupation: attrs.occupation || "",
-            bio: attrs.bio || "",
-            handle: attrs.handle || "",
-          });
-        }
-      }
+      const sanitizePhone = (value?: string) =>
+        (value || "").replace(/[^\d+]/g, "").slice(0, 15);
 
-      // Ensure handle uniqueness (avoid 400 from Strapi uid)
-      let handleValue = desiredHandle;
-      const dupRes = await api.get(
-        `/profiles?filters[handle][$eq]=${handleValue}&pagination[pageSize]=1`
-      );
-      const dup = dupRes.data?.data?.[0];
-      const dupId = dup?.id ?? null;
-      const dupDocId = dup?.documentId ?? dup?.attributes?.documentId;
-      if (dup && (dupId !== idToUse || dupDocId !== docIdToUse)) {
-        handleValue = `${handleValue}-${user.id}`;
-      }
+      const phoneClean = sanitizePhone(profile.phone);
 
+      // Upload avatar if provided
       let avatarId: number | undefined;
-      let avatarUrl: string | undefined;
+      let uploadedAvatarUrl: string | undefined;
+
       if (avatarFile) {
         const fd = new FormData();
         fd.append("files", avatarFile);
+
         const uploadRes = await api.post("/upload", fd, {
           headers: { "Content-Type": "multipart/form-data" },
         });
+
         avatarId = uploadRes.data?.[0]?.id;
-        avatarUrl = pickMediaUrl(uploadRes.data?.[0]);
+        uploadedAvatarUrl = pickMediaUrl(uploadRes.data?.[0]);
       }
 
-      const data = { ...profile, firstName: safeFirst, handle: handleValue };
-      if (avatarId) (data as any).avatar = avatarId;
-      (data as any).user = user.id;
-      (data as any).locale = "en";
+      // ✅ IMPORTANT:
+      // - handle is REQUIRED (UID)
+      // - make it UNIQUE up front so you never hit the "unique" validator
+      const payload: any = {
+        firstName: safeFirst,
+        lastName: profile.lastName,
+        age: profile.age,
+        gender: profile.gender,
+        religion: profile.religion,
+        hobbies: profile.hobbies,
+        occupation: profile.occupation,
+        bio: profile.bio,
 
-      let updated = false;
+        handle: lockedUniqueHandle, // ✅ always unique
 
-      const tryUpdate = async (target: string | number | null, useLocale = false) => {
-        if (!target) return false;
+        locale: "en",
+        user: user.id, // ✅ users-permissions relation works reliably with numeric id
+      };
+
+      payload.phone = phoneClean ? phoneClean : null;
+      if (avatarId) payload.avatar = avatarId;
+
+      // 1) resolve existing (user relation OR unique handle)
+      const existing = await fetchMyProfile();
+      let docId: string | null = existing?.documentId ?? profileDocumentId ?? null;
+
+      const tryUpdate = async (documentId: string, allowPhoneRetry = true) => {
         try {
-          const suffix = useLocale ? `?locale=en` : "";
-          await api.put(`/profiles/${target}${suffix}`, { data });
-          return true;
+          const res = await api.put(`/profiles/${documentId}`, { data: payload });
+          return res.data?.data ?? null;
         } catch (e) {
-          if (axios.isAxiosError(e) && e.response?.status === 404) return false;
+          if (axios.isAxiosError(e)) {
+            const status = e.response?.status;
+            const msg = String(e.response?.data?.error?.message || "").toLowerCase();
+
+            if (status === 400 && msg.includes("phone")) {
+              if (!allowPhoneRetry) throw e;
+              const clone = { ...payload };
+              delete clone.phone;
+              const res = await api.put(`/profiles/${documentId}`, { data: clone });
+              return res.data?.data ?? null;
+            }
+
+            if (status === 404) return null;
+          }
           throw e;
         }
       };
 
-      // Try docId with locale first, then numeric id
-      if (await tryUpdate(docIdToUse, true)) {
-        updated = true;
-      } else if (await tryUpdate(idToUse)) {
-        updated = true;
+      // 2) update if found
+      if (docId) {
+        const updated = await tryUpdate(docId);
+        if (!updated?.documentId) docId = null;
       }
 
-      if (!updated) {
-        const createRes = await api.post("/profiles", {
-          data: { ...data },
-        });
-        setProfileId(createRes.data?.data?.id || null);
-        setProfileDocId(createRes.data?.data?.documentId || null);
+      // 3) create only if truly none exists
+      if (!docId) {
+        const res = await api.post("/profiles", { data: payload });
+        docId = res.data?.data?.documentId ?? null;
+        setProfileDocumentId(docId);
       }
-      if (avatarUrl) {
-        setProfile((prev) => ({ ...prev, avatarUrl }));
+
+      if (uploadedAvatarUrl) {
+        setProfile((prev) => ({ ...prev, avatarUrl: uploadedAvatarUrl }));
       }
+
+      // 4) re-fetch truth
+      if (docId) {
+        const fresh = await fetchProfileByDocumentId(docId);
+        if (!fresh) throw new Error("Save succeeded but refresh failed");
+        setProfileFromEntry(fresh);
+      } else {
+        const mine = await fetchMyProfile();
+        if (!mine) throw new Error("Save succeeded but no profile found");
+        setProfileFromEntry(mine);
+      }
+
       setSuccess("Profile saved successfully.");
       setSuccessModal("Profile saved successfully.");
       setEditing(false);
-    } catch (err) {
-      setError("Failed to save profile");
-      setErrorModal("Failed to save profile. Please try again.");
+    } catch (e) {
+      if (axios.isAxiosError(e)) {
+        const msg =
+          e.response?.data?.error?.message ||
+          e.response?.data?.message ||
+          "Failed to save profile";
+        setError(String(msg));
+        setErrorModal(String(msg));
+      } else {
+        setError("Failed to save profile");
+        setErrorModal("Failed to save profile. Please try again.");
+      }
     }
   };
 
   const addPost = async () => {
     if (!textInput.trim() && !mediaInput.trim()) return;
+
     try {
       let mediaId: number | undefined;
+
       if (mediaFile) {
         const fd = new FormData();
         fd.append("files", mediaFile);
+
         const uploadRes = await api.post("/upload", fd, {
           headers: { "Content-Type": "multipart/form-data" },
         });
+
         mediaId = uploadRes.data?.[0]?.id;
       }
 
@@ -326,24 +358,11 @@ export default function Me() {
         },
       });
 
-      // refresh posts
-      const postsRes = await api.get(
-        `/users-posts?filters[owner][id][$eq]=${user?.id}&populate=Users_Pictures`
-      );
-      const mappedPosts: MediaPost[] = (postsRes.data?.data ?? []).map((p: any) => {
-        const attrs = normalize(p);
-        const pic = pickMediaUrl(attrs.Users_Pictures);
-        return {
-          id: p.id ?? attrs.documentId,
-          text: attrs.Users_Content || "",
-          media: pic,
-        };
-      });
-      setPosts(mappedPosts);
+      await fetchMyPosts();
       setMediaInput("");
       setMediaFile(null);
       setTextInput("");
-    } catch (err) {
+    } catch {
       setError("Failed to create post");
     }
   };
@@ -384,6 +403,7 @@ export default function Me() {
           </div>
         </div>
       )}
+
       {successModal && (
         <div
           style={{
@@ -424,25 +444,13 @@ export default function Me() {
           </div>
         </div>
       )}
+
       <Sidebar active="me" />
 
       <div className="main-content">
         <div className="dash-hero">
           <div className="dash-hero__text">
             <p className="eyebrow">Profile</p>
-            <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-              {profile.avatarUrl && (
-                <img
-                  src={profile.avatarUrl}
-                  alt={profile.handle || user.username}
-                  className="avatar-octagon"
-                  style={{ width: 72, height: 72 }}
-                />
-              )}
-              <h1 style={{ margin: 0 }}>
-                {profile.firstName || profile.lastName ? `${profile.firstName} ${profile.lastName}` : user.username}
-              </h1>
-            </div>
             <p className="subhead">Edit your details and share media or text updates.</p>
           </div>
         </div>
@@ -450,21 +458,7 @@ export default function Me() {
         {loading && <p className="status">Loading profile…</p>}
         {error && <p className="status status-error">{error}</p>}
         {success && <p className="status status-success">{success}</p>}
-        {profile.avatarUrl && (
-          <div className="panel-grid" style={{ marginBottom: "12px" }}>
-            <section className="panel" style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-              <img
-                src={profile.avatarUrl}
-                alt={profile.handle || user.username}
-                style={{ width: 96, height: 96, borderRadius: "50%", objectFit: "cover", border: "2px solid rgba(255,255,255,0.1)" }}
-              />
-              <div>
-                <p className="eyebrow">Profile image</p>
-                <p className="subhead" style={{ margin: 0 }}>This is the avatar shown with your posts and messages.</p>
-              </div>
-            </section>
-          </div>
-        )}
+
         <div className="panel-grid">
           <section className="panel">
             <div className="panel-header">
@@ -478,35 +472,48 @@ export default function Me() {
                 </button>
               )}
             </div>
+
             {editing ? (
               <div className="form-grid">
                 <label className="field">
                   <span>Handle</span>
                   <input
                     className="auth-input"
-                    placeholder="your-handle"
-                    value={profile.handle || ""}
-                    onChange={(e) => setProfile({ ...profile, handle: e.target.value })}
+                    value={lockedUniqueHandle}
+                    readOnly
+                    disabled
+                    tabIndex={-1}
+                    onFocus={(e) => e.target.blur()}
+                    style={{ pointerEvents: "none", userSelect: "none", opacity: 0.7 }}
                   />
+                  <small style={{ color: "#9ca3af" }}>
+                    Locked + unique (username/email + user id).
+                  </small>
                 </label>
-                {([
-                  ["First Name", "firstName"],
-                  ["Last Name", "lastName"],
-                  ["Age", "age"],
-                  ["Gender", "gender"],
-                  ["Religion", "religion"],
-                  ["Hobbies", "hobbies"],
-                  ["Occupation", "occupation"],
-                ] as const).map(([label, key]) => (
+
+                {(
+                  [
+                    ["First Name", "firstName"],
+                    ["Last Name", "lastName"],
+                    ["Age", "age"],
+                    ["Phone", "phone"],
+                    ["Gender", "gender"],
+                    ["Religion", "religion"],
+                    ["Hobbies", "hobbies"],
+                    ["Occupation", "occupation"],
+                  ] as const
+                ).map(([label, key]) => (
                   <label className="field" key={key}>
                     <span>{label}</span>
                     <input
                       className="auth-input"
-                      value={(profile as any)[key]}
+                      maxLength={64}
+                      value={(profile as any)[key] || ""}
                       onChange={(e) => setProfile({ ...profile, [key]: e.target.value })}
                     />
                   </label>
                 ))}
+
                 <label className="field">
                   <span>Bio</span>
                   <textarea
@@ -516,6 +523,7 @@ export default function Me() {
                     rows={3}
                   />
                 </label>
+
                 <label className="field">
                   <span>Avatar</span>
                   <input
@@ -525,6 +533,7 @@ export default function Me() {
                     onChange={(e) => setAvatarFile(e.target.files?.[0] || null)}
                   />
                 </label>
+
                 <div className="auth-actions">
                   <button className="btn primary" type="button" onClick={saveProfile}>
                     Save Profile
@@ -533,20 +542,25 @@ export default function Me() {
               </div>
             ) : (
               <div className="form-grid">
-                {([
-                  ["Handle", profile.handle || `@${user.username}`],
-                  ["First Name", profile.firstName],
-                  ["Last Name", profile.lastName],
-                  ["Age", profile.age],
-                  ["Gender", profile.gender],
-                  ["Religion", profile.religion],
-                  ["Hobbies", profile.hobbies],
-                  ["Occupation", profile.occupation],
-                  ["Bio", profile.bio],
-                ] as const).map(([label, value]) => (
+                {(
+                  [
+                    ["Handle", profile.handle || lockedUniqueHandle],
+                    ["First Name", profile.firstName],
+                    ["Last Name", profile.lastName],
+                    ["Age", profile.age],
+                    ["Phone", profile.phone],
+                    ["Gender", profile.gender],
+                    ["Religion", profile.religion],
+                    ["Hobbies", profile.hobbies],
+                    ["Occupation", profile.occupation],
+                    ["Bio", profile.bio],
+                  ] as const
+                ).map(([label, value]) => (
                   <div className="field" key={label}>
                     <span>{label}</span>
-                    <div className="auth-input" style={{ opacity: 0.8 }}>{value || "—"}</div>
+                    <div className="auth-input" style={{ opacity: 0.8 }}>
+                      {value || "—"}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -562,6 +576,7 @@ export default function Me() {
                 <h3>Media + Text</h3>
               </div>
             </div>
+
             <div className="form-grid">
               <label className="field">
                 <span>Media URL (image/video)</span>
@@ -572,6 +587,7 @@ export default function Me() {
                   onChange={(e) => setMediaInput(e.target.value)}
                 />
               </label>
+
               <label className="field">
                 <span>Upload media (image/video)</span>
                 <input
@@ -581,6 +597,7 @@ export default function Me() {
                   onChange={(e) => setMediaFile(e.target.files?.[0] || null)}
                 />
               </label>
+
               <label className="field">
                 <span>Caption / Text</span>
                 <textarea
@@ -591,6 +608,7 @@ export default function Me() {
                   onChange={(e) => setTextInput(e.target.value)}
                 />
               </label>
+
               <div className="auth-actions">
                 <button className="btn primary" type="button" onClick={addPost}>
                   Post
@@ -602,10 +620,9 @@ export default function Me() {
 
         <div className="posts-grid">
           {posts.map((p) => (
-            <article key={p.id} className="post-card">
+            <article key={String(p.id)} className="post-card">
               {p.media ? (
                 <div className="post-media">
-                  {/* naive check for video */}
                   {p.media.match(/\.(mp4|webm|mov)$/i) ? (
                     <video controls style={{ width: "100%", height: "100%", objectFit: "cover" }}>
                       <source src={p.media} />
@@ -615,6 +632,7 @@ export default function Me() {
                   )}
                 </div>
               ) : null}
+
               <div className="post-body">
                 <h3>{user.username}</h3>
                 <p>{p.text}</p>
