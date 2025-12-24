@@ -22,17 +22,18 @@ jobs:
           cache: 'npm'
           cache-dependency-path: ${{ env.APP_PATH }}/package-lock.json
 
-      - name: Install and build
+      - name: Install, build, and include production node_modules
         working-directory: ${{ env.APP_PATH }}
         run: |
           npm ci
           npm run build
+          npm ci --omit=dev  # keep production deps (serve) for deploy
 
-      - name: Upload app with dist
+      - name: Upload app with dist and node_modules
         uses: actions/upload-artifact@v4
         with:
           name: frontend-app
-          path: ${{ env.APP_PATH }}/  # includes package.json and dist
+          path: ${{ env.APP_PATH }}/
 
   deploy:
     runs-on: ubuntu-latest
