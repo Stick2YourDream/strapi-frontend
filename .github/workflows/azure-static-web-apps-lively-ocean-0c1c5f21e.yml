@@ -22,7 +22,7 @@ jobs:
         with:
           node-version: '20.19.0'
           cache: 'npm'
-          cache-dependency-path: frontend-vite/website-front/package-lock.json
+          cache-dependency-path: '**/package-lock.json'
 
       - name: Build frontend
         working-directory: frontend-vite/website-front
