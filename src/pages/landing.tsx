@@ -1,9 +1,39 @@
 import "../css/landing.css";
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import api from "../api/strapi";
+import { useAuth } from "../context/AuthContext";
+
+type ProfileSummary = {
+  displayName: string;
+  avatarUrl?: string;
+  handle?: string;
+};
 
 export default function Landing() {
   const navigate = useNavigate();
+  const { user, logout } = useAuth();
+  const [profileSummary, setProfileSummary] = useState<ProfileSummary | null>(null);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+
+  const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
+  const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
+  const pickMediaUrl = (mediaField: any): string | undefined => {
+    if (!mediaField) return undefined;
+    const candidate =
+      (Array.isArray(mediaField?.data) ? mediaField.data[0] : mediaField?.data) ??
+      (Array.isArray(mediaField) ? mediaField[0] : mediaField);
+    if (!candidate) return undefined;
+    const attrs = normalize(candidate);
+    let url =
+      attrs.url ||
+      attrs.formats?.large?.url ||
+      attrs.formats?.medium?.url ||
+      attrs.formats?.small?.url ||
+      attrs.formats?.thumbnail?.url;
+    if (!url) return undefined;
+    return url.startsWith("/") ? `${apiBase}${url}` : url;
+  };
 
   // Lightweight SEO metadata management without extra deps
   useEffect(() => {
@@ -90,6 +120,55 @@ export default function Landing() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!user) {
+      setProfileSummary(null);
+      return;
+    }
+
+    const loadProfile = async () => {
+      try {
+        const res = await api.get("/profiles/me?populate=avatar");
+        const data = res.data?.data;
+        const entry = Array.isArray(data) ? data[0] : data;
+        const attrs = normalize(entry);
+        if (!attrs || Array.isArray(attrs)) return;
+        const displayName =
+          attrs.firstName || attrs.lastName
+            ? `${attrs.firstName || ""} ${attrs.lastName || ""}`.trim()
+            : attrs.handle || attrs.username || user.username;
+        setProfileSummary({
+          displayName,
+          handle: attrs.handle || user.username,
+          avatarUrl: pickMediaUrl(attrs.avatar),
+        });
+      } catch {
+        setProfileSummary({
+          displayName: user.username,
+          handle: user.username,
+        });
+      }
+    };
+
+    loadProfile();
+  }, [user]);
+
+  useEffect(() => {
+    setProfileMenuOpen(false);
+  }, [user]);
+
+  const nameForDisplay = useMemo(
+    () => profileSummary?.displayName || user?.username || "Account",
+    [profileSummary?.displayName, user?.username]
+  );
+
+  const secondaryLine = profileSummary?.handle || user?.username || user?.email || "Profile";
+
+  const handleProfileAction = (path: string) => {
+    navigate(path);
+    setProfileMenuOpen(false);
+  };
+
   return (
     <div className="landing-page">
       <div className="landing-shell">
@@ -99,12 +178,71 @@ export default function Landing() {
             <span>Stick2YourDreams</span>
           </div>
           <div className="nav-actions">
-            <button className="btn-ghost" onClick={() => navigate("/login")}>
-              Log in
-            </button>
-            <button className="btn-primary" onClick={() => navigate("/register")}>
-              Get started
-            </button>
+            {user ? (
+              <div className="landing-profile">
+                <button
+                  type="button"
+                  className="landing-profile-button"
+                  onClick={() => setProfileMenuOpen((v) => !v)}
+                  aria-expanded={profileMenuOpen}
+                >
+                  {profileSummary?.avatarUrl && (
+                    <img
+                      src={profileSummary.avatarUrl}
+                      alt={nameForDisplay}
+                      className="landing-profile-avatar"
+                    />
+                  )}
+                  <div className="landing-profile-meta">
+                    <strong>{nameForDisplay}</strong>
+                    <span className="landing-profile-handle" title={secondaryLine}>
+                      {secondaryLine}
+                    </span>
+                  </div>
+                  <span className={`landing-profile-caret ${profileMenuOpen ? "open" : ""}`}>
+                    v
+                  </span>
+                </button>
+                {profileMenuOpen && (
+                  <div className="landing-profile-menu">
+                    <button
+                      type="button"
+                      className="landing-profile-item"
+                      onClick={() => handleProfileAction("/me")}
+                    >
+                      My Profile
+                    </button>
+                    <button
+                      type="button"
+                      className="landing-profile-item"
+                      onClick={() => handleProfileAction("/friends")}
+                    >
+                      My Friends
+                    </button>
+                    <button
+                      type="button"
+                      className="landing-profile-item"
+                      onClick={() => {
+                        logout();
+                        setProfileMenuOpen(false);
+                        navigate("/login");
+                      }}
+                    >
+                      Logout
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <>
+                <button className="btn-ghost" onClick={() => navigate("/login")}>
+                  Log in
+                </button>
+                <button className="btn-primary" onClick={() => navigate("/register")}>
+                  Get started
+                </button>
+              </>
+            )}
           </div>
         </header>
 

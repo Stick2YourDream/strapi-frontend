@@ -61,6 +61,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     // 24-hour session window
     const expiresAt = new Date().getTime() + 24 * 60 * 60 * 1000;
     localStorage.setItem("expiresAt", expiresAt.toString());
+    console.info("Auth: login success", { id: userData.id, username: userData.username });
   };
 
   const logout = () => {
@@ -68,6 +69,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     localStorage.removeItem("user");
     localStorage.removeItem("token");
     localStorage.removeItem("expiresAt");
+    console.info("Auth: logout success");
   };
 
   return (
