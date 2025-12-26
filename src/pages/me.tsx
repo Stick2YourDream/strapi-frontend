@@ -138,6 +138,15 @@ export default function Me() {
     return res.data?.data?.[0] ?? null;
   };
 
+  const fetchMyProfileByHandlePrefix = async (prefix?: string) => {
+    const target = (prefix || "").trim() || lockedUniqueHandle;
+    if (!target) return null;
+    const res = await api.get(
+      `/profiles?filters[handle][$startsWith]=${encodeURIComponent(target)}&populate=avatar&sort=updatedAt:desc&pagination[pageSize]=1`
+    );
+    return res.data?.data?.[0] ?? null;
+  };
+
   const fetchMyProfile = async () => {
     const byUser = await fetchMyProfileByUser();
     if (byUser) return byUser;
@@ -145,6 +154,10 @@ export default function Me() {
     for (const handle of candidates) {
       const byHandle = await fetchMyProfileByHandle(handle);
       if (byHandle) return byHandle;
+    }
+    for (const prefix of candidates) {
+      const byPrefix = await fetchMyProfileByHandlePrefix(prefix);
+      if (byPrefix) return byPrefix;
     }
     return null;
   };
