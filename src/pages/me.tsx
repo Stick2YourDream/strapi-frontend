@@ -40,9 +40,6 @@ const slug = (s: string) =>
 export default function Me() {
   const { user } = useAuth();
 
-  const [profileDocumentId, setProfileDocumentId] = useState<string | null>(null);
-  const [profileId, setProfileId] = useState<number | string | null>(null);
-
   const [profile, setProfile] = useState<Profile>({
     firstName: "",
     lastName: "",
@@ -102,9 +99,6 @@ export default function Me() {
     if (!entry) return;
     const attrs = normalize(entry);
 
-    setProfileDocumentId(entry.documentId ?? null);
-    setProfileId(entry.id ?? null);
-
     setProfile({
       firstName: attrs.firstName || "",
       lastName: attrs.lastName || "",
@@ -122,10 +116,8 @@ export default function Me() {
 
   const fetchMyProfileByUser = async () => {
     if (!user) return null;
-    const res = await api.get(
-      `/profiles?filters[user][id][$eq]=${user.id}&populate=avatar&sort=updatedAt:desc&pagination[pageSize]=1`
-    );
-    return res.data?.data?.[0] ?? null;
+    const res = await api.get(`/profiles/me?populate=avatar`);
+    return res.data?.data ?? null;
   };
 
   // ✅ fallback: if the old profile wasn’t linked to user, we still find it by unique handle
@@ -160,11 +152,6 @@ export default function Me() {
       if (byPrefix) return byPrefix;
     }
     return null;
-  };
-
-  const fetchProfileByDocumentId = async (documentId: string | number) => {
-    const res = await api.get(`/profiles/${documentId}?populate=avatar`);
-    return res.data?.data ?? null;
   };
 
   const fetchMyPosts = async () => {
@@ -210,8 +197,6 @@ export default function Me() {
             phone: "",
             handle: lockedUniqueHandle, // show the locked handle even if empty profile
           });
-          setProfileDocumentId(null);
-          setProfileId(null);
           setEditing(true);
           await fetchMyPosts();
           return;
@@ -280,39 +265,7 @@ export default function Me() {
       return data;
     };
 
-    const existing = await fetchMyProfile();
-    let docId: string | null = existing?.documentId ?? profileDocumentId ?? null;
-    let numericId: number | string | null = existing?.id ?? profileId ?? null;
-    let handleToUse = baseHandle;
-    let payload = buildPayload(handleToUse);
-
-    const tryUpdate = async (resourceId: string | number, allowPhoneRetry = true) => {
-      try {
-        const res = await api.put(`/profiles/${resourceId}`, { data: payload });
-        return res.data?.data ?? null;
-      } catch (e) {
-        if (axios.isAxiosError(e)) {
-          const status = e.response?.status;
-          const msg = String(e.response?.data?.error?.message || "").toLowerCase();
-
-          if (status === 400 && msg.includes("phone")) {
-            if (!allowPhoneRetry) throw e;
-            const clone = { ...payload };
-            delete clone.phone;
-            const res = await api.put(`/profiles/${resourceId}`, { data: clone });
-            return res.data?.data ?? null;
-          }
-
-          if (status === 404) return null;
-        }
-        throw e;
-      }
-    };
-
-    const tryCreate = async () => {
-      const res = await api.post("/profiles", { data: payload });
-      return res.data?.data ?? null;
-    };
+    let payload = buildPayload(baseHandle);
 
     const isHandleUniqueError = (err: any) => {
       if (!axios.isAxiosError(err)) return false;
@@ -322,38 +275,19 @@ export default function Me() {
       return msg.includes("unique") && (msg.includes("handle") || handleErr);
     };
 
-    const saveOnce = async () => {
-      const updateTarget = docId ?? numericId;
-      if (updateTarget) {
-        const updated = await tryUpdate(updateTarget);
-        if (updated) {
-          docId = updated.documentId ?? docId ?? null;
-          numericId = updated.id ?? numericId ?? null;
-          return updated;
-        }
-        docId = null;
-        numericId = null;
-      }
-      const created = await tryCreate();
-      if (created) {
-        docId = created.documentId ?? null;
-        numericId = created.id ?? null;
-      }
-      return created;
+    const doSave = async () => {
+      const res = await api.put("/profiles/me", { data: payload });
+      return res.data?.data ?? null;
     };
 
+    let saved: any = null;
     try {
-      const saved = await saveOnce();
-      docId = saved?.documentId ?? docId ?? null;
-      numericId = saved?.id ?? numericId ?? null;
+      saved = await doSave();
     } catch (e) {
       if (isHandleUniqueError(e)) {
-        handleToUse = buildUniqueHandle();
-        payload = buildPayload(handleToUse);
-        const saved = await saveOnce();
-        docId = saved?.documentId ?? docId ?? null;
-        numericId = saved?.id ?? numericId ?? null;
-        setProfile((prev) => ({ ...prev, handle: handleToUse }));
+        payload = buildPayload(buildUniqueHandle());
+        saved = await doSave();
+        setProfile((prev) => ({ ...prev, handle: payload.handle }));
       } else {
         throw e;
       }
@@ -363,13 +297,10 @@ export default function Me() {
       setProfile((prev) => ({ ...prev, avatarUrl: uploadedAvatarUrl }));
     }
 
-    const profileKey = docId ?? numericId;
-    if (profileKey) {
-      const fresh = await fetchProfileByDocumentId(profileKey);
-      if (!fresh) throw new Error("Save succeeded but refresh failed");
-      setProfileFromEntry(fresh);
+    if (saved) {
+      setProfileFromEntry(saved);
     } else {
-      const mine = await fetchMyProfile();
+      const mine = await fetchMyProfileByUser();
       if (!mine) throw new Error("Save succeeded but no profile found");
       setProfileFromEntry(mine);
     }
@@ -390,7 +321,8 @@ export default function Me() {
       setErrorModal("Failed to save profile. Please try again.");
     }
   }
-};const addPost = async () => {
+};
+const addPost = async () => {
     if (!textInput.trim() && !mediaInput.trim()) return;
 
     try {
