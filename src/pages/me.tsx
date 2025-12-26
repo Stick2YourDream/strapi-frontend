@@ -222,7 +222,6 @@ export default function Me() {
     const sanitizePhone = (value?: string) => (value || "").replace(/[^\d+]/g, "").slice(0, 15);
     const phoneClean = sanitizePhone(profile.phone);
 
-    // Upload avatar if provided
     let avatarId: number | undefined;
     let uploadedAvatarUrl: string | undefined;
 
@@ -257,7 +256,6 @@ export default function Me() {
       return data;
     };
 
-    // 1) resolve existing (user relation OR unique handle)
     const existing = await fetchMyProfile();
     let docId: string | null = existing?.documentId ?? profileDocumentId ?? null;
     let handleToUse = baseHandle;
@@ -266,7 +264,8 @@ export default function Me() {
     const tryUpdate = async (documentId: string, allowPhoneRetry = true) => {
       try {
         const res = await api.put(`/profiles/${documentId}`, { data: payload });
-        return res.data?.data ?? null;
+        const updated = res.data?.data;
+        return updated?.documentId || documentId;
       } catch (e) {
         if (axios.isAxiosError(e)) {
           const status = e.response?.status;
@@ -277,7 +276,8 @@ export default function Me() {
             const clone = { ...payload };
             delete clone.phone;
             const res = await api.put(`/profiles/${documentId}`, { data: clone });
-            return res.data?.data ?? null;
+            const updated = res.data?.data;
+            return updated?.documentId || documentId;
           }
 
           if (status === 404) return null;
@@ -286,41 +286,38 @@ export default function Me() {
       }
     };
 
+    const tryCreate = async () => {
+      const res = await api.post("/profiles", { data: payload });
+      const created = res.data?.data;
+      return created?.documentId ?? null;
+    };
+
     const isHandleUniqueError = (err: any) => {
       if (!axios.isAxiosError(err)) return false;
-      const msg = String(
-        err.response?.data?.error?.message || err.response?.data?.message || ""
-      ).toLowerCase();
+      const msg = String(err.response?.data?.error?.message || err.response?.data?.message || "").toLowerCase();
       const errors = (err.response?.data?.error?.details?.errors ?? []) as any[];
       const handleErr = errors?.find((e: any) => (e?.path ?? []).includes("handle"));
       return msg.includes("unique") && (msg.includes("handle") || handleErr);
     };
 
-    const attemptSave = async () => {
-      let currentDocId = docId;
-      payload = buildPayload(handleToUse);
-
-      if (currentDocId) {
-        const updated = await tryUpdate(currentDocId);
-        if (!updated?.documentId) currentDocId = null;
+    const saveOnce = async () => {
+      // update if we have a docId
+      if (docId) {
+        const updatedId = await tryUpdate(docId);
+        if (updatedId) return updatedId;
+        docId = null; // 404 fallback to create
       }
-
-      if (!currentDocId) {
-        const res = await api.post("/profiles", { data: payload });
-        currentDocId = res.data?.data?.documentId ?? null;
-        setProfileDocumentId(currentDocId);
-      }
-
-      return currentDocId;
+      // create if none
+      return await tryCreate();
     };
 
     try {
-      docId = await attemptSave();
+      docId = await saveOnce();
     } catch (e) {
       if (isHandleUniqueError(e)) {
         handleToUse = buildUniqueHandle();
         payload = buildPayload(handleToUse);
-        docId = await attemptSave();
+        docId = await saveOnce();
         setProfile((prev) => ({ ...prev, handle: handleToUse }));
       } else {
         throw e;
@@ -331,7 +328,6 @@ export default function Me() {
       setProfile((prev) => ({ ...prev, avatarUrl: uploadedAvatarUrl }));
     }
 
-    // 4) re-fetch truth
     if (docId) {
       const fresh = await fetchProfileByDocumentId(docId);
       if (!fresh) throw new Error("Save succeeded but refresh failed");
