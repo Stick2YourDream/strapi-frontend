@@ -31,6 +31,7 @@ jobs:
         run: |
           npm ci
           npm run build
+          cp staticwebapp.config.json dist/
 
       - name: Deploy to Azure Static Web Apps
         id: builddeploy
