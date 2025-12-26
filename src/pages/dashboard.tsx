@@ -37,6 +37,8 @@ export default function Dashboard() {
 
   const navigate = useNavigate();
   const { user } = useAuth();
+  const userLabel = user?.username || user?.email || "Guest";
+  const userInitial = userLabel.charAt(0).toUpperCase();
 
   useEffect(() => {
     let cancelled = false;
@@ -242,9 +244,28 @@ export default function Dashboard() {
             cover art when available.
           </p>
         </div>
-        <div className="hero-badge">
-          <span className="pill">Live</span>
-          <span>Authenticated</span>
+        <div className="hero-badge" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <span className="pill" title="Live">Live</span>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <div
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: "50%",
+                background: "linear-gradient(135deg, #60a5fa, #7c3aed)",
+                display: "grid",
+                placeItems: "center",
+                color: "#fff",
+                fontWeight: 700,
+              }}
+            >
+              {userInitial}
+            </div>
+            <div style={{ lineHeight: 1.2 }}>
+              <div style={{ fontSize: "12px", color: "#9ca3af" }}>Signed in as</div>
+              <div style={{ fontWeight: 600 }}>{userLabel}</div>
+            </div>
+          </div>
         </div>
       </div>
 

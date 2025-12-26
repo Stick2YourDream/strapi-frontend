@@ -77,13 +77,18 @@ export default function Sidebar({ active }: SidebarProps) {
     [profileSummary?.displayName, user?.username]
   );
 
+  const handleLogoClick = () => {
+    navigate("/");
+    setMenuOpen(false);
+  };
+
   return (
     <div className={`sidebar-shell ${menuOpen ? "open" : ""}`}>
       <div className="sidebar-topbar">
-        <div className="brand">
+        <button className="brand" type="button" onClick={handleLogoClick} style={{ cursor: "pointer" }}>
           <span className="brand-mark">S2YD</span>
           <span className="brand-text">Stick2YourDreams</span>
-        </div>
+        </button>
         <button
           type="button"
           className={`hamburger ${menuOpen ? "is-open" : ""}`}
@@ -97,10 +102,10 @@ export default function Sidebar({ active }: SidebarProps) {
       </div>
 
       <aside className="dash-nav">
-        <div className="brand">
+        <button className="brand" type="button" onClick={handleLogoClick} style={{ cursor: "pointer" }}>
           <span className="brand-mark">S2YD</span>
           <span className="brand-text">Stick2YourDreams</span>
-        </div>
+        </button>
         <div className="nav-actions" style={{ flexDirection: "column", alignItems: "flex-start", gap: "8px", width: "100%" }}>
           {profileSummary && (
             <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
