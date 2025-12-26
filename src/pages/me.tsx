@@ -207,41 +207,39 @@ export default function Me() {
   }, [user?.id, lockedUniqueHandle]);
 
   const saveProfile = async () => {
-    if (!user) return;
+  if (!user) return;
 
-    setError(null);
-    setErrorModal(null);
-    setSuccess(null);
-    setSuccessModal(null);
+  setError(null);
+  setErrorModal(null);
+  setSuccess(null);
+  setSuccessModal(null);
 
-    try {
-      const safeFirst = profile.firstName || user.username || user.email || "user";
+  try {
+    const safeFirst = profile.firstName || user.username || user.email || "user";
+    const baseHandle = (profile.handle || lockedUniqueHandle || "").trim() || lockedUniqueHandle;
+    const buildUniqueHandle = () => `${baseHandle}-${user.id}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-      const sanitizePhone = (value?: string) =>
-        (value || "").replace(/[^\d+]/g, "").slice(0, 15);
+    const sanitizePhone = (value?: string) => (value || "").replace(/[^\d+]/g, "").slice(0, 15);
+    const phoneClean = sanitizePhone(profile.phone);
 
-      const phoneClean = sanitizePhone(profile.phone);
+    // Upload avatar if provided
+    let avatarId: number | undefined;
+    let uploadedAvatarUrl: string | undefined;
 
-      // Upload avatar if provided
-      let avatarId: number | undefined;
-      let uploadedAvatarUrl: string | undefined;
+    if (avatarFile) {
+      const fd = new FormData();
+      fd.append("files", avatarFile);
 
-      if (avatarFile) {
-        const fd = new FormData();
-        fd.append("files", avatarFile);
+      const uploadRes = await api.post("/upload", fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
 
-        const uploadRes = await api.post("/upload", fd, {
-          headers: { "Content-Type": "multipart/form-data" },
-        });
+      avatarId = uploadRes.data?.[0]?.id;
+      uploadedAvatarUrl = pickMediaUrl(uploadRes.data?.[0]);
+    }
 
-        avatarId = uploadRes.data?.[0]?.id;
-        uploadedAvatarUrl = pickMediaUrl(uploadRes.data?.[0]);
-      }
-
-      // ✅ IMPORTANT:
-      // - handle is REQUIRED (UID)
-      // - make it UNIQUE up front so you never hit the "unique" validator
-      const payload: any = {
+    const buildPayload = (handleValue: string) => {
+      const data: any = {
         firstName: safeFirst,
         lastName: profile.lastName,
         age: profile.age,
@@ -250,90 +248,117 @@ export default function Me() {
         hobbies: profile.hobbies,
         occupation: profile.occupation,
         bio: profile.bio,
-
-        handle: lockedUniqueHandle, // ✅ always unique
-
+        handle: handleValue,
         locale: "en",
-        user: user.id, // ✅ users-permissions relation works reliably with numeric id
+        user: user.id,
       };
+      data.phone = phoneClean ? phoneClean : null;
+      if (avatarId) data.avatar = avatarId;
+      return data;
+    };
 
-      payload.phone = phoneClean ? phoneClean : null;
-      if (avatarId) payload.avatar = avatarId;
+    // 1) resolve existing (user relation OR unique handle)
+    const existing = await fetchMyProfile();
+    let docId: string | null = existing?.documentId ?? profileDocumentId ?? null;
+    let handleToUse = baseHandle;
+    let payload = buildPayload(handleToUse);
 
-      // 1) resolve existing (user relation OR unique handle)
-      const existing = await fetchMyProfile();
-      let docId: string | null = existing?.documentId ?? profileDocumentId ?? null;
+    const tryUpdate = async (documentId: string, allowPhoneRetry = true) => {
+      try {
+        const res = await api.put(`/profiles/${documentId}`, { data: payload });
+        return res.data?.data ?? null;
+      } catch (e) {
+        if (axios.isAxiosError(e)) {
+          const status = e.response?.status;
+          const msg = String(e.response?.data?.error?.message || "").toLowerCase();
 
-      const tryUpdate = async (documentId: string, allowPhoneRetry = true) => {
-        try {
-          const res = await api.put(`/profiles/${documentId}`, { data: payload });
-          return res.data?.data ?? null;
-        } catch (e) {
-          if (axios.isAxiosError(e)) {
-            const status = e.response?.status;
-            const msg = String(e.response?.data?.error?.message || "").toLowerCase();
-
-            if (status === 400 && msg.includes("phone")) {
-              if (!allowPhoneRetry) throw e;
-              const clone = { ...payload };
-              delete clone.phone;
-              const res = await api.put(`/profiles/${documentId}`, { data: clone });
-              return res.data?.data ?? null;
-            }
-
-            if (status === 404) return null;
+          if (status === 400 && msg.includes("phone")) {
+            if (!allowPhoneRetry) throw e;
+            const clone = { ...payload };
+            delete clone.phone;
+            const res = await api.put(`/profiles/${documentId}`, { data: clone });
+            return res.data?.data ?? null;
           }
-          throw e;
+
+          if (status === 404) return null;
         }
-      };
+        throw e;
+      }
+    };
 
-      // 2) update if found
-      if (docId) {
-        const updated = await tryUpdate(docId);
-        if (!updated?.documentId) docId = null;
+    const isHandleUniqueError = (err: any) => {
+      if (!axios.isAxiosError(err)) return false;
+      const msg = String(
+        err.response?.data?.error?.message || err.response?.data?.message || ""
+      ).toLowerCase();
+      const errors = (err.response?.data?.error?.details?.errors ?? []) as any[];
+      const handleErr = errors?.find((e: any) => (e?.path ?? []).includes("handle"));
+      return msg.includes("unique") && (msg.includes("handle") || handleErr);
+    };
+
+    const attemptSave = async () => {
+      let currentDocId = docId;
+      payload = buildPayload(handleToUse);
+
+      if (currentDocId) {
+        const updated = await tryUpdate(currentDocId);
+        if (!updated?.documentId) currentDocId = null;
       }
 
-      // 3) create only if truly none exists
-      if (!docId) {
+      if (!currentDocId) {
         const res = await api.post("/profiles", { data: payload });
-        docId = res.data?.data?.documentId ?? null;
-        setProfileDocumentId(docId);
+        currentDocId = res.data?.data?.documentId ?? null;
+        setProfileDocumentId(currentDocId);
       }
 
-      if (uploadedAvatarUrl) {
-        setProfile((prev) => ({ ...prev, avatarUrl: uploadedAvatarUrl }));
-      }
+      return currentDocId;
+    };
 
-      // 4) re-fetch truth
-      if (docId) {
-        const fresh = await fetchProfileByDocumentId(docId);
-        if (!fresh) throw new Error("Save succeeded but refresh failed");
-        setProfileFromEntry(fresh);
-      } else {
-        const mine = await fetchMyProfile();
-        if (!mine) throw new Error("Save succeeded but no profile found");
-        setProfileFromEntry(mine);
-      }
-
-      setSuccess("Profile saved successfully.");
-      setSuccessModal("Profile saved successfully.");
-      setEditing(false);
+    try {
+      docId = await attemptSave();
     } catch (e) {
-      if (axios.isAxiosError(e)) {
-        const msg =
-          e.response?.data?.error?.message ||
-          e.response?.data?.message ||
-          "Failed to save profile";
-        setError(String(msg));
-        setErrorModal(String(msg));
+      if (isHandleUniqueError(e)) {
+        handleToUse = buildUniqueHandle();
+        payload = buildPayload(handleToUse);
+        docId = await attemptSave();
+        setProfile((prev) => ({ ...prev, handle: handleToUse }));
       } else {
-        setError("Failed to save profile");
-        setErrorModal("Failed to save profile. Please try again.");
+        throw e;
       }
     }
-  };
 
-  const addPost = async () => {
+    if (uploadedAvatarUrl) {
+      setProfile((prev) => ({ ...prev, avatarUrl: uploadedAvatarUrl }));
+    }
+
+    // 4) re-fetch truth
+    if (docId) {
+      const fresh = await fetchProfileByDocumentId(docId);
+      if (!fresh) throw new Error("Save succeeded but refresh failed");
+      setProfileFromEntry(fresh);
+    } else {
+      const mine = await fetchMyProfile();
+      if (!mine) throw new Error("Save succeeded but no profile found");
+      setProfileFromEntry(mine);
+    }
+
+    setSuccess("Profile saved successfully.");
+    setSuccessModal("Profile saved successfully.");
+    setEditing(false);
+  } catch (e) {
+    if (axios.isAxiosError(e)) {
+      const msg =
+        e.response?.data?.error?.message ||
+        e.response?.data?.message ||
+        "Failed to save profile";
+      setError(String(msg));
+      setErrorModal(String(msg));
+    } else {
+      setError("Failed to save profile");
+      setErrorModal("Failed to save profile. Please try again.");
+    }
+  }
+};const addPost = async () => {
     if (!textInput.trim() && !mediaInput.trim()) return;
 
     try {
