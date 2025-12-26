@@ -1,6 +1,7 @@
 // src/pages/Me.tsx
 import { useEffect, useMemo, useState } from "react";
 import "../css/dashboard.css";
+import "../css/profile.css";
 import { useAuth } from "../context/AuthContext";
 import api from "../api/strapi";
 import axios from "axios";
@@ -369,6 +370,20 @@ export default function Me() {
 
   if (!user) return null;
 
+  const displayName =
+    (profile.firstName || profile.lastName
+      ? `${profile.firstName || ""} ${profile.lastName || ""}`.trim()
+      : user.username) || user.email;
+  const displayHandle = profile.handle || lockedUniqueHandle;
+  const avatarImg = profile.avatarUrl;
+  const initials =
+    displayName
+      ?.split(" ")
+      .map((p) => p[0])
+      .join("")
+      .slice(0, 2)
+      .toUpperCase() || "ME";
+
   return (
     <div className="dashboard-shell">
       {errorModal && (
@@ -451,13 +466,80 @@ export default function Me() {
         <div className="dash-hero">
           <div className="dash-hero__text">
             <p className="eyebrow">Profile</p>
-            <p className="subhead">Edit your details and share media or text updates.</p>
+            <p className="subhead">A clean snapshot of you, with quick actions and easy editing.</p>
           </div>
         </div>
 
         {loading && <p className="status">Loading profile…</p>}
         {error && <p className="status status-error">{error}</p>}
         {success && <p className="status status-success">{success}</p>}
+
+        <div className="panel-grid" style={{ marginBottom: "16px" }}>
+          <section
+            className="panel"
+            style={{
+              background: "linear-gradient(135deg, rgba(92,128,255,0.12), rgba(16,185,129,0.08))",
+              border: "1px solid rgba(255,255,255,0.06)",
+              display: "grid",
+              gridTemplateColumns: "auto 1fr",
+              gap: "18px",
+              alignItems: "center",
+              padding: "20px 22px",
+            }}
+          >
+            <div
+              style={{
+                width: 96,
+                height: 96,
+                borderRadius: "22px",
+                background: "rgba(255,255,255,0.06)",
+                display: "grid",
+                placeItems: "center",
+                overflow: "hidden",
+                boxShadow: "0 12px 40px rgba(0,0,0,0.25)",
+              }}
+            >
+              {avatarImg ? (
+                <img
+                  src={avatarImg}
+                  alt={displayName}
+                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                />
+              ) : (
+                <span style={{ fontWeight: 700, color: "#cdd5e8", fontSize: 22 }}>{initials}</span>
+              )}
+            </div>
+
+            <div style={{ display: "grid", gap: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <h2 style={{ margin: 0 }}>{displayName}</h2>
+                <span
+                  style={{
+                    background: "rgba(255,255,255,0.07)",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    padding: "6px 12px",
+                    borderRadius: 999,
+                    fontSize: 12,
+                    letterSpacing: 0.2,
+                  }}
+                >
+                  @{displayHandle}
+                </span>
+              </div>
+              <p style={{ margin: 0, color: "#cdd5e8", maxWidth: 720 }}>
+                {profile.bio || "Share a quick bio to help friends recognize you."}
+              </p>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button className="btn primary" type="button" onClick={() => setEditing(true)}>
+                  Edit Profile
+                </button>
+                <button className="btn ghost" type="button" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>
+                  Jump to top
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
 
         <div className="panel-grid">
           <section className="panel">
@@ -466,17 +548,12 @@ export default function Me() {
                 <p className="eyebrow">About</p>
                 <h3>Your Info</h3>
               </div>
-              {!editing && (
-                <button className="btn ghost" type="button" onClick={() => setEditing(true)}>
-                  Edit
-                </button>
-              )}
             </div>
 
             {editing ? (
-              <div className="form-grid">
-                <label className="field">
-                  <span>Handle</span>
+              <div className="profile-edit-grid">
+                <label className="profile-field">
+                  <span className="profile-field-label">Handle</span>
                   <input
                     className="auth-input"
                     value={lockedUniqueHandle}
@@ -486,9 +563,7 @@ export default function Me() {
                     onFocus={(e) => e.target.blur()}
                     style={{ pointerEvents: "none", userSelect: "none", opacity: 0.7 }}
                   />
-                  <small style={{ color: "#9ca3af" }}>
-                    Locked + unique (username/email + user id).
-                  </small>
+                  <small style={{ color: "#9ca3af" }}>Locked + unique (username/email + user id).</small>
                 </label>
 
                 {(
@@ -503,8 +578,8 @@ export default function Me() {
                     ["Occupation", "occupation"],
                   ] as const
                 ).map(([label, key]) => (
-                  <label className="field" key={key}>
-                    <span>{label}</span>
+                  <label className="profile-field" key={key}>
+                    <span className="profile-field-label">{label}</span>
                     <input
                       className="auth-input"
                       maxLength={64}
@@ -514,8 +589,8 @@ export default function Me() {
                   </label>
                 ))}
 
-                <label className="field">
-                  <span>Bio</span>
+                <label className="profile-field profile-span-2">
+                  <span className="profile-field-label">Bio</span>
                   <textarea
                     className="auth-input"
                     value={profile.bio}
@@ -524,8 +599,8 @@ export default function Me() {
                   />
                 </label>
 
-                <label className="field">
-                  <span>Avatar</span>
+                <label className="profile-field profile-span-2">
+                  <span className="profile-field-label">Avatar</span>
                   <input
                     type="file"
                     className="auth-input"
@@ -534,14 +609,14 @@ export default function Me() {
                   />
                 </label>
 
-                <div className="auth-actions">
+                <div className="profile-actions profile-span-2">
                   <button className="btn primary" type="button" onClick={saveProfile}>
                     Save Profile
                   </button>
                 </div>
               </div>
             ) : (
-              <div className="form-grid">
+              <div className="profile-info-grid">
                 {(
                   [
                     ["Handle", profile.handle || lockedUniqueHandle],
@@ -556,11 +631,9 @@ export default function Me() {
                     ["Bio", profile.bio],
                   ] as const
                 ).map(([label, value]) => (
-                  <div className="field" key={label}>
-                    <span>{label}</span>
-                    <div className="auth-input" style={{ opacity: 0.8 }}>
-                      {value || "—"}
-                    </div>
+                  <div className="profile-card" key={label}>
+                    <p className="profile-card-label">{label}</p>
+                    <p className="profile-card-value">{value || "-"}</p>
                   </div>
                 ))}
               </div>

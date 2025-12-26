@@ -6,6 +6,7 @@ import api from "../api/strapi";
 type ProfileSummary = {
   displayName: string;
   avatarUrl?: string;
+  handle?: string;
   age?: string;
   hobbies?: string;
   bio?: string;
@@ -21,6 +22,7 @@ export default function Sidebar({ active }: SidebarProps) {
   const [showMoreProfile, setShowMoreProfile] = useState(false);
   const [profileSummary, setProfileSummary] = useState<ProfileSummary | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
 
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
   const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
@@ -55,6 +57,7 @@ export default function Sidebar({ active }: SidebarProps) {
             : attrs.handle || attrs.username || user.username;
         setProfileSummary({
           displayName,
+          handle: attrs.handle || user.username,
           avatarUrl: pickMediaUrl(attrs.avatar),
           age: attrs.age || "",
           hobbies: attrs.hobbies || "",
@@ -82,6 +85,15 @@ export default function Sidebar({ active }: SidebarProps) {
     setMenuOpen(false);
   };
 
+  const handleProfileAction = (path: string) => {
+    navigate(path);
+    setShowProfileMenu(false);
+    setMenuOpen(false);
+  };
+
+  // prefer handle if loaded, else username/email
+  const secondaryLine = profileSummary?.handle || user?.username || user?.email || "Profile";
+
   return (
     <div className={`sidebar-shell ${menuOpen ? "open" : ""}`}>
       <div className="sidebar-topbar">
@@ -108,31 +120,97 @@ export default function Sidebar({ active }: SidebarProps) {
         </button>
         <div className="nav-actions" style={{ flexDirection: "column", alignItems: "flex-start", gap: "8px", width: "100%" }}>
           {profileSummary && (
-            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-              {profileSummary.avatarUrl && (
-                <img
-                  src={profileSummary.avatarUrl}
-                  alt={nameForDisplay}
-                  className="avatar-octagon"
-                  style={{ width: 54, height: 54 }}
-                />
+            <div style={{ position: "relative", width: "100%" }}>
+              <button
+                type="button"
+                onClick={() => setShowProfileMenu((v) => !v)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "10px",
+                  width: "100%",
+                  background: "transparent",
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  padding: "10px 12px",
+                  borderRadius: "12px",
+                  color: "#c7cede",
+                  cursor: "pointer",
+                }}
+              >
+                {profileSummary.avatarUrl && (
+                  <img
+                    src={profileSummary.avatarUrl}
+                    alt={nameForDisplay}
+                    className="avatar-octagon"
+                    style={{ width: 48, height: 48, borderRadius: "50%" }}
+                  />
+                )}
+                <div style={{ textAlign: "left" }}>
+                  <strong style={{ display: "block" }}>{nameForDisplay}</strong>
+                  <span
+                    style={{
+                      fontSize: "12px",
+                      color: "#9ca3af",
+                      display: "block",
+                      maxWidth: "100%",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                    title={secondaryLine}
+                  >
+                    {secondaryLine}
+                  </span>
+                </div>
+              </button>
+
+              {showProfileMenu && (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: "110%",
+                    left: 0,
+                    right: 0,
+                    background: "#0f172a",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    borderRadius: "10px",
+                    boxShadow: "0 12px 40px rgba(0,0,0,0.35)",
+                    overflow: "hidden",
+                    zIndex: 15,
+                  }}
+                >
+                  <button
+                    className="btn ghost nav-btn"
+                    type="button"
+                    style={{ width: "100%", border: "none", borderRadius: 0, justifyContent: "flex-start" }}
+                    onClick={() => handleProfileAction("/me")}
+                >
+                  My Profile
+                </button>
+                  <button
+                    className="btn ghost nav-btn"
+                    type="button"
+                    style={{ width: "100%", border: "none", borderRadius: 0, justifyContent: "flex-start" }}
+                    onClick={() => handleProfileAction("/friends")}
+                  >
+                    My Friends
+                  </button>
+                  <button
+                    className="btn ghost nav-btn"
+                    type="button"
+                    style={{ width: "100%", border: "none", borderRadius: 0, justifyContent: "flex-start" }}
+                    onClick={() => {
+                      logout();
+                      navigate("/login");
+                      setShowProfileMenu(false);
+                    }}
+                  >
+                    Logout
+                  </button>
+                </div>
               )}
-              <div style={{ color: "#c7cede" }}>
-                <strong>{nameForDisplay}</strong>
-              </div>
             </div>
           )}
-          <button
-            className="btn ghost nav-btn"
-            type="button"
-            onClick={() => {
-              logout();
-              navigate("/login");
-              setMenuOpen(false);
-            }}
-          >
-            Logout
-          </button>
         </div>
         <div className="nav-links">
           <button
@@ -144,26 +222,6 @@ export default function Sidebar({ active }: SidebarProps) {
             style={active === "dashboard" ? { boxShadow: "0 0 0 2px rgba(127,168,255,0.35)" } : undefined}
           >
             Dashboard
-          </button>
-          <button
-            className="btn ghost nav-btn"
-            onClick={() => {
-              navigate("/friends");
-              setMenuOpen(false);
-            }}
-            style={active === "friends" ? { boxShadow: "0 0 0 2px rgba(127,168,255,0.35)" } : undefined}
-          >
-            Friends
-          </button>
-          <button
-            className="btn ghost nav-btn"
-            onClick={() => {
-              navigate("/me");
-              setMenuOpen(false);
-            }}
-            style={active === "me" ? { boxShadow: "0 0 0 2px rgba(127,168,255,0.35)" } : undefined}
-          >
-            Me
           </button>
         </div>
         {user && (

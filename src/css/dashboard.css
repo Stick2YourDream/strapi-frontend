@@ -108,9 +108,12 @@
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 20px;
   font-weight: 700;
   letter-spacing: 0.04em;
+  background: limegreen;
+  border-radius: 20px;
+  padding: 0 1rem 0 0;
 }
 
 .brand-mark {
@@ -120,14 +123,14 @@
   width: 36px;
   height: 36px;
   border-radius: 10px;
-  background: linear-gradient(135deg, #5f8bff, #44d2ff);
-  color: #0b0d14;
-  font-weight: 800;
-  font-size: 13px;
+  background: black;
+  color: white;
+  font-weight: 600;
+  font-size: 10px;
 }
 
 .brand-text {
-  color: #e9ecf5;
+  color: #000
 }
 
 .nav-actions {

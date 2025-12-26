@@ -237,16 +237,20 @@ export default function Dashboard() {
       <div className="main-content">
         <div className="dash-hero">
         <div className="dash-hero__text">
-          <p className="eyebrow">Stick2YourDreams</p>
+          <p className="eyebrow">S2YD</p>
           <h1>Posts</h1>
           <p className="subhead">
             Fresh drops from the community. Rich cards, crisp typography, and
             cover art when available.
           </p>
         </div>
-        <div className="hero-badge" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+        <div className="hero-badge" style={{ display: 
+          "flex", alignItems: "center",
+           gap: "10px" }}>
           <span className="pill" title="Live">Live</span>
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <div style={{ display: "flex",
+             alignItems: "center", 
+             gap: "10px" }}>
             <div
               style={{
                 width: 36,
@@ -281,7 +285,7 @@ export default function Dashboard() {
                   <p className="eyebrow">Create</p>
                   <h3>New Post</h3>
                   <p className="panel-sub">
-                    Craft a quick update. Cover image is optional via Strapi.
+                    Let Your Friends Know What You're Up To! 
                   </p>
                 </div>
               </div>

@@ -1,0 +1,62 @@
+.profile-info-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.profile-card {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  padding: 14px 16px;
+  min-height: 90px;
+  display: grid;
+  align-content: center;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+}
+
+.profile-card-label {
+  margin: 0 0 4px;
+  font-size: 12px;
+  letter-spacing: 0.3px;
+  color: #94a3b8;
+}
+
+.profile-card-value {
+  margin: 0;
+  font-weight: 600;
+  color: #e5e7eb;
+  word-break: break-word;
+}
+
+.profile-edit-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.profile-field {
+  display: grid;
+  gap: 6px;
+}
+
+.profile-field-label {
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.profile-span-2 {
+  grid-column: span 2;
+}
+
+@media (max-width: 760px) {
+  .profile-span-2 {
+    grid-column: span 1;
+  }
+}
+
+.profile-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-start;
+}
