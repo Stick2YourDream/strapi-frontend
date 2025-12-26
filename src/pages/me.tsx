@@ -41,6 +41,7 @@ export default function Me() {
   const { user } = useAuth();
 
   const [profileDocumentId, setProfileDocumentId] = useState<string | null>(null);
+  const [profileId, setProfileId] = useState<number | string | null>(null);
 
   const [profile, setProfile] = useState<Profile>({
     firstName: "",
@@ -102,6 +103,7 @@ export default function Me() {
     const attrs = normalize(entry);
 
     setProfileDocumentId(entry.documentId ?? null);
+    setProfileId(entry.id ?? null);
 
     setProfile({
       firstName: attrs.firstName || "",
@@ -127,19 +129,27 @@ export default function Me() {
   };
 
   // ✅ fallback: if the old profile wasn’t linked to user, we still find it by unique handle
-  const fetchMyProfileByHandle = async () => {
-    if (!lockedUniqueHandle) return null;
+  const fetchMyProfileByHandle = async (handle?: string) => {
+    const target = (handle || "").trim() || lockedUniqueHandle;
+    if (!target) return null;
     const res = await api.get(
-      `/profiles?filters[handle][$eq]=${encodeURIComponent(lockedUniqueHandle)}&populate=avatar&sort=updatedAt:desc&pagination[pageSize]=1`
+      `/profiles?filters[handle][$eq]=${encodeURIComponent(target)}&populate=avatar&sort=updatedAt:desc&pagination[pageSize]=1`
     );
     return res.data?.data?.[0] ?? null;
   };
 
   const fetchMyProfile = async () => {
-    return (await fetchMyProfileByUser()) || (await fetchMyProfileByHandle());
+    const byUser = await fetchMyProfileByUser();
+    if (byUser) return byUser;
+    const candidates = [profile.handle, lockedUniqueHandle].filter(Boolean) as string[];
+    for (const handle of candidates) {
+      const byHandle = await fetchMyProfileByHandle(handle);
+      if (byHandle) return byHandle;
+    }
+    return null;
   };
 
-  const fetchProfileByDocumentId = async (documentId: string) => {
+  const fetchProfileByDocumentId = async (documentId: string | number) => {
     const res = await api.get(`/profiles/${documentId}?populate=avatar`);
     return res.data?.data ?? null;
   };
@@ -188,6 +198,7 @@ export default function Me() {
             handle: lockedUniqueHandle, // show the locked handle even if empty profile
           });
           setProfileDocumentId(null);
+          setProfileId(null);
           setEditing(true);
           await fetchMyPosts();
           return;
@@ -258,14 +269,14 @@ export default function Me() {
 
     const existing = await fetchMyProfile();
     let docId: string | null = existing?.documentId ?? profileDocumentId ?? null;
+    let numericId: number | string | null = existing?.id ?? profileId ?? null;
     let handleToUse = baseHandle;
     let payload = buildPayload(handleToUse);
 
-    const tryUpdate = async (documentId: string, allowPhoneRetry = true) => {
+    const tryUpdate = async (resourceId: string | number, allowPhoneRetry = true) => {
       try {
-        const res = await api.put(`/profiles/${documentId}`, { data: payload });
-        const updated = res.data?.data;
-        return updated?.documentId || documentId;
+        const res = await api.put(`/profiles/${resourceId}`, { data: payload });
+        return res.data?.data ?? null;
       } catch (e) {
         if (axios.isAxiosError(e)) {
           const status = e.response?.status;
@@ -275,9 +286,8 @@ export default function Me() {
             if (!allowPhoneRetry) throw e;
             const clone = { ...payload };
             delete clone.phone;
-            const res = await api.put(`/profiles/${documentId}`, { data: clone });
-            const updated = res.data?.data;
-            return updated?.documentId || documentId;
+            const res = await api.put(`/profiles/${resourceId}`, { data: clone });
+            return res.data?.data ?? null;
           }
 
           if (status === 404) return null;
@@ -288,8 +298,7 @@ export default function Me() {
 
     const tryCreate = async () => {
       const res = await api.post("/profiles", { data: payload });
-      const created = res.data?.data;
-      return created?.documentId ?? null;
+      return res.data?.data ?? null;
     };
 
     const isHandleUniqueError = (err: any) => {
@@ -301,23 +310,36 @@ export default function Me() {
     };
 
     const saveOnce = async () => {
-      // update if we have a docId
-      if (docId) {
-        const updatedId = await tryUpdate(docId);
-        if (updatedId) return updatedId;
-        docId = null; // 404 fallback to create
+      const updateTarget = docId ?? numericId;
+      if (updateTarget) {
+        const updated = await tryUpdate(updateTarget);
+        if (updated) {
+          docId = updated.documentId ?? docId ?? null;
+          numericId = updated.id ?? numericId ?? null;
+          return updated;
+        }
+        docId = null;
+        numericId = null;
       }
-      // create if none
-      return await tryCreate();
+      const created = await tryCreate();
+      if (created) {
+        docId = created.documentId ?? null;
+        numericId = created.id ?? null;
+      }
+      return created;
     };
 
     try {
-      docId = await saveOnce();
+      const saved = await saveOnce();
+      docId = saved?.documentId ?? docId ?? null;
+      numericId = saved?.id ?? numericId ?? null;
     } catch (e) {
       if (isHandleUniqueError(e)) {
         handleToUse = buildUniqueHandle();
         payload = buildPayload(handleToUse);
-        docId = await saveOnce();
+        const saved = await saveOnce();
+        docId = saved?.documentId ?? docId ?? null;
+        numericId = saved?.id ?? numericId ?? null;
         setProfile((prev) => ({ ...prev, handle: handleToUse }));
       } else {
         throw e;
@@ -328,8 +350,9 @@ export default function Me() {
       setProfile((prev) => ({ ...prev, avatarUrl: uploadedAvatarUrl }));
     }
 
-    if (docId) {
-      const fresh = await fetchProfileByDocumentId(docId);
+    const profileKey = docId ?? numericId;
+    if (profileKey) {
+      const fresh = await fetchProfileByDocumentId(profileKey);
       if (!fresh) throw new Error("Save succeeded but refresh failed");
       setProfileFromEntry(fresh);
     } else {
