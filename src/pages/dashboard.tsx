@@ -21,19 +21,100 @@ type NormalizedPost = {
   imageUrl?: string;
   createdAt?: string;
   source: "admin" | "user";
+  ownerName?: string;
   comments: CommentItem[];
+};
+
+type LinkPreview = {
+  url: string;
+  title?: string;
+  description?: string;
+  image?: string;
+  siteName?: string;
+  type?: string;
+};
+
+const PREVIEW_DEBOUNCE_MS = 450;
+const extractFirstUrl = (text: string) => {
+  const match = text.match(/(https?:\/\/[^\s]+|www\.[^\s]+)/i);
+  if (!match) return "";
+  let url = match[0].replace(/[),.!?]+$/, "");
+  if (url.startsWith("www.")) url = `https://${url}`;
+  return url;
+};
+const hostnameFor = (value: string) => {
+  try {
+    return new URL(value).hostname.replace(/^www\./, "");
+  } catch {
+    return value;
+  }
+};
+const isYoutubeUrl = (value: string) => {
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    return host.includes("youtube.com") || host === "youtu.be";
+  } catch {
+    return false;
+  }
+};
+const isVideoUrl = (value?: string) => !!value && /\.(mp4|webm|mov)$/i.test(value);
+const mediaDescriptor = (mediaUrl?: string, hasLink?: boolean) => {
+  if (mediaUrl) return isVideoUrl(mediaUrl) ? "with a video" : "with a picture";
+  if (hasLink) return "with a link";
+  return "";
+};
+
+const LinkPreviewCard = ({
+  preview,
+  url,
+  compact = false,
+}: {
+  preview: LinkPreview;
+  url: string;
+  compact?: boolean;
+}) => {
+  const title = preview.title || preview.siteName || hostnameFor(url);
+  const meta = preview.siteName || hostnameFor(url);
+  const showBadge = preview.type === "video" || isYoutubeUrl(url);
+  return (
+    <a
+      className={`link-preview-card${compact ? " is-compact" : ""}`}
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+    >
+      <div className="link-preview-media">
+        {preview.image ? (
+          <img src={preview.image} alt={title} loading="lazy" />
+        ) : (
+          <div className="link-preview-placeholder">LINK</div>
+        )}
+        {showBadge && <span className="link-preview-badge">Video</span>}
+      </div>
+      <div className="link-preview-body">
+        <p className="link-preview-title">{title}</p>
+        {preview.description && (
+          <p className="link-preview-desc">{preview.description}</p>
+        )}
+        <span className="link-preview-url">{meta}</span>
+      </div>
+    </a>
+  );
 };
 
 export default function Dashboard() {
   const [posts, setPosts] = useState<any>({ admin: [], user: [], comments: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [formTitle, setFormTitle] = useState("");
   const [formContent, setFormContent] = useState("");
   const [formFile, setFormFile] = useState<File | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [commentInputs, setCommentInputs] = useState<Record<string | number, string>>({});
+  const [linkPreview, setLinkPreview] = useState<LinkPreview | null>(null);
+  const [linkPreviewLoading, setLinkPreviewLoading] = useState(false);
+  const [linkPreviewError, setLinkPreviewError] = useState<string | null>(null);
+  const [previewCache, setPreviewCache] = useState<Record<string, LinkPreview | null>>({});
 
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -58,7 +139,7 @@ export default function Dashboard() {
         // Fetch admin posts, user posts, and all comments
         const [adminRes, userRes, commentsRes] = await Promise.all([
           api.get("/posts?populate=Pictures"),
-          api.get("/users-posts?populate=Users_Pictures"),
+          api.get("/users-posts?populate=Users_Pictures&populate=owner"),
           api.get("/comments?populate=owner"),
         ]);
 
@@ -109,6 +190,46 @@ export default function Dashboard() {
       cancelled = true;
     };
   }, [navigate]);
+
+  const fetchLinkPreview = async (
+    url: string,
+    options?: { silent?: boolean }
+  ): Promise<LinkPreview | null> => {
+    if (!url) return null;
+    if (previewCache[url] !== undefined) return previewCache[url];
+
+    if (!options?.silent) {
+      setLinkPreviewLoading(true);
+      setLinkPreviewError(null);
+    }
+
+    try {
+      const res = await api.get("/link-preview", { params: { url } });
+      const data = res.data?.data;
+      const preview = data?.url
+        ? {
+            url: data.url,
+            title: data.title,
+            description: data.description,
+            image: data.image,
+            siteName: data.siteName,
+            type: data.type,
+          }
+        : null;
+      setPreviewCache((prev) => ({ ...prev, [url]: preview }));
+      return preview;
+    } catch {
+      setPreviewCache((prev) => ({ ...prev, [url]: null }));
+      if (!options?.silent) {
+        setLinkPreviewError("Unable to load link preview.");
+      }
+      return null;
+    } finally {
+      if (!options?.silent) {
+        setLinkPreviewLoading(false);
+      }
+    }
+  };
 
   const normalizedPosts: NormalizedPost[] = useMemo(() => {
     const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
@@ -161,6 +282,13 @@ export default function Dashboard() {
             c.owner?.id,
         }));
 
+      const ownerData = attributes.owner?.data ?? attributes.owner;
+      const ownerAttrs = ownerData?.attributes ?? ownerData;
+      const ownerName =
+        source === "user"
+          ? ownerAttrs?.username || ownerAttrs?.email || "User"
+          : "S2YD";
+
       return {
         id: p.id ?? p.documentId ?? title,
         title,
@@ -168,6 +296,7 @@ export default function Dashboard() {
         imageUrl,
         createdAt: attributes.createdAt,
         source,
+        ownerName,
         comments: matchedComments,
       };
     };
@@ -181,6 +310,53 @@ export default function Dashboard() {
 
     return [...adminPosts, ...userPosts];
   }, [posts]);
+
+  useEffect(() => {
+    const url = extractFirstUrl(formContent);
+    if (!url) {
+      setLinkPreview(null);
+      setLinkPreviewError(null);
+      setLinkPreviewLoading(false);
+      return;
+    }
+
+    setLinkPreviewError(null);
+    if (linkPreview?.url === url) return;
+    const cached = previewCache[url];
+    if (cached !== undefined) {
+      setLinkPreview(cached);
+      return;
+    }
+
+    let active = true;
+    const handle = setTimeout(() => {
+      fetchLinkPreview(url).then((preview) => {
+        if (!active) return;
+        setLinkPreview(preview);
+      });
+    }, PREVIEW_DEBOUNCE_MS);
+
+    return () => {
+      active = false;
+      clearTimeout(handle);
+    };
+  }, [formContent, linkPreview?.url, previewCache]);
+
+  useEffect(() => {
+    const urls = Array.from(
+      new Set(
+        normalizedPosts
+          .map((post) => extractFirstUrl(post.content))
+          .filter((url) => url)
+      )
+    );
+
+    if (!urls.length) return;
+    urls.forEach((url) => {
+      if (previewCache[url] !== undefined) return;
+      void fetchLinkPreview(url, { silent: true });
+    });
+  }, [normalizedPosts, previewCache]);
 
   const formatDate = (date?: string) => {
     if (!date) return "";
@@ -229,6 +405,71 @@ export default function Dashboard() {
       speak();
     }
   }, [greeting, user]);
+
+  const createPost = async () => {
+    const content = formContent.trim();
+    if (!content && !formFile) {
+      setFormError("Add a message or a photo to post.");
+      return;
+    }
+
+    const url = extractFirstUrl(content);
+    const previewTitle = linkPreview?.url === url ? linkPreview.title : undefined;
+    const derivedTitle =
+      previewTitle || (url ? hostnameFor(url) : "") || content || "Post";
+
+    setFormError(null);
+    setSubmitting(true);
+    try {
+      let uploadedId: number | undefined;
+
+      if (formFile) {
+        const fd = new FormData();
+        fd.append("files", formFile);
+        const uploadRes = await api.post("/upload", fd, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+        const uploaded = uploadRes.data?.[0];
+        uploadedId = uploaded?.id;
+      }
+
+      await api.post("/users-posts", {
+        data: {
+          Title: String(derivedTitle).slice(0, 80) || "Post",
+          Users_Content: content,
+          owner: user?.id,
+          Users_Pictures: uploadedId ? [uploadedId] : undefined,
+        },
+      });
+
+      setFormContent("");
+      setFormFile(null);
+      setLinkPreview(null);
+      setLinkPreviewError(null);
+      const [adminRes, userRes] = await Promise.all([
+        api.get("/posts?populate=Pictures"),
+        api.get("/users-posts?populate=Users_Pictures&populate=owner"),
+      ]);
+      const commentsRes = await api.get("/comments?populate=owner");
+      setPosts({
+        admin: adminRes.data?.data ?? [],
+        user: userRes.data?.data ?? [],
+        comments: commentsRes.data?.data ?? [],
+      });
+    } catch (err: unknown) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Failed to create post";
+        setFormError(msg);
+      } else {
+        setFormError("Failed to create post");
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <div className="dashboard-shell">
@@ -279,7 +520,7 @@ export default function Dashboard() {
       {!loading && !error && (
         <>
           <div className="panel-grid">
-            <section className="panel">
+            <section className="panel post-composer">
               <div className="panel-header">
                 <div>
                   <p className="eyebrow">Create</p>
@@ -289,114 +530,73 @@ export default function Dashboard() {
                   </p>
                 </div>
               </div>
-              <div className="form-grid">
-                <label className="field">
-                  <span>Title</span>
-                  <input
+              <div className="post-composer__top">
+                <div className="post-composer__avatar">
+                  <span>{userInitial}</span>
+                </div>
+                <div className="post-composer__input">
+                  <textarea
                     className="auth-input"
-                    value={formTitle}
-                    onChange={(e) => setFormTitle(e.target.value)}
-                    placeholder="Post title"
-                    required
+                    value={formContent}
+                    onChange={(e) => {
+                      setFormContent(e.target.value);
+                      setFormError(null);
+                    }}
+                    placeholder="What's on your mind? Drop a YouTube link or article."
+                    rows={4}
                   />
-                </label>
-              <label className="field">
-                <span>Content</span>
-                <textarea
-                  className="auth-input"
-                  value={formContent}
-                  onChange={(e) => setFormContent(e.target.value)}
-                  placeholder="Write something..."
-                  rows={4}
-                  required
+                  {linkPreviewLoading && (
+                    <span className="post-composer__hint">Loading preview...</span>
+                  )}
+                </div>
+              </div>
+
+              {linkPreview && (
+                <LinkPreviewCard
+                  preview={linkPreview}
+                  url={linkPreview.url || extractFirstUrl(formContent)}
                 />
-              </label>
-              <label className="field">
-                <span>Picture (optional)</span>
-                <div className="file-pill">
-                  <label className="file-btn">
+              )}
+              {linkPreviewError && <p className="status status-error">{linkPreviewError}</p>}
+
+              <div className="post-composer__actions">
+                <div className="post-composer__tools">
+                  <label className="post-composer__tool">
                     <input
                       type="file"
                       accept="image/*"
                       onChange={(e) => {
                         const file = e.target.files?.[0] || null;
                         setFormFile(file);
+                        setFormError(null);
                       }}
                     />
-                    <span>Choose file</span>
+                    <span>{formFile ? "Change media" : "Add photo/video"}</span>
                   </label>
-                  <span className="file-name">
-                    {formFile ? formFile.name : "No file selected"}
+                  <span className="post-composer__file">
+                    {formFile ? formFile.name : "No media selected"}
                   </span>
+                  {formFile && (
+                    <button
+                      className="btn ghost"
+                      type="button"
+                      onClick={() => setFormFile(null)}
+                    >
+                      Remove
+                    </button>
+                  )}
                 </div>
-              </label>
-              {formError && <p className="auth-message error">{formError}</p>}
-              <div className="auth-actions">
                 <button
                   className="btn primary"
                   type="button"
-                    disabled={submitting}
-                    onClick={async () => {
-                      setFormError(null);
-                      if (!formTitle.trim() || !formContent.trim()) {
-                        setFormError("Title and content are required.");
-                        return;
-                      }
-                      setSubmitting(true);
-                      try {
-                        let uploadedId: number | undefined;
-
-                        if (formFile) {
-                          const fd = new FormData();
-                          fd.append("files", formFile);
-                          const uploadRes = await api.post("/upload", fd, {
-                            headers: { "Content-Type": "multipart/form-data" },
-                          });
-                          const uploaded = uploadRes.data?.[0];
-                          uploadedId = uploaded?.id;
-                        }
-
-                        await api.post("/users-posts", {
-                          data: {
-                            Title: formTitle.trim(),
-                            Users_Content: formContent.trim(),
-                            owner: user?.id,
-                            Users_Pictures: uploadedId ? [uploadedId] : undefined,
-                          },
-                        });
-
-                        setFormTitle("");
-                        setFormContent("");
-                        setFormFile(null);
-                        const [adminRes, userRes] = await Promise.all([
-                          api.get("/posts?populate=Pictures"),
-                          api.get("/users-posts?populate=Users_Pictures&populate=owner"),
-                        ]);
-                        const commentsRes = await api.get("/comments?populate=owner");
-                        setPosts({
-                          admin: adminRes.data?.data ?? [],
-                          user: userRes.data?.data ?? [],
-                          comments: commentsRes.data?.data ?? [],
-                        });
-                      } catch (err: unknown) {
-                        if (axios.isAxiosError(err)) {
-                          const msg =
-                            err.response?.data?.error?.message ||
-                            err.response?.data?.message ||
-                            "Failed to create post";
-                          setFormError(msg);
-                        } else {
-                          setFormError("Failed to create post");
-                        }
-                      } finally {
-                        setSubmitting(false);
-                      }
-                    }}
-                  >
-                    {submitting ? "Creating..." : "Create Post"}
-                  </button>
-                </div>
+                  disabled={submitting}
+                  onClick={createPost}
+                >
+                  {submitting ? "Posting..." : "Post"}
+                </button>
               </div>
+
+              {formError && <p className="auth-message error">{formError}</p>}
             </section>
           </div>
 
@@ -407,108 +607,146 @@ export default function Dashboard() {
               </div>
             )}
 
-            {normalizedPosts.map((post) => (
-              <article key={post.id} className="post-card">
-                {post.imageUrl ? (
-                  <div className="post-media">
-                    <img src={post.imageUrl} alt={post.title} loading="lazy" />
-                  </div>
-                ) : (
-                  <div className="post-media placeholder">
-                    <div className="dots" />
-                    <span>No image</span>
-                  </div>
-                )}
+            {normalizedPosts.map((post) => {
+              const postUrl = extractFirstUrl(post.content);
+              const preview = postUrl ? previewCache[postUrl] : undefined;
+              const hasLink = Boolean(postUrl);
+              const descriptor = mediaDescriptor(post.imageUrl, hasLink);
+              const previewImage = preview?.image;
+              const showPreviewMedia = !post.imageUrl && !!previewImage;
+              const showPlaceholder = !post.imageUrl && !previewImage;
+              const authorLabel = post.ownerName || "User";
 
-                <div className="post-body">
-                  <div className="post-meta">
-                    <span className="pill subtle">Feature</span>
-                    {post.createdAt && (
-                      <span className="date">{formatDate(post.createdAt)}</span>
-                    )}
+              return (
+                <article key={post.id} className="post-card">
+                  <div className="post-meta-bar">
+                    <span className="post-meta-name">{authorLabel}</span>
+                    <span className="post-meta-text">just posted an update</span>
+                    {descriptor && <span className="post-meta-tag">{descriptor}</span>}
                   </div>
-                  <h3>{post.title}</h3>
-                  <p>{post.content}</p>
 
-                  <div className="comments">
-                    <p className="eyebrow">Comments</p>
-                    {post.comments && post.comments.length > 0 ? (
-                      <ul className="comment-list">
-                        {post.comments.map((c) => (
-                          <li key={c.id} className="comment-item">
-                            <div className="comment-author">{c.owner || "User"}</div>
-                            <div className="comment-body">{c.body}</div>
-                            {user?.id === c.ownerId && (
-                              <button
-                                className="btn ghost comment-delete"
-                                type="button"
-                                onClick={async () => {
-                                  try {
-                                    await api.delete(`/comments/${c.id}`);
-                                    setPosts((prev: any) => ({
-                                      ...prev,
-                                      comments: (prev.comments || []).filter(
-                                        (cc: any) => cc.id !== c.id
-                                      ),
-                                    }));
-                                  } catch (err: unknown) {
-                                    console.error("Delete comment failed", err);
-                                    setError("Failed to delete comment");
-                                  }
-                                }}
-                              >
-                                Delete
-                              </button>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="status">No comments yet.</p>
-                    )}
-                    <div className="comment-form">
-                      <input
-                        className="auth-input"
-                        placeholder="Add a comment..."
-                        value={commentInputs[post.id] || ""}
-                        onChange={(e) =>
-                          setCommentInputs((prev) => ({ ...prev, [post.id]: e.target.value }))
-                        }
+                  {post.imageUrl ? (
+                    <div className="post-media">
+                      {isVideoUrl(post.imageUrl) ? (
+                        <video controls style={{ width: "100%", height: "100%", objectFit: "cover" }}>
+                          <source src={post.imageUrl} />
+                        </video>
+                      ) : (
+                        <img src={post.imageUrl} alt={post.title} loading="lazy" />
+                      )}
+                    </div>
+                  ) : showPreviewMedia ? (
+                    <div className="post-media">
+                      <img
+                        src={previewImage}
+                        alt={preview?.title || post.title}
+                        loading="lazy"
                       />
-                      <button
-                        className="btn primary"
-                        type="button"
-                        disabled={!commentInputs[post.id]?.trim()}
-                        onClick={async () => {
-                          const body = (commentInputs[post.id] || "").trim();
-                          if (!body) return;
-                          try {
-                            await api.post("/comments", {
-                              data: {
-                                body,
-                                target_type: post.source === "admin" ? "admin" : "user",
-                                target_id: post.id,
-                              },
-                            });
-                            const res = await api.get("/comments?populate=owner");
-                            setPosts((prev: any) => ({
-                              ...prev,
-                              comments: res.data?.data ?? [],
-                            }));
-                            setCommentInputs((prev) => ({ ...prev, [post.id]: "" }));
-                          } catch (err: unknown) {
-                            console.error("Add comment failed", err);
-                            setError("Failed to add comment");
+                    </div>
+                  ) : showPlaceholder ? (
+                    <div className="post-media placeholder">
+                      <div className="dots" />
+                      <span>No image</span>
+                    </div>
+                  ) : null}
+
+                  <div className="post-body">
+                    <div className="post-meta">
+                      <span className="pill subtle">Feature</span>
+                      {post.createdAt && (
+                        <span className="date">{formatDate(post.createdAt)}</span>
+                      )}
+                    </div>
+                    <h3>{post.title}</h3>
+                    <p>{post.content}</p>
+                    {preview && !post.imageUrl && (
+                      <LinkPreviewCard
+                        preview={preview}
+                        url={preview.url || postUrl}
+                        compact
+                      />
+                    )}
+
+                    <div className="comments">
+                      <p className="eyebrow">Comments</p>
+                      {post.comments && post.comments.length > 0 ? (
+                        <ul className="comment-list">
+                          {post.comments.map((c) => (
+                            <li key={c.id} className="comment-item">
+                              <div className="comment-author">{c.owner || "User"}</div>
+                              <div className="comment-body">{c.body}</div>
+                              {user?.id === c.ownerId && (
+                                <button
+                                  className="btn ghost comment-delete"
+                                  type="button"
+                                  onClick={async () => {
+                                    try {
+                                      await api.delete(`/comments/${c.id}`);
+                                      setPosts((prev: any) => ({
+                                        ...prev,
+                                        comments: (prev.comments || []).filter(
+                                          (cc: any) => cc.id !== c.id
+                                        ),
+                                      }));
+                                    } catch (err: unknown) {
+                                      console.error("Delete comment failed", err);
+                                      setError("Failed to delete comment");
+                                    }
+                                  }}
+                                >
+                                  Delete
+                                </button>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="status">No comments yet.</p>
+                      )}
+                      <div className="comment-form">
+                        <input
+                          className="auth-input"
+                          placeholder="Add a comment..."
+                          value={commentInputs[post.id] || ""}
+                          onChange={(e) =>
+                            setCommentInputs((prev) => ({ ...prev, [post.id]: e.target.value }))
                           }
-                        }}
-                      >
-                        Comment
-                      </button>
+                        />
+                        <button
+                          className="btn primary"
+                          type="button"
+                          disabled={!commentInputs[post.id]?.trim()}
+                          onClick={async () => {
+                            const body = (commentInputs[post.id] || "").trim();
+                            if (!body) return;
+                            try {
+                              await api.post("/comments", {
+                                data: {
+                                  body,
+                                  target_type: post.source === "admin" ? "admin" : "user",
+                                  target_id: post.id,
+                                },
+                              });
+                              const res = await api.get("/comments?populate=owner");
+                              setPosts((prev: any) => ({
+                                ...prev,
+                                comments: res.data?.data ?? [],
+                              }));
+                              setCommentInputs((prev) => ({ ...prev, [post.id]: "" }));
+                            } catch (err: unknown) {
+                              console.error("Add comment failed", err);
+                              setError("Failed to add comment");
+                            }
+                          }}
+                        >
+                          Comment
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </article>
-            ))}
+                </article>
+              );
+            })}
           </div>
       </>
     )}

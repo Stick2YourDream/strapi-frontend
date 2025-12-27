@@ -6,6 +6,7 @@ import { useAuth } from "../context/AuthContext";
 import api from "../api/strapi";
 import axios from "axios";
 import Sidebar from "../components/Sidebar";
+import { HOBBY_OPTIONS } from "./me_hobbies";
 
 type Profile = {
   firstName: string;
@@ -27,6 +28,15 @@ type MediaPost = {
   media?: string;
 };
 
+type LinkPreview = {
+  url: string;
+  title?: string;
+  description?: string;
+  image?: string;
+  siteName?: string;
+  type?: string;
+};
+
 const slug = (s: string) =>
   (s || "")
     .toString()
@@ -36,6 +46,101 @@ const slug = (s: string) =>
     .replace(/[^a-z0-9_-]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
+
+const AGE_OPTIONS = Array.from({ length: 103 }, (_, index) => String(18 + index));
+
+const normalizeHobby = (value: string) => value.trim().replace(/\s+/g, " ");
+const hobbyKey = (value: string) => normalizeHobby(value).toLowerCase();
+const parseHobbies = (value: string) => {
+  const seen = new Set<string>();
+  return (value || "")
+    .split(/[,;\n]+/)
+    .map((entry) => normalizeHobby(entry))
+    .filter((entry) => {
+      if (!entry) return false;
+      const key = hobbyKey(entry);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+};
+
+const phoneDigits = (value?: string) => (value || "").replace(/\D/g, "").slice(0, 10);
+const formatPhone = (value?: string) => {
+  const digits = phoneDigits(value);
+  if (!digits) return "";
+  if (digits.length <= 3) return `(${digits}`;
+  if (digits.length <= 6) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+  return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+};
+
+const PREVIEW_DEBOUNCE_MS = 450;
+const extractFirstUrl = (text: string) => {
+  const match = text.match(/(https?:\/\/[^\s]+|www\.[^\s]+)/i);
+  if (!match) return "";
+  let url = match[0].replace(/[),.!?]+$/, "");
+  if (url.startsWith("www.")) url = `https://${url}`;
+  return url;
+};
+const hostnameFor = (value: string) => {
+  try {
+    return new URL(value).hostname.replace(/^www\./, "");
+  } catch {
+    return value;
+  }
+};
+const isYoutubeUrl = (value: string) => {
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    return host.includes("youtube.com") || host === "youtu.be";
+  } catch {
+    return false;
+  }
+};
+const isVideoUrl = (value?: string) => !!value && /\.(mp4|webm|mov)$/i.test(value);
+const mediaDescriptor = (mediaUrl?: string, hasLink?: boolean) => {
+  if (mediaUrl) return isVideoUrl(mediaUrl) ? "with a video" : "with a picture";
+  if (hasLink) return "with a link";
+  return "";
+};
+
+const LinkPreviewCard = ({
+  preview,
+  url,
+  compact = false,
+}: {
+  preview: LinkPreview;
+  url: string;
+  compact?: boolean;
+}) => {
+  const title = preview.title || preview.siteName || hostnameFor(url);
+  const meta = preview.siteName || hostnameFor(url);
+  const showBadge = preview.type === "video" || isYoutubeUrl(url);
+  return (
+    <a
+      className={`link-preview-card${compact ? " is-compact" : ""}`}
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+    >
+      <div className="link-preview-media">
+        {preview.image ? (
+          <img src={preview.image} alt={title} loading="lazy" />
+        ) : (
+          <div className="link-preview-placeholder">LINK</div>
+        )}
+        {showBadge && <span className="link-preview-badge">Video</span>}
+      </div>
+      <div className="link-preview-body">
+        <p className="link-preview-title">{title}</p>
+        {preview.description && (
+          <p className="link-preview-desc">{preview.description}</p>
+        )}
+        <span className="link-preview-url">{meta}</span>
+      </div>
+    </a>
+  );
+};
 
 export default function Me() {
   const { user } = useAuth();
@@ -49,13 +154,11 @@ export default function Me() {
     hobbies: "",
     occupation: "",
     bio: "",
+    phone: "",
     handle: "",
   });
 
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
-  const [mediaInput, setMediaInput] = useState("");
-  const [mediaFile, setMediaFile] = useState<File | null>(null);
-  const [textInput, setTextInput] = useState("");
   const [posts, setPosts] = useState<MediaPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -63,6 +166,16 @@ export default function Me() {
   const [success, setSuccess] = useState<string | null>(null);
   const [successModal, setSuccessModal] = useState<string | null>(null);
   const [editing, setEditing] = useState(true);
+  const [hobbyInput, setHobbyInput] = useState("");
+  const [hobbyList, setHobbyList] = useState<string[]>([]);
+  const [postContent, setPostContent] = useState("");
+  const [postFile, setPostFile] = useState<File | null>(null);
+  const [postSubmitting, setPostSubmitting] = useState(false);
+  const [postError, setPostError] = useState<string | null>(null);
+  const [linkPreview, setLinkPreview] = useState<LinkPreview | null>(null);
+  const [linkPreviewLoading, setLinkPreviewLoading] = useState(false);
+  const [linkPreviewError, setLinkPreviewError] = useState<string | null>(null);
+  const [previewCache, setPreviewCache] = useState<Record<string, LinkPreview | null>>({});
 
   const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
@@ -98,6 +211,8 @@ export default function Me() {
   const setProfileFromEntry = (entry: any) => {
     if (!entry) return;
     const attrs = normalize(entry);
+    const parsedHobbies = parseHobbies(attrs.hobbies || "");
+    setHobbyList(parsedHobbies);
 
     setProfile({
       firstName: attrs.firstName || "",
@@ -105,10 +220,10 @@ export default function Me() {
       age: attrs.age || "",
       gender: attrs.gender || "",
       religion: attrs.religion || "",
-      hobbies: attrs.hobbies || "",
+      hobbies: parsedHobbies.join(", "),
       occupation: attrs.occupation || "",
       bio: attrs.bio || "",
-      phone: attrs.phone || "",
+      phone: formatPhone(attrs.phone || ""),
       handle: attrs.handle || "",
       avatarUrl: pickMediaUrl(attrs.avatar),
     });
@@ -174,6 +289,123 @@ export default function Me() {
     setPosts(mappedPosts);
   };
 
+  const fetchLinkPreview = async (
+    url: string,
+    options?: { silent?: boolean }
+  ): Promise<LinkPreview | null> => {
+    if (!url) return null;
+    if (previewCache[url] !== undefined) return previewCache[url];
+
+    if (!options?.silent) {
+      setLinkPreviewLoading(true);
+      setLinkPreviewError(null);
+    }
+
+    try {
+      const res = await api.get("/link-preview", { params: { url } });
+      const data = res.data?.data;
+      const preview = data?.url
+        ? {
+            url: data.url,
+            title: data.title,
+            description: data.description,
+            image: data.image,
+            siteName: data.siteName,
+            type: data.type,
+          }
+        : null;
+      setPreviewCache((prev) => ({ ...prev, [url]: preview }));
+      return preview;
+    } catch {
+      setPreviewCache((prev) => ({ ...prev, [url]: null }));
+      if (!options?.silent) {
+        setLinkPreviewError("Unable to load link preview.");
+      }
+      return null;
+    } finally {
+      if (!options?.silent) {
+        setLinkPreviewLoading(false);
+      }
+    }
+  };
+
+  const createPost = async () => {
+    if (!user) return;
+    const content = postContent.trim();
+    if (!content && !postFile) {
+      setPostError("Add a message or a photo to post.");
+      return;
+    }
+    setPostError(null);
+    setPostSubmitting(true);
+    try {
+      let uploadedId: number | undefined;
+
+      if (postFile) {
+        const fd = new FormData();
+        fd.append("files", postFile);
+        const uploadRes = await api.post("/upload", fd, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+        uploadedId = uploadRes.data?.[0]?.id;
+      }
+
+      await api.post("/users-posts", {
+        data: {
+          Title: content.slice(0, 80) || "Post",
+          Users_Content: content,
+          owner: user.id,
+          Users_Pictures: uploadedId ? [uploadedId] : undefined,
+        },
+      });
+
+      setPostContent("");
+      setPostFile(null);
+      setLinkPreview(null);
+      setLinkPreviewError(null);
+      await fetchMyPosts();
+    } catch (err) {
+      setPostError("Failed to create post.");
+    } finally {
+      setPostSubmitting(false);
+    }
+  };
+
+  const updateHobbies = (next: string[]) => {
+    setHobbyList(next);
+    setProfile((prev) => ({ ...prev, hobbies: next.join(", ") }));
+  };
+
+  const addHobby = () => {
+    const candidate = normalizeHobby(hobbyInput);
+    if (!candidate) return;
+    const match = HOBBY_OPTIONS.find((hobby) => hobbyKey(hobby) === hobbyKey(candidate));
+    if (!match) return;
+    if (hobbyList.some((hobby) => hobbyKey(hobby) === hobbyKey(match))) {
+      setHobbyInput("");
+      return;
+    }
+    const next = [...hobbyList, match];
+    updateHobbies(next);
+    setHobbyInput("");
+  };
+
+  const removeHobby = (target: string) => {
+    const key = hobbyKey(target);
+    const next = hobbyList.filter((hobby) => hobbyKey(hobby) !== key);
+    updateHobbies(next);
+  };
+
+  const hobbySuggestions = useMemo(() => {
+    const term = hobbyInput.trim().toLowerCase();
+    const selected = new Set(hobbyList.map((hobby) => hobbyKey(hobby)));
+    const matches = HOBBY_OPTIONS.filter((hobby) => {
+      if (selected.has(hobbyKey(hobby))) return false;
+      return term ? hobby.toLowerCase().includes(term) : true;
+    });
+    return matches.slice(0, 50);
+  }, [hobbyInput, hobbyList]);
+
   useEffect(() => {
     const load = async () => {
       if (!user) return;
@@ -185,6 +417,7 @@ export default function Me() {
         const mine = await fetchMyProfile();
 
         if (!mine) {
+          setHobbyList([]);
           setProfile({
             firstName: "",
             lastName: "",
@@ -215,6 +448,53 @@ export default function Me() {
     load();
   }, [user?.id, lockedUniqueHandle]);
 
+  useEffect(() => {
+    const url = extractFirstUrl(postContent);
+    if (!url) {
+      setLinkPreview(null);
+      setLinkPreviewError(null);
+      setLinkPreviewLoading(false);
+      return;
+    }
+
+    setLinkPreviewError(null);
+    if (linkPreview?.url === url) return;
+    const cached = previewCache[url];
+    if (cached !== undefined) {
+      setLinkPreview(cached);
+      return;
+    }
+
+    let active = true;
+    const handle = setTimeout(() => {
+      fetchLinkPreview(url).then((preview) => {
+        if (!active) return;
+        setLinkPreview(preview);
+      });
+    }, PREVIEW_DEBOUNCE_MS);
+
+    return () => {
+      active = false;
+      clearTimeout(handle);
+    };
+  }, [postContent, linkPreview?.url, previewCache]);
+
+  useEffect(() => {
+    const urls = Array.from(
+      new Set(
+        posts
+          .map((post) => extractFirstUrl(post.text))
+          .filter((url) => url)
+      )
+    );
+
+    if (!urls.length) return;
+    urls.forEach((url) => {
+      if (previewCache[url] !== undefined) return;
+      void fetchLinkPreview(url, { silent: true });
+    });
+  }, [posts, previewCache]);
+
   const saveProfile = async () => {
   if (!user) return;
 
@@ -228,8 +508,7 @@ export default function Me() {
     const baseHandle = (profile.handle || lockedUniqueHandle || "").trim() || lockedUniqueHandle;
     const buildUniqueHandle = () => `${baseHandle}-${user.id}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-    const sanitizePhone = (value?: string) => (value || "").replace(/[^\d+]/g, "").slice(0, 15);
-    const phoneClean = sanitizePhone(profile.phone);
+    const phoneClean = phoneDigits(profile.phone);
 
     let avatarId: number | undefined;
     let uploadedAvatarUrl: string | undefined;
@@ -322,40 +601,6 @@ export default function Me() {
     }
   }
 };
-const addPost = async () => {
-    if (!textInput.trim() && !mediaInput.trim()) return;
-
-    try {
-      let mediaId: number | undefined;
-
-      if (mediaFile) {
-        const fd = new FormData();
-        fd.append("files", mediaFile);
-
-        const uploadRes = await api.post("/upload", fd, {
-          headers: { "Content-Type": "multipart/form-data" },
-        });
-
-        mediaId = uploadRes.data?.[0]?.id;
-      }
-
-      await api.post("/users-posts", {
-        data: {
-          Title: textInput.slice(0, 50) || "Untitled",
-          Users_Content: textInput,
-          owner: user?.id,
-          Users_Pictures: mediaId ? [mediaId] : undefined,
-        },
-      });
-
-      await fetchMyPosts();
-      setMediaInput("");
-      setMediaFile(null);
-      setTextInput("");
-    } catch {
-      setError("Failed to create post");
-    }
-  };
 
   if (!user) return null;
 
@@ -372,6 +617,59 @@ const addPost = async () => {
       .join("")
       .slice(0, 2)
       .toUpperCase() || "ME";
+  const phoneLink = phoneDigits(profile.phone);
+  const phoneDisplay = formatPhone(profile.phone);
+  const canDial = phoneLink.length === 10;
+  const hobbiesDisplay = parseHobbies(profile.hobbies || "");
+  const leftInfo = [
+    ["First Name", profile.firstName],
+    ["Last Name", profile.lastName],
+    ["Age", profile.age],
+    ["Religion", profile.religion],
+    ["Gender", profile.gender],
+  ] as const;
+  const rightInfo = [
+    ["Handle", profile.handle || lockedUniqueHandle],
+    ["Phone", profile.phone],
+    ["Hobbies", profile.hobbies],
+    ["Occupation", profile.occupation],
+    ["Bio", profile.bio],
+  ] as const;
+  const renderInfoCard = (label: string, value?: string) => (
+    <div className="profile-card" key={label}>
+      <p className="profile-card-label">{label}</p>
+      {label === "Phone" ? (
+        <p className="profile-card-value">
+          {phoneLink ? (
+            canDial ? (
+              <a
+                href={`tel:${phoneLink}`}
+                style={{ color: "inherit", textDecoration: "underline" }}
+              >
+                {phoneDisplay || value}
+              </a>
+            ) : (
+              phoneDisplay || value
+            )
+          ) : (
+            "-"
+          )}
+        </p>
+      ) : label === "Hobbies" ? (
+        hobbiesDisplay.length ? (
+          <ul className="profile-list">
+            {hobbiesDisplay.map((hobby) => (
+              <li key={hobby}>{hobby}</li>
+            ))}
+          </ul>
+        ) : (
+          <p className="profile-card-value">-</p>
+        )
+      ) : (
+        <p className="profile-card-value">{value || "-"}</p>
+      )}
+    </div>
+  );
 
   return (
     <div className="dashboard-shell">
@@ -540,167 +838,332 @@ const addPost = async () => {
             </div>
 
             {editing ? (
-              <div className="profile-edit-grid">
-                <label className="profile-field">
-                  <span className="profile-field-label">Handle</span>
-                  <input
-                    className="auth-input"
-                    value={lockedUniqueHandle}
-                    readOnly
-                    disabled
-                    tabIndex={-1}
-                    onFocus={(e) => e.target.blur()}
-                    style={{ pointerEvents: "none", userSelect: "none", opacity: 0.7 }}
-                  />
-                  <small style={{ color: "#9ca3af" }}>Locked + unique (username/email + user id).</small>
-                </label>
-
-                {(
-                  [
-                    ["First Name", "firstName"],
-                    ["Last Name", "lastName"],
-                    ["Age", "age"],
-                    ["Phone", "phone"],
-                    ["Gender", "gender"],
-                    ["Religion", "religion"],
-                    ["Hobbies", "hobbies"],
-                    ["Occupation", "occupation"],
-                  ] as const
-                ).map(([label, key]) => (
-                  <label className="profile-field" key={key}>
-                    <span className="profile-field-label">{label}</span>
+              <div className="profile-columns">
+                <div className="profile-column">
+                  <label className="profile-field">
+                    <span className="profile-field-label">First Name</span>
                     <input
                       className="auth-input"
                       maxLength={64}
-                      value={(profile as any)[key] || ""}
-                      onChange={(e) => setProfile({ ...profile, [key]: e.target.value })}
+                      value={profile.firstName}
+                      onChange={(e) => setProfile({ ...profile, firstName: e.target.value })}
                     />
                   </label>
-                ))}
 
-                <label className="profile-field profile-span-2">
-                  <span className="profile-field-label">Bio</span>
-                  <textarea
-                    className="auth-input"
-                    value={profile.bio}
-                    onChange={(e) => setProfile({ ...profile, bio: e.target.value })}
-                    rows={3}
-                  />
-                </label>
+                  <label className="profile-field">
+                    <span className="profile-field-label">Last Name</span>
+                    <input
+                      className="auth-input"
+                      maxLength={64}
+                      value={profile.lastName}
+                      onChange={(e) => setProfile({ ...profile, lastName: e.target.value })}
+                    />
+                  </label>
 
-                <label className="profile-field profile-span-2">
-                  <span className="profile-field-label">Avatar</span>
-                  <input
-                    type="file"
-                    className="auth-input"
-                    accept="image/*"
-                    onChange={(e) => setAvatarFile(e.target.files?.[0] || null)}
-                  />
-                </label>
+                  <label className="profile-field">
+                    <span className="profile-field-label">Age</span>
+                    <select
+                      className="auth-input"
+                      value={profile.age}
+                      onChange={(e) => setProfile({ ...profile, age: e.target.value })}
+                    >
+                      <option value="">Select age</option>
+                      {AGE_OPTIONS.map((age) => (
+                        <option key={age} value={age}>
+                          {age}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
 
-                <div className="profile-actions profile-span-2">
-                  <button className="btn primary" type="button" onClick={saveProfile}>
-                    Save Profile
-                  </button>
+                  <label className="profile-field">
+                    <span className="profile-field-label">Religion</span>
+                    <input
+                      className="auth-input"
+                      maxLength={64}
+                      value={profile.religion}
+                      onChange={(e) => setProfile({ ...profile, religion: e.target.value })}
+                    />
+                  </label>
+
+                  <label className="profile-field">
+                    <span className="profile-field-label">Gender</span>
+                    <select
+                      className="auth-input"
+                      value={profile.gender}
+                      onChange={(e) => setProfile({ ...profile, gender: e.target.value })}
+                    >
+                      <option value="">Select gender</option>
+                      <option value="Male">Male</option>
+                      <option value="Female">Female</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div className="profile-column">
+                  <label className="profile-field">
+                    <span className="profile-field-label">Handle</span>
+                    <input
+                      className="auth-input"
+                      value={lockedUniqueHandle}
+                      readOnly
+                      disabled
+                      tabIndex={-1}
+                      onFocus={(e) => e.target.blur()}
+                      style={{ pointerEvents: "none", userSelect: "none", opacity: 0.7 }}
+                    />
+                    <small style={{ color: "#9ca3af" }}>
+                      Locked + unique (username/email + user id).
+                    </small>
+                  </label>
+
+                  <label className="profile-field">
+                    <span className="profile-field-label">Phone</span>
+                    <input
+                      className="auth-input"
+                      type="tel"
+                      maxLength={14}
+                      placeholder="(555) 123-4567"
+                      value={profile.phone || ""}
+                      onChange={(e) => setProfile({ ...profile, phone: formatPhone(e.target.value) })}
+                    />
+                  </label>
+
+                  <label className="profile-field">
+                    <span className="profile-field-label">Hobbies</span>
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <input
+                        className="auth-input"
+                        list="hobby-suggestions"
+                        placeholder="Search hobbies"
+                        value={hobbyInput}
+                        onChange={(e) => setHobbyInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            addHobby();
+                          }
+                        }}
+                      />
+                      <button className="btn ghost" type="button" onClick={addHobby}>
+                        Add
+                      </button>
+                    </div>
+                    <datalist id="hobby-suggestions">
+                      {hobbySuggestions.map((hobby) => (
+                        <option key={hobby} value={hobby} />
+                      ))}
+                    </datalist>
+                    {hobbyList.length ? (
+                      <ul className="profile-list">
+                        {hobbyList.map((hobby) => (
+                          <li key={hobby} style={{ marginBottom: 6 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                              <span>{hobby}</span>
+                              <button
+                                className="btn ghost"
+                                type="button"
+                                onClick={() => removeHobby(hobby)}
+                                style={{ padding: "2px 10px", fontSize: 12 }}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p style={{ margin: "8px 0 0", color: "#9ca3af" }}>No hobbies added yet.</p>
+                    )}
+                    <small style={{ color: "#9ca3af" }}>
+                      Choose from the suggestions and add one hobby at a time.
+                    </small>
+                  </label>
+
+                  <label className="profile-field">
+                    <span className="profile-field-label">Occupation</span>
+                    <input
+                      className="auth-input"
+                      maxLength={64}
+                      value={profile.occupation}
+                      onChange={(e) => setProfile({ ...profile, occupation: e.target.value })}
+                    />
+                  </label>
+
+                  <label className="profile-field">
+                    <span className="profile-field-label">Bio</span>
+                    <textarea
+                      className="auth-input"
+                      value={profile.bio}
+                      onChange={(e) => setProfile({ ...profile, bio: e.target.value })}
+                      maxLength={500}
+                      rows={3}
+                    />
+                    <small style={{ color: "#9ca3af" }}>
+                      {profile.bio.length}/500 characters
+                    </small>
+                  </label>
+
+                  <label className="profile-field">
+                    <span className="profile-field-label">Avatar</span>
+                    <input
+                      type="file"
+                      className="auth-input"
+                      accept="image/*"
+                      onChange={(e) => setAvatarFile(e.target.files?.[0] || null)}
+                    />
+                  </label>
+
+                  <div className="profile-actions">
+                    <button className="btn primary" type="button" onClick={saveProfile}>
+                      Save Profile
+                    </button>
+                  </div>
                 </div>
               </div>
             ) : (
-              <div className="profile-info-grid">
-                {(
-                  [
-                    ["Handle", profile.handle || lockedUniqueHandle],
-                    ["First Name", profile.firstName],
-                    ["Last Name", profile.lastName],
-                    ["Age", profile.age],
-                    ["Phone", profile.phone],
-                    ["Gender", profile.gender],
-                    ["Religion", profile.religion],
-                    ["Hobbies", profile.hobbies],
-                    ["Occupation", profile.occupation],
-                    ["Bio", profile.bio],
-                  ] as const
-                ).map(([label, value]) => (
-                  <div className="profile-card" key={label}>
-                    <p className="profile-card-label">{label}</p>
-                    <p className="profile-card-value">{value || "-"}</p>
-                  </div>
-                ))}
+              <div className="profile-columns">
+                <div className="profile-column">
+                  {leftInfo.map(([label, value]) => renderInfoCard(label, value))}
+                </div>
+                <div className="profile-column">
+                  {rightInfo.map(([label, value]) => renderInfoCard(label, value))}
+                </div>
               </div>
             )}
           </section>
         </div>
 
-        <div className="panel-grid" style={{ marginTop: "16px" }}>
-          <section className="panel">
+        <div className="panel-grid">
+          <section className="panel post-composer">
             <div className="panel-header">
               <div>
                 <p className="eyebrow">Share</p>
-                <h3>Media + Text</h3>
+                <h3>New Post</h3>
+                <p className="panel-sub">
+                  Say something real. Paste a link for an instant preview.
+                </p>
               </div>
             </div>
 
-            <div className="form-grid">
-              <label className="field">
-                <span>Media URL (image/video)</span>
-                <input
-                  className="auth-input"
-                  placeholder="https://example.com/media.png"
-                  value={mediaInput}
-                  onChange={(e) => setMediaInput(e.target.value)}
-                />
-              </label>
-
-              <label className="field">
-                <span>Upload media (image/video)</span>
-                <input
-                  type="file"
-                  className="auth-input"
-                  accept="image/*,video/*"
-                  onChange={(e) => setMediaFile(e.target.files?.[0] || null)}
-                />
-              </label>
-
-              <label className="field">
-                <span>Caption / Text</span>
+            <div className="post-composer__top">
+              <div className="post-composer__avatar">
+                {avatarImg ? (
+                  <img src={avatarImg} alt={displayName} />
+                ) : (
+                  <span>{initials}</span>
+                )}
+              </div>
+              <div className="post-composer__input">
                 <textarea
                   className="auth-input"
-                  placeholder="Say something..."
-                  value={textInput}
-                  rows={3}
-                  onChange={(e) => setTextInput(e.target.value)}
+                  placeholder="What's on your mind? Drop a YouTube link or article."
+                  value={postContent}
+                  onChange={(e) => {
+                    setPostContent(e.target.value);
+                    setPostError(null);
+                  }}
+                  rows={4}
                 />
-              </label>
-
-              <div className="auth-actions">
-                <button className="btn primary" type="button" onClick={addPost}>
-                  Post
-                </button>
+                {linkPreviewLoading && (
+                  <span className="post-composer__hint">Loading preview...</span>
+                )}
               </div>
             </div>
+
+            {linkPreview && (
+              <LinkPreviewCard
+                preview={linkPreview}
+                url={linkPreview.url || extractFirstUrl(postContent)}
+              />
+            )}
+            {linkPreviewError && <p className="status status-error">{linkPreviewError}</p>}
+
+            <div className="post-composer__actions">
+              <div className="post-composer__tools">
+                <label className="post-composer__tool">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => {
+                      setPostFile(e.target.files?.[0] || null);
+                      setPostError(null);
+                    }}
+                  />
+                  <span>{postFile ? "Change media" : "Add photo/video"}</span>
+                </label>
+                <span className="post-composer__file">
+                  {postFile ? postFile.name : "No media selected"}
+                </span>
+                {postFile && (
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={() => setPostFile(null)}
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+              <button
+                className="btn primary"
+                type="button"
+                onClick={createPost}
+                disabled={postSubmitting}
+              >
+                {postSubmitting ? "Posting..." : "Post"}
+              </button>
+            </div>
+
+            {postError && <p className="status status-error">{postError}</p>}
           </section>
         </div>
 
         <div className="posts-grid">
-          {posts.map((p) => (
-            <article key={String(p.id)} className="post-card">
-              {p.media ? (
-                <div className="post-media">
-                  {p.media.match(/\.(mp4|webm|mov)$/i) ? (
-                    <video controls style={{ width: "100%", height: "100%", objectFit: "cover" }}>
-                      <source src={p.media} />
-                    </video>
-                  ) : (
-                    <img src={p.media} alt={p.text} loading="lazy" />
+          {posts.map((p) => {
+            const postUrl = extractFirstUrl(p.text);
+            const preview = postUrl ? previewCache[postUrl] : undefined;
+            const hasLink = Boolean(postUrl);
+            const descriptor = mediaDescriptor(p.media, hasLink);
+
+            return (
+              <article key={String(p.id)} className="post-card">
+                <div className="post-meta-bar">
+                  <span className="post-meta-name">{displayName}</span>
+                  <span className="post-meta-text">just posted an update</span>
+                  {descriptor && <span className="post-meta-tag">{descriptor}</span>}
+                </div>
+
+                {p.media ? (
+                  <div className="post-media">
+                    {isVideoUrl(p.media) ? (
+                      <video controls style={{ width: "100%", height: "100%", objectFit: "cover" }}>
+                        <source src={p.media} />
+                      </video>
+                    ) : (
+                      <img src={p.media} alt={p.text} loading="lazy" />
+                    )}
+                  </div>
+                ) : preview?.image ? (
+                  <div className="post-media">
+                    <img
+                      src={preview.image}
+                      alt={preview.title || displayName}
+                      loading="lazy"
+                    />
+                  </div>
+                ) : null}
+
+                <div className="post-body">
+                  <h3>{user.username}</h3>
+                  <p>{p.text}</p>
+                  {preview && !p.media && (
+                    <LinkPreviewCard preview={preview} url={preview.url || postUrl} compact />
                   )}
                 </div>
-              ) : null}
-
-              <div className="post-body">
-                <h3>{user.username}</h3>
-                <p>{p.text}</p>
-              </div>
-            </article>
-          ))}
+              </article>
+            );
+          })}
         </div>
       </div>
     </div>

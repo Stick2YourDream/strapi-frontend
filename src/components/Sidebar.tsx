@@ -183,6 +183,14 @@ export default function Sidebar({ active }: SidebarProps) {
                     className="btn ghost nav-btn"
                     type="button"
                     style={{ width: "100%", border: "none", borderRadius: 0, justifyContent: "flex-start" }}
+                    onClick={() => handleProfileAction("/dashboard")}
+                  >
+                    My Dashboard
+                  </button>
+                  <button
+                    className="btn ghost nav-btn"
+                    type="button"
+                    style={{ width: "100%", border: "none", borderRadius: 0, justifyContent: "flex-start" }}
                     onClick={() => handleProfileAction("/me")}
                 >
                   My Profile
@@ -211,18 +219,6 @@ export default function Sidebar({ active }: SidebarProps) {
               )}
             </div>
           )}
-        </div>
-        <div className="nav-links">
-          <button
-            className="btn ghost nav-btn"
-            onClick={() => {
-              navigate("/dashboard");
-              setMenuOpen(false);
-            }}
-            style={active === "dashboard" ? { boxShadow: "0 0 0 2px rgba(127,168,255,0.35)" } : undefined}
-          >
-            Dashboard
-          </button>
         </div>
         {user && (
           <div style={{ marginTop: "12px", width: "100%" }}>
