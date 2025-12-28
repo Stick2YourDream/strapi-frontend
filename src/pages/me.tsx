@@ -40,6 +40,7 @@ type LocationOption = {
 
 type MediaPost = {
   id: number | string;
+  documentId?: number | string;
   text: string;
   media?: string;
 };
@@ -217,6 +218,7 @@ export default function Me() {
   const [postFile, setPostFile] = useState<File | null>(null);
   const [postSubmitting, setPostSubmitting] = useState(false);
   const [postError, setPostError] = useState<string | null>(null);
+  const [deletePostTarget, setDeletePostTarget] = useState<MediaPost | null>(null);
   const [linkPreview, setLinkPreview] = useState<LinkPreview | null>(null);
   const [linkPreviewLoading, setLinkPreviewLoading] = useState(false);
   const [linkPreviewError, setLinkPreviewError] = useState<string | null>(null);
@@ -576,8 +578,8 @@ export default function Me() {
     return null;
   };
 
-  const fetchMyPosts = async () => {
-    if (!user) return;
+  const fetchMyPosts = async (): Promise<MediaPost[]> => {
+    if (!user) return [];
 
     const postsRes = await api.get(
       `/users-posts?filters[owner][id][$eq]=${user.id}&populate=Users_Pictures&sort=createdAt:desc`
@@ -586,14 +588,22 @@ export default function Me() {
     const mappedPosts: MediaPost[] = (postsRes.data?.data ?? []).map((p: any) => {
       const attrs = normalize(p);
       const pic = pickMediaUrl(attrs.Users_Pictures);
+      const postId =
+        p?.id ??
+        attrs?.id ??
+        p?.documentId ??
+        attrs?.documentId ??
+        String(attrs?.Users_Content || "");
       return {
-        id: p.documentId ?? p.id ?? attrs.documentId,
+        id: postId,
+        documentId: p?.documentId ?? attrs?.documentId,
         text: attrs.Users_Content || "",
         media: pic,
       };
     });
 
     setPosts(mappedPosts);
+    return mappedPosts;
   };
 
   const fetchLinkPreview = async (
@@ -686,15 +696,42 @@ export default function Me() {
     }
   };
 
-  const deletePost = async (postId: number) => {
-    if (!window.confirm("Delete this post?")) return;
+  const deletePost = async (post: MediaPost) => {
     setPostError(null);
     try {
-      await api.delete(`/users-posts/${postId}`);
-      setPosts((prev) => prev.filter((p) => Number(p.id) !== postId));
+      const idNumber = typeof post.id === "number" ? post.id : Number(post.id);
+      const docId = post.documentId ?? (typeof post.id === "string" ? post.id : null);
+      const attempts: string[] = [];
+      if (docId) attempts.push(`/users-posts/${docId}?locale=en`);
+      if (Number.isFinite(idNumber)) attempts.push(`/users-posts/${idNumber}`);
+
+      let removed = false;
+      for (const path of attempts) {
+        try {
+          await api.delete(path);
+          removed = true;
+          break;
+        } catch (err: any) {
+          if (!(err?.response?.status === 404)) throw err;
+        }
+      }
+
+      if (!removed) throw new Error("Delete failed");
+
+      const updatedPosts = await fetchMyPosts();
+      const stillThere = updatedPosts.some((p) => {
+        if (docId && String(p.documentId) === String(docId)) return true;
+        if (Number.isFinite(idNumber) && String(p.id) === String(idNumber)) return true;
+        return false;
+      });
+      if (stillThere) {
+        setPostError("Delete failed to persist. Please try again.");
+      }
     } catch (err) {
       console.error("Delete post failed", err);
       setPostError("Failed to delete post.");
+    } finally {
+      setDeletePostTarget(null);
     }
   };
 
@@ -1408,6 +1445,59 @@ export default function Me() {
         </div>
       )}
 
+      {deletePostTarget && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.55)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+        >
+          <div
+            style={{
+              background: "#0f172a",
+              padding: "24px",
+              borderRadius: "12px",
+              boxShadow: "0 12px 40px rgba(0,0,0,0.35)",
+              maxWidth: "420px",
+              width: "90%",
+              border: "1px solid rgba(248, 113, 113, 0.35)",
+            }}
+          >
+            <h3 style={{ margin: "0 0 12px", color: "#f87171" }}>
+              Are You Sure You Want To Delete This Post
+            </h3>
+            <p style={{ margin: "0 0 16px", color: "#e5e7eb" }}>
+              This action cannot be undone.
+            </p>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px" }}>
+              <button
+                className="btn ghost"
+                type="button"
+                onClick={() => setDeletePostTarget(null)}
+              >
+                No, Do Not Delete
+              </button>
+              <button
+                className="btn primary"
+                type="button"
+                onClick={() => {
+                  if (deletePostTarget) {
+                    void deletePost(deletePostTarget);
+                  }
+                }}
+              >
+                Yes, I'm Sure
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {onboardingActive && (
         <div className="onboarding-overlay">
           <div className="onboarding-card">
@@ -2028,8 +2118,7 @@ export default function Me() {
             const preview = postUrl ? previewCache[postUrl] : undefined;
             const hasLink = Boolean(postUrl);
             const descriptor = mediaDescriptor(p.media, hasLink);
-            const postId = Number(p.id);
-            const canDelete = Number.isFinite(postId);
+            const canDelete = Boolean(p.id ?? p.documentId);
 
             return (
               <article key={String(p.id)} className="post-card">
@@ -2041,7 +2130,7 @@ export default function Me() {
                     <button
                       className="btn ghost post-delete"
                       type="button"
-                      onClick={() => deletePost(postId)}
+                      onClick={() => setDeletePostTarget(p)}
                     >
                       Delete
                     </button>
@@ -2059,7 +2148,7 @@ export default function Me() {
                     )}
                   </div>
                 ) : preview?.image ? (
-                  <div className="post-media">
+                  <div className="post-media link-preview-media">
                     <img
                       src={preview.image}
                       alt={preview.title || displayName}

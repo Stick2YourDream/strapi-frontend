@@ -1816,12 +1816,19 @@
     justify-content: flex-end;
   }
 
+  .post-media.link-preview-media,
+  .post-media.link-preview-placeholder {
+    display: none;
+  }
+
   .mobile-profile-menu,
   .mobile-notification-panel {
+    position: fixed;
+    top: 64px;
     right: 12px;
-    left: auto;
-    width: min(260px, calc(100vw - 24px));
-    max-width: calc(100vw - 24px);
+    left: 12px;
+    width: auto;
+    max-width: none;
   }
 
   .dash-hero {
@@ -1916,6 +1923,8 @@
 
   .mobile-profile-menu,
   .mobile-notification-panel {
+    max-height: calc(100vh - 80px);
+    overflow-y: auto;
     width: calc(100vw - 20px);
     right: 10px;
     left: 10px;

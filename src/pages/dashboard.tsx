@@ -762,7 +762,7 @@ export default function Dashboard() {
                       )}
                     </div>
                   ) : showPreviewMedia ? (
-                    <div className="post-media">
+                    <div className="post-media link-preview-media">
                       <img
                         src={previewImage}
                         alt={preview?.title || post.title}
@@ -770,7 +770,9 @@ export default function Dashboard() {
                       />
                     </div>
                   ) : showPlaceholder ? (
-                    <div className="post-media placeholder">
+                    <div
+                      className={`post-media placeholder${hasLink ? " link-preview-placeholder" : ""}`}
+                    >
                       <div className="dots" />
                       <span>No image</span>
                     </div>
