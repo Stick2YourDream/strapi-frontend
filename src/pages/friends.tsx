@@ -231,7 +231,7 @@ export default function Friends() {
         `filters[$or][0][recipient][id][$eq]=${friendId}`,
         `filters[$or][1][sender][id][$eq]=${friendId}`,
         `filters[$or][1][recipient][id][$eq]=${user.id}`,
-        "sort=createdAt:asc",
+        "sort=createdAt:desc",
         "pagination[pageSize]=200",
         "populate=sender",
         "populate=recipient",
@@ -247,6 +247,11 @@ export default function Friends() {
             from: senderId === user.id ? "me" : "them",
             at: attrs.createdAt || new Date().toISOString(),
           };
+        });
+        mapped.sort((a, b) => {
+          const aTime = new Date(a.at).getTime();
+          const bTime = new Date(b.at).getTime();
+          return bTime - aTime;
         });
         setChatLogs((prev) => ({ ...prev, [String(friendId)]: mapped }));
       } catch {
