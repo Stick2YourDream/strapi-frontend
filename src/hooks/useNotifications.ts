@@ -144,7 +144,7 @@ export const useNotifications = (userId?: number | null) => {
       let commentCount = 0;
       if (myPostIds.length) {
         const commentFilter = myPostIds
-          .map((id, index) => `filters[target_id][$in][${index}]=${id}`)
+          .map((id: number, index: number) => `filters[target_id][$in][${index}]=${id}`)
           .join("&");
         const commentsRes = await api
           .get(
