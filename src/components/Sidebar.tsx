@@ -96,6 +96,13 @@ export default function Sidebar({ active }: SidebarProps) {
   }, [profileSummary, user]);
 
   const nameForDisplay = profileCard?.displayName || "Me";
+  const mobileInitials = useMemo(() => {
+    const parts = nameForDisplay.trim().split(" ").filter(Boolean);
+    const first = parts[0]?.[0] || "";
+    const last = parts.length > 1 ? parts[parts.length - 1][0] : "";
+    const initials = `${first}${last}`.toUpperCase();
+    return initials || nameForDisplay.charAt(0).toUpperCase();
+  }, [nameForDisplay]);
 
   const handleLogoClick = () => {
     navigate("/");
@@ -109,6 +116,11 @@ export default function Sidebar({ active }: SidebarProps) {
     setMenuOpen(false);
   };
 
+  const toggleMobileMenu = () => {
+    setMenuOpen((prev) => !prev);
+    setShowNotifications(false);
+  };
+
   // prefer handle if loaded, else username/email
   const secondaryLine = profileCard?.handle || "Profile";
   const fallbackInitial = nameForDisplay.charAt(0).toUpperCase();
@@ -120,25 +132,136 @@ export default function Sidebar({ active }: SidebarProps) {
           <span className="brand-mark">S2YD</span>
           <span className="brand-text">Stick2YourDreams</span>
         </button>
-        <button
-          type="button"
-          className={`mobile-profile-toggle ${menuOpen ? "is-open" : ""}`}
-          onClick={() => setMenuOpen((v) => !v)}
-          aria-label="Toggle navigation menu"
-        >
-          {profileCard?.avatarUrl ? (
-            <img
-              src={profileCard.avatarUrl}
-              alt={nameForDisplay}
-              className="mobile-profile-avatar"
-            />
-          ) : (
-            <div className="mobile-profile-avatar fallback" aria-hidden="true">
-              {fallbackInitial}
+        <div className="mobile-topbar-actions">
+          <button
+            type="button"
+            className={`mobile-avatar-button ${menuOpen ? "is-open" : ""}`}
+            onClick={toggleMobileMenu}
+            aria-label={`Open profile menu for ${nameForDisplay}`}
+          >
+            {profileCard?.avatarUrl ? (
+              <img
+                src={profileCard.avatarUrl}
+                alt={nameForDisplay}
+                className="mobile-avatar-image"
+              />
+            ) : (
+              <span className="mobile-avatar-fallback" aria-hidden="true">
+                {fallbackInitial}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            className={`mobile-initials-button ${menuOpen ? "is-open" : ""}`}
+            onClick={toggleMobileMenu}
+            aria-label={`Open profile menu for ${nameForDisplay}`}
+          >
+            {mobileInitials}
+          </button>
+          <button
+            type="button"
+            className="sidebar-bell mobile-topbar-bell"
+            aria-label={`Notifications (${total})`}
+            onClick={() => {
+              setShowNotifications((v) => !v);
+              setShowProfileMenu(false);
+              setMenuOpen(false);
+              refresh();
+            }}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M12 22a2.5 2.5 0 0 0 2.45-2H9.55A2.5 2.5 0 0 0 12 22zm7-6V11a7 7 0 1 0-14 0v5l-2 2v1h18v-1l-2-2z"
+                fill="currentColor"
+              />
+            </svg>
+            {total > 0 && (
+              <span className="sidebar-bell-badge">
+                {total > 99 ? "99+" : total}
+              </span>
+            )}
+          </button>
+          {menuOpen && (
+            <div className="mobile-profile-menu">
+              <button
+                className="mobile-profile-item"
+                type="button"
+                onClick={() => handleProfileAction("/dashboard")}
+              >
+                My Dashboard
+              </button>
+              <button
+                className="mobile-profile-item"
+                type="button"
+                onClick={() => handleProfileAction("/me")}
+              >
+                My Profile
+              </button>
+              <button
+                className="mobile-profile-item"
+                type="button"
+                onClick={() => handleProfileAction("/friends")}
+              >
+                My Friends
+              </button>
+              <button
+                className="mobile-profile-item"
+                type="button"
+                onClick={() => {
+                  logout();
+                  navigate("/login");
+                  setMenuOpen(false);
+                }}
+              >
+                Logout
+              </button>
             </div>
           )}
-          <span className="mobile-profile-name">{nameForDisplay}</span>
-        </button>
+          {showNotifications && (
+            <div className="mobile-notification-panel">
+              <div className="sidebar-notification-header">
+                <strong>Notifications</strong>
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={markAllRead}
+                  disabled={total === 0}
+                >
+                  Mark read
+                </button>
+              </div>
+              <div className="sidebar-notification-list">
+                <div className="sidebar-notification-item">
+                  <span>New messages</span>
+                  <span className="sidebar-notification-count">{counts.messages}</span>
+                </div>
+                <div className="sidebar-notification-item">
+                  <span>Friend requests</span>
+                  <span className="sidebar-notification-count">{counts.requests}</span>
+                </div>
+                <div className="sidebar-notification-item">
+                  <span>Friend posts</span>
+                  <span className="sidebar-notification-count">{counts.friendPosts}</span>
+                </div>
+                <div className="sidebar-notification-item">
+                  <span>Comments on your posts</span>
+                  <span className="sidebar-notification-count">{counts.comments}</span>
+                </div>
+                <div className="sidebar-notification-item">
+                  <span>Likes on your posts</span>
+                  <span className="sidebar-notification-count">{counts.likes}</span>
+                </div>
+                {loading && (
+                  <div className="sidebar-notification-status">Refreshing...</div>
+                )}
+                {!loading && total === 0 && (
+                  <div className="sidebar-notification-status">All caught up.</div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       <aside className="dash-nav">

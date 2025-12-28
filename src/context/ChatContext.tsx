@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import api from "../api/strapi";
 import { useAuth } from "./AuthContext";
 
-type ChatFriend = {
+export type ChatFriend = {
   userId: number;
   handle?: string;
   firstName?: string;
@@ -99,7 +99,7 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
     setActiveFriend(activeRaw && typeof activeRaw === "object" ? (activeRaw as ChatFriend) : null);
 
     const minimizedRaw = localStorage.getItem(storageKey(CHAT_MIN_KEY));
-    setPopoutMinimized(minimizedRaw === "true");
+    setPopoutMinimized(minimizedRaw === null ? true : minimizedRaw === "true");
 
     const logsRaw = safeParseJson(localStorage.getItem(storageKey(CHAT_STORE_KEY)));
     setChatLogs(

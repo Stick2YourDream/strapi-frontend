@@ -6,7 +6,6 @@ import axios from "axios";
 import "../css/dashboard.css";
 import { useAuth } from "../context/AuthContext";
 import Sidebar from "../components/Sidebar";
-import ChatDock from "../components/ChatDock";
 import TopbarSearch from "../components/TopbarSearch";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { useUserPreferences } from "../context/UserPreferencesContext";
@@ -896,7 +895,6 @@ export default function Dashboard() {
       </>
     )}
       </div>
-      <ChatDock />
       </div>
   );
 }

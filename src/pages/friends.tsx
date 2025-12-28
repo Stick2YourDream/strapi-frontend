@@ -6,7 +6,6 @@ import { useChat } from "../context/ChatContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";
 import api from "../api/strapi";
 import Sidebar from "../components/Sidebar";
-import ChatDock from "../components/ChatDock";
 import TopbarSearch from "../components/TopbarSearch";
 import { usePageMeta } from "../hooks/usePageMeta";
 
@@ -797,7 +796,6 @@ export default function Friends() {
         </div>
       </div>
 
-      <ChatDock />
     </div>
   );
 }

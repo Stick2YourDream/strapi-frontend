@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import api from "../api/strapi";
+import { useAuth } from "../context/AuthContext";
 import { useChat } from "../context/ChatContext";
+import type { ChatFriend } from "../context/ChatContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";
 
 type LinkMeta = {
@@ -36,6 +38,7 @@ const getDisplayName = (handle?: string, firstName?: string, lastName?: string) 
 
 export default function ChatDock() {
   const location = useLocation();
+  const { user } = useAuth();
   const { preferences, setChatPrefs } = useUserPreferences();
   const {
     activeFriend,
@@ -43,6 +46,7 @@ export default function ChatDock() {
     chatLogs,
     drafts,
     gifDrafts,
+    openChat,
     setPopoutMinimized,
     setDraft,
     setGifDraft,
@@ -53,22 +57,165 @@ export default function ChatDock() {
   const linkMetaRef = useRef(linkMeta);
   const popoutRef = useRef<HTMLDivElement | null>(null);
   const sizeRef = useRef({ width: preferences.chat.width, height: preferences.chat.height });
+  const lastPathRef = useRef(location.pathname);
+  const [friendOptions, setFriendOptions] = useState<ChatFriend[]>([]);
+  const [friendsLoading, setFriendsLoading] = useState(false);
+  const [friendsError, setFriendsError] = useState<string | null>(null);
+  const [friendMenuOpen, setFriendMenuOpen] = useState(false);
+  const friendMenuRef = useRef<HTMLDivElement | null>(null);
   const chatPrefs = preferences.chat;
+
+  const hideForRoute = ["/", "/home", "/landing", "/login", "/register"].includes(
+    location.pathname
+  );
+
+  const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
+  const getEntity = (entry: any) => entry?.data ?? entry ?? null;
+  const getEntityAttrs = (entry: any) => {
+    const data = getEntity(entry);
+    return data?.attributes ?? data ?? {};
+  };
+  const getEntityId = (entry: any) => {
+    const data = getEntity(entry);
+    const rawId = data?.id ?? (typeof data === "number" ? data : data?.attributes?.id);
+    const num = Number(rawId);
+    return Number.isFinite(num) ? num : undefined;
+  };
+  const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
+  const pickMediaUrl = (mediaField: any): string | undefined => {
+    if (!mediaField) return undefined;
+    const candidate =
+      (Array.isArray(mediaField?.data) ? mediaField.data[0] : mediaField?.data) ??
+      (Array.isArray(mediaField) ? mediaField[0] : mediaField);
+    if (!candidate) return undefined;
+    const attrs = normalize(candidate);
+    let url =
+      attrs.url ||
+      attrs.formats?.large?.url ||
+      attrs.formats?.medium?.url ||
+      attrs.formats?.small?.url ||
+      attrs.formats?.thumbnail?.url;
+    if (!url) return undefined;
+    return url.startsWith("/") ? `${apiBase}${url}` : url;
+  };
 
   useEffect(() => {
     linkMetaRef.current = linkMeta;
   }, [linkMeta]);
 
   useEffect(() => {
+    if (popoutMinimized) {
+      setFriendMenuOpen(false);
+    }
+  }, [popoutMinimized]);
+
+  useEffect(() => {
+    if (!friendMenuOpen) return;
+    const handleClick = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!friendMenuRef.current || !target) return;
+      if (!friendMenuRef.current.contains(target)) {
+        setFriendMenuOpen(false);
+      }
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setFriendMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [friendMenuOpen]);
+
+  useEffect(() => {
     sizeRef.current = { width: chatPrefs.width, height: chatPrefs.height };
   }, [chatPrefs.height, chatPrefs.width]);
 
   useEffect(() => {
-    if (!activeFriend) return;
-    if (location.pathname !== "/friends") {
+    const lastPath = lastPathRef.current;
+    if (lastPath === "/friends" && location.pathname !== "/friends") {
       setPopoutMinimized(true);
     }
-  }, [activeFriend, location.pathname, setPopoutMinimized]);
+    lastPathRef.current = location.pathname;
+  }, [location.pathname, setPopoutMinimized]);
+
+  useEffect(() => {
+    if (!user?.id) {
+      setFriendOptions([]);
+      setFriendsError(null);
+      setFriendsLoading(false);
+      return;
+    }
+
+    let active = true;
+    const loadFriends = async () => {
+      setFriendsLoading(true);
+      setFriendsError(null);
+      try {
+        const friendsRes = await api.get(
+          `/friends?filters[$or][0][requester][id][$eq]=${user.id}&filters[$or][1][target][id][$eq]=${user.id}&populate=requester&populate=target&pagination[pageSize]=200`
+        );
+        const acceptedIds = new Set<number>();
+        (friendsRes.data?.data ?? []).forEach((relation: any) => {
+          const attrs = normalize(relation);
+          if (attrs.status !== "accepted") return;
+          const requesterId = getEntityId(attrs.requester);
+          const targetId = getEntityId(attrs.target);
+          const friendId = requesterId === user.id ? targetId : requesterId;
+          if (friendId) acceptedIds.add(friendId);
+        });
+
+        const friendIds = Array.from(acceptedIds);
+        if (!friendIds.length) {
+          if (active) setFriendOptions([]);
+          return;
+        }
+
+        const filter = friendIds
+          .map((id, index) => `filters[user][id][$in][${index}]=${id}`)
+          .join("&");
+        const profilesRes = await api.get(
+          `/profiles?${filter}&populate=avatar&populate=user&pagination[pageSize]=200`
+        );
+
+        const mapped: ChatFriend[] = (profilesRes.data?.data ?? [])
+          .map((p: any) => {
+            const attrs = normalize(p);
+            const userAttrs = getEntityAttrs(attrs.user);
+            const userId = getEntityId(attrs.user);
+            if (!userId) return null;
+            return {
+              userId,
+              handle: attrs.handle || userAttrs?.username || "",
+              firstName: attrs.firstName || "",
+              lastName: attrs.lastName || "",
+              avatarUrl: pickMediaUrl(attrs.avatar),
+            } as ChatFriend;
+          })
+          .filter(Boolean) as ChatFriend[];
+
+        mapped.sort((a, b) =>
+          getDisplayName(a.handle, a.firstName, a.lastName).localeCompare(
+            getDisplayName(b.handle, b.firstName, b.lastName)
+          )
+        );
+        if (active) setFriendOptions(mapped);
+      } catch {
+        if (active) setFriendsError("Unable to load friends.");
+      } finally {
+        if (active) setFriendsLoading(false);
+      }
+    };
+
+    loadFriends();
+    return () => {
+      active = false;
+    };
+  }, [user?.id]);
 
   useEffect(() => {
     const el = popoutRef.current;
@@ -132,25 +279,48 @@ export default function ChatDock() {
     });
   }, [activeFriend?.userId, chatLogs, fetchPreviewMeta]);
 
-  if (!activeFriend || !activeFriend.userId) return null;
+  if (!user || hideForRoute) return null;
 
-  const friendId = activeFriend.userId;
-  const key = String(friendId);
-  const messages = chatLogs[key] || [];
-  const messageDraft = drafts[key] || "";
-  const gifDraft = gifDrafts[key] || "";
-  const displayName = getDisplayName(
-    activeFriend.handle,
-    activeFriend.firstName,
-    activeFriend.lastName
-  );
-  const handleLabel = activeFriend.handle ? `@${activeFriend.handle}` : displayName;
+  const friendList = activeFriend?.userId && !friendOptions.some((f) => f.userId === activeFriend.userId)
+    ? [activeFriend, ...friendOptions]
+    : friendOptions;
+
+  const friendId = activeFriend?.userId;
+  const key = friendId ? String(friendId) : "";
+  const messages = friendId ? chatLogs[key] || [] : [];
+  const messageDraft = friendId ? drafts[key] || "" : "";
+  const gifDraft = friendId ? gifDrafts[key] || "" : "";
+  const displayName = activeFriend
+    ? getDisplayName(activeFriend.handle, activeFriend.firstName, activeFriend.lastName)
+    : "Select a friend";
+  const handleLabel = activeFriend?.handle ? `@${activeFriend.handle}` : displayName;
 
   const handleSend = async () => {
+    if (!friendId) return;
     const body = `${messageDraft}${gifDraft ? `\n${gifDraft}` : ""}`.trim();
     if (!body) return;
     const sendError = await sendMessage(friendId, body);
     setError(sendError);
+  };
+
+  const handleSelectFriend = (value: string) => {
+    const selectedId = Number(value);
+    if (!selectedId || !Number.isFinite(selectedId)) return;
+    const next = friendList.find((f) => f.userId === selectedId);
+    if (next) {
+      openChat(next);
+      setFriendMenuOpen(false);
+    }
+  };
+
+  const getInitials = (friend: ChatFriend) => {
+    const source =
+      `${friend.firstName || ""} ${friend.lastName || ""}`.trim() ||
+      friend.handle ||
+      "Friend";
+    const parts = source.split(" ").filter(Boolean);
+    const letters = parts.slice(0, 2).map((part) => part[0]).join("");
+    return letters.toUpperCase();
   };
 
   const popoutStyle = {
@@ -166,9 +336,78 @@ export default function ChatDock() {
       style={popoutStyle}
     >
       <div className="message-popout__header">
-        <div>
+        <div className="message-popout__title">
           <p className="eyebrow">Chat</p>
-          <strong>{handleLabel}</strong>
+          {!popoutMinimized && (
+            <div className="chat-friend-picker" ref={friendMenuRef}>
+              <button
+                className="chat-friend-trigger"
+                type="button"
+                onClick={() => setFriendMenuOpen((prev) => !prev)}
+                aria-haspopup="listbox"
+                aria-expanded={friendMenuOpen}
+              >
+                <span className="chat-friend-trigger__label">
+                  {friendsLoading
+                    ? "Loading friends..."
+                    : activeFriend
+                    ? displayName
+                    : "Select a friend"}
+                </span>
+                <span className="chat-friend-trigger__meta">
+                  {activeFriend?.handle ? `@${activeFriend.handle}` : "Pick someone to chat"}
+                </span>
+                <span className="chat-friend-trigger__chevron" aria-hidden="true" />
+              </button>
+              {friendMenuOpen && (
+                <div className="chat-friend-menu" role="listbox">
+                  {friendsLoading ? (
+                    <div className="chat-friend-option is-disabled">Loading friends...</div>
+                  ) : friendList.length === 0 ? (
+                    <div className="chat-friend-option is-disabled">No friends yet.</div>
+                  ) : (
+                    friendList.map((friend) => {
+                      const label = getDisplayName(
+                        friend.handle,
+                        friend.firstName,
+                        friend.lastName
+                      );
+                      const isActive = friend.userId === friendId;
+                      return (
+                        <button
+                          key={friend.userId}
+                          type="button"
+                          className={`chat-friend-option${isActive ? " is-active" : ""}`}
+                          role="option"
+                          aria-selected={isActive}
+                          onClick={() => handleSelectFriend(String(friend.userId))}
+                        >
+                          <span
+                            className="chat-friend-option__avatar"
+                            style={
+                              friend.avatarUrl
+                                ? { backgroundImage: `url(${friend.avatarUrl})` }
+                                : undefined
+                            }
+                          >
+                            {!friend.avatarUrl && getInitials(friend)}
+                          </span>
+                          <span className="chat-friend-option__meta">
+                            <span className="chat-friend-option__name">{label}</span>
+                            {friend.handle && (
+                              <span className="chat-friend-option__handle">
+                                @{friend.handle}
+                              </span>
+                            )}
+                          </span>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
         <div className="message-popout__actions">
           {!popoutMinimized && (
@@ -195,10 +434,17 @@ export default function ChatDock() {
           </button>
         </div>
       </div>
+      {!popoutMinimized && friendsError && (
+        <p className="status status-error" style={{ padding: "0 14px" }}>
+          {friendsError}
+        </p>
+      )}
       {!popoutMinimized && (
         <>
           <div className="message-popout__body">
-            {messages.length === 0 ? (
+            {!friendId ? (
+              <div className="status">Select a friend to start chatting.</div>
+            ) : messages.length === 0 ? (
               <div className="status">No messages yet.</div>
             ) : (
               messages.map((m) => (
@@ -264,7 +510,9 @@ export default function ChatDock() {
             <p className="eyebrow">Quick reactions</p>
             <EmojiBar
               onPick={(emoji) => {
-                setDraft(friendId, `${messageDraft}${emoji}`);
+                if (friendId) {
+                  setDraft(friendId, `${messageDraft}${emoji}`);
+                }
               }}
             />
           </div>
@@ -273,13 +521,23 @@ export default function ChatDock() {
               className="auth-input"
               placeholder="Paste a GIF / image / video URL (optional)"
               value={gifDraft}
-              onChange={(e) => setGifDraft(friendId, e.target.value)}
+              onChange={(e) => {
+                if (friendId) {
+                  setGifDraft(friendId, e.target.value);
+                }
+              }}
+              disabled={!friendId}
             />
             <input
               className="auth-input"
               placeholder={`Message ${handleLabel}...`}
               value={messageDraft}
-              onChange={(e) => setDraft(friendId, e.target.value)}
+              onChange={(e) => {
+                if (friendId) {
+                  setDraft(friendId, e.target.value);
+                }
+              }}
+              disabled={!friendId}
             />
             {error && <p className="status status-error">{error}</p>}
             <div className="auth-actions" style={{ justifyContent: "flex-end" }}>

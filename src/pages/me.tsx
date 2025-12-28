@@ -7,7 +7,6 @@ import { useUserPreferences } from "../context/UserPreferencesContext";
 import api from "../api/strapi";
 import axios from "axios";
 import Sidebar from "../components/Sidebar";
-import ChatDock from "../components/ChatDock";
 import TopbarSearch from "../components/TopbarSearch";
 import { HOBBY_OPTIONS } from "./me_hobbies";
 import { RELIGION_OPTIONS } from "./me_religions";
@@ -223,7 +222,7 @@ export default function Me() {
   const [onboardingError, setOnboardingError] = useState<string | null>(null);
   const [appearanceError, setAppearanceError] = useState<string | null>(null);
   const [appearanceUploading, setAppearanceUploading] = useState(false);
-  const [appearanceCollapsed, setAppearanceCollapsed] = useState(false);
+  const [appearanceCollapsed, setAppearanceCollapsed] = useState(true);
 
   const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
@@ -1550,12 +1549,12 @@ export default function Me() {
             )}
           </section>
         </div>
-        <div className="dash-hero">
+        {/* <div className="dash-hero">
           <div className="dash-hero__text">
             <p className="eyebrow">Profile</p>
             <p className="subhead">A clean snapshot of you, with quick actions and easy editing.</p>
           </div>
-        </div>
+        </div> */}
 
         {loading && <p className="status">Loading profile…</p>}
         {error && <p className="status status-error">{error}</p>}
@@ -2049,7 +2048,6 @@ export default function Me() {
           })}
         </div>
       </div>
-      <ChatDock />
     </div>
   );
 }
