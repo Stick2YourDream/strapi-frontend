@@ -8,6 +8,7 @@ import ProtectedRoute from "../components/ProtectedRoute";
 import Friends from "../pages/friends";
 import Me from "../pages/me";
 import Landing from "../pages/landing";
+import Terms from "../pages/terms";
 
 export default function AppRoutes(): JSX.Element {
   return (
@@ -19,6 +20,7 @@ export default function AppRoutes(): JSX.Element {
       {/* Login and Register pages */}
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
+      <Route path="/terms" element={<Terms />} />
       <Route
         path="/dashboard"
         element={

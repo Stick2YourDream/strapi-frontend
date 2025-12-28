@@ -1,12 +1,15 @@
 // src/pages/Me.tsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "../css/dashboard.css";
 import "../css/profile.css";
 import { useAuth } from "../context/AuthContext";
 import api from "../api/strapi";
 import axios from "axios";
 import Sidebar from "../components/Sidebar";
+import TopbarSearch from "../components/TopbarSearch";
 import { HOBBY_OPTIONS } from "./me_hobbies";
+import { RELIGION_OPTIONS } from "./me_religions";
+import { usePageMeta } from "../hooks/usePageMeta";
 
 type Profile = {
   firstName: string;
@@ -14,12 +17,24 @@ type Profile = {
   age: string;
   gender: string;
   religion: string;
+  country: string;
+  countryCode: string;
+  state: string;
+  stateCode: string;
+  city: string;
   hobbies: string;
   occupation: string;
   bio: string;
   phone?: string;
   handle?: string;
   avatarUrl?: string;
+  onboardingComplete?: boolean;
+};
+
+type LocationOption = {
+  name: string;
+  code: string;
+  countryCode?: string;
 };
 
 type MediaPost = {
@@ -64,6 +79,10 @@ const parseHobbies = (value: string) => {
       return true;
     });
 };
+
+const normalizeLocation = (value: string) => value.trim().toLowerCase();
+const matchByName = <T extends { name: string }>(list: T[], value: string) =>
+  list.find((item) => normalizeLocation(item.name) === normalizeLocation(value));
 
 const phoneDigits = (value?: string) => (value || "").replace(/\D/g, "").slice(0, 10);
 const formatPhone = (value?: string) => {
@@ -143,7 +162,13 @@ const LinkPreviewCard = ({
 };
 
 export default function Me() {
-  const { user } = useAuth();
+  const { user, refreshProfile } = useAuth();
+  usePageMeta({
+    title: "My Profile | Stick2YourDreams Connect",
+    description:
+      "Complete your Stick2YourDreams profile to connect with friends who share your goals, location, and interests.",
+    type: "profile",
+  });
 
   const [profile, setProfile] = useState<Profile>({
     firstName: "",
@@ -151,6 +176,11 @@ export default function Me() {
     age: "",
     gender: "",
     religion: "",
+    country: "",
+    countryCode: "",
+    state: "",
+    stateCode: "",
+    city: "",
     hobbies: "",
     occupation: "",
     bio: "",
@@ -158,6 +188,8 @@ export default function Me() {
     handle: "",
   });
 
+  const profileSnapshotRef = useRef<Profile | null>(null);
+  const hobbySnapshotRef = useRef<string[]>([]);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [posts, setPosts] = useState<MediaPost[]>([]);
   const [loading, setLoading] = useState(true);
@@ -176,9 +208,28 @@ export default function Me() {
   const [linkPreviewLoading, setLinkPreviewLoading] = useState(false);
   const [linkPreviewError, setLinkPreviewError] = useState<string | null>(null);
   const [previewCache, setPreviewCache] = useState<Record<string, LinkPreview | null>>({});
+  const [countryOptions, setCountryOptions] = useState<LocationOption[]>([]);
+  const [stateOptions, setStateOptions] = useState<LocationOption[]>([]);
+  const [cityOptions, setCityOptions] = useState<LocationOption[]>([]);
+  const [locationError, setLocationError] = useState<string | null>(null);
+  const [onboardingActive, setOnboardingActive] = useState(false);
+  const [onboardingStep, setOnboardingStep] = useState(0);
+  const [onboardingError, setOnboardingError] = useState<string | null>(null);
 
   const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
+  const filterLocationOptions = (
+    options: LocationOption[],
+    term: string,
+    limit = 200
+  ) => {
+    if (!options.length) return [];
+    const query = term.trim().toLowerCase();
+    const filtered = query
+      ? options.filter((option) => option.name.toLowerCase().includes(query))
+      : options;
+    return filtered.slice(0, limit);
+  };
 
   // ✅ stable unique handle: username/email + numeric user id
   const lockedUniqueHandle = useMemo(() => {
@@ -208,25 +259,183 @@ export default function Me() {
     return url.startsWith("/") ? `${apiBase}${url}` : url;
   };
 
+  const handleCountryChange = (value: string) => {
+    const match = matchByName(countryOptions, value);
+    setProfile((prev) => ({
+      ...prev,
+      country: value,
+      countryCode: match?.code || "",
+      state: "",
+      stateCode: "",
+      city: "",
+    }));
+    setStateOptions([]);
+    setCityOptions([]);
+  };
+
+  const handleStateChange = (value: string) => {
+    const match = matchByName(stateOptions, value);
+    setProfile((prev) => ({
+      ...prev,
+      state: value,
+      stateCode: match?.code || "",
+      city: "",
+    }));
+    setCityOptions([]);
+  };
+
+  const handleCityChange = (value: string) => {
+    setProfile((prev) => ({ ...prev, city: value }));
+  };
+
+  useEffect(() => {
+    let active = true;
+    const loadCountries = async () => {
+      try {
+        const res = await api.get("/locations/countries");
+        const list = (res.data?.data ?? []).map((country: any) => ({
+          name: country.name,
+          code: country.code || country.isoCode || "",
+        }));
+        if (active) {
+          setCountryOptions(list);
+          setLocationError(null);
+        }
+      } catch {
+        if (active) setLocationError("Unable to load country list.");
+      }
+    };
+    loadCountries();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!countryOptions.length) return;
+    setProfile((prev) => {
+      if (prev.countryCode || !prev.country) return prev;
+      const match = matchByName(countryOptions, prev.country);
+      return match ? { ...prev, countryCode: match.code } : prev;
+    });
+  }, [countryOptions]);
+
+  useEffect(() => {
+    const countryCode = profile.countryCode;
+    if (!countryCode) {
+      setStateOptions([]);
+      setCityOptions([]);
+      return;
+    }
+
+    let active = true;
+    const loadStates = async () => {
+      try {
+        const res = await api.get("/locations/states", {
+          params: { country: countryCode },
+        });
+        const list = (res.data?.data ?? []).map((state: any) => ({
+          name: state.name,
+          code: state.code || state.isoCode || "",
+          countryCode: state.countryCode,
+        }));
+        if (active) {
+          setStateOptions(list);
+          setLocationError(null);
+        }
+      } catch {
+        if (active) setLocationError("Unable to load states or regions.");
+      }
+    };
+    loadStates();
+    return () => {
+      active = false;
+    };
+  }, [profile.countryCode]);
+
+  useEffect(() => {
+    if (!stateOptions.length) return;
+    setProfile((prev) => {
+      if (prev.stateCode || !prev.state) return prev;
+      const match = matchByName(stateOptions, prev.state);
+      return match ? { ...prev, stateCode: match.code } : prev;
+    });
+  }, [stateOptions]);
+
+  useEffect(() => {
+    const countryCode = profile.countryCode;
+    if (!countryCode) {
+      setCityOptions([]);
+      return;
+    }
+    const needsState = stateOptions.length > 0;
+    if (needsState && !profile.stateCode) {
+      setCityOptions([]);
+      return;
+    }
+
+    let active = true;
+    const loadCities = async () => {
+      try {
+        const res = await api.get("/locations/cities", {
+          params: {
+            country: countryCode,
+            state: profile.stateCode || undefined,
+          },
+        });
+        const list = (res.data?.data ?? []).map((city: any) => ({
+          name: city.name,
+          code: city.name,
+        }));
+        if (active) {
+          setCityOptions(list);
+          setLocationError(null);
+        }
+      } catch {
+        if (active) setLocationError("Unable to load cities.");
+      }
+    };
+    loadCities();
+    return () => {
+      active = false;
+    };
+  }, [profile.countryCode, profile.stateCode, stateOptions.length]);
+
+  useEffect(() => {
+    if (onboardingActive) setOnboardingStep(0);
+  }, [onboardingActive]);
+
   const setProfileFromEntry = (entry: any) => {
     if (!entry) return;
     const attrs = normalize(entry);
     const parsedHobbies = parseHobbies(attrs.hobbies || "");
     setHobbyList(parsedHobbies);
 
-    setProfile({
+    const onboardingComplete =
+      typeof attrs.onboardingComplete === "boolean" ? attrs.onboardingComplete : true;
+    const nextProfile: Profile = {
       firstName: attrs.firstName || "",
       lastName: attrs.lastName || "",
       age: attrs.age || "",
       gender: attrs.gender || "",
       religion: attrs.religion || "",
+      country: attrs.country || "",
+      countryCode: attrs.countryCode || "",
+      state: attrs.state || "",
+      stateCode: attrs.stateCode || "",
+      city: attrs.city || "",
       hobbies: parsedHobbies.join(", "),
       occupation: attrs.occupation || "",
       bio: attrs.bio || "",
       phone: formatPhone(attrs.phone || ""),
       handle: attrs.handle || "",
       avatarUrl: pickMediaUrl(attrs.avatar),
-    });
+      onboardingComplete,
+    };
+    setProfile(nextProfile);
+    profileSnapshotRef.current = nextProfile;
+    hobbySnapshotRef.current = parsedHobbies;
+    setOnboardingActive(!onboardingComplete);
   };
 
   const fetchMyProfileByUser = async () => {
@@ -365,9 +574,29 @@ export default function Me() {
       setLinkPreviewError(null);
       await fetchMyPosts();
     } catch (err) {
-      setPostError("Failed to create post.");
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Failed to create post.";
+        setPostError(String(msg));
+      } else {
+        setPostError("Failed to create post.");
+      }
     } finally {
       setPostSubmitting(false);
+    }
+  };
+
+  const deletePost = async (postId: number) => {
+    if (!window.confirm("Delete this post?")) return;
+    setPostError(null);
+    try {
+      await api.delete(`/users-posts/${postId}`);
+      setPosts((prev) => prev.filter((p) => Number(p.id) !== postId));
+    } catch (err) {
+      console.error("Delete post failed", err);
+      setPostError("Failed to delete post.");
     }
   };
 
@@ -406,6 +635,60 @@ export default function Me() {
     return matches.slice(0, 50);
   }, [hobbyInput, hobbyList]);
 
+  const countrySuggestions = useMemo(
+    () => filterLocationOptions(countryOptions, profile.country),
+    [countryOptions, profile.country]
+  );
+  const stateSuggestions = useMemo(
+    () => filterLocationOptions(stateOptions, profile.state),
+    [stateOptions, profile.state]
+  );
+  const citySuggestions = useMemo(
+    () => filterLocationOptions(cityOptions, profile.city),
+    [cityOptions, profile.city]
+  );
+
+  const onboardingSteps = ["Basics", "Beliefs & Interests", "Location", "About you"];
+  const hasBasics =
+    profile.firstName.trim() &&
+    profile.lastName.trim() &&
+    profile.age &&
+    profile.gender;
+  const hasBeliefs = profile.religion.trim() && hobbyList.length > 0;
+  const needsState = stateOptions.length > 0;
+  const hasState = needsState ? Boolean(profile.state || profile.stateCode) : true;
+  const hasLocation =
+    profile.country.trim() && profile.countryCode && hasState && profile.city.trim();
+  const canFinishOnboarding = Boolean(hasBasics && hasBeliefs && hasLocation);
+
+  const handleOnboardingNext = async () => {
+    setOnboardingError(null);
+    if (onboardingStep === 0 && !hasBasics) {
+      setOnboardingError("Please add your name, age, and gender to continue.");
+      return;
+    }
+    if (onboardingStep === 1 && !hasBeliefs) {
+      setOnboardingError("Select a religion and add at least one hobby to continue.");
+      return;
+    }
+    if (onboardingStep === 2 && !hasLocation) {
+      setOnboardingError("Choose your country, region, and city to continue.");
+      return;
+    }
+
+    if (onboardingStep < onboardingSteps.length - 1) {
+      setOnboardingStep((prev) => prev + 1);
+      return;
+    }
+
+    if (!canFinishOnboarding) {
+      setOnboardingError("Finish the required steps before completing setup.");
+      return;
+    }
+
+    await saveProfile({ onboardingComplete: true });
+  };
+
   useEffect(() => {
     const load = async () => {
       if (!user) return;
@@ -424,12 +707,20 @@ export default function Me() {
             age: "",
             gender: "",
             religion: "",
+            country: "",
+            countryCode: "",
+            state: "",
+            stateCode: "",
+            city: "",
             hobbies: "",
             occupation: "",
             bio: "",
             phone: "",
             handle: lockedUniqueHandle, // show the locked handle even if empty profile
+            onboardingComplete: false,
           });
+          setOnboardingActive(true);
+          setOnboardingStep(0);
           setEditing(true);
           await fetchMyPosts();
           return;
@@ -495,112 +786,143 @@ export default function Me() {
     });
   }, [posts, previewCache]);
 
-  const saveProfile = async () => {
-  if (!user) return;
+  const saveProfile = async (override?: Partial<Profile>) => {
+    if (!user) return;
 
-  setError(null);
-  setErrorModal(null);
-  setSuccess(null);
-  setSuccessModal(null);
+    const mergedProfile = override ? { ...profile, ...override } : profile;
+    if (override) setProfile(mergedProfile);
 
-  try {
-    const safeFirst = profile.firstName || user.username || user.email || "user";
-    const baseHandle = (profile.handle || lockedUniqueHandle || "").trim() || lockedUniqueHandle;
-    const buildUniqueHandle = () => `${baseHandle}-${user.id}-${Math.floor(1000 + Math.random() * 9000)}`;
+    setError(null);
+    setErrorModal(null);
+    setSuccess(null);
+    setSuccessModal(null);
 
-    const phoneClean = phoneDigits(profile.phone);
-
-    let avatarId: number | undefined;
-    let uploadedAvatarUrl: string | undefined;
-
-    if (avatarFile) {
-      const fd = new FormData();
-      fd.append("files", avatarFile);
-
-      const uploadRes = await api.post("/upload", fd, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
-
-      avatarId = uploadRes.data?.[0]?.id;
-      uploadedAvatarUrl = pickMediaUrl(uploadRes.data?.[0]);
-    }
-
-    const buildPayload = (handleValue: string) => {
-      const data: any = {
-        firstName: safeFirst,
-        lastName: profile.lastName,
-        age: profile.age,
-        gender: profile.gender,
-        religion: profile.religion,
-        hobbies: profile.hobbies,
-        occupation: profile.occupation,
-        bio: profile.bio,
-        handle: handleValue,
-        locale: "en",
-        user: user.id,
-      };
-      data.phone = phoneClean ? phoneClean : null;
-      if (avatarId) data.avatar = avatarId;
-      return data;
-    };
-
-    let payload = buildPayload(baseHandle);
-
-    const isHandleUniqueError = (err: any) => {
-      if (!axios.isAxiosError(err)) return false;
-      const msg = String(err.response?.data?.error?.message || err.response?.data?.message || "").toLowerCase();
-      const errors = (err.response?.data?.error?.details?.errors ?? []) as any[];
-      const handleErr = errors?.find((e: any) => (e?.path ?? []).includes("handle"));
-      return msg.includes("unique") && (msg.includes("handle") || handleErr);
-    };
-
-    const doSave = async () => {
-      const res = await api.put("/profiles/me", { data: payload });
-      return res.data?.data ?? null;
-    };
-
-    let saved: any = null;
     try {
-      saved = await doSave();
-    } catch (e) {
-      if (isHandleUniqueError(e)) {
-        payload = buildPayload(buildUniqueHandle());
+      const safeFirst = mergedProfile.firstName || user.username || user.email || "user";
+      const baseHandle =
+        (mergedProfile.handle || lockedUniqueHandle || "").trim() || lockedUniqueHandle;
+      const buildUniqueHandle = () =>
+        `${baseHandle}-${user.id}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+      const phoneClean = phoneDigits(mergedProfile.phone);
+
+      let avatarId: number | undefined;
+      let uploadedAvatarUrl: string | undefined;
+
+      if (avatarFile) {
+        const fd = new FormData();
+        fd.append("files", avatarFile);
+
+        const uploadRes = await api.post("/upload", fd, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+
+        avatarId = uploadRes.data?.[0]?.id;
+        uploadedAvatarUrl = pickMediaUrl(uploadRes.data?.[0]);
+      }
+
+      const buildPayload = (handleValue: string) => {
+        const onboardingComplete =
+          typeof mergedProfile.onboardingComplete === "boolean"
+            ? mergedProfile.onboardingComplete
+            : true;
+        const data: any = {
+          firstName: safeFirst,
+          lastName: mergedProfile.lastName,
+          age: mergedProfile.age,
+          gender: mergedProfile.gender,
+          religion: mergedProfile.religion,
+          country: mergedProfile.country,
+          countryCode: mergedProfile.countryCode,
+          state: mergedProfile.state,
+          stateCode: mergedProfile.stateCode,
+          city: mergedProfile.city,
+          hobbies: mergedProfile.hobbies,
+          occupation: mergedProfile.occupation,
+          bio: mergedProfile.bio,
+          onboardingComplete,
+          handle: handleValue,
+          locale: "en",
+          user: user.id,
+        };
+        data.phone = phoneClean ? phoneClean : null;
+        if (avatarId) data.avatar = avatarId;
+        return data;
+      };
+
+      let payload = buildPayload(baseHandle);
+
+      const isHandleUniqueError = (err: any) => {
+        if (!axios.isAxiosError(err)) return false;
+        const msg = String(
+          err.response?.data?.error?.message || err.response?.data?.message || ""
+        ).toLowerCase();
+        const errors = (err.response?.data?.error?.details?.errors ?? []) as any[];
+        const handleErr = errors?.find((e: any) => (e?.path ?? []).includes("handle"));
+        return msg.includes("unique") && (msg.includes("handle") || handleErr);
+      };
+
+      const doSave = async () => {
+        const res = await api.put("/profiles/me", { data: payload });
+        return res.data?.data ?? null;
+      };
+
+      let saved: any = null;
+      try {
         saved = await doSave();
-        setProfile((prev) => ({ ...prev, handle: payload.handle }));
+      } catch (e) {
+        if (isHandleUniqueError(e)) {
+          payload = buildPayload(buildUniqueHandle());
+          saved = await doSave();
+          setProfile((prev) => ({ ...prev, handle: payload.handle }));
+        } else {
+          throw e;
+        }
+      }
+
+      if (uploadedAvatarUrl) {
+        setProfile((prev) => ({ ...prev, avatarUrl: uploadedAvatarUrl }));
+      }
+
+      if (saved) {
+        setProfileFromEntry(saved);
       } else {
-        throw e;
+        const mine = await fetchMyProfileByUser();
+        if (!mine) throw new Error("Save succeeded but no profile found");
+        setProfileFromEntry(mine);
+      }
+
+      void refreshProfile();
+
+      setSuccess("Profile saved successfully.");
+      setSuccessModal("Profile saved successfully.");
+      setEditing(false);
+    } catch (e) {
+      if (axios.isAxiosError(e)) {
+        const msg =
+          e.response?.data?.error?.message ||
+          e.response?.data?.message ||
+          "Failed to save profile";
+        setError(String(msg));
+        setErrorModal(String(msg));
+      } else {
+        setError("Failed to save profile");
+        setErrorModal("Failed to save profile. Please try again.");
       }
     }
+  };
 
-    if (uploadedAvatarUrl) {
-      setProfile((prev) => ({ ...prev, avatarUrl: uploadedAvatarUrl }));
+  const cancelEdit = () => {
+    if (profileSnapshotRef.current) {
+      setProfile(profileSnapshotRef.current);
+      setHobbyList([...hobbySnapshotRef.current]);
     }
-
-    if (saved) {
-      setProfileFromEntry(saved);
-    } else {
-      const mine = await fetchMyProfileByUser();
-      if (!mine) throw new Error("Save succeeded but no profile found");
-      setProfileFromEntry(mine);
-    }
-
-    setSuccess("Profile saved successfully.");
-    setSuccessModal("Profile saved successfully.");
+    setAvatarFile(null);
+    setHobbyInput("");
+    setError(null);
+    setErrorModal(null);
     setEditing(false);
-  } catch (e) {
-    if (axios.isAxiosError(e)) {
-      const msg =
-        e.response?.data?.error?.message ||
-        e.response?.data?.message ||
-        "Failed to save profile";
-      setError(String(msg));
-      setErrorModal(String(msg));
-    } else {
-      setError("Failed to save profile");
-      setErrorModal("Failed to save profile. Please try again.");
-    }
-  }
-};
+  };
 
   if (!user) return null;
 
@@ -621,6 +943,10 @@ export default function Me() {
   const phoneDisplay = formatPhone(profile.phone);
   const canDial = phoneLink.length === 10;
   const hobbiesDisplay = parseHobbies(profile.hobbies || "");
+  const stateLabel = profile.countryCode === "US" ? "State" : "Province/Region";
+  const locationDisplay = [profile.city, profile.state, profile.country]
+    .filter(Boolean)
+    .join(", ");
   const leftInfo = [
     ["First Name", profile.firstName],
     ["Last Name", profile.lastName],
@@ -628,13 +954,17 @@ export default function Me() {
     ["Religion", profile.religion],
     ["Gender", profile.gender],
   ] as const;
-  const rightInfo = [
+  const rightInfo: Array<[string, string | undefined]> = [
     ["Handle", profile.handle || lockedUniqueHandle],
     ["Phone", profile.phone],
+    ["Location", locationDisplay],
+    ["Country", profile.country],
+    [stateLabel, profile.state],
+    ["City", profile.city],
     ["Hobbies", profile.hobbies],
     ["Occupation", profile.occupation],
     ["Bio", profile.bio],
-  ] as const;
+  ];
   const renderInfoCard = (label: string, value?: string) => (
     <div className="profile-card" key={label}>
       <p className="profile-card-label">{label}</p>
@@ -670,6 +1000,233 @@ export default function Me() {
       )}
     </div>
   );
+
+  const onboardingTitle = onboardingSteps[onboardingStep] || "Profile setup";
+  const renderOnboardingStep = () => {
+    switch (onboardingStep) {
+      case 0:
+        return (
+          <div className="onboarding-fields">
+            <label className="profile-field">
+              <span className="profile-field-label">First Name</span>
+              <input
+                className="auth-input"
+                maxLength={64}
+                value={profile.firstName}
+                onChange={(e) => setProfile({ ...profile, firstName: e.target.value })}
+              />
+            </label>
+            <label className="profile-field">
+              <span className="profile-field-label">Last Name</span>
+              <input
+                className="auth-input"
+                maxLength={64}
+                value={profile.lastName}
+                onChange={(e) => setProfile({ ...profile, lastName: e.target.value })}
+              />
+            </label>
+            <label className="profile-field">
+              <span className="profile-field-label">Age</span>
+              <select
+                className="auth-input"
+                value={profile.age}
+                onChange={(e) => setProfile({ ...profile, age: e.target.value })}
+              >
+                <option value="">Select age</option>
+                {AGE_OPTIONS.map((age) => (
+                  <option key={age} value={age}>
+                    {age}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="profile-field">
+              <span className="profile-field-label">Gender</span>
+              <select
+                className="auth-input"
+                value={profile.gender}
+                onChange={(e) => setProfile({ ...profile, gender: e.target.value })}
+              >
+                <option value="">Select gender</option>
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+              </select>
+            </label>
+          </div>
+        );
+      case 1:
+        return (
+          <div className="onboarding-fields">
+            <label className="profile-field">
+              <span className="profile-field-label">Religion</span>
+              <select
+                className="auth-input"
+                value={profile.religion}
+                onChange={(e) => setProfile({ ...profile, religion: e.target.value })}
+              >
+                <option value="">Select religion</option>
+                {RELIGION_OPTIONS.map((religion) => (
+                  <option key={religion} value={religion}>
+                    {religion}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="profile-field">
+              <span className="profile-field-label">Hobbies</span>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <input
+                  className="auth-input"
+                  list="hobby-suggestions-onboarding"
+                  placeholder="Search hobbies"
+                  value={hobbyInput}
+                  onChange={(e) => setHobbyInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addHobby();
+                    }
+                  }}
+                />
+                <button className="btn ghost" type="button" onClick={addHobby}>
+                  Add
+                </button>
+              </div>
+              <datalist id="hobby-suggestions-onboarding">
+                {hobbySuggestions.map((hobby) => (
+                  <option key={hobby} value={hobby} />
+                ))}
+              </datalist>
+              {hobbyList.length ? (
+                <ul className="profile-list">
+                  {hobbyList.map((hobby) => (
+                    <li key={hobby} style={{ marginBottom: 6 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span>{hobby}</span>
+                        <button
+                          className="btn ghost"
+                          type="button"
+                          onClick={() => removeHobby(hobby)}
+                          style={{ padding: "2px 10px", fontSize: 12 }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p style={{ margin: "8px 0 0", color: "#9ca3af" }}>
+                  No hobbies added yet.
+                </p>
+              )}
+              <small style={{ color: "#9ca3af" }}>
+                Choose from the suggestions and add one hobby at a time.
+              </small>
+            </label>
+          </div>
+        );
+      case 2:
+        return (
+          <div className="onboarding-fields">
+            <label className="profile-field">
+              <span className="profile-field-label">Country</span>
+              <input
+                className="auth-input"
+                list="country-options-onboarding"
+                placeholder="Search country"
+                value={profile.country}
+                onChange={(e) => handleCountryChange(e.target.value)}
+              />
+              <datalist id="country-options-onboarding">
+                {countrySuggestions.map((country) => (
+                  <option key={country.code || country.name} value={country.name} />
+                ))}
+              </datalist>
+            </label>
+            <label className="profile-field">
+              <span className="profile-field-label">{stateLabel}</span>
+              <input
+                className="auth-input"
+                list="state-options-onboarding"
+                placeholder={
+                  stateOptions.length ? `Search ${stateLabel.toLowerCase()}` : "Select country first"
+                }
+                value={profile.state}
+                onChange={(e) => handleStateChange(e.target.value)}
+                disabled={!profile.countryCode || !stateOptions.length}
+              />
+              <datalist id="state-options-onboarding">
+                {stateSuggestions.map((state) => (
+                  <option key={state.code || state.name} value={state.name} />
+                ))}
+              </datalist>
+            </label>
+            <label className="profile-field">
+              <span className="profile-field-label">City</span>
+              <input
+                className="auth-input"
+                list="city-options-onboarding"
+                placeholder={
+                  !profile.countryCode
+                    ? "Select country first"
+                    : stateOptions.length && !profile.stateCode
+                    ? `Select ${stateLabel.toLowerCase()} first`
+                    : "Search city"
+                }
+                value={profile.city}
+                onChange={(e) => handleCityChange(e.target.value)}
+                disabled={!profile.countryCode || (stateOptions.length > 0 && !profile.stateCode)}
+              />
+              <datalist id="city-options-onboarding">
+                {citySuggestions.map((city) => (
+                  <option key={city.name} value={city.name} />
+                ))}
+              </datalist>
+            </label>
+            {locationError && <p className="profile-location-error">{locationError}</p>}
+          </div>
+        );
+      default:
+        return (
+          <div className="onboarding-fields">
+            <label className="profile-field">
+              <span className="profile-field-label">Occupation</span>
+              <input
+                className="auth-input"
+                maxLength={64}
+                value={profile.occupation}
+                onChange={(e) => setProfile({ ...profile, occupation: e.target.value })}
+              />
+            </label>
+            <label className="profile-field">
+              <span className="profile-field-label">Bio</span>
+              <textarea
+                className="auth-input"
+                value={profile.bio}
+                onChange={(e) => setProfile({ ...profile, bio: e.target.value })}
+                maxLength={500}
+                rows={3}
+              />
+              <small style={{ color: "#9ca3af" }}>
+                {profile.bio.length}/500 characters
+              </small>
+            </label>
+            <label className="profile-field">
+              <span className="profile-field-label">Phone</span>
+              <input
+                className="auth-input"
+                type="tel"
+                maxLength={14}
+                placeholder="(555) 123-4567"
+                value={profile.phone || ""}
+                onChange={(e) => setProfile({ ...profile, phone: formatPhone(e.target.value) })}
+              />
+            </label>
+          </div>
+        );
+    }
+  };
 
   return (
     <div className="dashboard-shell">
@@ -747,9 +1304,51 @@ export default function Me() {
         </div>
       )}
 
+      {onboardingActive && (
+        <div className="onboarding-overlay">
+          <div className="onboarding-card">
+            <div className="onboarding-header">
+              <div>
+                <p className="eyebrow">Getting started</p>
+                <h3>Complete your profile</h3>
+                <p className="onboarding-sub">This step-by-step guide appears once.</p>
+              </div>
+              <div className="onboarding-progress">
+                Step {onboardingStep + 1} of {onboardingSteps.length}
+              </div>
+            </div>
+            <h4 className="onboarding-title">{onboardingTitle}</h4>
+            {renderOnboardingStep()}
+            {onboardingError && <p className="status status-error">{onboardingError}</p>}
+            <div className="onboarding-actions">
+              {onboardingStep > 0 && (
+                <button
+                  className="btn ghost"
+                  type="button"
+                  onClick={() => setOnboardingStep((prev) => Math.max(prev - 1, 0))}
+                >
+                  Back
+                </button>
+              )}
+              <button
+                className="btn primary"
+                type="button"
+                onClick={handleOnboardingNext}
+                disabled={
+                  onboardingStep === onboardingSteps.length - 1 && !canFinishOnboarding
+                }
+              >
+                {onboardingStep === onboardingSteps.length - 1 ? "Finish setup" : "Next"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <Sidebar active="me" />
 
       <div className="main-content">
+        <TopbarSearch />
         <div className="dash-hero">
           <div className="dash-hero__text">
             <p className="eyebrow">Profile</p>
@@ -878,12 +1477,18 @@ export default function Me() {
 
                   <label className="profile-field">
                     <span className="profile-field-label">Religion</span>
-                    <input
+                    <select
                       className="auth-input"
-                      maxLength={64}
                       value={profile.religion}
                       onChange={(e) => setProfile({ ...profile, religion: e.target.value })}
-                    />
+                    >
+                      <option value="">Select religion</option>
+                      {RELIGION_OPTIONS.map((religion) => (
+                        <option key={religion} value={religion}>
+                          {religion}
+                        </option>
+                      ))}
+                    </select>
                   </label>
 
                   <label className="profile-field">
@@ -928,6 +1533,66 @@ export default function Me() {
                       onChange={(e) => setProfile({ ...profile, phone: formatPhone(e.target.value) })}
                     />
                   </label>
+
+                  <label className="profile-field">
+                    <span className="profile-field-label">Country</span>
+                    <input
+                      className="auth-input"
+                      list="country-options"
+                      placeholder="Search country"
+                      value={profile.country}
+                      onChange={(e) => handleCountryChange(e.target.value)}
+                    />
+                    <datalist id="country-options">
+                      {countrySuggestions.map((country) => (
+                        <option key={country.code || country.name} value={country.name} />
+                      ))}
+                    </datalist>
+                  </label>
+
+                  <label className="profile-field">
+                    <span className="profile-field-label">{stateLabel}</span>
+                    <input
+                      className="auth-input"
+                      list="state-options"
+                      placeholder={stateOptions.length ? `Search ${stateLabel.toLowerCase()}` : "Select country first"}
+                      value={profile.state}
+                      onChange={(e) => handleStateChange(e.target.value)}
+                      disabled={!profile.countryCode || !stateOptions.length}
+                    />
+                    <datalist id="state-options">
+                      {stateSuggestions.map((state) => (
+                        <option key={state.code || state.name} value={state.name} />
+                      ))}
+                    </datalist>
+                  </label>
+
+                  <label className="profile-field">
+                    <span className="profile-field-label">City</span>
+                    <input
+                      className="auth-input"
+                      list="city-options"
+                      placeholder={
+                        !profile.countryCode
+                          ? "Select country first"
+                          : stateOptions.length && !profile.stateCode
+                          ? `Select ${stateLabel.toLowerCase()} first`
+                          : "Search city"
+                      }
+                      value={profile.city}
+                      onChange={(e) => handleCityChange(e.target.value)}
+                      disabled={!profile.countryCode || (stateOptions.length > 0 && !profile.stateCode)}
+                    />
+                    <datalist id="city-options">
+                      {citySuggestions.map((city) => (
+                        <option key={city.name} value={city.name} />
+                      ))}
+                    </datalist>
+                  </label>
+
+                  {locationError && (
+                    <p className="profile-location-error">{locationError}</p>
+                  )}
 
                   <label className="profile-field">
                     <span className="profile-field-label">Hobbies</span>
@@ -1015,7 +1680,10 @@ export default function Me() {
                   </label>
 
                   <div className="profile-actions">
-                    <button className="btn primary" type="button" onClick={saveProfile}>
+                    <button className="btn ghost" type="button" onClick={cancelEdit}>
+                      Cancel
+                    </button>
+                    <button className="btn primary" type="button" onClick={() => saveProfile()}>
                       Save Profile
                     </button>
                   </div>
@@ -1041,7 +1709,7 @@ export default function Me() {
                 <p className="eyebrow">Share</p>
                 <h3>New Post</h3>
                 <p className="panel-sub">
-                  Say something real. Paste a link for an instant preview.
+                  What's On Your Mind?
                 </p>
               </div>
             </div>
@@ -1125,6 +1793,8 @@ export default function Me() {
             const preview = postUrl ? previewCache[postUrl] : undefined;
             const hasLink = Boolean(postUrl);
             const descriptor = mediaDescriptor(p.media, hasLink);
+            const postId = Number(p.id);
+            const canDelete = Number.isFinite(postId);
 
             return (
               <article key={String(p.id)} className="post-card">
@@ -1132,6 +1802,15 @@ export default function Me() {
                   <span className="post-meta-name">{displayName}</span>
                   <span className="post-meta-text">just posted an update</span>
                   {descriptor && <span className="post-meta-tag">{descriptor}</span>}
+                  {canDelete && (
+                    <button
+                      className="btn ghost post-delete"
+                      type="button"
+                      onClick={() => deletePost(postId)}
+                    >
+                      Delete
+                    </button>
+                  )}
                 </div>
 
                 {p.media ? (

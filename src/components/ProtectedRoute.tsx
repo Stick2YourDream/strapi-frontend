@@ -1,5 +1,5 @@
 // src/components/ProtectedRoute.tsx
-import { Navigate } from "react-router-dom";
+import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
 interface Props {
@@ -7,10 +7,19 @@ interface Props {
 }
 
 export default function ProtectedRoute({ children }: Props) {
-  const { user } = useAuth();
+  const { user, profile, profileLoading } = useAuth();
+  const location = useLocation();
 
   if (!user) {
     return <Navigate to="/login" replace />;
+  }
+
+  if (profileLoading && !profile) {
+    return null;
+  }
+
+  if (!profile?.onboardingComplete && location.pathname !== "/me") {
+    return <Navigate to="/me" replace />;
   }
 
   return children;

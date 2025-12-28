@@ -6,12 +6,19 @@ import type { AuthResponse } from "../types/auth";
 import { useAuth } from "../context/AuthContext";
 import axios from "axios";
 import "../css/login.css";
+import { usePageMeta } from "../hooks/usePageMeta";
 
 export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  usePageMeta({
+    title: "Login | Stick2YourDreams Connect",
+    description:
+      "Log in to Stick2YourDreams Connect to share progress updates and stay accountable with your support network.",
+    type: "website",
+  });
 
   const { login } = useAuth();
   const navigate = useNavigate();
@@ -85,7 +92,14 @@ export default function Login() {
   return (
     <div className="auth-shell">
       <div className="auth-hero">
-        <p className="eyebrow">Stick2YourDreams</p>
+        <button
+          type="button"
+          className="auth-brand"
+          onClick={() => navigate("/")}
+        >
+          <span className="auth-brand-mark">S2YD</span>
+          <span className="auth-brand-text">| Stick2YourDreams</span>
+        </button>
         <h1>Welcome back</h1>
         <p className="subhead">
           Sign in to access your dashboard and keep the momentum going.

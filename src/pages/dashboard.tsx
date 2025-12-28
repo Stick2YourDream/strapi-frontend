@@ -6,6 +6,8 @@ import axios from "axios";
 import "../css/dashboard.css";
 import { useAuth } from "../context/AuthContext";
 import Sidebar from "../components/Sidebar";
+import TopbarSearch from "../components/TopbarSearch";
+import { usePageMeta } from "../hooks/usePageMeta";
 
 type CommentItem = {
   id: string | number;
@@ -22,6 +24,7 @@ type NormalizedPost = {
   createdAt?: string;
   source: "admin" | "user";
   ownerName?: string;
+  ownerId?: number;
   comments: CommentItem[];
 };
 
@@ -63,6 +66,112 @@ const mediaDescriptor = (mediaUrl?: string, hasLink?: boolean) => {
   if (hasLink) return "with a link";
   return "";
 };
+
+const MOTIVATIONAL_PHRASES = [
+  "Small steps today build the momentum you want tomorrow.",
+  "Show up for yourself and the win will follow.",
+  "Progress over perfection, always.",
+  "Keep going. Your future self is already grateful.",
+  "Consistency beats intensity. You have this.",
+  "One focused action can change your whole day.",
+  "You do not need to be perfect, just present.",
+  "Start where you are and make the next right move.",
+  "A calm mind creates strong progress.",
+  "Choose progress, even if it is tiny.",
+  "Your effort today is the seed of tomorrow.",
+  "Keep the promise you made to yourself.",
+  "You are closer than you think.",
+  "One step forward is still forward.",
+  "Little wins stack into big wins.",
+  "You are building something that matters.",
+  "Your pace is valid. Keep moving.",
+  "Focus on what you can do in the next 10 minutes.",
+  "Consistency turns dreams into plans.",
+  "Take the next small action and breathe.",
+  "Momentum loves a simple start.",
+  "Be proud of showing up today.",
+  "Quiet effort makes loud results.",
+  "You can do hard things, one step at a time.",
+  "Your future is shaped by what you do today.",
+  "Choose progress over pressure.",
+  "The habit is the win.",
+  "Stay curious, stay kind, keep going.",
+  "You are not behind. You are building.",
+  "Your small action is still brave.",
+  "Today counts, even if it feels ordinary.",
+  "Make it simple. Then make it happen.",
+  "Keep your focus narrow and your hope wide.",
+  "You have what you need to begin.",
+  "Your effort is already a success.",
+  "Strong days start with one clear choice.",
+  "Your goals want your attention, not your stress.",
+  "One honest step beats ten perfect plans.",
+  "You are doing better than you think.",
+  "Keep your energy for what matters most.",
+  "Be steady, be kind, be consistent.",
+  "Your progress is real. Keep showing up.",
+  "Let today be the day you move forward.",
+  "Do the next doable thing.",
+  "You are allowed to grow at your speed.",
+  "Small moves, big direction.",
+  "Every rep makes you stronger.",
+  "Your momentum is building right now.",
+  "Focus on the process and the results will follow.",
+  "You are a builder. Keep building.",
+  "You are stronger than your last excuse.",
+  "Start small. Finish proud.",
+  "Choose action over doubt.",
+  "Your future self says thank you.",
+  "Keep your eyes on the next step.",
+  "Discipline is a gift you give yourself.",
+  "You can reset and restart any time.",
+  "Consistency is your superpower.",
+  "Your effort is the plan.",
+  "Do it imperfectly, do it today.",
+  "Keep going, your growth is showing.",
+  "One brave step changes everything.",
+  "You are not alone in the work.",
+  "Focus, breathe, move forward.",
+  "You are creating your own momentum.",
+  "The smallest step still moves you ahead.",
+  "Your courage is in the try.",
+  "Be the friend you need today.",
+  "Progress loves patience.",
+  "Let your actions speak louder than your doubts.",
+  "Simple and steady beats rushed and messy.",
+  "You are building trust with yourself.",
+  "Your best effort today is enough.",
+  "You have the power to choose a better next step.",
+  "Keep your goals close and your worries far.",
+  "You can do one more small thing.",
+  "Your growth is worth the time.",
+  "Show up. Breathe. Begin.",
+  "You are building a life you believe in.",
+  "Do the work, keep the faith.",
+  "One good choice can set the tone for the day.",
+  "You are capable of steady progress.",
+  "Take the next step, then the next.",
+  "You do not have to rush. Just continue.",
+  "Your progress is proof of your strength.",
+  "Keep your eyes on what you can control.",
+  "Today is a fresh chance to try.",
+  "Make it simple, make it consistent.",
+  "You are doing the right kind of hard work.",
+  "Your effort is building real change.",
+  "Trust the process and keep your focus.",
+  "You are allowed to be a work in progress.",
+  "One focused hour beats a scattered day.",
+  "You are capable of more than you feel today.",
+  "Keep the routine, keep the dream.",
+  "Progress is built in the quiet moments.",
+  "Your dedication is paying off.",
+  "Choose a small win right now.",
+  "You are making steady forward motion.",
+  "Do not quit. Adjust and continue.",
+  "Your consistency is your edge.",
+  "You are doing something meaningful today.",
+  "Keep going. Your momentum is real.",
+];
 
 const LinkPreviewCard = ({
   preview,
@@ -118,6 +227,12 @@ export default function Dashboard() {
 
   const navigate = useNavigate();
   const { user } = useAuth();
+  usePageMeta({
+    title: "Dashboard | Stick2YourDreams Connect",
+    description:
+      "Share updates, celebrate wins, and stay accountable with your Stick2YourDreams community.",
+    type: "website",
+  });
   const userLabel = user?.username || user?.email || "Guest";
   const userInitial = userLabel.charAt(0).toUpperCase();
 
@@ -284,6 +399,8 @@ export default function Dashboard() {
 
       const ownerData = attributes.owner?.data ?? attributes.owner;
       const ownerAttrs = ownerData?.attributes ?? ownerData;
+      const ownerId =
+        ownerData?.id ?? (typeof ownerData === "number" ? ownerData : ownerAttrs?.id);
       const ownerName =
         source === "user"
           ? ownerAttrs?.username || ownerAttrs?.email || "User"
@@ -297,6 +414,7 @@ export default function Dashboard() {
         createdAt: attributes.createdAt,
         source,
         ownerName,
+        ownerId,
         comments: matchedComments,
       };
     };
@@ -378,33 +496,10 @@ export default function Dashboard() {
     return "Good Evening";
   }, []);
 
-  // Speak greeting aloud on login
-  useEffect(() => {
-    if (!user) return;
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
-
-    const speak = () => {
-      const utter = new SpeechSynthesisUtterance(`${greeting}, ${user.username}`);
-      const voices = window.speechSynthesis.getVoices();
-      const preferred = voices.find((v) =>
-        ["Google UK English Female", "Google US English", "en-US"].includes(v.name)
-      );
-      utter.voice = preferred || voices.find((v) => v.lang?.startsWith("en")) || null;
-      utter.lang = utter.voice?.lang || "en-US";
-      utter.rate = 1;
-      utter.pitch = 1;
-
-      window.speechSynthesis.cancel(); // stop any pending speech
-      window.speechSynthesis.speak(utter);
-    };
-
-    // Some browsers populate voices asynchronously
-    if (window.speechSynthesis.getVoices().length === 0) {
-      window.speechSynthesis.onvoiceschanged = speak;
-    } else {
-      speak();
-    }
-  }, [greeting, user]);
+  const motivation = useMemo(() => {
+    const index = Math.floor(Math.random() * MOTIVATIONAL_PHRASES.length);
+    return MOTIVATIONAL_PHRASES[index] || "Keep showing up for yourself.";
+  }, []);
 
   const createPost = async () => {
     const content = formContent.trim();
@@ -471,11 +566,34 @@ export default function Dashboard() {
     }
   };
 
+  const deletePost = async (postId: number) => {
+    if (!window.confirm("Delete this post?")) return;
+    try {
+      await api.delete(`/users-posts/${postId}`);
+      setPosts((prev: any) => ({
+        ...prev,
+        user: (prev.user || []).filter((p: any) => Number(p.id ?? p.documentId) !== postId),
+      }));
+    } catch (err) {
+      console.error("Delete post failed", err);
+      setError("Failed to delete post");
+    }
+  };
+
   return (
     <div className="dashboard-shell">
       <Sidebar active="dashboard" />
 
       <div className="main-content">
+        {user && (
+          <div className="topbar-greeting">
+            <span className="topbar-greeting-title">
+              {greeting} {userLabel}
+            </span>
+            <span className="topbar-greeting-sub">{motivation}</span>
+          </div>
+        )}
+        <TopbarSearch />
         <div className="dash-hero">
         <div className="dash-hero__text">
           <p className="eyebrow">S2YD</p>
@@ -600,7 +718,7 @@ export default function Dashboard() {
             </section>
           </div>
 
-          <div className="posts-grid">
+          <div className="posts-grid posts-grid--two">
             {normalizedPosts.length === 0 && (
               <div className="empty-state">
                 <p>No posts yet. Add one in Strapi to see it here.</p>
@@ -616,6 +734,11 @@ export default function Dashboard() {
               const showPreviewMedia = !post.imageUrl && !!previewImage;
               const showPlaceholder = !post.imageUrl && !previewImage;
               const authorLabel = post.ownerName || "User";
+              const postId = Number(post.id);
+              const canDelete =
+                post.source === "user" &&
+                Number.isFinite(postId) &&
+                user?.id === post.ownerId;
 
               return (
                 <article key={post.id} className="post-card">
@@ -653,9 +776,20 @@ export default function Dashboard() {
                   <div className="post-body">
                     <div className="post-meta">
                       <span className="pill subtle">Feature</span>
-                      {post.createdAt && (
-                        <span className="date">{formatDate(post.createdAt)}</span>
-                      )}
+                      <div className="post-meta-right">
+                        {post.createdAt && (
+                          <span className="date">{formatDate(post.createdAt)}</span>
+                        )}
+                        {canDelete && (
+                          <button
+                            className="btn ghost post-delete"
+                            type="button"
+                            onClick={() => deletePost(postId)}
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <h3>{post.title}</h3>
                     <p>{post.content}</p>
@@ -733,12 +867,20 @@ export default function Dashboard() {
                                 comments: res.data?.data ?? [],
                               }));
                               setCommentInputs((prev) => ({ ...prev, [post.id]: "" }));
-                            } catch (err: unknown) {
-                              console.error("Add comment failed", err);
+                          } catch (err: unknown) {
+                            console.error("Add comment failed", err);
+                            if (axios.isAxiosError(err)) {
+                              const msg =
+                                err.response?.data?.error?.message ||
+                                err.response?.data?.message ||
+                                "Failed to add comment";
+                              setError(String(msg));
+                            } else {
                               setError("Failed to add comment");
                             }
-                          }}
-                        >
+                          }
+                        }}
+                      >
                           Comment
                         </button>
                       </div>

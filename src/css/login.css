@@ -16,6 +16,44 @@
   text-align: center;
 }
 
+.auth-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(5, 238, 40, 0.7);
+  background: rgba(5, 238, 40, 0.97);
+  color: #0b0d14;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.2s ease, filter 0.2s ease;
+}
+
+.auth-brand:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(5, 238, 40, 0.25);
+  filter: brightness(1.02);
+}
+
+.auth-brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: #0b0d14;
+  color: #fff;
+  font-size: 10px;
+}
+
+.auth-brand-text {
+  color: #0b0d14;
+  font-weight: 700;
+}
+
 .eyebrow {
   text-transform: uppercase;
   letter-spacing: 0.2em;

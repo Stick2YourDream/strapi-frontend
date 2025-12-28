@@ -4,12 +4,16 @@ import "../css/dashboard.css";
 import { useAuth } from "../context/AuthContext";
 import api from "../api/strapi";
 import Sidebar from "../components/Sidebar";
+import TopbarSearch from "../components/TopbarSearch";
+import { usePageMeta } from "../hooks/usePageMeta";
 
 type FriendPost = {
   id: number | string;
   title: string;
   content: string;
   imageUrl?: string;
+  createdAt?: string;
+  linkUrl?: string;
 };
 
 type FriendProfile = {
@@ -18,6 +22,14 @@ type FriendProfile = {
   bio?: string;
   userId?: number;
   username?: string;
+  firstName?: string;
+  lastName?: string;
+  religion?: string;
+  hobbies?: string;
+  country?: string;
+  state?: string;
+  city?: string;
+  avatarUrl?: string;
 };
 
 type FriendRelation = {
@@ -29,14 +41,101 @@ type FriendRelation = {
   status: "pending" | "accepted" | "blocked" | string;
 };
 
+type LinkPreview = {
+  url: string;
+  title?: string;
+  description?: string;
+  image?: string;
+  siteName?: string;
+  type?: string;
+};
+
 const CHAT_STORE_KEY = "chatLogs_v1";
 const CHAT_TTL_MS = 4 * 365 * 24 * 60 * 60 * 1000; // ~4 years
 
+const extractFirstUrl = (text: string) => {
+  const match = String(text || "").match(/(https?:\/\/[^\s]+|www\.[^\s]+)/i);
+  if (!match) return "";
+  let url = match[0].replace(/[),.!?]+$/, "");
+  if (url.startsWith("www.")) url = `https://${url}`;
+  return url;
+};
+
+const normalizeMatch = (value?: string) => String(value || "").trim().toLowerCase();
+const parseHobbyList = (value?: string) =>
+  String(value || "")
+    .split(/[,;\n]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+const hostnameFor = (value: string) => {
+  try {
+    return new URL(value).hostname.replace(/^www\./, "");
+  } catch {
+    return value;
+  }
+};
+
+const isYoutubeUrl = (value: string) => {
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    return host.includes("youtube.com") || host === "youtu.be";
+  } catch {
+    return false;
+  }
+};
+
+const LinkPreviewCard = ({
+  preview,
+  url,
+  compact = false,
+}: {
+  preview?: LinkPreview | null;
+  url: string;
+  compact?: boolean;
+}) => {
+  const safePreview: LinkPreview =
+    preview ?? { url, title: hostnameFor(url), siteName: hostnameFor(url) };
+  const title =
+    safePreview.title || safePreview.siteName || hostnameFor(url);
+  const meta = safePreview.siteName || hostnameFor(url);
+  const showBadge = safePreview.type === "video" || isYoutubeUrl(url);
+  return (
+    <a
+      className={`link-preview-card${compact ? " is-compact" : ""}`}
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+    >
+      <div className="link-preview-media">
+        {safePreview.image ? (
+          <img src={safePreview.image} alt={title} loading="lazy" />
+        ) : (
+          <div className="link-preview-placeholder">LINK</div>
+        )}
+        {showBadge && <span className="link-preview-badge">Video</span>}
+      </div>
+      <div className="link-preview-body">
+        <p className="link-preview-title">{title}</p>
+        {safePreview.description && (
+          <p className="link-preview-desc">{safePreview.description}</p>
+        )}
+        <span className="link-preview-url">{meta}</span>
+      </div>
+    </a>
+  );
+};
+
 export default function Friends() {
   const { user } = useAuth();
+  usePageMeta({
+    title: "Friends | Stick2YourDreams Connect",
+    description:
+      "Find supportive friends, send messages, and discover new connections based on shared location, hobbies, and faith.",
+    type: "website",
+  });
 
   const [query, setQuery] = useState("");
-  const [addHandle, setAddHandle] = useState("");
   const [profiles, setProfiles] = useState<FriendProfile[]>([]);
   const [friends, setFriends] = useState<FriendRelation[]>([]);
   const [messages, setMessages] = useState<Record<string, string>>({});
@@ -49,14 +148,31 @@ export default function Friends() {
   >({});
   const [linkMeta, setLinkMeta] = useState<Record<string, { title?: string; thumb?: string }>>({});
   const linkMetaRef = useRef(linkMeta);
+  const [linkPreviews, setLinkPreviews] = useState<Record<string, LinkPreview | null>>({});
+  const linkPreviewsRef = useRef(linkPreviews);
 
   useEffect(() => {
     linkMetaRef.current = linkMeta;
   }, [linkMeta]);
+
+  useEffect(() => {
+    linkPreviewsRef.current = linkPreviews;
+  }, [linkPreviews]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
+  const getEntity = (entry: any) => entry?.data ?? entry ?? null;
+  const getEntityAttrs = (entry: any) => {
+    const data = getEntity(entry);
+    return data?.attributes ?? data ?? {};
+  };
+  const getEntityId = (entry: any) => {
+    const data = getEntity(entry);
+    const rawId = data?.id ?? (typeof data === "number" ? data : data?.attributes?.id);
+    const num = Number(rawId);
+    return Number.isFinite(num) ? num : undefined;
+  };
   const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
   const pickMediaUrl = (mediaField: any): string | undefined => {
     if (!mediaField) return undefined;
@@ -75,6 +191,32 @@ export default function Friends() {
     return url.startsWith("/") ? `${apiBase}${url}` : url;
   };
 
+  const fetchLinkPreview = useCallback(async (url: string) => {
+    if (!url) return;
+    if (linkPreviewsRef.current[url] !== undefined) return;
+    try {
+      const res = await api.get("/link-preview", { params: { url } });
+      const data = res.data?.data;
+      const preview = data?.url
+        ? {
+            url: data.url,
+            title: data.title,
+            description: data.description,
+            image: data.image,
+            siteName: data.siteName,
+            type: data.type,
+          }
+        : null;
+      setLinkPreviews((prev) =>
+        prev[url] !== undefined ? prev : { ...prev, [url]: preview }
+      );
+    } catch {
+      setLinkPreviews((prev) =>
+        prev[url] !== undefined ? prev : { ...prev, [url]: null }
+      );
+    }
+  }, []);
+
   // Load profiles, friends, and posts
   useEffect(() => {
     const load = async () => {
@@ -85,40 +227,70 @@ export default function Friends() {
       setLoading(true);
       setError(null);
       try {
-        const profilesRes = await api.get("/profiles?populate=user");
+        const profilesRes = await api.get(
+          "/profiles?populate[0]=user&populate[1]=avatar"
+        );
         const mappedProfiles: FriendProfile[] = (profilesRes.data?.data ?? []).map((p: any) => {
           const attrs = normalize(p);
-          const userData = normalize(attrs.user?.data ?? attrs.user);
+          const userAttrs = getEntityAttrs(attrs.user);
+          const userId = getEntityId(attrs.user);
           return {
             id: p.id ?? attrs.documentId,
-            userId: userData?.id,
-            username: userData?.username,
-            handle: attrs.handle || userData?.username || `user-${p.id ?? attrs.documentId}`,
+            userId,
+            username: userAttrs?.username,
+            firstName: attrs.firstName || "",
+            lastName: attrs.lastName || "",
+            handle: attrs.handle || userAttrs?.username || `user-${p.id ?? attrs.documentId}`,
             bio: attrs.bio || "",
+            religion: attrs.religion || "",
+            hobbies: attrs.hobbies || "",
+            country: attrs.country || "",
+            state: attrs.state || "",
+            city: attrs.city || "",
+            avatarUrl: pickMediaUrl(attrs.avatar),
           };
         });
 
-        const ownerIds = mappedProfiles.map((p) => p.userId).filter(Boolean) as number[];
+        const ownerIds = mappedProfiles
+          .map((p) => (typeof p.userId === "number" ? p.userId : undefined))
+          .filter((id): id is number => typeof id === "number" && Number.isFinite(id));
         if (ownerIds.length) {
+          const ownerFilter = ownerIds
+            .map((id, index) => `filters[owner][id][$in][${index}]=${id}`)
+            .join("&");
           const postsRes = await api.get(
-            `/users-posts?filters[owner][id][$in]=${ownerIds.join(
-              ","
-            )}&populate=Users_Pictures&populate=owner`
+            `/users-posts?${ownerFilter}&populate=Users_Pictures&populate=owner&sort=createdAt:desc&pagination[pageSize]=200&publicationState=preview`
           );
           const grouped: Record<number, FriendPost[]> = {};
+          const linkUrls = new Set<string>();
           (postsRes.data?.data ?? []).forEach((p: any) => {
             const attrs = normalize(p);
-            const ownerId = normalize(attrs.owner?.data ?? attrs.owner)?.id;
+            const ownerId = getEntityId(attrs.owner);
             if (!ownerId) return;
             const imageUrl = pickMediaUrl(attrs.Users_Pictures);
+            const content = attrs.Users_Content || "";
+            const linkUrl = extractFirstUrl(content);
+            if (linkUrl) linkUrls.add(linkUrl);
             (grouped[ownerId] = grouped[ownerId] || []).push({
               id: p.id ?? attrs.documentId,
               title: attrs.Title || "Untitled",
-              content: attrs.Users_Content || "",
+              content,
               imageUrl,
+              createdAt: attrs.createdAt,
+              linkUrl: linkUrl || undefined,
+            });
+          });
+          Object.values(grouped).forEach((list) => {
+            list.sort((a, b) => {
+              const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+              const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+              return bTime - aTime;
             });
           });
           setPostsByOwner(grouped);
+          linkUrls.forEach((url) => {
+            void fetchLinkPreview(url);
+          });
         } else {
           setPostsByOwner({});
         }
@@ -129,14 +301,12 @@ export default function Friends() {
       );
       const mappedFriends: FriendRelation[] = (friendsRes.data?.data ?? []).map((f: any) => {
         const attrs = normalize(f);
-        const requester = normalize(attrs.requester?.data ?? attrs.requester);
-        const target = normalize(attrs.target?.data ?? attrs.target);
         return {
           id: f.id ?? attrs.documentId,
           idNumber: f.id ?? undefined,
           docId: attrs.documentId,
-          requesterId: requester?.id,
-          targetId: target?.id,
+          requesterId: getEntityId(attrs.requester),
+          targetId: getEntityId(attrs.target),
           status: attrs.status || "pending",
         };
       });
@@ -150,7 +320,7 @@ export default function Friends() {
       }
     };
     load();
-  }, [user]);
+  }, [fetchLinkPreview, user]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -159,7 +329,10 @@ export default function Friends() {
     return list.filter(
       (f) =>
         f.handle.toLowerCase().includes(q) ||
-        (f.username ?? "").toLowerCase().includes(q)
+        (f.username ?? "").toLowerCase().includes(q) ||
+        (f.firstName ?? "").toLowerCase().includes(q) ||
+        (f.lastName ?? "").toLowerCase().includes(q) ||
+        `${(f.firstName ?? "").toLowerCase()} ${(f.lastName ?? "").toLowerCase()}`.trim().includes(q)
     );
   }, [profiles, query, user]);
 
@@ -190,14 +363,12 @@ export default function Friends() {
       );
       const mapped: FriendRelation[] = (res.data?.data ?? []).map((f: any) => {
         const attrs = normalize(f);
-        const requester = normalize(attrs.requester?.data ?? attrs.requester);
-        const target = normalize(attrs.target?.data ?? attrs.target);
         return {
           id: f.id ?? attrs.documentId,
           idNumber: f.id ?? undefined,
           docId: attrs.documentId,
-          requesterId: requester?.id,
-          targetId: target?.id,
+          requesterId: getEntityId(attrs.requester),
+          targetId: getEntityId(attrs.target),
           status: attrs.status || "pending",
         };
       });
@@ -206,22 +377,6 @@ export default function Friends() {
     } catch (err) {
       setError("Failed to add friend");
     }
-  };
-
-  const addFriendByHandle = async () => {
-    const targetHandle = addHandle.trim().replace(/^@+/, "").toLowerCase();
-    if (!targetHandle) return;
-    const target = profiles.find(
-      (p) =>
-        p.handle.toLowerCase() === targetHandle ||
-        (p.username ?? "").toLowerCase() === targetHandle
-    );
-    if (!target?.userId) {
-      setError("Handle not found");
-      return;
-    }
-    await addFriend(target);
-    setAddHandle("");
   };
 
   const acceptFriend = async (relation: FriendRelation) => {
@@ -255,14 +410,12 @@ export default function Friends() {
         );
         const mapped: FriendRelation[] = (res.data?.data ?? []).map((f: any) => {
           const attrs = normalize(f);
-          const requester = normalize(attrs.requester?.data ?? attrs.requester);
-          const target = normalize(attrs.target?.data ?? attrs.target);
           return {
             id: f.id ?? attrs.documentId,
             idNumber: f.id ?? undefined,
             docId: attrs.documentId,
-            requesterId: requester?.id,
-            targetId: target?.id,
+            requesterId: getEntityId(attrs.requester),
+            targetId: getEntityId(attrs.target),
             status: attrs.status || "pending",
           };
         });
@@ -300,7 +453,16 @@ export default function Friends() {
         ],
       }));
     } catch (err) {
-      setError("Failed to send message");
+      if (err && typeof err === "object" && "response" in err) {
+        const anyErr = err as any;
+        const msg =
+          anyErr.response?.data?.error?.message ||
+          anyErr.response?.data?.message ||
+          "Failed to send message";
+        setError(String(msg));
+      } else {
+        setError("Failed to send message");
+      }
     }
   };
 
@@ -324,10 +486,107 @@ export default function Friends() {
     [friends, profiles, user?.id]
   );
 
+  const myProfile = useMemo(
+    () => profiles.find((p) => p.userId === user?.id) || null,
+    [profiles, user?.id]
+  );
+
+  const suggestions = useMemo(() => {
+    if (!user || !myProfile) return [];
+    const relatedIds = new Set<number>();
+    friends.forEach((f) => {
+      if (f.requesterId === user.id && f.targetId) relatedIds.add(f.targetId);
+      if (f.targetId === user.id && f.requesterId) relatedIds.add(f.requesterId);
+    });
+
+    const myReligion = normalizeMatch(myProfile.religion);
+    const myCountry = normalizeMatch(myProfile.country);
+    const myState = normalizeMatch(myProfile.state);
+    const myCity = normalizeMatch(myProfile.city);
+    const myHobbies = new Set(parseHobbyList(myProfile.hobbies).map(normalizeMatch));
+
+    const scored = profiles
+      .filter((p) => p.userId && p.userId !== user.id && !relatedIds.has(p.userId))
+      .map((p) => {
+        const reasons: string[] = [];
+        let score = 0;
+        const religion = normalizeMatch(p.religion);
+        const country = normalizeMatch(p.country);
+        const state = normalizeMatch(p.state);
+        const city = normalizeMatch(p.city);
+        const hobbies = parseHobbyList(p.hobbies).map(normalizeMatch);
+
+        if (myReligion && religion && myReligion === religion) {
+          score += 3;
+          reasons.push("Same religion");
+        }
+        if (myCountry && country && myCountry === country) {
+          score += 3;
+          reasons.push("Same country");
+        }
+        if (myState && state && myState === state) {
+          score += 2;
+          reasons.push("Same region");
+        }
+        if (myCity && city && myCity === city) {
+          score += 2;
+          reasons.push("Same city");
+        }
+
+        let overlap = 0;
+        hobbies.forEach((hobby) => {
+          if (hobby && myHobbies.has(hobby)) overlap += 1;
+        });
+        if (overlap > 0) {
+          score += Math.min(overlap, 5);
+          reasons.push(`${overlap} shared ${overlap === 1 ? "hobby" : "hobbies"}`);
+        }
+
+        return { profile: p, score, reasons };
+      })
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 6);
+
+    return scored;
+  }, [friends, myProfile, profiles, user]);
+
+  const suggestionsReady = Boolean(
+    myProfile?.religion ||
+      myProfile?.hobbies ||
+      myProfile?.country ||
+      myProfile?.state ||
+      myProfile?.city
+  );
+
   const friendKey = (f: FriendProfile) => {
     if (f.userId) return String(f.userId);
     if (typeof f.id === "number") return String(f.id);
     return undefined;
+  };
+
+  const renderAvatar = (profile?: FriendProfile, size = 44) => {
+    const handle = profile?.handle || profile?.username || "User";
+    if (profile?.avatarUrl) {
+      return (
+        <img
+          src={profile.avatarUrl}
+          alt={handle}
+          className="friend-avatar"
+          style={{ width: size, height: size }}
+          loading="lazy"
+        />
+      );
+    }
+    return (
+      <div
+        className="friend-avatar fallback"
+        aria-hidden="true"
+        style={{ width: size, height: size }}
+      >
+        {handle.charAt(0).toUpperCase()}
+      </div>
+    );
   };
 
   const fetchPreviewMeta = useCallback(
@@ -449,6 +708,7 @@ export default function Friends() {
       <Sidebar active="friends" />
 
       <div className="main-content">
+        <TopbarSearch value={query} onChange={setQuery} />
         <div className="dash-hero">
           <div className="dash-hero__text">
             <p className="eyebrow">Friends</p>
@@ -466,6 +726,60 @@ export default function Friends() {
           <section className="panel">
             <div className="panel-header">
               <div>
+                <p className="eyebrow">Suggestions</p>
+                <h3>Friend suggestions</h3>
+              </div>
+            </div>
+            {suggestions.length === 0 ? (
+              <p className="status">
+                {suggestionsReady
+                  ? "No suggestions yet. Check back as more friends join."
+                  : "Complete your profile (location, hobbies, religion) to unlock suggestions."}
+              </p>
+            ) : (
+              <ul className="suggestion-list">
+                {suggestions.map(({ profile: suggestion, reasons }) => {
+                  const displayName = `${suggestion.firstName || ""} ${suggestion.lastName || ""}`.trim();
+                  const handle = suggestion.handle || suggestion.username || "friend";
+                  const location = [suggestion.city, suggestion.state, suggestion.country]
+                    .filter(Boolean)
+                    .join(", ");
+                  return (
+                    <li key={suggestion.id} className="suggestion-item">
+                      {renderAvatar(suggestion, 40)}
+                      <div className="suggestion-body">
+                        <strong>{displayName || `@${handle}`}</strong>
+                        <span>@{handle}</span>
+                        {location && <span className="suggestion-location">{location}</span>}
+                        {reasons.length > 0 && (
+                          <div className="suggestion-tags">
+                            {reasons.map((reason) => (
+                              <span key={reason} className="suggestion-tag">
+                                {reason}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        className="btn ghost"
+                        type="button"
+                        onClick={() => addFriend(suggestion)}
+                      >
+                        Add
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+        </div>
+
+        <div className="panel-grid">
+          <section className="panel">
+            <div className="panel-header">
+              <div>
                 <p className="eyebrow">Friends</p>
                 <h3>Current friends</h3>
               </div>
@@ -474,14 +788,21 @@ export default function Friends() {
               <p className="status">0</p>
             ) : (
               <ul className="comment-list">
-                {acceptedFriends.map(({ relation, profile }) => (
-                  <li key={relation.id} className="comment-item">
-                    <div className="comment-body">
-                      <strong>@{profile?.handle || profile?.username || "friend"}</strong>
-                      <p>{profile?.bio || "Friend"}</p>
-                    </div>
-                  </li>
-                ))}
+                {acceptedFriends.map(({ relation, profile }) => {
+                  const displayName = `${profile?.firstName || ""} ${profile?.lastName || ""}`.trim();
+                  return (
+                    <li key={relation.id} className="comment-item friend-item">
+                      <div className="friend-header">
+                        {renderAvatar(profile, 40)}
+                        <div className="friend-header-meta">
+                          <strong>@{profile?.handle || profile?.username || "friend"}</strong>
+                          {displayName && <span className="friend-name">{displayName}</span>}
+                        </div>
+                      </div>
+                      <p className="comment-body">{profile?.bio || "Friend"}</p>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </section>
@@ -498,7 +819,7 @@ export default function Friends() {
               </div>
               <ul className="comment-list">
                 {incomingPending.map(({ relation, profile }) => (
-                  <li key={relation.id} className="comment-item">
+                  <li key={relation.id} className="comment-item pending-approval">
                     <div className="comment-body">
                       <strong>@{profile?.handle || profile?.username || "friend"}</strong>
                       <p>{profile?.bio || "Pending request"}</p>
@@ -519,41 +840,15 @@ export default function Friends() {
           </div>
         )}
 
-        <div className="panel-grid">
-          <section className="panel">
-            <div className="form-grid">
-              <label className="field">
-                <span>Search handle</span>
-                <input
-                  className="auth-input"
-                  placeholder="@handle"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                />
-              </label>
-              <label className="field">
-                <span>Add by handle</span>
-                <div className="comment-form">
-                  <input
-                    className="auth-input"
-                    placeholder="@friend_handle"
-                    value={addHandle}
-                    onChange={(e) => setAddHandle(e.target.value)}
-                  />
-                  <button className="btn primary" type="button" onClick={addFriendByHandle}>
-                    Add Friend
-                  </button>
-                </div>
-              </label>
-            </div>
-          </section>
-        </div>
-
         <div className="posts-grid">
           {filtered.map((f) => {
             const status = relationStatusFor(f);
             const ownerPosts = f.userId ? postsByOwner[f.userId] : undefined;
+            const latestPost = ownerPosts && ownerPosts.length ? ownerPosts[0] : undefined;
+            const latestPreview =
+              latestPost?.linkUrl ? linkPreviews[latestPost.linkUrl] : undefined;
             const key = friendKey(f);
+            const displayName = `${f.firstName || ""} ${f.lastName || ""}`.trim();
             return (
               <article
                 key={f.id}
@@ -566,7 +861,13 @@ export default function Friends() {
                     <span className="pill subtle">Friend</span>
                     {status && <span className="pill subtle">{status}</span>}
                   </div>
-                  <h3>@{f.handle}</h3>
+                  <div className="friend-header">
+                    {renderAvatar(f, 48)}
+                    <div className="friend-header-meta">
+                      <h3>@{f.handle}</h3>
+                      {displayName && <span className="friend-name">{displayName}</span>}
+                    </div>
+                  </div>
                   <p className="comment-body">{f.bio || "No bio yet."}</p>
                   <button
                     className="btn ghost"
@@ -584,16 +885,49 @@ export default function Friends() {
                   >
                     {status === "accepted" ? "Friends" : status === "pending" ? "Requested" : "Add / Request"}
                   </button>
+                  <div className="friend-current-post">
+                    <p className="eyebrow">Current post</p>
+                    {latestPost ? (
+                      <div className={`friend-current-card ${latestPost.imageUrl ? "" : "no-media"}`}>
+                        {latestPost.imageUrl && (
+                          <img src={latestPost.imageUrl} alt={latestPost.title} loading="lazy" />
+                        )}
+                        <div>
+                          <strong>{latestPost.title}</strong>
+                          <p>{latestPost.content}</p>
+                          {latestPost.linkUrl && (
+                            <div className="friend-link-preview">
+                              <LinkPreviewCard
+                                preview={latestPreview}
+                                url={latestPost.linkUrl}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="status">No posts yet.</p>
+                    )}
+                  </div>
                   <div className="comments">
-                    <p className="eyebrow">Posts</p>
+                    <p className="eyebrow">All posts</p>
                     {ownerPosts && ownerPosts.length ? (
-                      <ul className="comment-list">
+                      <ul className="comment-list friend-posts-list">
                         {ownerPosts.map((p) => (
                           <li key={p.id} className="comment-item">
                             {p.imageUrl && <img src={p.imageUrl} alt={p.title} className="avatar" />}
                             <div className="comment-body">
                               <strong>{p.title}</strong>
                               <p>{p.content}</p>
+                              {p.linkUrl && (
+                                <div className="friend-link-preview">
+                                  <LinkPreviewCard
+                                    preview={linkPreviews[p.linkUrl]}
+                                    url={p.linkUrl}
+                                    compact
+                                  />
+                                </div>
+                              )}
                             </div>
                           </li>
                         ))}

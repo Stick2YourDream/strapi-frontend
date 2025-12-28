@@ -87,6 +87,77 @@
   gap: 6px;
 }
 
+.profile-location-error {
+  margin: 0 4px;
+  color: #fca5a5;
+  font-size: 12px;
+}
+
+.onboarding-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 10, 18, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 1200;
+  overflow-y: auto;
+}
+
+.onboarding-card {
+  width: min(760px, 96vw);
+  background: linear-gradient(140deg, rgba(20, 28, 46, 0.98), rgba(10, 14, 26, 0.98));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  padding: 24px;
+  display: grid;
+  gap: 16px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+
+.onboarding-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.onboarding-sub {
+  margin: 4px 0 0;
+  color: #9aa5bb;
+  font-size: 13px;
+}
+
+.onboarding-progress {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.06);
+  color: #cbd5e1;
+  font-size: 12px;
+  letter-spacing: 0.3px;
+}
+
+.onboarding-title {
+  margin: 0;
+  font-size: 18px;
+  color: #e5e7eb;
+}
+
+.onboarding-fields {
+  display: grid;
+  gap: 12px;
+}
+
+.onboarding-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 @media (max-width: 980px) {
   .profile-columns {
     grid-template-columns: 1fr;
@@ -277,6 +348,15 @@
 @media (max-width: 720px) {
   .post-composer__top {
     grid-template-columns: 1fr;
+  }
+
+  .onboarding-card {
+    padding: 18px;
+  }
+
+  .onboarding-actions {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .link-preview-card,

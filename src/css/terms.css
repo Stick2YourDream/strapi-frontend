@@ -1,0 +1,101 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap");
+
+.terms-page {
+  min-height: 100vh;
+  background: radial-gradient(circle at 20% 20%, rgba(92, 240, 199, 0.08), transparent 25%),
+    radial-gradient(circle at 80% 0%, rgba(127, 168, 255, 0.08), transparent 30%),
+    #0d0c1d;
+  color: #f5f6fb;
+  font-family: "Space Grotesk", "Manrope", system-ui, sans-serif;
+  padding: 32px 18px 80px;
+}
+
+.terms-shell {
+  max-width: 920px;
+  margin: 0 auto;
+}
+
+.terms-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.terms-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #f5f6fb;
+  cursor: pointer;
+}
+
+.terms-mark {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.terms-text {
+  color: #a8adc2;
+  font-weight: 500;
+}
+
+.terms-back {
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.04);
+  color: #f5f6fb;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.terms-card {
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  padding: 28px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+}
+
+.terms-card h1 {
+  margin: 0 0 6px;
+  font-size: clamp(24px, 4vw, 32px);
+}
+
+.terms-updated {
+  margin: 0 0 18px;
+  color: #a8adc2;
+  font-size: 13px;
+}
+
+.terms-section {
+  margin-top: 20px;
+}
+
+.terms-section h2 {
+  font-size: 18px;
+  margin: 0 0 8px;
+}
+
+.terms-section p {
+  margin: 0 0 10px;
+  color: #cbd5e1;
+  line-height: 1.6;
+}
+
+@media (max-width: 720px) {
+  .terms-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .terms-card {
+    padding: 20px;
+  }
+}

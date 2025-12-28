@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import api from "../api/strapi";
+import { useNotifications } from "../hooks/useNotifications";
 
 type ProfileSummary = {
   displayName: string;
@@ -23,6 +24,8 @@ export default function Sidebar({ active }: SidebarProps) {
   const [profileSummary, setProfileSummary] = useState<ProfileSummary | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const { counts, total, loading, refresh, markAllRead } = useNotifications(user?.id);
 
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
   const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
@@ -70,15 +73,29 @@ export default function Sidebar({ active }: SidebarProps) {
     load();
   }, [user]);
 
+  useEffect(() => {
+    setShowProfileMenu(false);
+    setShowNotifications(false);
+  }, [user]);
+
   // Close mobile menu when the active page changes
   useEffect(() => {
     setMenuOpen(false);
+    setShowProfileMenu(false);
+    setShowNotifications(false);
   }, [active]);
 
-  const nameForDisplay = useMemo(
-    () => profileSummary?.displayName || user?.username || "Me",
-    [profileSummary?.displayName, user?.username]
-  );
+  const profileCard = useMemo(() => {
+    if (!user) return null;
+    return {
+      displayName:
+        profileSummary?.displayName || user.username || user.email || "Me",
+      handle: profileSummary?.handle || user.username || user.email || "Profile",
+      avatarUrl: profileSummary?.avatarUrl,
+    };
+  }, [profileSummary, user]);
+
+  const nameForDisplay = profileCard?.displayName || "Me";
 
   const handleLogoClick = () => {
     navigate("/");
@@ -88,11 +105,13 @@ export default function Sidebar({ active }: SidebarProps) {
   const handleProfileAction = (path: string) => {
     navigate(path);
     setShowProfileMenu(false);
+    setShowNotifications(false);
     setMenuOpen(false);
   };
 
   // prefer handle if loaded, else username/email
-  const secondaryLine = profileSummary?.handle || user?.username || user?.email || "Profile";
+  const secondaryLine = profileCard?.handle || "Profile";
+  const fallbackInitial = nameForDisplay.charAt(0).toUpperCase();
 
   return (
     <div className={`sidebar-shell ${menuOpen ? "open" : ""}`}>
@@ -103,13 +122,22 @@ export default function Sidebar({ active }: SidebarProps) {
         </button>
         <button
           type="button"
-          className={`hamburger ${menuOpen ? "is-open" : ""}`}
+          className={`mobile-profile-toggle ${menuOpen ? "is-open" : ""}`}
           onClick={() => setMenuOpen((v) => !v)}
           aria-label="Toggle navigation menu"
         >
-          <span />
-          <span />
-          <span />
+          {profileCard?.avatarUrl ? (
+            <img
+              src={profileCard.avatarUrl}
+              alt={nameForDisplay}
+              className="mobile-profile-avatar"
+            />
+          ) : (
+            <div className="mobile-profile-avatar fallback" aria-hidden="true">
+              {fallbackInitial}
+            </div>
+          )}
+          <span className="mobile-profile-name">{nameForDisplay}</span>
         </button>
       </div>
 
@@ -119,50 +147,137 @@ export default function Sidebar({ active }: SidebarProps) {
           <span className="brand-text">Stick2YourDreams</span>
         </button>
         <div className="nav-actions" style={{ flexDirection: "column", alignItems: "flex-start", gap: "8px", width: "100%" }}>
-          {profileSummary && (
-            <div style={{ position: "relative", width: "100%" }}>
-              <button
-                type="button"
-                onClick={() => setShowProfileMenu((v) => !v)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "10px",
-                  width: "100%",
-                  background: "transparent",
-                  border: "1px solid rgba(255,255,255,0.08)",
-                  padding: "10px 12px",
-                  borderRadius: "12px",
-                  color: "#c7cede",
-                  cursor: "pointer",
-                }}
-              >
-                {profileSummary.avatarUrl && (
-                  <img
-                    src={profileSummary.avatarUrl}
-                    alt={nameForDisplay}
-                    className="avatar-octagon"
-                    style={{ width: 48, height: 48, borderRadius: "50%" }}
-                  />
-                )}
-                <div style={{ textAlign: "left" }}>
-                  <strong style={{ display: "block" }}>{nameForDisplay}</strong>
-                  <span
-                    style={{
-                      fontSize: "12px",
-                      color: "#9ca3af",
-                      display: "block",
-                      maxWidth: "100%",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                    title={secondaryLine}
-                  >
-                    {secondaryLine}
-                  </span>
+          {profileCard && (
+            <div className="sidebar-profile-slot">
+              <div className="sidebar-profile-row">
+                <button
+                  type="button"
+                  className="sidebar-profile-button"
+                  onClick={() => {
+                    setShowProfileMenu((v) => !v);
+                    setShowNotifications(false);
+                  }}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                    background: "transparent",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    padding: "10px 12px",
+                    borderRadius: "12px",
+                    color: "#c7cede",
+                    cursor: "pointer",
+                  }}
+                >
+                  {profileCard.avatarUrl ? (
+                    <img
+                      src={profileCard.avatarUrl}
+                      alt={nameForDisplay}
+                      className="avatar-octagon"
+                      style={{ width: 48, height: 48, borderRadius: "50%" }}
+                    />
+                  ) : (
+                    <div
+                      aria-hidden="true"
+                      style={{
+                        width: 48,
+                        height: 48,
+                        borderRadius: "50%",
+                        display: "grid",
+                        placeItems: "center",
+                        background: "linear-gradient(135deg, #60a5fa, #7c3aed)",
+                        color: "#0b0d14",
+                        fontWeight: 700,
+                      }}
+                    >
+                      {fallbackInitial}
+                    </div>
+                  )}
+                  <div style={{ textAlign: "left", minWidth: 0 }}>
+                    <strong style={{ display: "block" }}>{nameForDisplay}</strong>
+                    <span
+                      style={{
+                        fontSize: "12px",
+                        color: "#9ca3af",
+                        display: "block",
+                        maxWidth: "100%",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                      title={secondaryLine}
+                    >
+                      {secondaryLine}
+                    </span>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  className="sidebar-bell"
+                  aria-label={`Notifications (${total})`}
+                  onClick={() => {
+                    setShowNotifications((v) => !v);
+                    setShowProfileMenu(false);
+                    refresh();
+                  }}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M12 22a2.5 2.5 0 0 0 2.45-2H9.55A2.5 2.5 0 0 0 12 22zm7-6V11a7 7 0 1 0-14 0v5l-2 2v1h18v-1l-2-2z"
+                      fill="currentColor"
+                    />
+                  </svg>
+                  {total > 0 && (
+                    <span className="sidebar-bell-badge">
+                      {total > 99 ? "99+" : total}
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              {showNotifications && (
+                <div className="sidebar-notification-panel">
+                  <div className="sidebar-notification-header">
+                    <strong>Notifications</strong>
+                    <button
+                      type="button"
+                      className="btn ghost"
+                      onClick={markAllRead}
+                      disabled={total === 0}
+                    >
+                      Mark read
+                    </button>
+                  </div>
+                  <div className="sidebar-notification-list">
+                    <div className="sidebar-notification-item">
+                      <span>New messages</span>
+                      <span className="sidebar-notification-count">{counts.messages}</span>
+                    </div>
+                    <div className="sidebar-notification-item">
+                      <span>Friend requests</span>
+                      <span className="sidebar-notification-count">{counts.requests}</span>
+                    </div>
+                  <div className="sidebar-notification-item">
+                    <span>Friend posts</span>
+                    <span className="sidebar-notification-count">{counts.friendPosts}</span>
+                  </div>
+                  <div className="sidebar-notification-item">
+                    <span>Comments on your posts</span>
+                    <span className="sidebar-notification-count">{counts.comments}</span>
+                  </div>
+                  <div className="sidebar-notification-item">
+                    <span>Likes on your posts</span>
+                    <span className="sidebar-notification-count">{counts.likes}</span>
+                  </div>
+                    {loading && (
+                      <div className="sidebar-notification-status">Refreshing...</div>
+                    )}
+                    {!loading && total === 0 && (
+                      <div className="sidebar-notification-status">All caught up.</div>
+                    )}
+                  </div>
                 </div>
-              </button>
+              )}
 
               {showProfileMenu && (
                 <div
