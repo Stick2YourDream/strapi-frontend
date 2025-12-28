@@ -9,7 +9,13 @@ const ssgDir = path.join(rootDir, "dist-ssg");
 const templatePath = path.join(distDir, "index.html");
 const template = fs.readFileSync(templatePath, "utf-8");
 
-const ssgBundle = pathToFileURL(path.join(ssgDir, "entry-ssg.js")).href;
+const entryCandidates = fs
+  .readdirSync(ssgDir)
+  .filter((name) => name.startsWith("entry-ssg.") && (name.endsWith(".js") || name.endsWith(".mjs")));
+if (!entryCandidates.length) {
+  throw new Error("Unable to find SSR entry in dist-ssg (expected entry-ssg.js/mjs).");
+}
+const ssgBundle = pathToFileURL(path.join(ssgDir, entryCandidates[0])).href;
 const { render } = await import(ssgBundle);
 
 const routes = [

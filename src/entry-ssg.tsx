@@ -1,5 +1,5 @@
 import { renderToString } from "react-dom/server";
-import { StaticRouter } from "react-router-dom/server";
+import { StaticRouter } from "react-router";
 import AppRoutes from "./routes/AppRoutes";
 import { StaticAuthProvider } from "./context/AuthContext";
 import { ChatProvider } from "./context/ChatContext";

@@ -1,0 +1,9 @@
+User-agent: *
+Allow: /
+Disallow: /login
+Disallow: /register
+Disallow: /dashboard
+Disallow: /friends
+Disallow: /me
+
+Sitemap: https://s2ydconnection.com/sitemap.xml
