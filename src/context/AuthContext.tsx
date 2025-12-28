@@ -135,6 +135,18 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   );
 };
 
+export const StaticAuthProvider = ({ children }: { children: React.ReactNode }) => {
+  const emptyAuth: AuthContextType = {
+    user: null,
+    profile: null,
+    profileLoading: false,
+    login: () => undefined,
+    logout: () => undefined,
+    refreshProfile: async () => undefined,
+  };
+  return <AuthContext.Provider value={emptyAuth}>{children}</AuthContext.Provider>;
+};
+
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) throw new Error("useAuth must be used within AuthProvider");

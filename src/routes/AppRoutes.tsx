@@ -1,6 +1,6 @@
 // src/routes/AppRoutes.tsx
 // import React from "react";
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
 import Login from "../pages/login";
 import Register from "../pages/register";
 import Dashboard from "../pages/dashboard";
@@ -15,7 +15,7 @@ export default function AppRoutes(): JSX.Element {
     <Routes>
       {/* Public landing / home page */}
       <Route path="/" element={<Landing />} />
-      <Route path="/home" element={<Landing />} />
+      <Route path="/home" element={<Navigate to="/" replace />} />
 
       {/* Login and Register pages */}
       <Route path="/login" element={<Login />} />
@@ -47,7 +47,7 @@ export default function AppRoutes(): JSX.Element {
       />
 
       {/* Optional additional routes */}
-      <Route path="/landing" element={<Landing />} />
+      <Route path="/landing" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }

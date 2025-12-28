@@ -234,6 +234,7 @@ export default function Dashboard() {
     description:
       "Share updates, celebrate wins, and stay accountable with your Stick2YourDreams community.",
     type: "website",
+    robots: "noindex, nofollow",
   });
   const userLabel = user?.username || user?.email || "Guest";
   const userInitial = userLabel.charAt(0).toUpperCase();

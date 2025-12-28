@@ -171,6 +171,7 @@ export default function Me() {
     description:
       "Complete your Stick2YourDreams profile to connect with friends who share your goals, location, and interests.",
     type: "profile",
+    robots: "noindex, nofollow",
   });
 
   const [profile, setProfile] = useState<Profile>({

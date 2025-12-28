@@ -58,6 +58,7 @@ export default function Register() {
     description:
       "Create a Stick2YourDreams account to join a motivational support network that celebrates progress and accountability.",
     type: "website",
+    robots: "noindex, nofollow",
   });
 
   const navigate = useNavigate();

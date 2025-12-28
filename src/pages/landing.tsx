@@ -55,6 +55,11 @@ export default function Landing() {
     description:
       "Stick2YourDreams Connect is a motivational support network where friends keep you accountable, celebrate progress, and build momentum together.",
     type: "website",
+    canonical: "https://s2ydconnection.com/",
+    keywords:
+      "accountability, motivational support, community, goals, progress, friends, social network, productivity",
+    image: "https://s2ydconnection.com/logo.png",
+    imageAlt: "Stick2YourDreams Connect logo",
   });
   const [profileSummary, setProfileSummary] = useState<ProfileSummary | null>(null);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -117,91 +122,6 @@ export default function Landing() {
       linkUrl: linkUrl || undefined,
     };
   };
-
-  // Lightweight SEO metadata management without extra deps
-  useEffect(() => {
-    const title = "S2YD | Engage with a community of dreamers";
-    const description =
-      "Stick2YourDreams is a focused, private space to share progress, swap feedback, and keep accountability with friends. Log micro goals, share posts, and message your crew.";
-    const url = window.location.origin + "/";
-
-    const prevTitle = document.title;
-    const metaName = (name: string) =>
-      (document.querySelector(`meta[name="${name}"]`) as HTMLMetaElement | null) ??
-      (() => {
-        const m = document.createElement("meta");
-        m.setAttribute("name", name);
-        document.head.appendChild(m);
-        return m;
-      })();
-    const metaProp = (property: string) =>
-      (document.querySelector(`meta[property="${property}"]`) as HTMLMetaElement | null) ??
-      (() => {
-        const m = document.createElement("meta");
-        m.setAttribute("property", property);
-        document.head.appendChild(m);
-        return m;
-      })();
-    const linkRel = (rel: string) =>
-      (document.querySelector(`link[rel="${rel}"]`) as HTMLLinkElement | null) ??
-      (() => {
-        const l = document.createElement("link");
-        l.setAttribute("rel", rel);
-        document.head.appendChild(l);
-        return l;
-      })();
-
-    const prevDescription = metaName("description")?.content;
-    const prevOgTitle = metaProp("og:title")?.content;
-    const prevOgDesc = metaProp("og:description")?.content;
-    const prevOgUrl = metaProp("og:url")?.content;
-    const prevCanonical = linkRel("canonical")?.href;
-
-    document.title = title;
-    metaName("description").content = description;
-    metaName("keywords").content =
-      "accountability, creators, founders, productivity, social app, friends, feedback, goals";
-    metaName("robots").content = "index, follow";
-    metaProp("og:type").content = "website";
-    metaProp("og:title").content = title;
-    metaProp("og:description").content = description;
-    metaProp("og:url").content = url;
-    metaProp("og:site_name").content = "Stick2YourDreams";
-    linkRel("canonical").href = url;
-
-    // JSON-LD for richer SERP context
-    const ld = {
-      "@context": "https://schema.org",
-      "@type": "SoftwareApplication",
-      name: "Stick2YourDreams",
-      applicationCategory: "ProductivityApplication",
-      operatingSystem: "Web",
-      description,
-      url,
-      offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
-      featureList: [
-        "Private friend network for accountability",
-        "Post updates with media",
-        "Direct messages for fast feedback",
-        "Micro-goal tracking and streaks",
-      ],
-      author: { "@type": "Organization", name: "Stick2YourDreams" },
-    };
-    const script = document.createElement("script");
-    script.type = "application/ld+json";
-    script.text = JSON.stringify(ld);
-    document.head.appendChild(script);
-
-    return () => {
-      document.title = prevTitle;
-      if (prevDescription !== undefined) metaName("description").content = prevDescription;
-      if (prevOgTitle !== undefined) metaProp("og:title").content = prevOgTitle;
-      if (prevOgDesc !== undefined) metaProp("og:description").content = prevOgDesc;
-      if (prevOgUrl !== undefined) metaProp("og:url").content = prevOgUrl;
-      if (prevCanonical !== undefined) linkRel("canonical").href = prevCanonical;
-      document.head.removeChild(script);
-    };
-  }, []);
 
   useEffect(() => {
     let active = true;

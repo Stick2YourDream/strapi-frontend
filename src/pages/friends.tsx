@@ -134,6 +134,7 @@ export default function Friends() {
     description:
       "Find supportive friends, send messages, and discover new connections based on shared location, hobbies, and faith.",
     type: "website",
+    robots: "noindex, nofollow",
   });
 
   const [query, setQuery] = useState("");

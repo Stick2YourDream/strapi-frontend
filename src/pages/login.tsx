@@ -18,6 +18,7 @@ export default function Login() {
     description:
       "Log in to Stick2YourDreams Connect to share progress updates and stay accountable with your support network.",
     type: "website",
+    robots: "noindex, nofollow",
   });
 
   const { login } = useAuth();

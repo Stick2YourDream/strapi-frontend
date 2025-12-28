@@ -25,7 +25,7 @@
       content="Build momentum with friends who support your goals. Share updates, get feedback, and stay accountable."
     />
     <meta property="og:url" content="https://s2ydconnection.com/" />
-    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:card" content="summary_large_image" />
     <meta
       name="twitter:title"
       content="Stick2YourDreams Connect | Motivational support network"
@@ -34,7 +34,41 @@
       name="twitter:description"
       content="Build momentum with friends who support your goals. Share updates, get feedback, and stay accountable."
     />
+    <meta property="og:image" content="https://s2ydconnection.com/logo.png" />
+    <meta property="og:image:alt" content="Stick2YourDreams Connect logo" />
+    <meta name="twitter:image" content="https://s2ydconnection.com/logo.png" />
+    <meta name="twitter:image:alt" content="Stick2YourDreams Connect logo" />
     <link rel="canonical" href="https://s2ydconnection.com/" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "Organization",
+            "@id": "https://s2ydconnection.com/#organization",
+            "name": "Stick2YourDreams Connect",
+            "url": "https://s2ydconnection.com/",
+            "logo": "https://s2ydconnection.com/logo.png"
+          },
+          {
+            "@type": "WebSite",
+            "@id": "https://s2ydconnection.com/#website",
+            "url": "https://s2ydconnection.com/",
+            "name": "Stick2YourDreams Connect",
+            "publisher": { "@id": "https://s2ydconnection.com/#organization" }
+          },
+          {
+            "@type": "WebPage",
+            "@id": "https://s2ydconnection.com/#webpage",
+            "url": "https://s2ydconnection.com/",
+            "name": "Stick2YourDreams Connect | Motivational support network",
+            "description": "Stick2YourDreams Connect is a motivational support network where friends celebrate progress, share updates, and keep each other accountable.",
+            "isPartOf": { "@id": "https://s2ydconnection.com/#website" },
+            "about": { "@id": "https://s2ydconnection.com/#organization" }
+          }
+        ]
+      }
+    </script>
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-L96XEJPQN0"></script>
     <script>
       window.dataLayer = window.dataLayer || [];
@@ -53,7 +87,59 @@
     <title>Stick2YourDreams Connect | Motivational support network</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!--ssg-outlet-->
+      <noscript>
+        <main
+          style="
+            min-height: 100vh;
+            padding: 48px 24px;
+            font-family: system-ui, -apple-system, Segoe UI, sans-serif;
+            background: #0b0d14;
+            color: #eef2ff;
+          "
+        >
+          <header style="max-width: 900px; margin: 0 auto 32px;">
+            <p style="letter-spacing: 0.2em; text-transform: uppercase; font-size: 12px; color: #8fb5ff;">
+              Stick2YourDreams Connect
+            </p>
+            <h1 style="font-size: 36px; margin: 12px 0;">
+              Build momentum with friends who show up for your goals.
+            </h1>
+            <p style="font-size: 16px; line-height: 1.6; color: #cbd5f5;">
+              A motivational support network where friends celebrate progress, share updates, and keep each other accountable.
+            </p>
+          </header>
+          <section style="max-width: 900px; margin: 0 auto; display: flex; gap: 12px; flex-wrap: wrap;">
+            <a
+              href="/register"
+              style="
+                padding: 12px 18px;
+                border-radius: 999px;
+                background: linear-gradient(135deg, #5cf0c7, #3b82f6);
+                color: #0b0d14;
+                font-weight: 700;
+                text-decoration: none;
+              "
+            >
+              Join the community
+            </a>
+            <a
+              href="/login"
+              style="
+                padding: 12px 18px;
+                border-radius: 999px;
+                border: 1px solid rgba(255, 255, 255, 0.2);
+                color: #e2e8f0;
+                text-decoration: none;
+              "
+            >
+              Already with us?
+            </a>
+          </section>
+        </main>
+      </noscript>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
