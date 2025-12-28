@@ -50,8 +50,16 @@ type LinkPreview = {
   type?: string;
 };
 
+type ChatMessage = {
+  id: string | number;
+  body: string;
+  from: "me" | "them";
+  at: string;
+};
+
 const CHAT_STORE_KEY = "chatLogs_v1";
 const CHAT_TTL_MS = 4 * 365 * 24 * 60 * 60 * 1000; // ~4 years
+const CHAT_REFRESH_MS = 10000;
 
 const extractFirstUrl = (text: string) => {
   const match = String(text || "").match(/(https?:\/\/[^\s]+|www\.[^\s]+)/i);
@@ -143,9 +151,7 @@ export default function Friends() {
   const [activeFriend, setActiveFriend] = useState<FriendProfile | null>(null);
   const [popoutMinimized, setPopoutMinimized] = useState(false);
   const [gifInput, setGifInput] = useState("");
-  const [chatLogs, setChatLogs] = useState<
-    Record<string, { id: string; body: string; from: "me" | "them"; at: string }[]>
-  >({});
+  const [chatLogs, setChatLogs] = useState<Record<string, ChatMessage[]>>({});
   const [linkMeta, setLinkMeta] = useState<Record<string, { title?: string; thumb?: string }>>({});
   const linkMetaRef = useRef(linkMeta);
   const [linkPreviews, setLinkPreviews] = useState<Record<string, LinkPreview | null>>({});
@@ -216,6 +222,39 @@ export default function Friends() {
       );
     }
   }, []);
+
+  const loadConversation = useCallback(
+    async (friendId: number) => {
+      if (!user || !Number.isFinite(friendId)) return;
+      const query = [
+        `filters[$or][0][sender][id][$eq]=${user.id}`,
+        `filters[$or][0][recipient][id][$eq]=${friendId}`,
+        `filters[$or][1][sender][id][$eq]=${friendId}`,
+        `filters[$or][1][recipient][id][$eq]=${user.id}`,
+        "sort=createdAt:asc",
+        "pagination[pageSize]=200",
+        "populate=sender",
+        "populate=recipient",
+      ].join("&");
+      try {
+        const res = await api.get(`/messages?${query}`);
+        const mapped: ChatMessage[] = (res.data?.data ?? []).map((m: any) => {
+          const attrs = normalize(m);
+          const senderId = getEntityId(attrs.sender);
+          return {
+            id: m.id ?? attrs.documentId ?? `${senderId}-${attrs.createdAt ?? ""}`,
+            body: attrs.body || "",
+            from: senderId === user.id ? "me" : "them",
+            at: attrs.createdAt || new Date().toISOString(),
+          };
+        });
+        setChatLogs((prev) => ({ ...prev, [String(friendId)]: mapped }));
+      } catch {
+        // ignore chat load errors
+      }
+    },
+    [user]
+  );
 
   // Load profiles, friends, and posts
   useEffect(() => {
@@ -440,18 +479,10 @@ export default function Friends() {
       });
       setMessages((prev) => ({ ...prev, [recipientId]: "" }));
       setGifInput("");
-      setChatLogs((prev) => ({
-        ...prev,
-        [recipientId]: [
-          ...(prev[recipientId] || []),
-          {
-            id: `${recipientId}-${Date.now()}`,
-            body,
-            from: "me",
-            at: new Date().toISOString(),
-          },
-        ],
-      }));
+      const friendId = Number(recipientId);
+      if (Number.isFinite(friendId)) {
+        await loadConversation(friendId);
+      }
     } catch (err) {
       if (err && typeof err === "object" && "response" in err) {
         const anyErr = err as any;
@@ -675,17 +706,21 @@ export default function Friends() {
     if (!key) return;
     setActiveFriend(f);
     setPopoutMinimized(false);
-    setChatLogs((prev) => {
-      if (prev[key]?.length) return prev;
-      const intro = {
-        id: `${key}-intro`,
-        body: "Message Me!",
-        from: "them" as const,
-        at: new Date().toISOString(),
-      };
-      return { ...prev, [key]: [intro] };
-    });
+    const friendId = Number(key);
+    if (Number.isFinite(friendId)) {
+      void loadConversation(friendId);
+    }
   };
+
+  useEffect(() => {
+    if (!activeFriend) return;
+    const key = friendKey(activeFriend);
+    const friendId = key ? Number(key) : NaN;
+    if (!Number.isFinite(friendId)) return;
+    void loadConversation(friendId);
+    const interval = window.setInterval(() => loadConversation(friendId), CHAT_REFRESH_MS);
+    return () => window.clearInterval(interval);
+  }, [activeFriend, loadConversation]);
 
   useEffect(() => {
     if (!activeFriend) return;
