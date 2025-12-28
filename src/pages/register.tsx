@@ -156,7 +156,7 @@ export default function Register() {
           <span className="auth-brand-mark">S2YD</span>
           <span className="auth-brand-text">| Stick2YourDreams</span>
         </button>
-        <h1>Create your account</h1>
+        <h1 className="subhead-top">Create your account</h1>
         <p className="subhead">
           Join the community and share your journey!
         </p>

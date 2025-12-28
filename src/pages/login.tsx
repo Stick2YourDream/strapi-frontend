@@ -101,9 +101,9 @@ export default function Login() {
           <span className="auth-brand-mark">S2YD</span>
           <span className="auth-brand-text">| Stick2YourDreams</span>
         </button>
-        <h1>Welcome back</h1>
+        <h1 className="subhead-top">Welcome back!</h1>
         <p className="subhead">
-          Sign in to access your dashboard and keep the momentum going.
+          Sign in to Stick2YourDreams Connect and start making a difference.
         </p>
       </div>
 

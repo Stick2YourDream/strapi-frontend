@@ -481,9 +481,9 @@ export default function Landing() {
                 <button className="btn-ghost" onClick={() => navigate("/login")}>
                   Log in
                 </button>
-                <button className="btn-primary" onClick={() => navigate("/register")}>
+                {/* <button className="btn-primary" onClick={() => navigate("/register")}>
                   Get started
-                </button>
+                </button> */}
               </>
             )}
           </div>

@@ -171,6 +171,26 @@
   width: 100%;
 }
 
+.chat-size-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.chat-size-preset {
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.chat-size-preset.is-active {
+  border-color: rgba(92, 240, 199, 0.55);
+  color: #d9fbe7;
+  background: rgba(92, 240, 199, 0.12);
+}
+
 .profile-list {
   margin: 6px 0 0;
   padding-left: 18px;

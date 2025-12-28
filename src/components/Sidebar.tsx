@@ -96,20 +96,19 @@ export default function Sidebar({ active }: SidebarProps) {
   }, [profileSummary, user]);
 
   const nameForDisplay = profileCard?.displayName || "Me";
-  const mobileInitials = useMemo(() => {
-    const parts = nameForDisplay.trim().split(" ").filter(Boolean);
-    const first = parts[0]?.[0] || "";
-    const last = parts.length > 1 ? parts[parts.length - 1][0] : "";
-    const initials = `${first}${last}`.toUpperCase();
-    return initials || nameForDisplay.charAt(0).toUpperCase();
-  }, [nameForDisplay]);
-
   const handleLogoClick = () => {
     navigate("/");
     setMenuOpen(false);
   };
 
   const handleProfileAction = (path: string) => {
+    navigate(path);
+    setShowProfileMenu(false);
+    setShowNotifications(false);
+    setMenuOpen(false);
+  };
+
+  const handleNotificationAction = (path: string) => {
     navigate(path);
     setShowProfileMenu(false);
     setShowNotifications(false);
@@ -150,14 +149,6 @@ export default function Sidebar({ active }: SidebarProps) {
                 {fallbackInitial}
               </span>
             )}
-          </button>
-          <button
-            type="button"
-            className={`mobile-initials-button ${menuOpen ? "is-open" : ""}`}
-            onClick={toggleMobileMenu}
-            aria-label={`Open profile menu for ${nameForDisplay}`}
-          >
-            {mobileInitials}
           </button>
           <button
             type="button"
@@ -232,26 +223,46 @@ export default function Sidebar({ active }: SidebarProps) {
                 </button>
               </div>
               <div className="sidebar-notification-list">
-                <div className="sidebar-notification-item">
+                <button
+                  type="button"
+                  className="sidebar-notification-item is-action"
+                  onClick={() => handleNotificationAction("/friends")}
+                >
                   <span>New messages</span>
                   <span className="sidebar-notification-count">{counts.messages}</span>
-                </div>
-                <div className="sidebar-notification-item">
+                </button>
+                <button
+                  type="button"
+                  className="sidebar-notification-item is-action"
+                  onClick={() => handleNotificationAction("/friends")}
+                >
                   <span>Friend requests</span>
                   <span className="sidebar-notification-count">{counts.requests}</span>
-                </div>
-                <div className="sidebar-notification-item">
+                </button>
+                <button
+                  type="button"
+                  className="sidebar-notification-item is-action"
+                  onClick={() => handleNotificationAction("/friends")}
+                >
                   <span>Friend posts</span>
                   <span className="sidebar-notification-count">{counts.friendPosts}</span>
-                </div>
-                <div className="sidebar-notification-item">
+                </button>
+                <button
+                  type="button"
+                  className="sidebar-notification-item is-action"
+                  onClick={() => handleNotificationAction("/dashboard")}
+                >
                   <span>Comments on your posts</span>
                   <span className="sidebar-notification-count">{counts.comments}</span>
-                </div>
-                <div className="sidebar-notification-item">
+                </button>
+                <button
+                  type="button"
+                  className="sidebar-notification-item is-action"
+                  onClick={() => handleNotificationAction("/dashboard")}
+                >
                   <span>Likes on your posts</span>
                   <span className="sidebar-notification-count">{counts.likes}</span>
-                </div>
+                </button>
                 {loading && (
                   <div className="sidebar-notification-status">Refreshing...</div>
                 )}
@@ -372,26 +383,46 @@ export default function Sidebar({ active }: SidebarProps) {
                     </button>
                   </div>
                   <div className="sidebar-notification-list">
-                    <div className="sidebar-notification-item">
+                    <button
+                      type="button"
+                      className="sidebar-notification-item is-action"
+                      onClick={() => handleNotificationAction("/friends")}
+                    >
                       <span>New messages</span>
                       <span className="sidebar-notification-count">{counts.messages}</span>
-                    </div>
-                    <div className="sidebar-notification-item">
+                    </button>
+                    <button
+                      type="button"
+                      className="sidebar-notification-item is-action"
+                      onClick={() => handleNotificationAction("/friends")}
+                    >
                       <span>Friend requests</span>
                       <span className="sidebar-notification-count">{counts.requests}</span>
-                    </div>
-                  <div className="sidebar-notification-item">
-                    <span>Friend posts</span>
-                    <span className="sidebar-notification-count">{counts.friendPosts}</span>
-                  </div>
-                  <div className="sidebar-notification-item">
-                    <span>Comments on your posts</span>
-                    <span className="sidebar-notification-count">{counts.comments}</span>
-                  </div>
-                  <div className="sidebar-notification-item">
-                    <span>Likes on your posts</span>
-                    <span className="sidebar-notification-count">{counts.likes}</span>
-                  </div>
+                    </button>
+                    <button
+                      type="button"
+                      className="sidebar-notification-item is-action"
+                      onClick={() => handleNotificationAction("/friends")}
+                    >
+                      <span>Friend posts</span>
+                      <span className="sidebar-notification-count">{counts.friendPosts}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="sidebar-notification-item is-action"
+                      onClick={() => handleNotificationAction("/dashboard")}
+                    >
+                      <span>Comments on your posts</span>
+                      <span className="sidebar-notification-count">{counts.comments}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="sidebar-notification-item is-action"
+                      onClick={() => handleNotificationAction("/dashboard")}
+                    >
+                      <span>Likes on your posts</span>
+                      <span className="sidebar-notification-count">{counts.likes}</span>
+                    </button>
                     {loading && (
                       <div className="sidebar-notification-status">Refreshing...</div>
                     )}

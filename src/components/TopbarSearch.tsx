@@ -211,7 +211,7 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
             value={value ?? query}
             onChange={(e) => updateQuery(e.target.value)}
             onFocus={() => setOpen(Boolean((value ?? query).trim()))}
-            placeholder="Search by handle or name"
+            placeholder="Find you friends by Name or Handle"
             aria-label="Search by handle or name"
           />
           {open && (

@@ -162,6 +162,13 @@ const LinkPreviewCard = ({
   );
 };
 
+const CHAT_PRESETS = [
+  { id: "small", label: "Small", width: 320, height: 440 },
+  { id: "medium", label: "Medium", width: 360, height: 520 },
+  { id: "large", label: "Large", width: 420, height: 600 },
+  { id: "xlarge", label: "X-Large", width: 480, height: 680 },
+] as const;
+
 export default function Me() {
   const { user, refreshProfile } = useAuth();
   const { preferences, setBackgroundAll, resetBackgroundAll, setChatPrefs, getBackgroundStyle } =
@@ -288,6 +295,14 @@ export default function Me() {
   const resetChatSettings = () => {
     setChatPrefs({ width: 360, height: 520, fontSize: 14 });
   };
+
+  const activeChatPreset = useMemo(() => {
+    return CHAT_PRESETS.find(
+      (preset) =>
+        preset.width === preferences.chat.width &&
+        preset.height === preferences.chat.height
+    );
+  }, [preferences.chat.height, preferences.chat.width]);
 
   // ✅ stable unique handle: username/email + numeric user id
   const lockedUniqueHandle = useMemo(() => {
@@ -1535,10 +1550,26 @@ export default function Me() {
                   <div className="profile-field">
                     <span className="profile-field-label">Chat size</span>
                     <p className="profile-appearance-sub">
-                      Drag the chat corner to resize. It stays minimized when you leave friends.
+                      Choose a preset size for the chat window.
                     </p>
+                    <div className="chat-size-presets">
+                      {CHAT_PRESETS.map((preset) => (
+                        <button
+                          key={preset.id}
+                          className={`btn ghost chat-size-preset${
+                            activeChatPreset?.id === preset.id ? " is-active" : ""
+                          }`}
+                          type="button"
+                          onClick={() =>
+                            setChatPrefs({ width: preset.width, height: preset.height })
+                          }
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
                     <button className="btn ghost" type="button" onClick={resetChatSettings}>
-                      Reset chat size
+                      Reset to default
                     </button>
                   </div>
                 </div>
@@ -1913,7 +1944,7 @@ export default function Me() {
                 <p className="eyebrow">Share</p>
                 <h3>New Post</h3>
                 <p className="panel-sub">
-                  What's On Your Mind?
+                  Share With Our Community!
                 </p>
               </div>
             </div>
@@ -1929,7 +1960,7 @@ export default function Me() {
               <div className="post-composer__input">
                 <textarea
                   className="auth-input"
-                  placeholder="What's on your mind? Drop a YouTube link or article."
+                  placeholder="What's on your mind?"
                   value={postContent}
                   onChange={(e) => {
                     setPostContent(e.target.value);

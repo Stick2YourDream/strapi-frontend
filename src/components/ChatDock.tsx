@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import api from "../api/strapi";
 import { useAuth } from "../context/AuthContext";
@@ -36,6 +36,21 @@ const getDisplayName = (handle?: string, firstName?: string, lastName?: string) 
   return name || (handle ? `@${handle}` : "Friend");
 };
 
+type ChatSizePreset = {
+  id: "small" | "medium" | "large" | "xlarge" | "fullscreen";
+  label: string;
+  width?: number;
+  height?: number;
+};
+
+const CHAT_SIZE_PRESETS: ChatSizePreset[] = [
+  { id: "small", label: "Small", width: 320, height: 440 },
+  { id: "medium", label: "Medium", width: 360, height: 520 },
+  { id: "large", label: "Large", width: 420, height: 600 },
+  { id: "xlarge", label: "X-Large", width: 480, height: 680 },
+  { id: "fullscreen", label: "Full" },
+];
+
 export default function ChatDock() {
   const location = useLocation();
   const { user } = useAuth();
@@ -56,12 +71,12 @@ export default function ChatDock() {
   const [linkMeta, setLinkMeta] = useState<Record<string, LinkMeta>>({});
   const linkMetaRef = useRef(linkMeta);
   const popoutRef = useRef<HTMLDivElement | null>(null);
-  const sizeRef = useRef({ width: preferences.chat.width, height: preferences.chat.height });
   const lastPathRef = useRef(location.pathname);
   const [friendOptions, setFriendOptions] = useState<ChatFriend[]>([]);
   const [friendsLoading, setFriendsLoading] = useState(false);
   const [friendsError, setFriendsError] = useState<string | null>(null);
   const [friendMenuOpen, setFriendMenuOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
   const friendMenuRef = useRef<HTMLDivElement | null>(null);
   const chatPrefs = preferences.chat;
 
@@ -104,6 +119,21 @@ export default function ChatDock() {
   }, [linkMeta]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const media = window.matchMedia("(max-width: 720px)");
+    const handleChange = (event: MediaQueryListEvent) => {
+      setIsMobile(event.matches);
+    };
+    setIsMobile(media.matches);
+    if (media.addEventListener) {
+      media.addEventListener("change", handleChange);
+      return () => media.removeEventListener("change", handleChange);
+    }
+    media.addListener(handleChange);
+    return () => media.removeListener(handleChange);
+  }, []);
+
+  useEffect(() => {
     if (popoutMinimized) {
       setFriendMenuOpen(false);
     }
@@ -130,10 +160,6 @@ export default function ChatDock() {
       document.removeEventListener("keydown", handleKey);
     };
   }, [friendMenuOpen]);
-
-  useEffect(() => {
-    sizeRef.current = { width: chatPrefs.width, height: chatPrefs.height };
-  }, [chatPrefs.height, chatPrefs.width]);
 
   useEffect(() => {
     const lastPath = lastPathRef.current;
@@ -217,26 +243,6 @@ export default function ChatDock() {
     };
   }, [user?.id]);
 
-  useEffect(() => {
-    const el = popoutRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver((entries) => {
-      if (!entries.length || popoutMinimized) return;
-      const target = entries[0].target as HTMLElement;
-      const rect = target.getBoundingClientRect();
-      const width = Math.round(rect.width);
-      const height = Math.round(rect.height);
-      const current = sizeRef.current;
-      if (Math.abs(width - current.width) < 2 && Math.abs(height - current.height) < 2) {
-        return;
-      }
-      sizeRef.current = { width, height };
-      setChatPrefs({ width, height });
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [popoutMinimized, setChatPrefs]);
-
   const fetchPreviewMeta = useCallback(async (url: string, fallbackThumb?: string) => {
     if (!url || linkMetaRef.current[url]) return;
     try {
@@ -278,6 +284,20 @@ export default function ChatDock() {
       });
     });
   }, [activeFriend?.userId, chatLogs, fetchPreviewMeta]);
+
+  const activeSizeId = useMemo(() => {
+    const match = CHAT_SIZE_PRESETS.find(
+      (preset) => preset.width === chatPrefs.width && preset.height === chatPrefs.height
+    );
+    if (match) return match.id;
+    if (isMobile || typeof window === "undefined") return null;
+    const fullWidth = Math.max(320, window.innerWidth - 36);
+    const fullHeight = Math.max(320, window.innerHeight - 36);
+    if (Math.abs(chatPrefs.width - fullWidth) < 8 && Math.abs(chatPrefs.height - fullHeight) < 8) {
+      return "fullscreen";
+    }
+    return null;
+  }, [chatPrefs.height, chatPrefs.width, isMobile]);
 
   if (!user || hideForRoute) return null;
 
@@ -323,16 +343,43 @@ export default function ChatDock() {
     return letters.toUpperCase();
   };
 
+  const handleSizePreset = (preset: ChatSizePreset) => {
+    if (preset.id === "fullscreen") {
+      if (typeof window === "undefined") return;
+      const width = Math.max(320, window.innerWidth - 36);
+      const height = Math.max(320, window.innerHeight - 36);
+      setChatPrefs({ width, height });
+      return;
+    }
+    if (!preset.width || !preset.height) return;
+    setChatPrefs({ width: preset.width, height: preset.height });
+  };
+
+  const toggleLabel = isMobile
+    ? popoutMinimized
+      ? "Open Chat"
+      : "Close"
+    : popoutMinimized
+    ? "Expand"
+    : "Minimize";
+  const isFullscreen = activeSizeId === "fullscreen" && !isMobile && !popoutMinimized;
+
   const popoutStyle = {
-    width: chatPrefs.width,
-    height: popoutMinimized ? undefined : chatPrefs.height,
+    ...(isMobile
+      ? {}
+      : {
+          width: chatPrefs.width,
+          height: popoutMinimized ? undefined : chatPrefs.height,
+        }),
     ["--chat-font-size" as any]: `${chatPrefs.fontSize}px`,
   };
 
   return (
     <div
       ref={popoutRef}
-      className={`message-popout ${popoutMinimized ? "minimized" : ""}`}
+      className={`message-popout ${popoutMinimized ? "minimized" : ""}${
+        isFullscreen ? " is-fullscreen" : ""
+      }`}
       style={popoutStyle}
     >
       <div className="message-popout__header">
@@ -411,26 +458,45 @@ export default function ChatDock() {
         </div>
         <div className="message-popout__actions">
           {!popoutMinimized && (
-            <div className="chat-font-control">
-              <span className="chat-font-label">A</span>
-              <input
-                aria-label="Chat text size"
-                type="range"
-                min={12}
-                max={20}
-                step={1}
-                value={chatPrefs.fontSize}
-                onChange={(e) => setChatPrefs({ fontSize: Number(e.target.value) })}
-              />
-              <span className="chat-font-label large">A</span>
-            </div>
+            <>
+              <div className="chat-font-control">
+                <span className="chat-font-label">A</span>
+                <input
+                  aria-label="Chat text size"
+                  type="range"
+                  min={12}
+                  max={20}
+                  step={1}
+                  value={chatPrefs.fontSize}
+                  onChange={(e) => setChatPrefs({ fontSize: Number(e.target.value) })}
+                />
+                <span className="chat-font-label large">A</span>
+              </div>
+              {!isMobile && (
+                <div className="chat-size-controls" role="group" aria-label="Chat size">
+                  {CHAT_SIZE_PRESETS.map((preset) => (
+                    <button
+                      key={preset.id}
+                      className={`btn ghost chat-size-btn${
+                        activeSizeId === preset.id ? " is-active" : ""
+                      }`}
+                      type="button"
+                      aria-pressed={activeSizeId === preset.id}
+                      onClick={() => handleSizePreset(preset)}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
           )}
           <button
-            className="btn ghost"
+            className="btn ghost chat-toggle-btn"
             type="button"
             onClick={() => setPopoutMinimized(!popoutMinimized)}
           >
-            {popoutMinimized ? "Expand" : "Minimize"}
+            {toggleLabel}
           </button>
         </div>
       </div>
