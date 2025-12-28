@@ -6,8 +6,10 @@ import axios from "axios";
 import "../css/dashboard.css";
 import { useAuth } from "../context/AuthContext";
 import Sidebar from "../components/Sidebar";
+import ChatDock from "../components/ChatDock";
 import TopbarSearch from "../components/TopbarSearch";
 import { usePageMeta } from "../hooks/usePageMeta";
+import { useUserPreferences } from "../context/UserPreferencesContext";
 
 type CommentItem = {
   id: string | number;
@@ -227,6 +229,7 @@ export default function Dashboard() {
 
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { getBackgroundStyle } = useUserPreferences();
   usePageMeta({
     title: "Dashboard | Stick2YourDreams Connect",
     description:
@@ -581,7 +584,7 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="dashboard-shell">
+    <div className="dashboard-shell" style={getBackgroundStyle("dashboard")}>
       <Sidebar active="dashboard" />
 
       <div className="main-content">
@@ -893,6 +896,7 @@ export default function Dashboard() {
       </>
     )}
       </div>
+      <ChatDock />
       </div>
   );
 }

@@ -2,8 +2,11 @@
 import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import "../css/dashboard.css";
 import { useAuth } from "../context/AuthContext";
+import { useChat } from "../context/ChatContext";
+import { useUserPreferences } from "../context/UserPreferencesContext";
 import api from "../api/strapi";
 import Sidebar from "../components/Sidebar";
+import ChatDock from "../components/ChatDock";
 import TopbarSearch from "../components/TopbarSearch";
 import { usePageMeta } from "../hooks/usePageMeta";
 
@@ -49,17 +52,6 @@ type LinkPreview = {
   siteName?: string;
   type?: string;
 };
-
-type ChatMessage = {
-  id: string | number;
-  body: string;
-  from: "me" | "them";
-  at: string;
-};
-
-const CHAT_STORE_KEY = "chatLogs_v1";
-const CHAT_TTL_MS = 4 * 365 * 24 * 60 * 60 * 1000; // ~4 years
-const CHAT_REFRESH_MS = 10000;
 
 const extractFirstUrl = (text: string) => {
   const match = String(text || "").match(/(https?:\/\/[^\s]+|www\.[^\s]+)/i);
@@ -136,6 +128,8 @@ const LinkPreviewCard = ({
 
 export default function Friends() {
   const { user } = useAuth();
+  const { openChat } = useChat();
+  const { getBackgroundStyle } = useUserPreferences();
   usePageMeta({
     title: "Friends | Stick2YourDreams Connect",
     description:
@@ -146,20 +140,9 @@ export default function Friends() {
   const [query, setQuery] = useState("");
   const [profiles, setProfiles] = useState<FriendProfile[]>([]);
   const [friends, setFriends] = useState<FriendRelation[]>([]);
-  const [messages, setMessages] = useState<Record<string, string>>({});
   const [postsByOwner, setPostsByOwner] = useState<Record<number, FriendPost[]>>({});
-  const [activeFriend, setActiveFriend] = useState<FriendProfile | null>(null);
-  const [popoutMinimized, setPopoutMinimized] = useState(false);
-  const [gifInput, setGifInput] = useState("");
-  const [chatLogs, setChatLogs] = useState<Record<string, ChatMessage[]>>({});
-  const [linkMeta, setLinkMeta] = useState<Record<string, { title?: string; thumb?: string }>>({});
-  const linkMetaRef = useRef(linkMeta);
   const [linkPreviews, setLinkPreviews] = useState<Record<string, LinkPreview | null>>({});
   const linkPreviewsRef = useRef(linkPreviews);
-
-  useEffect(() => {
-    linkMetaRef.current = linkMeta;
-  }, [linkMeta]);
 
   useEffect(() => {
     linkPreviewsRef.current = linkPreviews;
@@ -222,44 +205,6 @@ export default function Friends() {
       );
     }
   }, []);
-
-  const loadConversation = useCallback(
-    async (friendId: number) => {
-      if (!user || !Number.isFinite(friendId)) return;
-      const query = [
-        `filters[$or][0][sender][id][$eq]=${user.id}`,
-        `filters[$or][0][recipient][id][$eq]=${friendId}`,
-        `filters[$or][1][sender][id][$eq]=${friendId}`,
-        `filters[$or][1][recipient][id][$eq]=${user.id}`,
-        "sort=createdAt:desc",
-        "pagination[pageSize]=200",
-        "populate=sender",
-        "populate=recipient",
-      ].join("&");
-      try {
-        const res = await api.get(`/messages?${query}`);
-        const mapped: ChatMessage[] = (res.data?.data ?? []).map((m: any) => {
-          const attrs = normalize(m);
-          const senderId = getEntityId(attrs.sender);
-          return {
-            id: m.id ?? attrs.documentId ?? `${senderId}-${attrs.createdAt ?? ""}`,
-            body: attrs.body || "",
-            from: senderId === user.id ? "me" : "them",
-            at: attrs.createdAt || new Date().toISOString(),
-          };
-        });
-        mapped.sort((a, b) => {
-          const aTime = new Date(a.at).getTime();
-          const bTime = new Date(b.at).getTime();
-          return bTime - aTime;
-        });
-        setChatLogs((prev) => ({ ...prev, [String(friendId)]: mapped }));
-      } catch {
-        // ignore chat load errors
-      }
-    },
-    [user]
-  );
 
   // Load profiles, friends, and posts
   useEffect(() => {
@@ -471,37 +416,6 @@ export default function Friends() {
     }
   };
 
-  const sendMessage = async (recipientId?: string, overrideBody?: string) => {
-    if (!recipientId) return;
-    const body = overrideBody ?? messages[recipientId] ?? "";
-    if (!body.trim()) return;
-    try {
-      await api.post("/messages", {
-        data: {
-          body,
-          recipient: Number(recipientId),
-        },
-      });
-      setMessages((prev) => ({ ...prev, [recipientId]: "" }));
-      setGifInput("");
-      const friendId = Number(recipientId);
-      if (Number.isFinite(friendId)) {
-        await loadConversation(friendId);
-      }
-    } catch (err) {
-      if (err && typeof err === "object" && "response" in err) {
-        const anyErr = err as any;
-        const msg =
-          anyErr.response?.data?.error?.message ||
-          anyErr.response?.data?.message ||
-          "Failed to send message";
-        setError(String(msg));
-      } else {
-        setError("Failed to send message");
-      }
-    }
-  };
-
   const acceptedFriends = useMemo(
     () =>
       friends.filter((f) => f.status === "accepted").map((f) => {
@@ -595,12 +509,6 @@ export default function Friends() {
       myProfile?.city
   );
 
-  const friendKey = (f: FriendProfile) => {
-    if (f.userId) return String(f.userId);
-    if (typeof f.id === "number") return String(f.id);
-    return undefined;
-  };
-
   const renderAvatar = (profile?: FriendProfile, size = 44) => {
     const handle = profile?.handle || profile?.username || "User";
     if (profile?.avatarUrl) {
@@ -625,126 +533,19 @@ export default function Friends() {
     );
   };
 
-  const fetchPreviewMeta = useCallback(
-    async (url: string, thumb?: string) => {
-      if (linkMetaRef.current[url]?.title) return;
-      let title: string | undefined = undefined;
-      try {
-        const res = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`);
-        if (res.ok) {
-          const data = await res.json();
-          title = data?.title || title;
-        }
-      } catch {
-        // ignore; fallback below
-      }
-      if (!title) {
-        try {
-          const u = new URL(url);
-          title = u.hostname.replace(/^www\./, "");
-        } catch {
-          title = "Link";
-        }
-      }
-      setLinkMeta((prev) => ({ ...prev, [url]: { title, thumb } }));
-    },
-    []
-  );
-
-  const extractLinks = (text: string) => {
-    const regex = /(https?:\/\/[^\s]+)/g;
-    return text.match(regex) || [];
-  };
-
-  const parseYouTubeId = (url: string) => {
-    try {
-      const u = new URL(url);
-      if (u.hostname.includes("youtube.com")) {
-        return u.searchParams.get("v");
-      }
-      if (u.hostname === "youtu.be") {
-        return u.pathname.replace("/", "") || null;
-      }
-    } catch {
-      return null;
-    }
-    return null;
-  };
-
-  const pruneLogs = useCallback((logs: typeof chatLogs) => {
-    const cutoff = Date.now() - CHAT_TTL_MS;
-    const pruned: typeof chatLogs = {};
-    Object.entries(logs).forEach(([key, msgs]) => {
-      const filtered = msgs.filter((m) => {
-        const t = new Date(m.at).getTime();
-        return Number.isFinite(t) ? t >= cutoff : true;
-      });
-      if (filtered.length) pruned[String(key)] = filtered;
+  const handleOpenChat = (profile: FriendProfile) => {
+    if (!profile.userId) return;
+    openChat({
+      userId: profile.userId,
+      handle: profile.handle,
+      firstName: profile.firstName,
+      lastName: profile.lastName,
+      avatarUrl: profile.avatarUrl,
     });
-    return pruned;
-  }, []);
-
-  // Load chat history from localStorage (persist ~4 years)
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(CHAT_STORE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-      const data = parsed?.data ?? parsed;
-      if (data && typeof data === "object") {
-        const pruned = pruneLogs(data);
-        setChatLogs(pruned);
-      }
-    } catch {
-      // ignore malformed storage
-    }
-  }, [pruneLogs]);
-
-  // Persist chat history
-  useEffect(() => {
-    const pruned = pruneLogs(chatLogs);
-    localStorage.setItem(CHAT_STORE_KEY, JSON.stringify({ savedAt: Date.now(), data: pruned }));
-  }, [chatLogs, pruneLogs]);
-
-  const openChat = (f: FriendProfile) => {
-    const key = friendKey(f);
-    if (!key) return;
-    setActiveFriend(f);
-    setPopoutMinimized(false);
-    const friendId = Number(key);
-    if (Number.isFinite(friendId)) {
-      void loadConversation(friendId);
-    }
   };
-
-  useEffect(() => {
-    if (!activeFriend) return;
-    const key = friendKey(activeFriend);
-    const friendId = key ? Number(key) : NaN;
-    if (!Number.isFinite(friendId)) return;
-    void loadConversation(friendId);
-    const interval = window.setInterval(() => loadConversation(friendId), CHAT_REFRESH_MS);
-    return () => window.clearInterval(interval);
-  }, [activeFriend, loadConversation]);
-
-  useEffect(() => {
-    if (!activeFriend) return;
-    const key = friendKey(activeFriend);
-    if (!key) return;
-    const urls = (chatLogs[key] || []).flatMap((m) => extractLinks(m.body));
-    urls.forEach((url) => {
-      const ytId = parseYouTubeId(url);
-      const thumb = ytId ? `https://img.youtube.com/vi/${ytId}/hqdefault.jpg` : undefined;
-      if (!linkMetaRef.current[url]) {
-        fetchPreviewMeta(url, thumb);
-      } else if (thumb && !linkMetaRef.current[url].thumb) {
-        setLinkMeta((prev) => ({ ...prev, [url]: { ...prev[url], thumb } }));
-      }
-    });
-  }, [activeFriend, chatLogs, fetchPreviewMeta]);
 
   return (
-    <div className="dashboard-shell">
+    <div className="dashboard-shell" style={getBackgroundStyle("friends")}>
       <Sidebar active="friends" />
 
       <div className="main-content">
@@ -887,14 +688,14 @@ export default function Friends() {
             const latestPost = ownerPosts && ownerPosts.length ? ownerPosts[0] : undefined;
             const latestPreview =
               latestPost?.linkUrl ? linkPreviews[latestPost.linkUrl] : undefined;
-            const key = friendKey(f);
             const displayName = `${f.firstName || ""} ${f.lastName || ""}`.trim();
+            const canMessage = Boolean(f.userId);
             return (
               <article
                 key={f.id}
                 className="post-card"
-                onClick={() => key && openChat(f)}
-                style={{ cursor: key ? "pointer" : "default" }}
+                onClick={() => canMessage && handleOpenChat(f)}
+                style={{ cursor: canMessage ? "pointer" : "default" }}
               >
                 <div className="post-body">
                   <div className="post-meta">
@@ -980,10 +781,10 @@ export default function Friends() {
                     <button
                       className="btn primary"
                       type="button"
-                      disabled={!key}
+                      disabled={!canMessage}
                       onClick={(e) => {
                         e.stopPropagation();
-                        openChat(f);
+                        handleOpenChat(f);
                       }}
                     >
                       Message
@@ -996,150 +797,8 @@ export default function Friends() {
         </div>
       </div>
 
-      {activeFriend && (
-        <div className={`message-popout ${popoutMinimized ? "minimized" : ""}`}>
-          <div className="message-popout__header">
-            <div>
-              <p className="eyebrow">Chat</p>
-              <strong>@{activeFriend.handle}</strong>
-            </div>
-            <div className="message-popout__actions">
-              <button className="btn ghost" type="button" onClick={() => setPopoutMinimized((v) => !v)}>
-                {popoutMinimized ? "Expand" : "Minimize"}
-              </button>
-              <button className="btn ghost" type="button" onClick={() => setActiveFriend(null)}>
-                Close
-              </button>
-            </div>
-          </div>
-          {!popoutMinimized && (
-            <>
-              <div className="message-popout__body">
-                {(friendKey(activeFriend) && chatLogs[friendKey(activeFriend)!] || []).length === 0 ? (
-                  <div className="status">No messages yet.</div>
-                ) : (
-                  (friendKey(activeFriend) && chatLogs[friendKey(activeFriend)!] || []).map((m) => (
-                    <div
-                      key={m.id}
-                      className={`message-bubble ${m.from === "me" ? "outgoing" : "incoming"}`}
-                    >
-                      <div className="message-meta">
-                        <span>{m.from === "me" ? "You" : `@${activeFriend.handle}`}</span>
-                        <span>{new Date(m.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-                      </div>
-                      <div className="comment-body" style={{ whiteSpace: "pre-wrap" }}>
-                        {m.body}
-                      </div>
-                      {extractLinks(m.body).map((url) => {
-                        const ytId = parseYouTubeId(url);
-                        const thumb = ytId ? `https://img.youtube.com/vi/${ytId}/hqdefault.jpg` : null;
-                        const title = ytId ? "YouTube video" : url.replace(/^https?:\/\//, "");
-                        return (
-                          <div
-                      key={`${m.id}-${url}`}
-                      style={{
-                        marginTop: "8px",
-                        border: "1px solid rgba(255,255,255,0.08)",
-                        borderRadius: "10px",
-                              overflow: "hidden",
-                              background: "rgba(255,255,255,0.03)",
-                            }}
-                          >
-                          {thumb && (
-                            <a href={url} target="_blank" rel="noreferrer" style={{ display: "block" }}>
-                              <img
-                                src={thumb}
-                                alt={title}
-                                  style={{ width: "100%", height: "auto", display: "block" }}
-                                  loading="lazy"
-                                />
-                              </a>
-                            )}
-                            <div style={{ padding: "8px 10px" }}>
-                              <a href={url} target="_blank" rel="noreferrer" style={{ color: "#8fb5ff" }}>
-                                {linkMeta[url]?.title || title}
-                              </a>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ))
-                )}
-              </div>
-              <div className="message-popout__friends">
-                <p className="eyebrow">Quick reactions</p>
-                <EmojiBar
-                  onPick={(emoji) => {
-                    const k = friendKey(activeFriend);
-                    if (!k) return;
-                    setMessages((prev) => ({
-                      ...prev,
-                      [k]: `${prev[k] || ""}${emoji}`,
-                    }));
-                  }}
-                />
-              </div>
-              <div className="message-popout__footer">
-                <input
-                  className="auth-input"
-                  placeholder="Paste a GIF / image / video URL (optional)"
-                  value={gifInput}
-                  onChange={(e) => setGifInput(e.target.value)}
-                />
-                <input
-                  className="auth-input"
-                  placeholder={`Message @${activeFriend.handle}...`}
-                  value={(friendKey(activeFriend) ? messages[friendKey(activeFriend)!] : "") || ""}
-                  onChange={(e) => {
-                    const k = friendKey(activeFriend);
-                    if (!k) return;
-                    setMessages((prev) => ({ ...prev, [k]: e.target.value }));
-                  }}
-                />
-                <div className="auth-actions" style={{ justifyContent: "space-between" }}>
-                  <button className="btn ghost" type="button" onClick={() => setActiveFriend(null)}>
-                    Close
-                  </button>
-                  <button
-                      className="btn primary"
-                      type="button"
-                      disabled={!friendKey(activeFriend)}
-                      onClick={() => {
-                        const k = friendKey(activeFriend);
-                        if (!k) return;
-                        const body = `${messages[k] || ""}${gifInput ? `\n${gifInput}` : ""}`;
-                        sendMessage(k, body);
-                      }}
-                    >
-                      Send
-                    </button>
-                </div>
-              </div>
-            </>
-          )}
-        </div>
-      )}
+      <ChatDock />
     </div>
   );
 }
 
-// Chat popout (emoji-friendly) rendered at the root of this page
-function EmojiBar({ onPick }: { onPick: (emoji: string) => void }) {
-  const emojis = ["😊", "😂", "🔥", "🎉", "🤝", "❤️", "👍", "🥳", "🚀", "✨"];
-  return (
-    <div className="message-popout__chips">
-      {emojis.map((e) => (
-        <button
-          key={e}
-          className="btn ghost"
-          type="button"
-          onClick={() => onPick(e)}
-          style={{ padding: "6px 10px" }}
-        >
-          {e}
-        </button>
-      ))}
-    </div>
-  );
-}

@@ -3,9 +3,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import "../css/dashboard.css";
 import "../css/profile.css";
 import { useAuth } from "../context/AuthContext";
+import { useUserPreferences } from "../context/UserPreferencesContext";
 import api from "../api/strapi";
 import axios from "axios";
 import Sidebar from "../components/Sidebar";
+import ChatDock from "../components/ChatDock";
 import TopbarSearch from "../components/TopbarSearch";
 import { HOBBY_OPTIONS } from "./me_hobbies";
 import { RELIGION_OPTIONS } from "./me_religions";
@@ -163,6 +165,8 @@ const LinkPreviewCard = ({
 
 export default function Me() {
   const { user, refreshProfile } = useAuth();
+  const { preferences, setBackgroundAll, resetBackgroundAll, setChatPrefs, getBackgroundStyle } =
+    useUserPreferences();
   usePageMeta({
     title: "My Profile | Stick2YourDreams Connect",
     description:
@@ -190,6 +194,8 @@ export default function Me() {
 
   const profileSnapshotRef = useRef<Profile | null>(null);
   const hobbySnapshotRef = useRef<string[]>([]);
+  const profileIdRef = useRef<string | number | null>(null);
+  const handleFixAttemptedRef = useRef(false);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [posts, setPosts] = useState<MediaPost[]>([]);
   const [loading, setLoading] = useState(true);
@@ -215,6 +221,9 @@ export default function Me() {
   const [onboardingActive, setOnboardingActive] = useState(false);
   const [onboardingStep, setOnboardingStep] = useState(0);
   const [onboardingError, setOnboardingError] = useState<string | null>(null);
+  const [appearanceError, setAppearanceError] = useState<string | null>(null);
+  const [appearanceUploading, setAppearanceUploading] = useState(false);
+  const [appearanceCollapsed, setAppearanceCollapsed] = useState(false);
 
   const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
@@ -229,6 +238,55 @@ export default function Me() {
       ? options.filter((option) => option.name.toLowerCase().includes(query))
       : options;
     return filtered.slice(0, limit);
+  };
+
+  const currentBackground = preferences.backgrounds.dashboard;
+  const appearanceColor = currentBackground.color || "#0b0d14";
+
+  const handleBackgroundColor = (value: string) => {
+    setAppearanceError(null);
+    setBackgroundAll({ color: value });
+  };
+
+  const handleBackgroundImage = async (file?: File | null) => {
+    setAppearanceError(null);
+    if (!file) return;
+    if (file.size > 4 * 1024 * 1024) {
+      setAppearanceError("Background image is too large. Keep it under 4MB.");
+      return;
+    }
+    setAppearanceUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("files", file);
+      const uploadRes = await api.post("/upload", fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      const uploaded = uploadRes.data?.[0];
+      const url = uploaded?.url;
+      if (!url) {
+        setAppearanceError("Upload failed. Please try again.");
+        return;
+      }
+      const resolvedUrl = url.startsWith("/") ? `${apiBase}${url}` : url;
+      setBackgroundAll({ image: resolvedUrl });
+    } catch {
+      setAppearanceError("Unable to upload the background image.");
+    } finally {
+      setAppearanceUploading(false);
+    }
+  };
+
+  const clearBackgroundImage = () => {
+    setBackgroundAll({ image: "" });
+  };
+
+  const resetBackgroundSettings = () => {
+    resetBackgroundAll();
+  };
+
+  const resetChatSettings = () => {
+    setChatPrefs({ width: 360, height: 520, fontSize: 14 });
   };
 
   // ✅ stable unique handle: username/email + numeric user id
@@ -405,9 +463,32 @@ export default function Me() {
     if (onboardingActive) setOnboardingStep(0);
   }, [onboardingActive]);
 
+  useEffect(() => {
+    if (!user || loading) return;
+    if (handleFixAttemptedRef.current) return;
+    if (!profileIdRef.current || !lockedUniqueHandle) return;
+    const currentHandle = (profile.handle || "").trim().toLowerCase();
+    if (currentHandle && currentHandle !== "user") return;
+    handleFixAttemptedRef.current = true;
+    api
+      .put("/profiles/me", { data: { handle: lockedUniqueHandle, locale: "en" } })
+      .then((res) => {
+        const updated = res.data?.data;
+        if (updated) {
+          setProfileFromEntry(updated);
+        } else {
+          setProfile((prev) => ({ ...prev, handle: lockedUniqueHandle }));
+        }
+      })
+      .catch(() => {
+        handleFixAttemptedRef.current = false;
+      });
+  }, [loading, lockedUniqueHandle, profile.handle, user]);
+
   const setProfileFromEntry = (entry: any) => {
     if (!entry) return;
     const attrs = normalize(entry);
+    profileIdRef.current = entry?.documentId ?? entry?.id ?? null;
     const parsedHobbies = parseHobbies(attrs.hobbies || "");
     setHobbyList(parsedHobbies);
 
@@ -466,7 +547,9 @@ export default function Me() {
   const fetchMyProfile = async () => {
     const byUser = await fetchMyProfileByUser();
     if (byUser) return byUser;
-    const candidates = [profile.handle, lockedUniqueHandle].filter(Boolean) as string[];
+    const candidates = [profile.handle, lockedUniqueHandle].filter(
+      (value) => value && value.toLowerCase() !== "user"
+    ) as string[];
     for (const handle of candidates) {
       const byHandle = await fetchMyProfileByHandle(handle);
       if (byHandle) return byHandle;
@@ -799,8 +882,11 @@ export default function Me() {
 
     try {
       const safeFirst = mergedProfile.firstName || user.username || user.email || "user";
+      const normalizedHandle = (mergedProfile.handle || "").trim();
       const baseHandle =
-        (mergedProfile.handle || lockedUniqueHandle || "").trim() || lockedUniqueHandle;
+          normalizedHandle && normalizedHandle.toLowerCase() !== "user"
+            ? normalizedHandle
+            : lockedUniqueHandle;
       const buildUniqueHandle = () =>
         `${baseHandle}-${user.id}-${Math.floor(1000 + Math.random() * 9000)}`;
 
@@ -930,7 +1016,10 @@ export default function Me() {
     (profile.firstName || profile.lastName
       ? `${profile.firstName || ""} ${profile.lastName || ""}`.trim()
       : user.username) || user.email;
-  const displayHandle = profile.handle || lockedUniqueHandle;
+  const displayHandle =
+    profile.handle && profile.handle.toLowerCase() !== "user"
+      ? profile.handle
+      : lockedUniqueHandle;
   const avatarImg = profile.avatarUrl;
   const initials =
     displayName
@@ -955,7 +1044,7 @@ export default function Me() {
     ["Gender", profile.gender],
   ] as const;
   const rightInfo: Array<[string, string | undefined]> = [
-    ["Handle", profile.handle || lockedUniqueHandle],
+    ["Handle", displayHandle],
     ["Phone", profile.phone],
     ["Location", locationDisplay],
     ["Country", profile.country],
@@ -1229,7 +1318,7 @@ export default function Me() {
   };
 
   return (
-    <div className="dashboard-shell">
+    <div className="dashboard-shell" style={getBackgroundStyle("profile")}>
       {errorModal && (
         <div
           style={{
@@ -1347,8 +1436,120 @@ export default function Me() {
 
       <Sidebar active="me" />
 
-      <div className="main-content">
-        <TopbarSearch />
+        <div className="main-content">
+          <TopbarSearch />
+          <div className="panel-grid profile-appearance-row">
+          <section className="panel profile-appearance-panel">
+            <div className="profile-appearance-header">
+              <div>
+                <p className="eyebrow">Style</p>
+                <h4>Background &amp; Chat</h4>
+                <p className="profile-appearance-sub">
+                  Update the background for dashboard, friends, and profile in one place.
+                </p>
+              </div>
+              <button
+                className="btn ghost profile-appearance-toggle"
+                type="button"
+                onClick={() => setAppearanceCollapsed((prev) => !prev)}
+              >
+                {appearanceCollapsed ? "Expand" : "Minimize"}
+              </button>
+            </div>
+
+            {!appearanceCollapsed && (
+              <div className="profile-appearance-body">
+                <div className="profile-appearance-grid">
+                  <label className="profile-field">
+                    <span className="profile-field-label">Background color</span>
+                    <div className="appearance-color-row">
+                      <input
+                        type="color"
+                        value={appearanceColor}
+                        onChange={(e) => handleBackgroundColor(e.target.value)}
+                        aria-label="Background color"
+                      />
+                      <input
+                        className="auth-input"
+                        value={currentBackground.color || ""}
+                        placeholder="#0b0d14"
+                        onChange={(e) => {
+                          const next = e.target.value.trim();
+                          setBackgroundAll({ color: next });
+                        }}
+                      />
+                    </div>
+                    <small className="profile-appearance-sub">
+                      Leave blank to use the default gradient.
+                    </small>
+                  </label>
+
+                  <label className="profile-field">
+                    <span className="profile-field-label">Background image</span>
+                    <input
+                      type="file"
+                      className="auth-input"
+                      accept="image/*"
+                      onChange={(e) => handleBackgroundImage(e.target.files?.[0] || null)}
+                    />
+                    {currentBackground.image && (
+                      <div className="appearance-preview">
+                        <img src={currentBackground.image} alt="Background preview" />
+                      </div>
+                    )}
+                    <div className="appearance-actions">
+                      <button className="btn ghost" type="button" onClick={clearBackgroundImage}>
+                        Remove image
+                      </button>
+                      <button
+                        className="btn ghost"
+                        type="button"
+                        onClick={resetBackgroundSettings}
+                      >
+                        Reset background
+                      </button>
+                    </div>
+                    {appearanceUploading && (
+                      <small className="profile-appearance-sub">Uploading image...</small>
+                    )}
+                  </label>
+
+                  <label className="profile-field">
+                    <span className="profile-field-label">Chat text size</span>
+                    <input
+                      className="appearance-range"
+                      type="range"
+                      min={12}
+                      max={20}
+                      step={1}
+                      value={preferences.chat.fontSize}
+                      onChange={(e) =>
+                        setChatPrefs({ fontSize: Number(e.target.value) })
+                      }
+                    />
+                    <small className="profile-appearance-sub">
+                      Current size: {preferences.chat.fontSize}px
+                    </small>
+                  </label>
+
+                  <div className="profile-field">
+                    <span className="profile-field-label">Chat size</span>
+                    <p className="profile-appearance-sub">
+                      Drag the chat corner to resize. It stays minimized when you leave friends.
+                    </p>
+                    <button className="btn ghost" type="button" onClick={resetChatSettings}>
+                      Reset chat size
+                    </button>
+                  </div>
+                </div>
+
+                {appearanceError && (
+                  <p className="profile-location-error">{appearanceError}</p>
+                )}
+              </div>
+            )}
+          </section>
+        </div>
         <div className="dash-hero">
           <div className="dash-hero__text">
             <p className="eyebrow">Profile</p>
@@ -1437,8 +1638,9 @@ export default function Me() {
             </div>
 
             {editing ? (
-              <div className="profile-columns">
-                <div className="profile-column">
+              <>
+                <div className="profile-columns">
+                  <div className="profile-column">
                   <label className="profile-field">
                     <span className="profile-field-label">First Name</span>
                     <input
@@ -1689,6 +1891,8 @@ export default function Me() {
                   </div>
                 </div>
               </div>
+
+              </>
             ) : (
               <div className="profile-columns">
                 <div className="profile-column">
@@ -1845,6 +2049,7 @@ export default function Me() {
           })}
         </div>
       </div>
+      <ChatDock />
     </div>
   );
 }
