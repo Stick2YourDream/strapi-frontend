@@ -14,7 +14,7 @@ type ProfileSummary = {
 };
 
 type SidebarProps = {
-  active: "dashboard" | "friends" | "me";
+  active: "dashboard" | "friends" | "me" | "groups";
 };
 
 export default function Sidebar({ active }: SidebarProps) {
@@ -199,6 +199,13 @@ export default function Sidebar({ active }: SidebarProps) {
               <button
                 className="mobile-profile-item"
                 type="button"
+                onClick={() => handleProfileAction("/groups")}
+              >
+                My Groups
+              </button>
+              <button
+                className="mobile-profile-item"
+                type="button"
                 onClick={() => {
                   logout();
                   navigate("/login");
@@ -246,6 +253,14 @@ export default function Sidebar({ active }: SidebarProps) {
                 >
                   <span>Friend posts</span>
                   <span className="sidebar-notification-count">{counts.friendPosts}</span>
+                </button>
+                <button
+                  type="button"
+                  className="sidebar-notification-item is-action"
+                  onClick={() => handleNotificationAction("/groups")}
+                >
+                  <span>Group updates</span>
+                  <span className="sidebar-notification-count">{counts.groupUpdates}</span>
                 </button>
                 <button
                   type="button"
@@ -410,6 +425,14 @@ export default function Sidebar({ active }: SidebarProps) {
                     <button
                       type="button"
                       className="sidebar-notification-item is-action"
+                      onClick={() => handleNotificationAction("/groups")}
+                    >
+                      <span>Group updates</span>
+                      <span className="sidebar-notification-count">{counts.groupUpdates}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="sidebar-notification-item is-action"
                       onClick={() => handleNotificationAction("/dashboard")}
                     >
                       <span>Comments on your posts</span>
@@ -476,6 +499,14 @@ export default function Sidebar({ active }: SidebarProps) {
                     className="btn ghost nav-btn"
                     type="button"
                     style={{ width: "100%", border: "none", borderRadius: 0, justifyContent: "flex-start" }}
+                    onClick={() => handleProfileAction("/groups")}
+                  >
+                    My Groups
+                  </button>
+                  <button
+                    className="btn ghost nav-btn"
+                    type="button"
+                    style={{ width: "100%", border: "none", borderRadius: 0, justifyContent: "flex-start" }}
                     onClick={() => {
                       logout();
                       navigate("/login");
@@ -491,14 +522,14 @@ export default function Sidebar({ active }: SidebarProps) {
         </div>
         {user && (
           <div style={{ marginTop: "12px", width: "100%" }}>
-            <button
+            {/* <button
               className="btn ghost"
               type="button"
               onClick={() => setShowMoreProfile((v) => !v)}
               style={{ width: "100%", marginBottom: showMoreProfile ? "8px" : 0 }}
             >
               {showMoreProfile ? "Hide details" : "Bio"}
-            </button>
+            </button> */}
             {showMoreProfile && (
               <div className="bio-panel">
                 <div className="bio-line"><strong>Name:</strong> {nameForDisplay}</div>

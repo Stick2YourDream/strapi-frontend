@@ -7,6 +7,7 @@ type NotificationCounts = {
   friendPosts: number;
   comments: number;
   likes: number;
+  groupUpdates: number;
 };
 
 const NOTIF_LAST_SEEN_KEY = "notifications_last_seen_v1";
@@ -70,6 +71,7 @@ export const useNotifications = (userId?: number | null) => {
     friendPosts: 0,
     comments: 0,
     likes: 0,
+    groupUpdates: 0,
   });
   const [loading, setLoading] = useState(false);
   const lastSeenRef = useRef<string | null>(null);
@@ -78,7 +80,14 @@ export const useNotifications = (userId?: number | null) => {
 
   const refresh = useCallback(async () => {
     if (!userId || !Number.isFinite(Number(userId))) {
-      setCounts({ messages: 0, requests: 0, friendPosts: 0, comments: 0, likes: 0 });
+      setCounts({
+        messages: 0,
+        requests: 0,
+        friendPosts: 0,
+        comments: 0,
+        likes: 0,
+        groupUpdates: 0,
+      });
       return;
     }
 
@@ -169,6 +178,15 @@ export const useNotifications = (userId?: number | null) => {
         friendPostCount = postsRes?.data?.data?.length ?? 0;
       }
 
+      const groupUpdatesRes = await api
+        .get(
+          `/group-notifications?` +
+            `filters[recipient][id][$eq]=${currentUserId}` +
+            `${afterFilter}&sort=createdAt:desc&pagination[pageSize]=50`
+        )
+        .catch(() => null);
+      const groupUpdateCount = groupUpdatesRes?.data?.data?.length ?? 0;
+
       const prevSnapshot = likeSnapshotRef.current || {};
       let likeCount = 0;
       const nextSnapshot: Record<string, number> = {};
@@ -187,6 +205,7 @@ export const useNotifications = (userId?: number | null) => {
         friendPosts: friendPostCount,
         comments: commentCount,
         likes: likeCount,
+        groupUpdates: groupUpdateCount,
       });
     } finally {
       setLoading(false);
@@ -216,6 +235,7 @@ export const useNotifications = (userId?: number | null) => {
       friendPosts: 0,
       comments: 0,
       likes: 0,
+      groupUpdates: 0,
     }));
   }, [userId]);
 
@@ -225,8 +245,16 @@ export const useNotifications = (userId?: number | null) => {
       counts.requests +
       counts.friendPosts +
       counts.comments +
+      counts.likes +
+      counts.groupUpdates,
+    [
+      counts.comments,
+      counts.friendPosts,
+      counts.groupUpdates,
       counts.likes,
-    [counts.comments, counts.friendPosts, counts.likes, counts.messages, counts.requests]
+      counts.messages,
+      counts.requests,
+    ]
   );
 
   return { counts, total, loading, refresh, markAllRead };

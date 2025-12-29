@@ -7,6 +7,8 @@ import Dashboard from "../pages/dashboard";
 import ProtectedRoute from "../components/ProtectedRoute";
 import Friends from "../pages/friends";
 import Me from "../pages/me";
+import Groups from "../pages/groups";
+import GroupDetail from "../pages/group";
 import Landing from "../pages/landing";
 import Terms from "../pages/terms";
 
@@ -42,6 +44,22 @@ export default function AppRoutes(): JSX.Element {
         element={
           <ProtectedRoute>
             <Me />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/groups"
+        element={
+          <ProtectedRoute>
+            <Groups />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/groups/:groupId"
+        element={
+          <ProtectedRoute>
+            <GroupDetail />
           </ProtectedRoute>
         }
       />

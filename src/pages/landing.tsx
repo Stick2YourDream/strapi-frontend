@@ -423,6 +423,10 @@ export default function Landing() {
                         <span className="landing-notification-count">{counts.friendPosts}</span>
                       </div>
                       <div className="landing-notification-item">
+                        <span>Group updates</span>
+                        <span className="landing-notification-count">{counts.groupUpdates}</span>
+                      </div>
+                      <div className="landing-notification-item">
                         <span>Comments on your posts</span>
                         <span className="landing-notification-count">{counts.comments}</span>
                       </div>
@@ -461,6 +465,13 @@ export default function Landing() {
                       onClick={() => handleProfileAction("/friends")}
                     >
                       My Friends
+                    </button>
+                    <button
+                      type="button"
+                      className="landing-profile-item"
+                      onClick={() => handleProfileAction("/groups")}
+                    >
+                      My Groups
                     </button>
                     <button
                       type="button"
