@@ -1727,6 +1727,10 @@
   align-items: center;
 }
 
+.biobutton{
+  display: none;
+}
+
 @media (max-width: 960px) {
   .sidebar-topbar {
     display: flex;

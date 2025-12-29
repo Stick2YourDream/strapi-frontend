@@ -522,14 +522,14 @@ export default function Sidebar({ active }: SidebarProps) {
         </div>
         {user && (
           <div style={{ marginTop: "12px", width: "100%" }}>
-            {/* <button
-              className="btn ghost"
+            <button
+              className="btn ghost biobutton"
               type="button"
               onClick={() => setShowMoreProfile((v) => !v)}
               style={{ width: "100%", marginBottom: showMoreProfile ? "8px" : 0 }}
             >
               {showMoreProfile ? "Hide details" : "Bio"}
-            </button> */}
+            </button>
             {showMoreProfile && (
               <div className="bio-panel">
                 <div className="bio-line"><strong>Name:</strong> {nameForDisplay}</div>
