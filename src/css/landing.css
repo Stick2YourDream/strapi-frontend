@@ -255,6 +255,11 @@
   gap: 8px;
 }
 
+.landing-notification-group {
+  display: grid;
+  gap: 6px;
+}
+
 .landing-notification-item {
   display: flex;
   align-items: center;
@@ -276,6 +281,58 @@
   font-size: 12px;
   color: var(--muted);
   padding-left: 4px;
+}
+
+.landing-notification-preview {
+  padding: 0 8px 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.landing-notification-preview-text {
+  display: block;
+  color: var(--mist);
+  flex: 1;
+  min-width: 0;
+}
+
+.landing-notification-preview-list {
+  display: grid;
+  gap: 6px;
+  padding-left: 6px;
+}
+
+.landing-notification-preview-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.landing-notification-preview-more {
+  font-size: 11px;
+  color: var(--muted);
+  padding-left: 8px;
+}
+
+.landing-notification-action {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: transparent;
+  color: var(--mist);
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.landing-notification-action:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .landing-profile-item {

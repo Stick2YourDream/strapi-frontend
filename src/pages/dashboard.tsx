@@ -67,6 +67,14 @@ const mediaDescriptor = (mediaUrl?: string, hasLink?: boolean) => {
   if (hasLink) return "with a link";
   return "";
 };
+const sortByCreatedAtDesc = (items: NormalizedPost[]) =>
+  [...items].sort((a, b) => {
+    const aParsed = a.createdAt ? Date.parse(a.createdAt) : 0;
+    const bParsed = b.createdAt ? Date.parse(b.createdAt) : 0;
+    const aTime = Number.isNaN(aParsed) ? 0 : aParsed;
+    const bTime = Number.isNaN(bParsed) ? 0 : bParsed;
+    return bTime - aTime;
+  });
 
 const MOTIVATIONAL_PHRASES = [
   "Small steps today build the momentum you want tomorrow.",
@@ -429,7 +437,10 @@ export default function Dashboard() {
       ? (posts as any).user.map((p: any) => normalize(p, "user"))
       : [];
 
-    return [...adminPosts, ...userPosts];
+    const sortedAdmin = sortByCreatedAtDesc(adminPosts);
+    const sortedUser = sortByCreatedAtDesc(userPosts);
+
+    return [...sortedAdmin, ...sortedUser];
   }, [posts]);
 
   useEffect(() => {

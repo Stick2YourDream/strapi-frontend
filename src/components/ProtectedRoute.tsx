@@ -18,7 +18,7 @@ export default function ProtectedRoute({ children }: Props) {
     return null;
   }
 
-  if (!profile?.onboardingComplete && location.pathname !== "/me") {
+  if (profile && profile.onboardingComplete === false && location.pathname !== "/me") {
     return <Navigate to="/me" replace />;
   }
 

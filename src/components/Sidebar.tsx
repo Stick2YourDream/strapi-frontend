@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import api from "../api/strapi";
-import { useNotifications } from "../hooks/useNotifications";
+import { useNotifications, type FriendRequestPreview } from "../hooks/useNotifications";
 
 type ProfileSummary = {
   displayName: string;
@@ -17,6 +17,14 @@ type SidebarProps = {
   active: "dashboard" | "friends" | "me" | "groups";
 };
 
+const trimPreviewText = (value?: string, max = 72) => {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  if (text.length <= max) return text;
+  if (max <= 3) return text.slice(0, max);
+  return `${text.slice(0, max - 3)}...`;
+};
+
 export default function Sidebar({ active }: SidebarProps) {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
@@ -25,7 +33,9 @@ export default function Sidebar({ active }: SidebarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
-  const { counts, total, loading, refresh, markAllRead } = useNotifications(user?.id);
+  const { counts, total, loading, refresh, markAllRead, previews, acceptFriendRequest } =
+    useNotifications(user?.id);
+  const [acceptingRequests, setAcceptingRequests] = useState<Record<string, boolean>>({});
 
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
   const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
@@ -123,6 +133,196 @@ export default function Sidebar({ active }: SidebarProps) {
   // prefer handle if loaded, else username/email
   const secondaryLine = profileCard?.handle || "Profile";
   const fallbackInitial = nameForDisplay.charAt(0).toUpperCase();
+
+  const messagePreviewText = useMemo(() => {
+    if (counts.messages <= 0) return "";
+    if (!previews.messages) return "You have new messages.";
+    const snippet = trimPreviewText(previews.messages.body, 64);
+    return snippet
+      ? `${previews.messages.senderName} sent you a new message: "${snippet}"`
+      : `${previews.messages.senderName} sent you a new message.`;
+  }, [counts.messages, previews.messages]);
+
+  const friendPostPreviewText = useMemo(() => {
+    if (counts.friendPosts <= 0) return "";
+    if (!previews.friendPosts) return "New friend posts are waiting.";
+    const snippet = trimPreviewText(
+      previews.friendPosts.title || previews.friendPosts.content,
+      64
+    );
+    const owner = previews.friendPosts.ownerName || "A friend";
+    return snippet ? `${owner} posted "${snippet}"` : `${owner} shared a new post.`;
+  }, [counts.friendPosts, previews.friendPosts]);
+
+  const commentPreviewText = useMemo(() => {
+    if (counts.comments <= 0) return "";
+    if (!previews.comments) return "New comments are waiting.";
+    const snippet = trimPreviewText(previews.comments.body, 64);
+    const owner = previews.comments.ownerName || "Someone";
+    return snippet ? `${owner} commented: "${snippet}"` : `${owner} commented on your post.`;
+  }, [counts.comments, previews.comments]);
+
+  const groupUpdatePreviewText = useMemo(() => {
+    if (counts.groupUpdates <= 0) return "";
+    if (!previews.groupUpdates) return "New group updates are waiting.";
+    const snippet = trimPreviewText(previews.groupUpdates.message, 72);
+    if (snippet) return snippet;
+    const actor = previews.groupUpdates.actorName;
+    return actor ? `${actor} posted a group update.` : "New group update received.";
+  }, [counts.groupUpdates, previews.groupUpdates]);
+
+  const likesPreviewText = useMemo(() => {
+    if (counts.likes <= 0) return "";
+    return counts.likes === 1
+      ? "1 new like on your posts."
+      : `${counts.likes} new likes on your posts.`;
+  }, [counts.likes]);
+
+  const handleAcceptRequest = async (request: FriendRequestPreview) => {
+    const key = String(request.id);
+    if (acceptingRequests[key]) return;
+    setAcceptingRequests((prev) => ({ ...prev, [key]: true }));
+    const ok = await acceptFriendRequest(request);
+    if (!ok) {
+      console.error("Failed to accept friend request");
+    }
+    setAcceptingRequests((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+
+  const renderNotificationList = () => (
+    <div className="sidebar-notification-list">
+      <div className="sidebar-notification-group">
+        <button
+          type="button"
+          className="sidebar-notification-item is-action"
+          onClick={() => handleNotificationAction("/friends")}
+        >
+          <span>New messages</span>
+          <span className="sidebar-notification-count">{counts.messages}</span>
+        </button>
+        {counts.messages > 0 && messagePreviewText && (
+          <div className="sidebar-notification-preview">
+            <span className="sidebar-notification-preview-text">{messagePreviewText}</span>
+          </div>
+        )}
+      </div>
+      <div className="sidebar-notification-group">
+        <button
+          type="button"
+          className="sidebar-notification-item is-action"
+          onClick={() => handleNotificationAction("/friends")}
+        >
+          <span>Friend requests</span>
+          <span className="sidebar-notification-count">{counts.requests}</span>
+        </button>
+        {counts.requests > 0 && (
+          <div className="sidebar-notification-preview-list">
+            {previews.requests.length > 0 ? (
+              previews.requests.map((request) => {
+                const key = String(request.id);
+                return (
+                  <div key={key} className="sidebar-notification-preview-row">
+                    <span className="sidebar-notification-preview-text">
+                      {request.requesterName} sent you a friend request.
+                    </span>
+                    <button
+                      type="button"
+                      className="btn ghost tiny"
+                      disabled={acceptingRequests[key]}
+                      onClick={() => void handleAcceptRequest(request)}
+                    >
+                      {acceptingRequests[key] ? "Accepting..." : "Accept"}
+                    </button>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="sidebar-notification-preview">
+                <span className="sidebar-notification-preview-text">
+                  You have a new friend request.
+                </span>
+              </div>
+            )}
+            {previews.requests.length > 0 && counts.requests > previews.requests.length && (
+              <div className="sidebar-notification-preview-more">
+                +{counts.requests - previews.requests.length} more requests
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="sidebar-notification-group">
+        <button
+          type="button"
+          className="sidebar-notification-item is-action"
+          onClick={() => handleNotificationAction("/friends")}
+        >
+          <span>Friend posts</span>
+          <span className="sidebar-notification-count">{counts.friendPosts}</span>
+        </button>
+        {counts.friendPosts > 0 && friendPostPreviewText && (
+          <div className="sidebar-notification-preview">
+            <span className="sidebar-notification-preview-text">{friendPostPreviewText}</span>
+          </div>
+        )}
+      </div>
+      <div className="sidebar-notification-group">
+        <button
+          type="button"
+          className="sidebar-notification-item is-action"
+          onClick={() => handleNotificationAction("/groups")}
+        >
+          <span>Group updates</span>
+          <span className="sidebar-notification-count">{counts.groupUpdates}</span>
+        </button>
+        {counts.groupUpdates > 0 && groupUpdatePreviewText && (
+          <div className="sidebar-notification-preview">
+            <span className="sidebar-notification-preview-text">
+              {groupUpdatePreviewText}
+            </span>
+          </div>
+        )}
+      </div>
+      <div className="sidebar-notification-group">
+        <button
+          type="button"
+          className="sidebar-notification-item is-action"
+          onClick={() => handleNotificationAction("/dashboard")}
+        >
+          <span>Comments on your posts</span>
+          <span className="sidebar-notification-count">{counts.comments}</span>
+        </button>
+        {counts.comments > 0 && commentPreviewText && (
+          <div className="sidebar-notification-preview">
+            <span className="sidebar-notification-preview-text">{commentPreviewText}</span>
+          </div>
+        )}
+      </div>
+      <div className="sidebar-notification-group">
+        <button
+          type="button"
+          className="sidebar-notification-item is-action"
+          onClick={() => handleNotificationAction("/dashboard")}
+        >
+          <span>Likes on your posts</span>
+          <span className="sidebar-notification-count">{counts.likes}</span>
+        </button>
+        {counts.likes > 0 && likesPreviewText && (
+          <div className="sidebar-notification-preview">
+            <span className="sidebar-notification-preview-text">{likesPreviewText}</span>
+          </div>
+        )}
+      </div>
+      {loading && <div className="sidebar-notification-status">Refreshing...</div>}
+      {!loading && total === 0 && (
+        <div className="sidebar-notification-status">All caught up.</div>
+      )}
+    </div>
+  );
 
   return (
     <div className={`sidebar-shell ${menuOpen ? "open" : ""}`}>
@@ -229,62 +429,7 @@ export default function Sidebar({ active }: SidebarProps) {
                   Mark read
                 </button>
               </div>
-              <div className="sidebar-notification-list">
-                <button
-                  type="button"
-                  className="sidebar-notification-item is-action"
-                  onClick={() => handleNotificationAction("/friends")}
-                >
-                  <span>New messages</span>
-                  <span className="sidebar-notification-count">{counts.messages}</span>
-                </button>
-                <button
-                  type="button"
-                  className="sidebar-notification-item is-action"
-                  onClick={() => handleNotificationAction("/friends")}
-                >
-                  <span>Friend requests</span>
-                  <span className="sidebar-notification-count">{counts.requests}</span>
-                </button>
-                <button
-                  type="button"
-                  className="sidebar-notification-item is-action"
-                  onClick={() => handleNotificationAction("/friends")}
-                >
-                  <span>Friend posts</span>
-                  <span className="sidebar-notification-count">{counts.friendPosts}</span>
-                </button>
-                <button
-                  type="button"
-                  className="sidebar-notification-item is-action"
-                  onClick={() => handleNotificationAction("/groups")}
-                >
-                  <span>Group updates</span>
-                  <span className="sidebar-notification-count">{counts.groupUpdates}</span>
-                </button>
-                <button
-                  type="button"
-                  className="sidebar-notification-item is-action"
-                  onClick={() => handleNotificationAction("/dashboard")}
-                >
-                  <span>Comments on your posts</span>
-                  <span className="sidebar-notification-count">{counts.comments}</span>
-                </button>
-                <button
-                  type="button"
-                  className="sidebar-notification-item is-action"
-                  onClick={() => handleNotificationAction("/dashboard")}
-                >
-                  <span>Likes on your posts</span>
-                  <span className="sidebar-notification-count">{counts.likes}</span>
-                </button>
-                {loading && (
-                  <div className="sidebar-notification-status">Refreshing...</div>
-                )}
-                {!loading && total === 0 && (
-                  <div className="sidebar-notification-status">All caught up.</div>
-                )}
-              </div>
+              {renderNotificationList()}
             </div>
           )}
         </div>
@@ -397,62 +542,7 @@ export default function Sidebar({ active }: SidebarProps) {
                       Mark read
                     </button>
                   </div>
-                  <div className="sidebar-notification-list">
-                    <button
-                      type="button"
-                      className="sidebar-notification-item is-action"
-                      onClick={() => handleNotificationAction("/friends")}
-                    >
-                      <span>New messages</span>
-                      <span className="sidebar-notification-count">{counts.messages}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="sidebar-notification-item is-action"
-                      onClick={() => handleNotificationAction("/friends")}
-                    >
-                      <span>Friend requests</span>
-                      <span className="sidebar-notification-count">{counts.requests}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="sidebar-notification-item is-action"
-                      onClick={() => handleNotificationAction("/friends")}
-                    >
-                      <span>Friend posts</span>
-                      <span className="sidebar-notification-count">{counts.friendPosts}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="sidebar-notification-item is-action"
-                      onClick={() => handleNotificationAction("/groups")}
-                    >
-                      <span>Group updates</span>
-                      <span className="sidebar-notification-count">{counts.groupUpdates}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="sidebar-notification-item is-action"
-                      onClick={() => handleNotificationAction("/dashboard")}
-                    >
-                      <span>Comments on your posts</span>
-                      <span className="sidebar-notification-count">{counts.comments}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="sidebar-notification-item is-action"
-                      onClick={() => handleNotificationAction("/dashboard")}
-                    >
-                      <span>Likes on your posts</span>
-                      <span className="sidebar-notification-count">{counts.likes}</span>
-                    </button>
-                    {loading && (
-                      <div className="sidebar-notification-status">Refreshing...</div>
-                    )}
-                    {!loading && total === 0 && (
-                      <div className="sidebar-notification-status">All caught up.</div>
-                    )}
-                  </div>
+                  {renderNotificationList()}
                 </div>
               )}
 

@@ -10,9 +10,60 @@ type NotificationCounts = {
   groupUpdates: number;
 };
 
+export type FriendRequestPreview = {
+  id: string | number;
+  idNumber?: number;
+  docId?: string;
+  requesterId?: number;
+  requesterName: string;
+  createdAt?: string;
+};
+
+export type MessagePreview = {
+  id: string | number;
+  senderId?: number;
+  senderName: string;
+  body?: string;
+  createdAt?: string;
+};
+
+export type FriendPostPreview = {
+  id: string | number;
+  ownerId?: number;
+  ownerName: string;
+  title?: string;
+  content?: string;
+  createdAt?: string;
+};
+
+export type CommentPreview = {
+  id: string | number;
+  ownerId?: number;
+  ownerName: string;
+  body?: string;
+  createdAt?: string;
+};
+
+export type GroupUpdatePreview = {
+  id: string | number;
+  actorName?: string;
+  message?: string;
+  createdAt?: string;
+};
+
+export type NotificationPreviews = {
+  messages: MessagePreview | null;
+  requests: FriendRequestPreview[];
+  friendPosts: FriendPostPreview | null;
+  comments: CommentPreview | null;
+  likes: { count: number } | null;
+  groupUpdates: GroupUpdatePreview | null;
+};
+
 const NOTIF_LAST_SEEN_KEY = "notifications_last_seen_v1";
 const NOTIF_LIKE_SNAPSHOT_KEY = "notifications_like_snapshot_v1";
 const REFRESH_MS = 60000;
+const MAX_PREVIEW_ITEMS = 3;
 
 const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
 const getEntity = (entry: any) => entry?.data ?? entry ?? null;
@@ -21,6 +72,11 @@ const getEntityId = (entry: any) => {
   const rawId = data?.id ?? (typeof data === "number" ? data : data?.attributes?.id);
   const num = Number(rawId);
   return Number.isFinite(num) ? num : undefined;
+};
+const getUserLabel = (entry: any) => {
+  const data = getEntity(entry);
+  const attrs = normalize(data);
+  return attrs?.username || attrs?.email || attrs?.handle || "User";
 };
 
 const safeParseJson = (value: string | null) => {
@@ -73,6 +129,14 @@ export const useNotifications = (userId?: number | null) => {
     likes: 0,
     groupUpdates: 0,
   });
+  const [previews, setPreviews] = useState<NotificationPreviews>(() => ({
+    messages: null,
+    requests: [],
+    friendPosts: null,
+    comments: null,
+    likes: null,
+    groupUpdates: null,
+  }));
   const [loading, setLoading] = useState(false);
   const lastSeenRef = useRef<string | null>(null);
   const likeSnapshotRef = useRef<Record<string, number> | null>(null);
@@ -87,6 +151,14 @@ export const useNotifications = (userId?: number | null) => {
         comments: 0,
         likes: 0,
         groupUpdates: 0,
+      });
+      setPreviews({
+        messages: null,
+        requests: [],
+        friendPosts: null,
+        comments: null,
+        likes: null,
+        groupUpdates: null,
       });
       return;
     }
@@ -104,22 +176,39 @@ export const useNotifications = (userId?: number | null) => {
         .get(
           `/friends?filters[$or][0][requester][id][$eq]=${currentUserId}` +
             `&filters[$or][1][target][id][$eq]=${currentUserId}` +
-            `&populate=requester&populate=target&pagination[pageSize]=200`
+            `&populate=requester&populate=target&sort=createdAt:desc&pagination[pageSize]=200`
         )
         .catch(() => null);
 
       const relations = (friendsRes?.data?.data ?? []).map((f: any) => {
         const attrs = normalize(f);
         return {
+          id: f.id ?? attrs.documentId ?? attrs.id,
+          idNumber: typeof f.id === "number" ? f.id : undefined,
+          docId: attrs.documentId,
           status: attrs.status || "pending",
           requesterId: getEntityId(attrs.requester),
           targetId: getEntityId(attrs.target),
+          requesterName: getUserLabel(attrs.requester),
+          targetName: getUserLabel(attrs.target),
+          createdAt: attrs.createdAt,
         };
       });
 
       const pendingRequests = relations.filter(
         (f: any) => f.status === "pending" && f.targetId === currentUserId
-      ).length;
+      );
+      const pendingRequestCount = pendingRequests.length;
+      const requestPreviews = pendingRequests
+        .slice(0, MAX_PREVIEW_ITEMS)
+        .map((f: any) => ({
+          id: f.id,
+          idNumber: f.idNumber,
+          docId: f.docId,
+          requesterId: f.requesterId,
+          requesterName: f.requesterName || "User",
+          createdAt: f.createdAt,
+        }));
 
       const acceptedFriendIds = relations
         .filter((f: any) => f.status === "accepted")
@@ -129,10 +218,24 @@ export const useNotifications = (userId?: number | null) => {
       const messagesRes = await api
         .get(
           `/messages?filters[recipient][id][$eq]=${currentUserId}` +
-            `${afterFilter}&sort=createdAt:desc&pagination[pageSize]=50`
+            `${afterFilter}&populate=sender&sort=createdAt:desc&pagination[pageSize]=50`
         )
         .catch(() => null);
-      const messageCount = messagesRes?.data?.data?.length ?? 0;
+      const messages = messagesRes?.data?.data ?? [];
+      const messageCount = messages.length ?? 0;
+      const messagePreview: MessagePreview | null = messages.length
+        ? (() => {
+            const first = messages[0];
+            const attrs = normalize(first);
+            return {
+              id: first.id ?? attrs.documentId ?? attrs.id ?? "message",
+              senderId: getEntityId(attrs.sender),
+              senderName: getUserLabel(attrs.sender),
+              body: attrs.body,
+              createdAt: attrs.createdAt,
+            };
+          })()
+        : null;
 
       const myPostsRes = await api
         .get(
@@ -151,6 +254,7 @@ export const useNotifications = (userId?: number | null) => {
         .filter((id: number) => Number.isFinite(id));
 
       let commentCount = 0;
+      let commentPreview: CommentPreview | null = null;
       if (myPostIds.length) {
         const commentFilter = myPostIds
           .map((id: number, index: number) => `filters[target_id][$in][${index}]=${id}`)
@@ -158,13 +262,28 @@ export const useNotifications = (userId?: number | null) => {
         const commentsRes = await api
           .get(
             `/comments?filters[target_type][$eq]=user` +
-              `&${commentFilter}${afterFilter}&sort=createdAt:desc&pagination[pageSize]=50`
+              `&${commentFilter}${afterFilter}&populate=owner&sort=createdAt:desc&pagination[pageSize]=50`
           )
           .catch(() => null);
-        commentCount = commentsRes?.data?.data?.length ?? 0;
+        const comments = commentsRes?.data?.data ?? [];
+        commentCount = comments.length ?? 0;
+        commentPreview = comments.length
+          ? (() => {
+              const first = comments[0];
+              const attrs = normalize(first);
+              return {
+                id: first.id ?? attrs.documentId ?? attrs.id ?? "comment",
+                ownerId: getEntityId(attrs.owner),
+                ownerName: getUserLabel(attrs.owner),
+                body: attrs.body,
+                createdAt: attrs.createdAt,
+              };
+            })()
+          : null;
       }
 
       let friendPostCount = 0;
+      let friendPostPreview: FriendPostPreview | null = null;
       if (acceptedFriendIds.length) {
         const friendFilter = acceptedFriendIds
           .map((id: number, index: number) => `filters[owner][id][$in][${index}]=${id}`)
@@ -172,20 +291,48 @@ export const useNotifications = (userId?: number | null) => {
         const postsRes = await api
           .get(
             `/users-posts?${friendFilter}` +
-              `${afterFilter}&sort=createdAt:desc&pagination[pageSize]=50`
+              `${afterFilter}&populate=owner&sort=createdAt:desc&pagination[pageSize]=50`
           )
           .catch(() => null);
-        friendPostCount = postsRes?.data?.data?.length ?? 0;
+        const posts = postsRes?.data?.data ?? [];
+        friendPostCount = posts.length ?? 0;
+        friendPostPreview = posts.length
+          ? (() => {
+              const first = posts[0];
+              const attrs = normalize(first);
+              return {
+                id: first.id ?? attrs.documentId ?? attrs.id ?? "post",
+                ownerId: getEntityId(attrs.owner),
+                ownerName: getUserLabel(attrs.owner),
+                title: attrs.Title || attrs.title,
+                content: attrs.Users_Content || attrs.content,
+                createdAt: attrs.createdAt,
+              };
+            })()
+          : null;
       }
 
       const groupUpdatesRes = await api
         .get(
           `/group-notifications?` +
             `filters[recipient][id][$eq]=${currentUserId}` +
-            `${afterFilter}&sort=createdAt:desc&pagination[pageSize]=50`
+            `${afterFilter}&populate=actor&populate=group&sort=createdAt:desc&pagination[pageSize]=50`
         )
         .catch(() => null);
-      const groupUpdateCount = groupUpdatesRes?.data?.data?.length ?? 0;
+      const groupUpdates = groupUpdatesRes?.data?.data ?? [];
+      const groupUpdateCount = groupUpdates.length ?? 0;
+      const groupUpdatePreview: GroupUpdatePreview | null = groupUpdates.length
+        ? (() => {
+            const first = groupUpdates[0];
+            const attrs = normalize(first);
+            return {
+              id: first.id ?? attrs.documentId ?? attrs.id ?? "group-update",
+              actorName: getUserLabel(attrs.actor),
+              message: attrs.message,
+              createdAt: attrs.createdAt,
+            };
+          })()
+        : null;
 
       const prevSnapshot = likeSnapshotRef.current || {};
       let likeCount = 0;
@@ -201,11 +348,19 @@ export const useNotifications = (userId?: number | null) => {
 
       setCounts({
         messages: messageCount,
-        requests: pendingRequests,
+        requests: pendingRequestCount,
         friendPosts: friendPostCount,
         comments: commentCount,
         likes: likeCount,
         groupUpdates: groupUpdateCount,
+      });
+      setPreviews({
+        messages: messagePreview,
+        requests: requestPreviews,
+        friendPosts: friendPostPreview,
+        comments: commentPreview,
+        likes: likeCount > 0 ? { count: likeCount } : null,
+        groupUpdates: groupUpdatePreview,
       });
     } finally {
       setLoading(false);
@@ -237,7 +392,49 @@ export const useNotifications = (userId?: number | null) => {
       likes: 0,
       groupUpdates: 0,
     }));
+    setPreviews((prev) => ({
+      ...prev,
+      messages: null,
+      friendPosts: null,
+      comments: null,
+      likes: null,
+      groupUpdates: null,
+    }));
   }, [userId]);
+
+  const acceptFriendRequest = useCallback(
+    async (request: FriendRequestPreview) => {
+      if (!request?.id) return false;
+      try {
+        const targetDoc = request.docId ?? (typeof request.id === "string" ? request.id : null);
+        const targetNum =
+          request.idNumber ?? (typeof request.id === "number" ? request.id : null);
+
+        let updated = false;
+        const payload = { data: { status: "accepted", locale: "en" } };
+
+        if (targetNum) {
+          try {
+            await api.put(`/friends/${targetNum}`, payload);
+            updated = true;
+          } catch (err: any) {
+            if (!(err?.response?.status === 404)) throw err;
+          }
+        }
+        if (!updated && targetDoc) {
+          await api.put(`/friends/${targetDoc}?locale=en`, payload);
+          updated = true;
+        }
+        if (!updated) throw new Error("Update failed");
+
+        await refresh();
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [refresh]
+  );
 
   const total = useMemo(
     () =>
@@ -257,5 +454,5 @@ export const useNotifications = (userId?: number | null) => {
     ]
   );
 
-  return { counts, total, loading, refresh, markAllRead };
+  return { counts, total, loading, refresh, markAllRead, previews, acceptFriendRequest };
 };

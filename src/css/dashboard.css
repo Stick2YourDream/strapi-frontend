@@ -532,6 +532,11 @@
   gap: 8px;
 }
 
+.sidebar-notification-group {
+  display: grid;
+  gap: 6px;
+}
+
 .sidebar-notification-item {
   display: flex;
   align-items: center;
@@ -567,6 +572,48 @@
   font-size: 12px;
   color: #9aa5bb;
   padding-left: 4px;
+}
+
+.sidebar-notification-preview {
+  padding: 0 8px 4px;
+  font-size: 12px;
+  color: #b7c2d6;
+}
+
+.sidebar-notification-preview-text {
+  display: block;
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-notification-preview-list {
+  display: grid;
+  gap: 6px;
+  padding-left: 6px;
+}
+
+.sidebar-notification-preview-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.sidebar-notification-preview-more {
+  font-size: 11px;
+  color: #9aa5bb;
+  padding-left: 8px;
+}
+
+.btn.tiny {
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
 }
 
 .main-content {
