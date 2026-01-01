@@ -5,6 +5,7 @@ import { useAuth } from "../context/AuthContext";
 import { useChat } from "../context/ChatContext";
 import type { ChatFriend } from "../context/ChatContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";
+import "../css/chatbox.css";
 
 type LinkMeta = {
   title?: string;
@@ -44,10 +45,10 @@ type ChatSizePreset = {
 };
 
 const CHAT_SIZE_PRESETS: ChatSizePreset[] = [
-  { id: "small", label: "Small", width: 320, height: 440 },
-  { id: "medium", label: "Medium", width: 360, height: 520 },
-  { id: "large", label: "Large", width: 420, height: 600 },
-  { id: "xlarge", label: "X-Large", width: 480, height: 680 },
+  { id: "small", label: "Small", width: 400, height: 520 },
+  { id: "medium", label: "Medium", width: 500, height: 680 },
+  { id: "large", label: "Large", width: 570, height: 720 },
+  { id: "xlarge", label: "Extra Large", width: 650, height: 800 },
   { id: "fullscreen", label: "Full" },
 ];
 
@@ -60,11 +61,9 @@ export default function ChatDock() {
     popoutMinimized,
     chatLogs,
     drafts,
-    gifDrafts,
     openChat,
     setPopoutMinimized,
     setDraft,
-    setGifDraft,
     sendMessage,
   } = useChat();
   const [error, setError] = useState<string | null>(null);
@@ -72,11 +71,15 @@ export default function ChatDock() {
   const linkMetaRef = useRef(linkMeta);
   const popoutRef = useRef<HTMLDivElement | null>(null);
   const lastPathRef = useRef(location.pathname);
+  const resizeTimeoutRef = useRef<number | null>(null);
+  const resizeSnapshotRef = useRef({ width: 0, height: 0 });
   const [friendOptions, setFriendOptions] = useState<ChatFriend[]>([]);
   const [friendsLoading, setFriendsLoading] = useState(false);
   const [friendsError, setFriendsError] = useState<string | null>(null);
   const [friendMenuOpen, setFriendMenuOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const [reactionPickerFor, setReactionPickerFor] = useState<string | null>(null);
+  const [messageReactions, setMessageReactions] = useState<Record<string, string[]>>({});
   const friendMenuRef = useRef<HTMLDivElement | null>(null);
   const chatPrefs = preferences.chat;
 
@@ -138,6 +141,47 @@ export default function ChatDock() {
       setFriendMenuOpen(false);
     }
   }, [popoutMinimized]);
+
+  useEffect(() => {
+    if (isMobile || !popoutMinimized) return;
+    const element = popoutRef.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const nextWidth = Math.round(entry.contentRect.width);
+      const nextHeight = Math.round(entry.contentRect.height);
+      resizeSnapshotRef.current = { width: nextWidth, height: nextHeight };
+      if (resizeTimeoutRef.current) {
+        window.clearTimeout(resizeTimeoutRef.current);
+      }
+      resizeTimeoutRef.current = window.setTimeout(() => {
+        const { width, height } = resizeSnapshotRef.current;
+        if (
+          Math.abs(width - chatPrefs.minimizedWidth) > 1 ||
+          Math.abs(height - chatPrefs.minimizedHeight) > 1
+        ) {
+          setChatPrefs({ minimizedWidth: width, minimizedHeight: height });
+        }
+      }, 160);
+    });
+
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+      if (resizeTimeoutRef.current) {
+        window.clearTimeout(resizeTimeoutRef.current);
+        resizeTimeoutRef.current = null;
+      }
+    };
+  }, [
+    chatPrefs.minimizedHeight,
+    chatPrefs.minimizedWidth,
+    isMobile,
+    popoutMinimized,
+    setChatPrefs,
+  ]);
 
   useEffect(() => {
     if (!friendMenuOpen) return;
@@ -309,7 +353,6 @@ export default function ChatDock() {
   const key = friendId ? String(friendId) : "";
   const messages = friendId ? chatLogs[key] || [] : [];
   const messageDraft = friendId ? drafts[key] || "" : "";
-  const gifDraft = friendId ? gifDrafts[key] || "" : "";
   const displayName = activeFriend
     ? getDisplayName(activeFriend.handle, activeFriend.firstName, activeFriend.lastName)
     : "Select a friend";
@@ -317,7 +360,7 @@ export default function ChatDock() {
 
   const handleSend = async () => {
     if (!friendId) return;
-    const body = `${messageDraft}${gifDraft ? `\n${gifDraft}` : ""}`.trim();
+    const body = messageDraft.trim();
     if (!body) return;
     const sendError = await sendMessage(friendId, body);
     setError(sendError);
@@ -355,22 +398,35 @@ export default function ChatDock() {
     setChatPrefs({ width: preset.width, height: preset.height });
   };
 
-  const toggleLabel = isMobile
-    ? popoutMinimized
-      ? "Open Chat"
-      : "Close"
-    : popoutMinimized
-    ? "Expand"
-    : "Minimize";
+  const handleSizeChange = (value: string) => {
+    const preset = CHAT_SIZE_PRESETS.find((entry) => entry.id === value);
+    if (preset) handleSizePreset(preset);
+  };
+
+  const toggleReactionPicker = (messageId: string) => {
+    setReactionPickerFor((prev) => (prev === messageId ? null : messageId));
+  };
+
+  const handleReactionPick = (messageId: string, emoji: string) => {
+    setMessageReactions((prev) => {
+      const current = prev[messageId] ?? [];
+      const next = current.includes(emoji)
+        ? current.filter((item) => item !== emoji)
+        : [...current, emoji];
+      return { ...prev, [messageId]: next };
+    });
+    setReactionPickerFor(null);
+  };
+
+  const toggleLabel = popoutMinimized ? "Expand chat" : "Minimize chat";
   const isFullscreen = activeSizeId === "fullscreen" && !isMobile && !popoutMinimized;
 
   const popoutStyle = {
     ...(isMobile
       ? {}
-      : {
-          width: chatPrefs.width,
-          height: popoutMinimized ? undefined : chatPrefs.height,
-        }),
+      : popoutMinimized
+      ? { width: chatPrefs.minimizedWidth, height: chatPrefs.minimizedHeight }
+      : { width: chatPrefs.width, height: chatPrefs.height }),
     ["--chat-font-size" as any]: `${chatPrefs.fontSize}px`,
   };
 
@@ -473,32 +529,51 @@ export default function ChatDock() {
                 <span className="chat-font-label large">A</span>
               </div>
               {!isMobile && (
-                <div className="chat-size-controls" role="group" aria-label="Chat size">
-                  {CHAT_SIZE_PRESETS.map((preset) => (
-                    <button
-                      key={preset.id}
-                      className={`btn ghost chat-size-btn${
-                        activeSizeId === preset.id ? " is-active" : ""
-                      }`}
-                      type="button"
-                      aria-pressed={activeSizeId === preset.id}
-                      onClick={() => handleSizePreset(preset)}
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
-                </div>
+                <label className="chat-size-select">
+                  <span className="chat-size-label">ChatBox Size</span>
+                  <select
+                    className="chat-size-dropdown"
+                    value={activeSizeId || "medium"}
+                    onChange={(e) => handleSizeChange(e.target.value)}
+                  >
+                    {CHAT_SIZE_PRESETS.map((preset) => (
+                      <option key={preset.id} value={preset.id}>
+                        {preset.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               )}
             </>
           )}
-          <button
-            className="btn ghost chat-toggle-btn"
-            type="button"
-            onClick={() => setPopoutMinimized(!popoutMinimized)}
-          >
-            {toggleLabel}
-          </button>
         </div>
+        <button
+          className="chat-toggle-icon"
+          type="button"
+          onClick={() => setPopoutMinimized(!popoutMinimized)}
+          aria-label={toggleLabel}
+          title={toggleLabel}
+        >
+          {popoutMinimized ? (
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M12 5v14M5 12h14"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M5 12h14"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+          )}
+        </button>
       </div>
       {!popoutMinimized && friendsError && (
         <p className="status status-error" style={{ padding: "0 14px" }}>
@@ -513,87 +588,101 @@ export default function ChatDock() {
             ) : messages.length === 0 ? (
               <div className="status">No messages yet.</div>
             ) : (
-              messages.map((m) => (
-                <div
-                  key={m.id}
-                  className={`message-bubble ${m.from === "me" ? "outgoing" : "incoming"}`}
-                >
-                  <div className="message-meta">
-                    <span>{m.from === "me" ? "You" : displayName}</span>
-                    <span>
-                      {new Date(m.at).toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </span>
-                  </div>
-                  <div className="comment-body" style={{ whiteSpace: "pre-wrap" }}>
-                    {m.body}
-                  </div>
-                  {extractLinks(m.body).map((url) => {
-                    const meta = linkMeta[url];
-                    const thumb = meta?.thumb;
-                    const title = meta?.title || url.replace(/^https?:\/\//, "");
-                    return (
-                      <div
-                        key={`${m.id}-${url}`}
-                        style={{
-                          marginTop: "8px",
-                          border: "1px solid rgba(255,255,255,0.08)",
-                          borderRadius: "10px",
-                          overflow: "hidden",
-                          background: "rgba(255,255,255,0.03)",
-                        }}
-                      >
-                        {thumb && (
-                          <a href={url} target="_blank" rel="noreferrer" style={{ display: "block" }}>
-                            <img
-                              src={thumb}
-                              alt={title}
-                              style={{ width: "100%", height: "auto", display: "block" }}
-                              loading="lazy"
-                            />
-                          </a>
-                        )}
-                        <div style={{ padding: "8px 10px" }}>
-                          <a
-                            href={url}
-                            target="_blank"
-                            rel="noreferrer"
-                            style={{ color: "#8fb5ff" }}
-                          >
-                            {title}
-                          </a>
+              messages.map((m) => {
+                const messageId = String(m.id);
+                const reactions = messageReactions[messageId] ?? [];
+                const showPicker = reactionPickerFor === messageId;
+                return (
+                  <div
+                    key={m.id}
+                    className={`message-bubble ${m.from === "me" ? "outgoing" : "incoming"}`}
+                  >
+                    <div className="message-meta">
+                      <span>{m.from === "me" ? "You" : displayName}</span>
+                      <span>
+                        {new Date(m.at).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </span>
+                    </div>
+                    <div className="comment-body" style={{ whiteSpace: "pre-wrap" }}>
+                      {m.body}
+                    </div>
+                    {extractLinks(m.body).map((url) => {
+                      const meta = linkMeta[url];
+                      const thumb = meta?.thumb;
+                      const title = meta?.title || url.replace(/^https?:\/\//, "");
+                      return (
+                        <div
+                          key={`${m.id}-${url}`}
+                          style={{
+                            marginTop: "8px",
+                            border: "1px solid rgba(255,255,255,0.08)",
+                            borderRadius: "10px",
+                            overflow: "hidden",
+                            background: "rgba(255,255,255,0.03)",
+                          }}
+                        >
+                          {thumb && (
+                            <a href={url} target="_blank" rel="noreferrer" style={{ display: "block" }}>
+                              <img
+                                src={thumb}
+                                alt={title}
+                                style={{ width: "100%", height: "auto", display: "block" }}
+                                loading="lazy"
+                              />
+                            </a>
+                          )}
+                          <div style={{ padding: "8px 10px" }}>
+                            <a
+                              href={url}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{ color: "#8fb5ff" }}
+                            >
+                              {title}
+                            </a>
+                          </div>
                         </div>
+                      );
+                    })}
+                    <div className="message-bubble__actions">
+                      <button
+                        type="button"
+                        className="message-reaction-button"
+                        aria-label="React to message"
+                        onClick={() => toggleReactionPicker(messageId)}
+                      >
+                        <span aria-hidden="true">{"\u{1F44D}"}</span>
+                      </button>
+                      {reactions.length > 0 && (
+                        <div className="message-reaction-list">
+                          {reactions.map((emoji) => (
+                            <button
+                              key={`${messageId}-${emoji}`}
+                              type="button"
+                              className="message-reaction-chip"
+                              aria-label={`Remove reaction ${emoji}`}
+                              onClick={() => handleReactionPick(messageId, emoji)}
+                            >
+                              {emoji}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {showPicker && (
+                      <div className="message-reaction-picker">
+                        <ReactionPicker onPick={(emoji) => handleReactionPick(messageId, emoji)} />
                       </div>
-                    );
-                  })}
-                </div>
-              ))
+                    )}
+                  </div>
+                );
+              })
             )}
           </div>
-          <div className="message-popout__friends">
-            <p className="eyebrow">Quick reactions</p>
-            <EmojiBar
-              onPick={(emoji) => {
-                if (friendId) {
-                  setDraft(friendId, `${messageDraft}${emoji}`);
-                }
-              }}
-            />
-          </div>
           <div className="message-popout__footer">
-            <input
-              className="auth-input"
-              placeholder="Paste a GIF / image / video URL (optional)"
-              value={gifDraft}
-              onChange={(e) => {
-                if (friendId) {
-                  setGifDraft(friendId, e.target.value);
-                }
-              }}
-              disabled={!friendId}
-            />
             <input
               className="auth-input"
               placeholder={`Message ${handleLabel}...`}
@@ -618,28 +707,33 @@ export default function ChatDock() {
   );
 }
 
-function EmojiBar({ onPick }: { onPick: (emoji: string) => void }) {
+function ReactionPicker({ onPick }: { onPick: (emoji: string) => void }) {
   const emojis = [
-    "\u{1F600}",
-    "\u{1F604}",
-    "\u{1F44F}",
+    "\u{1F44D}",
+    "\u{1F602}",
+    "\u{1F970}",
+    "\u{1F929}",
+    "\u{1F60E}",
     "\u{1F64C}",
-    "\u{1F4AA}",
+    "\u{1F44F}",
     "\u{1F525}",
-    "\u{2728}",
-    "\u{2764}\u{FE0F}",
-    "\u{1F64F}",
     "\u{1F389}",
+    "\u{1F4AA}",
+    "\u{1F91D}",
+    "\u{1F31F}",
+    "\u{2764}\u{FE0F}",
+    "\u{1F62E}",
+    "\u{1F622}",
+    "\u{1F92F}",
   ];
   return (
-    <div className="message-popout__chips">
+    <div className="message-reaction-picker-grid">
       {emojis.map((e) => (
         <button
           key={e}
-          className="btn ghost"
+          className="message-reaction-emoji"
           type="button"
           onClick={() => onPick(e)}
-          style={{ padding: "6px 10px" }}
         >
           {e}
         </button>

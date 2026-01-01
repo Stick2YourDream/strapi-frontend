@@ -22,11 +22,9 @@ type ChatContextValue = {
   popoutMinimized: boolean;
   chatLogs: Record<string, ChatMessage[]>;
   drafts: Record<string, string>;
-  gifDrafts: Record<string, string>;
   openChat: (friend: ChatFriend) => void;
   setPopoutMinimized: (value: boolean) => void;
   setDraft: (friendId: number, value: string) => void;
-  setGifDraft: (friendId: number, value: string) => void;
   sendMessage: (friendId: number, body: string) => Promise<string | null>;
 };
 
@@ -34,7 +32,6 @@ const CHAT_STORE_KEY = "chatLogs_v1";
 const CHAT_ACTIVE_KEY = "chatActiveFriend_v1";
 const CHAT_MIN_KEY = "chatMinimized_v1";
 const CHAT_DRAFT_KEY = "chatDrafts_v1";
-const CHAT_GIF_KEY = "chatGifDrafts_v1";
 const CHAT_TTL_MS = 4 * 365 * 24 * 60 * 60 * 1000; // ~4 years
 const CHAT_REFRESH_MS = 10000;
 
@@ -78,7 +75,6 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
   const [popoutMinimized, setPopoutMinimized] = useState(true);
   const [chatLogs, setChatLogs] = useState<Record<string, ChatMessage[]>>({});
   const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [gifDrafts, setGifDrafts] = useState<Record<string, string>>({});
 
   const storageKey = useCallback(
     (base: string) => (userId ? `${base}_${userId}` : base),
@@ -91,7 +87,6 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
       setPopoutMinimized(true);
       setChatLogs({});
       setDrafts({});
-      setGifDrafts({});
       return;
     }
 
@@ -108,9 +103,6 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
 
     const draftsRaw = safeParseJson(localStorage.getItem(storageKey(CHAT_DRAFT_KEY)));
     setDrafts(draftsRaw && typeof draftsRaw === "object" ? draftsRaw : {});
-
-    const gifsRaw = safeParseJson(localStorage.getItem(storageKey(CHAT_GIF_KEY)));
-    setGifDrafts(gifsRaw && typeof gifsRaw === "object" ? gifsRaw : {});
   }, [storageKey, userId]);
 
   useEffect(() => {
@@ -133,11 +125,6 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
     if (!userId) return;
     localStorage.setItem(storageKey(CHAT_DRAFT_KEY), JSON.stringify(drafts));
   }, [drafts, storageKey, userId]);
-
-  useEffect(() => {
-    if (!userId) return;
-    localStorage.setItem(storageKey(CHAT_GIF_KEY), JSON.stringify(gifDrafts));
-  }, [gifDrafts, storageKey, userId]);
 
   const loadConversation = useCallback(
     async (friendId: number) => {
@@ -199,11 +186,6 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
     setDrafts((prev) => ({ ...prev, [String(friendId)]: value }));
   }, []);
 
-  const setGifDraft = useCallback((friendId: number, value: string) => {
-    if (!Number.isFinite(friendId)) return;
-    setGifDrafts((prev) => ({ ...prev, [String(friendId)]: value }));
-  }, []);
-
   const sendMessage = useCallback(
     async (friendId: number, body: string) => {
       if (!userId || !Number.isFinite(friendId)) return "Missing sender or recipient.";
@@ -216,7 +198,6 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
           },
         });
         setDrafts((prev) => ({ ...prev, [String(friendId)]: "" }));
-        setGifDrafts((prev) => ({ ...prev, [String(friendId)]: "" }));
         await loadConversation(friendId);
         return null;
       } catch (err) {
@@ -240,23 +221,19 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
       popoutMinimized,
       chatLogs,
       drafts,
-      gifDrafts,
       openChat,
       setPopoutMinimized,
       setDraft,
-      setGifDraft,
       sendMessage,
     }),
     [
       activeFriend,
       chatLogs,
       drafts,
-      gifDrafts,
       openChat,
       popoutMinimized,
       sendMessage,
       setDraft,
-      setGifDraft,
       setPopoutMinimized,
     ]
   );

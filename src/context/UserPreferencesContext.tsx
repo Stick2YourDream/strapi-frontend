@@ -13,6 +13,8 @@ type BackgroundPrefs = {
 type ChatPrefs = {
   width: number;
   height: number;
+  minimizedWidth: number;
+  minimizedHeight: number;
   fontSize: number;
 };
 
@@ -40,6 +42,8 @@ const DEFAULT_PREFERENCES: UserPreferences = {
   chat: {
     width: 360,
     height: 520,
+    minimizedWidth: 260,
+    minimizedHeight: 72,
     fontSize: 14,
   },
 };

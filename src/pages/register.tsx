@@ -1,6 +1,6 @@
 // src/pages/Register.tsx
 import { Infinity } from "lucide-react";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api/strapi";
 import type { RegisterResponse } from "../types/auth";
@@ -39,10 +39,54 @@ const getPasswordError = (password: string) => {
   return null;
 };
 
+const parseBirthdate = (value: string) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!year || month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const utcDate = new Date(Date.UTC(year, month - 1, day));
+  if (Number.isNaN(utcDate.getTime())) return null;
+  if (
+    utcDate.getUTCFullYear() !== year ||
+    utcDate.getUTCMonth() + 1 !== month ||
+    utcDate.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return { year, month, day };
+};
+
+const getAgeFromBirthdate = (value: string) => {
+  const parsed = parseBirthdate(value);
+  if (!parsed) return null;
+  const today = new Date();
+  const yearNow = today.getUTCFullYear();
+  const monthNow = today.getUTCMonth() + 1;
+  const dayNow = today.getUTCDate();
+  let age = yearNow - parsed.year;
+  const hadBirthday =
+    monthNow > parsed.month || (monthNow === parsed.month && dayNow >= parsed.day);
+  if (!hadBirthday) age -= 1;
+  if (age < 0) return null;
+  return age;
+};
+
+const getMaxBirthdate = () => {
+  const today = new Date();
+  const year = today.getFullYear() - 18;
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
 export default function Register() {
   const [form, setForm] = useState({
     username: "",
     email: "",
+    confirmEmail: "",
+    birthday: "",
     password: "",
     confirmPassword: "",
     botField: "",
@@ -62,6 +106,7 @@ export default function Register() {
   });
 
   const navigate = useNavigate();
+  const maxBirthdate = useMemo(() => getMaxBirthdate(), []);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setForm({ ...form, [e.target.name]: e.target.value });
@@ -82,8 +127,29 @@ export default function Register() {
       return;
     }
 
+    const normalizedEmail = form.email.trim().toLowerCase();
+    const normalizedConfirm = form.confirmEmail.trim().toLowerCase();
+    if (normalizedEmail !== normalizedConfirm) {
+      setError("Email addresses do not match.");
+      return;
+    }
+
     if (!termsAccepted) {
       setError("Please read and accept the Terms and Conditions.");
+      return;
+    }
+
+    if (!form.birthday) {
+      setError("Please enter your birthday.");
+      return;
+    }
+    const age = getAgeFromBirthdate(form.birthday);
+    if (age === null) {
+      setError("Please enter a valid birthday.");
+      return;
+    }
+    if (age < 18) {
+      setError("You must be 18 or older to sign up.");
       return;
     }
 
@@ -103,7 +169,8 @@ export default function Register() {
       // ✅ custom route POST /api/register
       const res = await api.post<RegisterResponse>("/register", {
         username: form.username,
-        email: form.email,
+        email: normalizedEmail,
+        birthday: form.birthday,
         password: form.password,
         formStart: formStartRef.current,
         botField: form.botField,
@@ -112,11 +179,14 @@ export default function Register() {
 
       // Best-effort: immediately create a linked profile with the chosen handle (username)
       const lockedHandle = slugifyHandle(form.username || form.email);
+      const ageValue = String(age);
       try {
         await api.post("/profiles", {
           data: {
             handle: lockedHandle,
             firstName: form.username,
+            birthday: form.birthday,
+            age: ageValue,
             user: res.data.user.id,
             locale: "en",
           },
@@ -223,6 +293,34 @@ export default function Register() {
             value={form.email}
             required
           />
+        </div>
+
+        <div className="field">
+          <label>Confirm Email</label>
+          <input
+            className="auth-input"
+            name="confirmEmail"
+            type="email"
+            placeholder="Re-enter your email"
+            onChange={handleChange}
+            value={form.confirmEmail}
+            required
+          />
+        </div>
+
+        <div className="field">
+          <label>Birthday</label>
+          <input
+            className="auth-input"
+            name="birthday"
+            type="date"
+            max={maxBirthdate}
+            min="1900-01-01"
+            onChange={handleChange}
+            value={form.birthday}
+            required
+          />
+          <small className="auth-hint">You must be 18 or older to sign up.</small>
         </div>
 
         <div className="field">
@@ -356,4 +454,3 @@ export default function Register() {
     </div>
   );
 }
-

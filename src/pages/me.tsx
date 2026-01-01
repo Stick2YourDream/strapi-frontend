@@ -16,6 +16,7 @@ type Profile = {
   firstName: string;
   lastName: string;
   age: string;
+  birthday: string;
   gender: string;
   religion: string;
   country: string;
@@ -93,6 +94,31 @@ const formatPhone = (value?: string) => {
   if (digits.length <= 3) return `(${digits}`;
   if (digits.length <= 6) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
   return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+};
+
+const formatBirthday = (value?: string) => {
+  if (!value) return "";
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return value;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const utcDate = new Date(Date.UTC(year, month - 1, day));
+  if (Number.isNaN(utcDate.getTime())) return value;
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(utcDate);
+};
+
+const getTodayInput = () => {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 };
 
 const PREVIEW_DEBOUNCE_MS = 450;
@@ -181,11 +207,13 @@ export default function Me() {
     type: "profile",
     robots: "noindex, nofollow",
   });
+  const todayInput = useMemo(() => getTodayInput(), []);
 
   const [profile, setProfile] = useState<Profile>({
     firstName: "",
     lastName: "",
     age: "",
+    birthday: "",
     gender: "",
     religion: "",
     country: "",
@@ -295,7 +323,13 @@ export default function Me() {
   };
 
   const resetChatSettings = () => {
-    setChatPrefs({ width: 360, height: 520, fontSize: 14 });
+    setChatPrefs({
+      width: 360,
+      height: 520,
+      minimizedWidth: 260,
+      minimizedHeight: 72,
+      fontSize: 14,
+    });
   };
 
   const activeChatPreset = useMemo(() => {
@@ -515,6 +549,7 @@ export default function Me() {
       firstName: attrs.firstName || "",
       lastName: attrs.lastName || "",
       age: attrs.age || "",
+      birthday: attrs.birthday || "",
       gender: attrs.gender || "",
       religion: attrs.religion || "",
       country: attrs.country || "",
@@ -840,6 +875,7 @@ export default function Me() {
             firstName: "",
             lastName: "",
             age: "",
+            birthday: "",
             gender: "",
             religion: "",
             country: "",
@@ -968,6 +1004,7 @@ export default function Me() {
           firstName: safeFirst,
           lastName: mergedProfile.lastName,
           age: mergedProfile.age,
+          birthday: mergedProfile.birthday || null,
           gender: mergedProfile.gender,
           religion: mergedProfile.religion,
           country: mergedProfile.country,
@@ -1088,10 +1125,12 @@ export default function Me() {
   const locationDisplay = [profile.city, profile.state, profile.country]
     .filter(Boolean)
     .join(", ");
+  const birthdayDisplay = formatBirthday(profile.birthday);
   const leftInfo = [
     ["First Name", profile.firstName],
     ["Last Name", profile.lastName],
     ["Age", profile.age],
+    ["Birthday", birthdayDisplay],
     ["Religion", profile.religion],
     ["Gender", profile.gender],
   ] as const;
@@ -1180,6 +1219,16 @@ export default function Me() {
                   </option>
                 ))}
               </select>
+            </label>
+            <label className="profile-field">
+              <span className="profile-field-label">Birthday</span>
+              <input
+                className="auth-input"
+                type="date"
+                max={todayInput}
+                value={profile.birthday}
+                onChange={(e) => setProfile({ ...profile, birthday: e.target.value })}
+              />
             </label>
             <label className="profile-field">
               <span className="profile-field-label">Gender</span>
@@ -1796,6 +1845,16 @@ export default function Me() {
                         </option>
                       ))}
                     </select>
+                  </label>
+                  <label className="profile-field">
+                    <span className="profile-field-label">Birthday</span>
+                    <input
+                      className="auth-input"
+                      type="date"
+                      max={todayInput}
+                      value={profile.birthday}
+                      onChange={(e) => setProfile({ ...profile, birthday: e.target.value })}
+                    />
                   </label>
 
                   <label className="profile-field">
