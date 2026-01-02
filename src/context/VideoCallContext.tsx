@@ -448,29 +448,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     (videoTrack: MediaStreamTrack | null) => {
       const rawStream = rawStreamRef.current;
       const audioTracks = rawStream ? rawStream.getAudioTracks() : [];
-      const stream = localStreamRef.current ?? new MediaStream();
-
-      const existingAudio = stream.getAudioTracks();
-      existingAudio.forEach((track) => {
-        if (!audioTracks.some((t) => t.id === track.id)) {
-          stream.removeTrack(track);
-        }
-      });
-      audioTracks.forEach((track) => {
-        if (!stream.getAudioTracks().some((t) => t.id === track.id)) {
-          stream.addTrack(track);
-        }
-      });
-
-      const existingVideo = stream.getVideoTracks();
-      existingVideo.forEach((track) => {
-        if (!videoTrack || track.id !== videoTrack.id) {
-          stream.removeTrack(track);
-        }
-      });
-      if (videoTrack && !stream.getVideoTracks().some((t) => t.id === videoTrack.id)) {
-        stream.addTrack(videoTrack);
-      }
+      const tracks = [...audioTracks, ...(videoTrack ? [videoTrack] : [])];
+      const stream = new MediaStream(tracks);
 
       setLocalStream(stream);
       localStreamRef.current = stream;
@@ -715,24 +694,27 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           Object.fromEntries(payload.participants.map((p) => [p.socketId, p]))
         );
         setStatus("in-call");
+        payload.participants.forEach(async (participant) => {
+          if (peersRef.current.has(participant.socketId)) return;
+          try {
+            const pc = createPeerConnection(participant.socketId);
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            socket.emit("call:offer", { to: participant.socketId, sdp: offer });
+          } catch {
+            setError("Failed to connect to participant.");
+          }
+        });
       }
     );
 
     socket.on(
       "call:user-joined",
-      async (payload: { roomId: string; participant: VideoCallParticipant }) => {
+      (payload: { roomId: string; participant: VideoCallParticipant }) => {
         setRemoteParticipants((prev) => ({
           ...prev,
           [payload.participant.socketId]: payload.participant,
         }));
-        try {
-          const pc = createPeerConnection(payload.participant.socketId);
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          socket.emit("call:offer", { to: payload.participant.socketId, sdp: offer });
-        } catch (err) {
-          setError("Failed to connect to new participant.");
-        }
       }
     );
 
