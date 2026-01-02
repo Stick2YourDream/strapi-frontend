@@ -38,6 +38,25 @@ type LinkPreview = {
   type?: string;
 };
 
+const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
+const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
+const pickMediaUrl = (mediaField: any): string | undefined => {
+  if (!mediaField) return undefined;
+  const candidate =
+    (Array.isArray(mediaField?.data) ? mediaField.data[0] : mediaField?.data) ??
+    (Array.isArray(mediaField) ? mediaField[0] : mediaField);
+  if (!candidate) return undefined;
+  const attrs = normalize(candidate);
+  let url =
+    attrs.url ||
+    attrs.formats?.large?.url ||
+    attrs.formats?.medium?.url ||
+    attrs.formats?.small?.url ||
+    attrs.formats?.thumbnail?.url;
+  if (!url) return undefined;
+  return url.startsWith("/") ? `${apiBase}${url}` : url;
+};
+
 const PREVIEW_DEBOUNCE_MS = 450;
 const extractFirstUrl = (text: string) => {
   const match = text.match(/(https?:\/\/[^\s]+|www\.[^\s]+)/i);
@@ -233,6 +252,7 @@ export default function Dashboard() {
   const [linkPreviewLoading, setLinkPreviewLoading] = useState(false);
   const [linkPreviewError, setLinkPreviewError] = useState<string | null>(null);
   const [previewCache, setPreviewCache] = useState<Record<string, LinkPreview | null>>({});
+  const [profileAvatarUrl, setProfileAvatarUrl] = useState<string | null>(null);
 
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -246,6 +266,30 @@ export default function Dashboard() {
   });
   const userLabel = user?.username || user?.email || "Guest";
   const userInitial = userLabel.charAt(0).toUpperCase();
+
+  useEffect(() => {
+    let active = true;
+
+    const loadAvatar = async () => {
+      if (!user) {
+        setProfileAvatarUrl(null);
+        return;
+      }
+      try {
+        const res = await api.get(`/profiles?filters[user][id][$eq]=${user.id}&populate=avatar`);
+        const entry = res.data?.data?.[0];
+        const avatarUrl = entry ? pickMediaUrl(normalize(entry).avatar) : undefined;
+        if (active) setProfileAvatarUrl(avatarUrl || null);
+      } catch {
+        if (active) setProfileAvatarUrl(null);
+      }
+    };
+
+    loadAvatar();
+    return () => {
+      active = false;
+    };
+  }, [user]);
 
   useEffect(() => {
     let cancelled = false;
@@ -613,8 +657,7 @@ export default function Dashboard() {
           <p className="eyebrow">S2YD</p>
           <h1>Posts</h1>
           <p className="subhead">
-            Fresh drops from the community. Rich cards, crisp typography, and
-            cover art when available.
+            See What Our Community Is Doing!
           </p>
         </div>
         <div className="hero-badge" style={{ display: 
@@ -664,7 +707,15 @@ export default function Dashboard() {
               </div>
               <div className="post-composer__top">
                 <div className="post-composer__avatar">
-                  <span>{userInitial}</span>
+                  {profileAvatarUrl ? (
+                    <img
+                      src={profileAvatarUrl}
+                      alt={`${userLabel} avatar`}
+                      onError={() => setProfileAvatarUrl(null)}
+                    />
+                  ) : (
+                    <span>{userInitial}</span>
+                  )}
                 </div>
                 <div className="post-composer__input">
                   <textarea
@@ -674,7 +725,7 @@ export default function Dashboard() {
                       setFormContent(e.target.value);
                       setFormError(null);
                     }}
-                    placeholder="What's on your mind? Drop a YouTube link or article."
+                    placeholder="What's on your mind?"
                     rows={4}
                   />
                   {linkPreviewLoading && (

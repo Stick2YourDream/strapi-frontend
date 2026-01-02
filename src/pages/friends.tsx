@@ -1,6 +1,7 @@
 // src/pages/Friends.tsx
 import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import "../css/dashboard.css";
+import "../css/friends.css";
 import { useAuth } from "../context/AuthContext";
 import { useChat } from "../context/ChatContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import api from "../api/strapi";
 import { useAuth } from "../context/AuthContext";
+import "../css/topbar.css";
 
 type DirectoryProfile = {
   id: number | string;

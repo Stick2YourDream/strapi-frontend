@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import api from "../api/strapi";
 import { useNotifications, type FriendRequestPreview } from "../hooks/useNotifications";
+import "../css/sidebar.css";
 
 type ProfileSummary = {
   displayName: string;

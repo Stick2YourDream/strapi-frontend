@@ -1,0 +1,243 @@
+/* src/pages/Friends.css */
+.friend-item {
+  gap: 8px;
+}
+
+.friend-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.friend-header-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.friend-name {
+  font-size: 12px;
+  color: #9aa5bb;
+}
+
+.friend-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.friend-avatar.fallback {
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, #60a5fa, #7c3aed);
+  color: #0b0d14;
+  font-weight: 700;
+}
+
+.friend-mini-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.friend-mini-item {
+  margin: 0;
+}
+
+.friend-mini-button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: #e2e8f0;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.friend-mini-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(125, 211, 252, 0.5);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
+}
+
+.friend-mini-button.is-active {
+  border-color: rgba(92, 240, 199, 0.5);
+  background: rgba(92, 240, 199, 0.16);
+}
+
+.friend-mini-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.friend-mini-name {
+  font-weight: 600;
+  color: #f8fafc;
+  font-size: 14px;
+}
+
+.friend-mini-tag {
+  font-size: 12px;
+  color: #9aa5bb;
+}
+
+.friend-detail {
+  display: grid;
+  gap: 12px;
+}
+
+.friend-detail-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.friend-current-post {
+  margin-top: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.friend-current-card {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: #dfe6f5;
+}
+
+.friend-current-card.no-media {
+  grid-template-columns: 1fr;
+}
+
+.friend-current-card img {
+  width: 64px;
+  height: 64px;
+  border-radius: 10px;
+  object-fit: cover;
+}
+
+.friend-current-card p {
+  margin: 4px 0 0;
+  color: #c7cede;
+}
+
+.friend-posts-list {
+  max-height: 240px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.friend-posts-list.is-expanded {
+  max-height: none;
+  overflow: visible;
+}
+
+.friend-posts-list .comment-item {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.friend-posts-list .avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.friend-link-preview {
+  margin-top: 8px;
+}
+
+.friend-link-preview .link-preview-card {
+  margin-top: 0;
+}
+
+.friend-current-card .link-preview-media {
+  min-height: 140px;
+}
+
+.friend-posts-list .link-preview-media {
+  min-height: 90px;
+}
+
+.suggestion-list {
+  display: grid;
+  gap: 12px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.suggestion-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.suggestion-body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.suggestion-body strong {
+  font-size: 14px;
+  color: #f8fafc;
+}
+
+.suggestion-body span {
+  font-size: 12px;
+  color: #9aa5bb;
+}
+
+.suggestion-location {
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.suggestion-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.suggestion-tag {
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+  color: #cfe1ff;
+}
+
+.comment-item.pending-approval {
+  border-color: rgba(132, 255, 0, 0.6);
+  box-shadow: 0 0 0 1px rgba(132, 255, 0, 0.45), 0 0 16px rgba(132, 255, 0, 0.35);
+}
