@@ -118,7 +118,7 @@ export default function Groups() {
   const navigate = useNavigate();
   const { user } = useAuth();
   usePageMeta({
-    title: "Groups | Stick2YourDreams Connect",
+    title: "Groups | Your Social Place",
     description: "Create groups, invite friends, and build shared momentum.",
   });
 

@@ -25,7 +25,7 @@ const routes = [
       title: "Stick2YourDreams Connect | Motivational support network",
       description:
         "Stick2YourDreams Connect is a motivational support network where friends celebrate progress, share updates, and keep each other accountable.",
-      url: "https://s2ydconnection.com/",
+      url: "https://yoursocialplace.com/",
     },
   },
   {
@@ -34,7 +34,7 @@ const routes = [
       title: "Terms & Conditions | Stick2YourDreams Connect",
       description:
         "Review the Stick2YourDreams Connect terms and conditions for community guidelines, safety, and platform usage.",
-      url: "https://s2ydconnection.com/terms",
+      url: "https://yoursocialplace.com/terms",
     },
   },
 ];

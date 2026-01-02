@@ -14,9 +14,9 @@ export default function Login() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   usePageMeta({
-    title: "Login | Stick2YourDreams Connect",
+    title: "Login | Your Social Place",
     description:
-      "Log in to Stick2YourDreams Connect to share progress updates and stay accountable with your support network.",
+      "Log in to Your Social Place to share progress updates and stay accountable with your support network.",
     type: "website",
     robots: "noindex, nofollow",
   });
@@ -98,12 +98,12 @@ export default function Login() {
           className="auth-brand"
           onClick={() => navigate("/")}
         >
-          <span className="auth-brand-mark">S2YD</span>
+          <span className="auth-brand-mark">Your Social Place</span>
           <span className="auth-brand-text">| Stick2YourDreams</span>
         </button>
         <h1 className="subhead-top">Welcome back!</h1>
         <p className="subhead">
-          Sign in to Stick2YourDreams Connect and start making a difference.
+          Sign in to Your Social Place and start making a difference.
         </p>
       </div>
 
@@ -146,7 +146,7 @@ export default function Login() {
             className="btn ghost"
             onClick={() => navigate("/register")}
           >
-            Register with Stick2YourDreams
+            Register with Your Social Place
           </button>
         </div>
       </form>

@@ -329,8 +329,10 @@ export default function Sidebar({ active }: SidebarProps) {
     <div className={`sidebar-shell ${menuOpen ? "open" : ""}`}>
       <div className="sidebar-topbar">
         <button className="brand" type="button" onClick={handleLogoClick} style={{ cursor: "pointer" }}>
-          <span className="brand-mark">S2YD</span>
-          <span className="brand-text">Stick2YourDreams</span>
+          <span className="brand-mark" aria-hidden="true">
+            <img src="/logo.png" alt="" />
+          </span>
+          <span className="brand-text">Your Social Place</span>
         </button>
         <div className="mobile-topbar-actions">
           <button
@@ -438,8 +440,10 @@ export default function Sidebar({ active }: SidebarProps) {
 
       <aside className="dash-nav">
         <button className="brand" type="button" onClick={handleLogoClick} style={{ cursor: "pointer" }}>
-          <span className="brand-mark">S2YD</span>
-          <span className="brand-text">Stick2YourDreams</span>
+          <span className="brand-mark" aria-hidden="true">
+            <img src="/logo.png" alt="" />
+          </span>
+          <span className="brand-text">Your Social Place</span>
         </button>
         <div className="nav-actions" style={{ flexDirection: "column", alignItems: "flex-start", gap: "8px", width: "100%" }}>
           {profileCard && (

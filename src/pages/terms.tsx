@@ -6,9 +6,9 @@ import { usePageMeta } from "../hooks/usePageMeta";
 export default function Terms() {
   const navigate = useNavigate();
   usePageMeta({
-    title: "Terms & Conditions | Stick2YourDreams Connect",
+    title: "Terms & Conditions | Your Social PlaceStick2YourDreams Connect",
     description:
-      "Review the Stick2YourDreams Connect terms and conditions for community guidelines, safety, and platform usage.",
+      "Review the Your Social Place terms and conditions for community guidelines, safety, and platform usage.",
     type: "website",
   });
 

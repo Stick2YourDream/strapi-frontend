@@ -29,6 +29,37 @@
   flex-shrink: 0;
 }
 
+.presence-avatar {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.presence-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 2px solid #0b0d14;
+  background: #ef4444;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.35);
+  pointer-events: none;
+}
+
+.presence-dot.is-online {
+  background: #22c55e;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.35);
+}
+
+.presence-dot.is-offline {
+  background: #ef4444;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.35);
+}
+
 .friend-avatar.fallback {
   display: grid;
   place-items: center;
@@ -93,6 +124,44 @@
 .friend-mini-tag {
   font-size: 12px;
   color: #9aa5bb;
+}
+
+.friend-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.friend-video-call {
+  white-space: nowrap;
+}
+
+.friend-search {
+  margin-top: 10px;
+  display: grid;
+  gap: 1rem;
+}
+
+.friend-search-label {
+  font-size: 12px;
+  color: #9aa5bb;
+}
+
+.friend-search-input {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(8, 12, 20, 0.6);
+  color: #e2e8f0;
+  padding: 8px 12px;
+  font-size: 13px;
+  margin-bottom: 1rem;
+}
+
+.friend-search-input::placeholder {
+  color: #8d9bb3;
 }
 
 .friend-detail {

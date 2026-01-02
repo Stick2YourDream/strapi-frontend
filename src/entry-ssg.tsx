@@ -4,6 +4,7 @@ import AppRoutes from "./routes/AppRoutes";
 import { StaticAuthProvider } from "./context/AuthContext";
 import { ChatProvider } from "./context/ChatContext";
 import { UserPreferencesProvider } from "./context/UserPreferencesContext";
+import { VideoCallProvider } from "./context/VideoCallContext";
 import ChatDock from "./components/ChatDock";
 import ConsentBanner from "./components/ConsentBanner";
 
@@ -17,9 +18,11 @@ export const render = (url: string): RenderResult => {
       <StaticAuthProvider>
         <UserPreferencesProvider>
           <ChatProvider>
-            <AppRoutes />
-            <ChatDock />
-            <ConsentBanner />
+            <VideoCallProvider>
+              <AppRoutes />
+              <ChatDock />
+              <ConsentBanner />
+            </VideoCallProvider>
           </ChatProvider>
         </UserPreferencesProvider>
       </StaticAuthProvider>

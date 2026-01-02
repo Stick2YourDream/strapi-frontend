@@ -1,11 +1,11 @@
-export const TERMS_TITLE = "Stick2YourDreams Connect Terms and Conditions";
+export const TERMS_TITLE = "Your Social Place Terms and Conditions";
 export const TERMS_UPDATED = "Last updated: Dec 27, 2025";
 
 export const TERMS_SECTIONS = [
   {
     title: "1. Acceptance of these Terms",
     body: [
-      "By creating an account or using Stick2YourDreams Connect (the \"Service\"), you agree to these Terms and Conditions. If you do not agree, do not use the Service.",
+      "By creating an account or using Your Social Place (the \"Service\"), you agree to these Terms and Conditions. If you do not agree, do not use the Service.",
       "If you are using the Service on behalf of an organization, you represent that you have the authority to bind that organization to these Terms.",
     ],
   },

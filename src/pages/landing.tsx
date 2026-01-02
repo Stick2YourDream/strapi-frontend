@@ -59,14 +59,14 @@ export default function Landing() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
   usePageMeta({
-    title: "Stick2YourDreams Connect | Build momentum with friends",
+    title: "Your Social Place | Build momentum with friends",
     description:
-      "Stick2YourDreams Connect is a motivational support network where friends keep you accountable, celebrate progress, and build momentum together.",
+      "Your Social Place is a motivational support network where friends keep you accountable, celebrate progress, and build momentum together.",
     type: "website",
-    canonical: "https://s2ydconnection.com/",
+    canonical: "https://yoursocialplace.com/",
     keywords:
-      "accountability, motivational support, community, goals, progress, friends, social network, productivity",
-    image: "https://s2ydconnection.com/logo.png",
+      "social, social place, accountability, motivational support, community, goals, progress, friends, social network, productivity",
+    image: "https://yoursocialplace.com/logo.png",
     imageAlt: "Stick2YourDreams Connect logo",
   });
   const [profileSummary, setProfileSummary] = useState<ProfileSummary | null>(null);
@@ -116,7 +116,7 @@ export default function Landing() {
     const author =
       source === "featured"
         ? ownerData?.username || ownerData?.email || "Community"
-        : "S2YD";
+        : "Your Social Place";
 
     const title =
       trimText(titleRaw, 56) ||
@@ -327,13 +327,29 @@ export default function Landing() {
     });
   };
 
+  const handleProfileAction = (path: string) => {
+    navigate(path);
+    setProfileMenuOpen(false);
+    setShowNotifications(false);
+  };
+
+  const handleNotificationAction = (path: string) => {
+    navigate(path);
+    setProfileMenuOpen(false);
+    setShowNotifications(false);
+  };
+
   const renderNotificationList = () => (
     <div className="landing-notification-list">
       <div className="landing-notification-group">
-        <div className="landing-notification-item">
+        <button
+          type="button"
+          className="landing-notification-item is-action"
+          onClick={() => handleNotificationAction("/friends")}
+        >
           <span>New messages</span>
           <span className="landing-notification-count">{counts.messages}</span>
-        </div>
+        </button>
         {counts.messages > 0 && messagePreviewText && (
           <div className="landing-notification-preview">
             <span className="landing-notification-preview-text">{messagePreviewText}</span>
@@ -341,10 +357,14 @@ export default function Landing() {
         )}
       </div>
       <div className="landing-notification-group">
-        <div className="landing-notification-item">
+        <button
+          type="button"
+          className="landing-notification-item is-action"
+          onClick={() => handleNotificationAction("/friends")}
+        >
           <span>Friend requests</span>
           <span className="landing-notification-count">{counts.requests}</span>
-        </div>
+        </button>
         {counts.requests > 0 && (
           <div className="landing-notification-preview-list">
             {previews.requests.length > 0 ? (
@@ -382,10 +402,14 @@ export default function Landing() {
         )}
       </div>
       <div className="landing-notification-group">
-        <div className="landing-notification-item">
+        <button
+          type="button"
+          className="landing-notification-item is-action"
+          onClick={() => handleNotificationAction("/friends")}
+        >
           <span>Friend posts</span>
           <span className="landing-notification-count">{counts.friendPosts}</span>
-        </div>
+        </button>
         {counts.friendPosts > 0 && friendPostPreviewText && (
           <div className="landing-notification-preview">
             <span className="landing-notification-preview-text">{friendPostPreviewText}</span>
@@ -393,10 +417,14 @@ export default function Landing() {
         )}
       </div>
       <div className="landing-notification-group">
-        <div className="landing-notification-item">
+        <button
+          type="button"
+          className="landing-notification-item is-action"
+          onClick={() => handleNotificationAction("/groups")}
+        >
           <span>Group updates</span>
           <span className="landing-notification-count">{counts.groupUpdates}</span>
-        </div>
+        </button>
         {counts.groupUpdates > 0 && groupUpdatePreviewText && (
           <div className="landing-notification-preview">
             <span className="landing-notification-preview-text">
@@ -406,10 +434,14 @@ export default function Landing() {
         )}
       </div>
       <div className="landing-notification-group">
-        <div className="landing-notification-item">
+        <button
+          type="button"
+          className="landing-notification-item is-action"
+          onClick={() => handleNotificationAction("/dashboard")}
+        >
           <span>Comments on your posts</span>
           <span className="landing-notification-count">{counts.comments}</span>
-        </div>
+        </button>
         {counts.comments > 0 && commentPreviewText && (
           <div className="landing-notification-preview">
             <span className="landing-notification-preview-text">{commentPreviewText}</span>
@@ -417,10 +449,14 @@ export default function Landing() {
         )}
       </div>
       <div className="landing-notification-group">
-        <div className="landing-notification-item">
+        <button
+          type="button"
+          className="landing-notification-item is-action"
+          onClick={() => handleNotificationAction("/dashboard")}
+        >
           <span>Likes on your posts</span>
           <span className="landing-notification-count">{counts.likes}</span>
-        </div>
+        </button>
         {counts.likes > 0 && likesPreviewText && (
           <div className="landing-notification-preview">
             <span className="landing-notification-preview-text">{likesPreviewText}</span>
@@ -436,12 +472,6 @@ export default function Landing() {
 
   const focusHasPosts = featuredPosts.length > 0 || adminPosts.length > 0;
   const profileInitial = nameForDisplay.charAt(0).toUpperCase();
-
-  const handleProfileAction = (path: string) => {
-    navigate(path);
-    setProfileMenuOpen(false);
-    setShowNotifications(false);
-  };
 
   const handleSuggestionSubmit = async () => {
     const message = suggestionMessage.trim();
@@ -520,10 +550,17 @@ export default function Landing() {
     <div className="landing-page">
       <div className="landing-shell">
         <header className="landing-nav">
-          <div className="brand-mark">
-            <span>S2YD</span>
-            <span>Stick2YourDreams</span>
-          </div>
+          <button
+            type="button"
+            className="landing-brand"
+            onClick={() => navigate("/")}
+            aria-label="Go to Your Social Place home"
+          >
+            <span className="landing-brand-mark" aria-hidden="true">
+              <img src="/logo.png" alt="" />
+            </span>
+            <span className="landing-brand-text">Your Social Place</span>
+          </button>
           <div className="landing-beta">BETA</div>
           <div className="nav-actions">
             {user ? (
@@ -656,7 +693,7 @@ export default function Landing() {
               Let's Build a Community that Supports Each Other.
             </h1>
             <p>
-              Stick2YourDreams is built on mutual support—because you don’t have to do this alone. 
+              Your Social Place is built on mutual support—because you don’t have to do this alone. 
               Share what you’re working on, and get real feedback when you’re stuck, encouragement 
               when you’re tired, and accountability when you need that extra push. And as you grow, 
               you’ll pass it forward—helping someone else stay in motion, too. No fluff—just people 
@@ -693,7 +730,7 @@ export default function Landing() {
                 <div className="focus-column">
                   <div className="focus-heading">
                     <span className="focus-label">Admin posts</span>
-                    <span className="focus-sub">Signals from the S2YD team.</span>
+                    <span className="focus-sub">Signals from the Your Social Place team.</span>
                   </div>
                   <div className="focus-list">
                     {adminPosts.length ? (
@@ -828,7 +865,7 @@ export default function Landing() {
             <span className="footer-muted">support@stick2yourdreams.com</span>
           </div>
           <div className="footer-row footer-meta">
-            <span>Stick2YourDreams Connect</span>
+            <span>Your Social Place</span>
             <span>(c) 2025 Stick2YourDreams</span>
           </div>
         </footer>
@@ -889,7 +926,7 @@ export default function Landing() {
                   rows={4}
                   value={suggestionMessage}
                   onChange={(e) => setSuggestionMessage(e.target.value)}
-                  placeholder="Tell us what would make Stick2YourDreams better."
+                  placeholder="Tell us what would make Your Social Place better."
                 />
               </div>
               {suggestionError && (

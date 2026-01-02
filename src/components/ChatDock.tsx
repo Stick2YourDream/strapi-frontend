@@ -5,7 +5,9 @@ import { useAuth } from "../context/AuthContext";
 import { useChat } from "../context/ChatContext";
 import type { ChatFriend } from "../context/ChatContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";
+import { useVideoCall, type VideoCallInvitee } from "../context/VideoCallContext";
 import "../css/chatbox.css";
+import VideoCallModal from "./VideoCallModal";
 
 type LinkMeta = {
   title?: string;
@@ -66,6 +68,7 @@ export default function ChatDock() {
     setDraft,
     sendMessage,
   } = useChat();
+  const { openCallComposer, onlineUserIds, setPresenceTargets } = useVideoCall();
   const [error, setError] = useState<string | null>(null);
   const [linkMeta, setLinkMeta] = useState<Record<string, LinkMeta>>({});
   const linkMetaRef = useRef(linkMeta);
@@ -86,6 +89,13 @@ export default function ChatDock() {
   const hideForRoute = ["/", "/home", "/landing", "/login", "/register"].includes(
     location.pathname
   );
+
+  const friendList = useMemo(() => {
+    if (!activeFriend?.userId) return friendOptions;
+    return friendOptions.some((f) => f.userId === activeFriend.userId)
+      ? friendOptions
+      : [activeFriend, ...friendOptions];
+  }, [activeFriend, friendOptions]);
 
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
   const getEntity = (entry: any) => entry?.data ?? entry ?? null;
@@ -287,6 +297,17 @@ export default function ChatDock() {
     };
   }, [user?.id]);
 
+  useEffect(() => {
+    if (!user?.id) {
+      setPresenceTargets([]);
+      return;
+    }
+    const ids = friendList
+      .map((friend) => friend.userId)
+      .filter((id): id is number => Number.isFinite(id));
+    setPresenceTargets(ids);
+  }, [friendList, setPresenceTargets, user?.id]);
+
   const fetchPreviewMeta = useCallback(async (url: string, fallbackThumb?: string) => {
     if (!url || linkMetaRef.current[url]) return;
     try {
@@ -345,10 +366,6 @@ export default function ChatDock() {
 
   if (!user || hideForRoute) return null;
 
-  const friendList = activeFriend?.userId && !friendOptions.some((f) => f.userId === activeFriend.userId)
-    ? [activeFriend, ...friendOptions]
-    : friendOptions;
-
   const friendId = activeFriend?.userId;
   const key = friendId ? String(friendId) : "";
   const messages = friendId ? chatLogs[key] || [] : [];
@@ -375,6 +392,17 @@ export default function ChatDock() {
       setFriendMenuOpen(false);
     }
   };
+
+  const toInvitee = (friend: ChatFriend): VideoCallInvitee => ({
+    userId: friend.userId,
+    displayName: getDisplayName(friend.handle, friend.firstName, friend.lastName),
+    handle: friend.handle,
+    avatarUrl: friend.avatarUrl,
+  });
+
+  const videoInvitees = friendList
+    .filter((friend) => Number.isFinite(friend.userId))
+    .map((friend) => toInvitee(friend));
 
   const getInitials = (friend: ChatFriend) => {
     const source =
@@ -431,14 +459,15 @@ export default function ChatDock() {
   };
 
   return (
-    <div
-      ref={popoutRef}
-      className={`message-popout ${popoutMinimized ? "minimized" : ""}${
-        isFullscreen ? " is-fullscreen" : ""
-      }`}
-      style={popoutStyle}
-    >
-      <div className="message-popout__header">
+    <>
+      <div
+        ref={popoutRef}
+        className={`message-popout ${popoutMinimized ? "minimized" : ""}${
+          isFullscreen ? " is-fullscreen" : ""
+        }`}
+        style={popoutStyle}
+      >
+        <div className="message-popout__header">
         <div className="message-popout__title">
           <p className="eyebrow">Chat</p>
           {!popoutMinimized && (
@@ -476,6 +505,8 @@ export default function ChatDock() {
                         friend.lastName
                       );
                       const isActive = friend.userId === friendId;
+                      const isOnline = onlineUserIds.has(friend.userId);
+                      const statusLabel = isOnline ? "Online" : "Offline";
                       return (
                         <button
                           key={friend.userId}
@@ -485,15 +516,22 @@ export default function ChatDock() {
                           aria-selected={isActive}
                           onClick={() => handleSelectFriend(String(friend.userId))}
                         >
-                          <span
-                            className="chat-friend-option__avatar"
-                            style={
-                              friend.avatarUrl
-                                ? { backgroundImage: `url(${friend.avatarUrl})` }
-                                : undefined
-                            }
-                          >
-                            {!friend.avatarUrl && getInitials(friend)}
+                          <span className="chat-friend-option__avatar-wrap">
+                            <span
+                              className="chat-friend-option__avatar"
+                              style={
+                                friend.avatarUrl
+                                  ? { backgroundImage: `url(${friend.avatarUrl})` }
+                                  : undefined
+                              }
+                            >
+                              {!friend.avatarUrl && getInitials(friend)}
+                            </span>
+                            <span
+                              className={`presence-dot ${isOnline ? "is-online" : "is-offline"}`}
+                              title={statusLabel}
+                              aria-label={statusLabel}
+                            />
                           </span>
                           <span className="chat-friend-option__meta">
                             <span className="chat-friend-option__name">{label}</span>
@@ -515,6 +553,15 @@ export default function ChatDock() {
         <div className="message-popout__actions">
           {!popoutMinimized && (
             <>
+              <button
+                className="chat-video-launch"
+                type="button"
+                onClick={() =>
+                  openCallComposer(activeFriend ? [toInvitee(activeFriend)] : [])
+                }
+              >
+                Video call
+              </button>
               <div className="chat-font-control">
                 <span className="chat-font-label">A</span>
                 <input
@@ -580,8 +627,8 @@ export default function ChatDock() {
           {friendsError}
         </p>
       )}
-      {!popoutMinimized && (
-        <>
+        {!popoutMinimized && (
+          <>
           <div className="message-popout__body">
             {!friendId ? (
               <div className="status">Select a friend to start chatting.</div>
@@ -702,8 +749,10 @@ export default function ChatDock() {
             </div>
           </div>
         </>
-      )}
-    </div>
+        )}
+      </div>
+      <VideoCallModal friends={videoInvitees} />
+    </>
   );
 }
 

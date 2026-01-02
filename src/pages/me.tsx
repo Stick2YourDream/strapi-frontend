@@ -201,9 +201,9 @@ export default function Me() {
   const { preferences, setBackgroundAll, resetBackgroundAll, setChatPrefs, getBackgroundStyle } =
     useUserPreferences();
   usePageMeta({
-    title: "My Profile | Stick2YourDreams Connect",
+    title: "My Profile | Your Social Place",
     description:
-      "Complete your Stick2YourDreams profile to connect with friends who share your goals, location, and interests.",
+      "Complete your Your Social Place profile to connect with friends who share your goals, location, and interests.",
     type: "profile",
     robots: "noindex, nofollow",
   });

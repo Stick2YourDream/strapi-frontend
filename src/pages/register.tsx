@@ -98,9 +98,9 @@ export default function Register() {
   const [info, setInfo] = useState<string | null>(null);
   const formStartRef = useRef(Date.now());
   usePageMeta({
-    title: "Register | Stick2YourDreams Connect",
+    title: "Register | Your Social Place",
     description:
-      "Create a Stick2YourDreams account to join a motivational support network that celebrates progress and accountability.",
+      "Create a Your Social Place account to join a motivational support network that celebrates progress and accountability.",
     type: "website",
     robots: "noindex, nofollow",
   });
@@ -223,7 +223,7 @@ export default function Register() {
           className="auth-brand"
           onClick={() => navigate("/")}
         >
-          <span className="auth-brand-mark">S2YD</span>
+          <span className="auth-brand-mark">Your Social Place</span>
           <span className="auth-brand-text">| Stick2YourDreams</span>
         </button>
         <h1 className="subhead-top">Create your account</h1>

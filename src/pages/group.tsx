@@ -126,7 +126,7 @@ export default function GroupDetail() {
   const navigate = useNavigate();
   const { user } = useAuth();
   usePageMeta({
-    title: "Group | Stick2YourDreams Connect",
+    title: "Group | Your Social Place",
     description: "Share updates, media, and momentum with your group.",
   });
 

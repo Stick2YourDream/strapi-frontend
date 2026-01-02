@@ -258,9 +258,9 @@ export default function Dashboard() {
   const { user } = useAuth();
   const { getBackgroundStyle } = useUserPreferences();
   usePageMeta({
-    title: "Dashboard | Stick2YourDreams Connect",
+    title: "Dashboard | Your Social Place",
     description:
-      "Share updates, celebrate wins, and stay accountable with your Stick2YourDreams community.",
+      "Share updates, celebrate wins, and stay accountable with your your social place community.",
     type: "website",
     robots: "noindex, nofollow",
   });
@@ -459,7 +459,7 @@ export default function Dashboard() {
       const ownerName =
         source === "user"
           ? ownerAttrs?.username || ownerAttrs?.email || "User"
-          : "S2YD";
+          : "Your Social Place";
 
       return {
         id: p.id ?? p.documentId ?? title,
@@ -654,7 +654,7 @@ export default function Dashboard() {
         <TopbarSearch />
         <div className="dash-hero">
         <div className="dash-hero__text">
-          <p className="eyebrow">S2YD</p>
+          <p className="eyebrow">Your Social Place</p>
           <h1>Posts</h1>
           <p className="subhead">
             See What Our Community Is Doing!

@@ -5,6 +5,7 @@ import "../css/friends.css";
 import { useAuth } from "../context/AuthContext";
 import { useChat } from "../context/ChatContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";
+import { useVideoCall, type VideoCallInvitee } from "../context/VideoCallContext";
 import api from "../api/strapi";
 import Sidebar from "../components/Sidebar";
 import TopbarSearch from "../components/TopbarSearch";
@@ -122,9 +123,10 @@ const LinkPreviewCard = ({
 export default function Friends() {
   const { user } = useAuth();
   const { openChat } = useChat();
+  const { openCallComposer, onlineUserIds, setPresenceTargets } = useVideoCall();
   const { getBackgroundStyle } = useUserPreferences();
   usePageMeta({
-    title: "Friends | Stick2YourDreams Connect",
+    title: "Friends | Your Social Place",
     description:
       "Find supportive friends, send messages, and discover new connections based on shared location, hobbies, and faith.",
     type: "website",
@@ -132,6 +134,7 @@ export default function Friends() {
   });
 
   const [query, setQuery] = useState("");
+  const [friendQuery, setFriendQuery] = useState("");
   const [profiles, setProfiles] = useState<FriendProfile[]>([]);
   const [postsByOwner, setPostsByOwner] = useState<Record<number, FriendPost[]>>({});
   const [selectedFriendId, setSelectedFriendId] = useState<number | null>(null);
@@ -310,8 +313,24 @@ export default function Friends() {
     load();
   }, [fetchLinkPreview, user]);
 
+  const presenceIds = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          profiles
+            .map((profile) => profile.userId)
+            .filter((id): id is number => Number.isFinite(id))
+        )
+      ),
+    [profiles]
+  );
+
+  useEffect(() => {
+    setPresenceTargets(presenceIds);
+  }, [presenceIds, setPresenceTargets]);
+
   const filteredFriends = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = friendQuery.trim().toLowerCase();
     if (!q) return profiles;
     return profiles.filter((friend) => {
       const handle = (friend.handle || friend.username || "").toLowerCase();
@@ -325,7 +344,7 @@ export default function Friends() {
         full.includes(q)
       );
     });
-  }, [profiles, query]);
+  }, [profiles, friendQuery]);
 
   useEffect(() => {
     if (!filteredFriends.length) {
@@ -355,18 +374,17 @@ export default function Friends() {
 
   const renderAvatar = (profile?: FriendProfile, size = 44) => {
     const handle = profile?.handle || profile?.username || "User";
-    if (profile?.avatarUrl) {
-      return (
-        <img
-          src={profile.avatarUrl}
-          alt={handle}
-          className="friend-avatar"
-          style={{ width: size, height: size }}
-          loading="lazy"
-        />
-      );
-    }
-    return (
+    const isOnline = profile?.userId ? onlineUserIds.has(profile.userId) : false;
+    const statusLabel = isOnline ? "Online" : "Offline";
+    const avatar = profile?.avatarUrl ? (
+      <img
+        src={profile.avatarUrl}
+        alt={handle}
+        className="friend-avatar"
+        style={{ width: size, height: size }}
+        loading="lazy"
+      />
+    ) : (
       <div
         className="friend-avatar fallback"
         aria-hidden="true"
@@ -375,6 +393,27 @@ export default function Friends() {
         {handle.charAt(0).toUpperCase()}
       </div>
     );
+    return (
+      <span className="presence-avatar" style={{ width: size, height: size }}>
+        {avatar}
+        <span
+          className={`presence-dot ${isOnline ? "is-online" : "is-offline"}`}
+          title={statusLabel}
+          aria-label={statusLabel}
+        />
+      </span>
+    );
+  };
+
+  const toInvitee = (profile: FriendProfile): VideoCallInvitee => {
+    const name = `${profile.firstName || ""} ${profile.lastName || ""}`.trim();
+    const handle = profile.handle || profile.username || "friend";
+    return {
+      userId: profile.userId || 0,
+      displayName: name || handle,
+      handle,
+      avatarUrl: profile.avatarUrl,
+    };
   };
 
   const handleOpenChat = (profile: FriendProfile) => {
@@ -391,6 +430,11 @@ export default function Friends() {
   const handleSelectFriend = (profile: FriendProfile) => {
     if (!profile.userId) return;
     setSelectedFriendId(profile.userId);
+  };
+
+  const handleVideoCall = (profile: FriendProfile) => {
+    if (!profile.userId) return;
+    openCallComposer([toInvitee(profile)]);
   };
 
   const handleShowAllPosts = () => {
@@ -440,16 +484,42 @@ export default function Friends() {
 
         <div className="panel-grid">
           <section className="panel">
-            <div className="panel-header">
+            <div className="panel-header friend-panel-header">
               <div>
                 <p className="eyebrow">Friends</p>
                 <h3>Current friends</h3>
               </div>
+              {!loading && profiles.length > 0 && (
+                <button
+                  className="btn ghost friend-video-call"
+                  type="button"
+                  onClick={() => openCallComposer()}
+                >
+                  Start video call
+                </button>
+              )}
             </div>
+            {!loading && profiles.length > 0 && (
+              <div className="friend-search">
+                <label className="friend-search-label" htmlFor="friend-search-input">
+                  Search friends
+                </label>
+                <input
+                  id="friend-search-input"
+                  className="friend-search-input"
+                  type="search"
+                  value={friendQuery}
+                  onChange={(e) => setFriendQuery(e.target.value)}
+                  placeholder="Find Your Friends"
+                />
+              </div>
+            )}
             {loading ? (
               <p className="status">Loading friends...</p>
-            ) : filteredFriends.length === 0 ? (
+            ) : profiles.length === 0 ? (
               <p className="status">No friends yet.</p>
+            ) : filteredFriends.length === 0 ? (
+              <p className="status">No friends match your search.</p>
             ) : (
               <ul className="friend-mini-list">
                 {filteredFriends.map((friend) => {
@@ -507,6 +577,13 @@ export default function Friends() {
                     onClick={() => handleOpenChat(selectedFriend)}
                   >
                     Message
+                  </button>
+                  <button
+                    className="btn ghost friend-video-call"
+                    type="button"
+                    onClick={() => handleVideoCall(selectedFriend)}
+                  >
+                    Video call
                   </button>
                   <button
                     className="btn ghost"
