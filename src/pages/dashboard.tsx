@@ -675,11 +675,21 @@ export default function Dashboard() {
                 background: "linear-gradient(135deg, #60a5fa, #7c3aed)",
                 display: "grid",
                 placeItems: "center",
+                overflow: "hidden",
                 color: "#fff",
                 fontWeight: 700,
               }}
             >
-              {userInitial}
+              {profileAvatarUrl ? (
+                <img
+                  src={profileAvatarUrl}
+                  alt={`${userLabel} avatar`}
+                  style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                  onError={() => setProfileAvatarUrl(null)}
+                />
+              ) : (
+                userInitial
+              )}
             </div>
             <div style={{ lineHeight: 1.2 }}>
               <div style={{ fontSize: "12px", color: "#9ca3af" }}>Signed in as</div>
