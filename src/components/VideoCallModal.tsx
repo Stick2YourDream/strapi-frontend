@@ -74,18 +74,30 @@ const VideoTile = ({
   className?: string;
 }) => {
   const ref = useRef<HTMLVideoElement | null>(null);
-  const hasVideo = Boolean(stream && stream.getVideoTracks().some((track) => track.enabled));
+  const hasVideo = Boolean(stream?.getVideoTracks().some((track) => track.enabled));
 
   useEffect(() => {
-    if (!ref.current || !stream || !hasVideo) return;
+    if (!ref.current) return;
+    if (!stream) {
+      ref.current.srcObject = null;
+      return;
+    }
     ref.current.srcObject = stream;
-  }, [hasVideo, stream]);
+    ref.current.play().catch(() => undefined);
+  }, [stream]);
 
   return (
     <div className={`video-tile${className ? ` ${className}` : ""}`}>
-      {stream && hasVideo ? (
-        <video ref={ref} autoPlay playsInline muted={muted} />
-      ) : (
+      {stream && (
+        <video
+          ref={ref}
+          autoPlay
+          playsInline
+          muted={muted}
+          className={`video-tile__media${hasVideo ? "" : " is-hidden"}`}
+        />
+      )}
+      {(!stream || !hasVideo) && (
         <div className="video-tile__placeholder">
           {avatarUrl ? (
             <div
@@ -134,6 +146,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     acceptCall,
     declineCall,
     leaveCall,
+    endCall,
     toggleVideo,
     toggleAudio,
     sendMessage,
@@ -559,12 +572,15 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                 >
                   {isVideoEnabled ? "Cam on" : "Cam off"}
                 </button>
+                <button type="button" className="video-control ghost" onClick={leaveCall}>
+                  Leave call
+                </button>
                 <button
                   type="button"
                   className="video-control end"
                   onClick={() => {
                     void playEndCallTone();
-                    leaveCall();
+                    endCall();
                   }}
                 >
                   End call

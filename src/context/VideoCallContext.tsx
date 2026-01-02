@@ -95,6 +95,7 @@ type VideoCallContextValue = {
   acceptCall: () => Promise<void>;
   declineCall: () => void;
   leaveCall: () => void;
+  endCall: () => void;
   toggleVideo: () => void;
   toggleAudio: () => void;
   sendMessage: (body: string, kind?: VideoCallMessage["kind"], gifUrl?: string) => void;
@@ -196,6 +197,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     sourceId: string | null;
     effectsKey: string;
   }>({ track: null, cleanup: null, sourceId: null, effectsKey: "" });
+  const cleanupCallRef = useRef<() => void>(() => {});
   const profileRef = useRef<VideoCallInvitee | null>(null);
   const statusRef = useRef<VideoCallStatus>(status);
   const activeRoomRef = useRef<string | null>(activeRoomId);
@@ -553,8 +555,17 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       };
       pc.ontrack = (event) => {
         const [stream] = event.streams;
-        if (!stream) return;
-        setRemoteStreams((prev) => ({ ...prev, [socketId]: stream }));
+        setRemoteStreams((prev) => {
+          const existing = prev[socketId];
+          if (existing) {
+            if (!existing.getTracks().some((track) => track.id === event.track.id)) {
+              existing.addTrack(event.track);
+            }
+            return { ...prev, [socketId]: existing };
+          }
+          const nextStream = stream ?? new MediaStream([event.track]);
+          return { ...prev, [socketId]: nextStream };
+        });
       };
       pc.onconnectionstatechange = () => {
         if (["failed", "closed", "disconnected"].includes(pc.connectionState)) {
@@ -731,8 +742,28 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
 
     socket.on(
       "call:offer",
-      async (payload: { from: string; sdp: RTCSessionDescriptionInit }) => {
+      async (payload: {
+        from: string;
+        sdp: RTCSessionDescriptionInit;
+        userId?: number;
+        displayName?: string;
+        handle?: string;
+        avatarUrl?: string;
+      }) => {
         try {
+          setRemoteParticipants((prev) => {
+            if (prev[payload.from]) return prev;
+            return {
+              ...prev,
+              [payload.from]: {
+                socketId: payload.from,
+                userId: Number(payload.userId) || 0,
+                displayName: payload.displayName || payload.handle || "Friend",
+                handle: payload.handle,
+                avatarUrl: payload.avatarUrl,
+              },
+            };
+          });
           const pc = createPeerConnection(payload.from);
           await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
           const answer = await pc.createAnswer();
@@ -791,6 +822,11 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       if (payload?.roomId && payload.roomId !== activeRoomRef.current) return;
       setError(payload?.message || "Call error");
       setStatus("setup");
+    });
+
+    socket.on("call:ended", (payload: { roomId?: string }) => {
+      if (payload?.roomId && payload.roomId !== activeRoomRef.current) return;
+      cleanupCallRef.current();
     });
 
     return () => {
@@ -910,6 +946,24 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     setError(null);
   }, []);
 
+  const cleanupCall = useCallback(() => {
+    peersRef.current.forEach((_, socketId) => closePeer(socketId));
+    peersRef.current.clear();
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((track) => track.stop());
+    }
+    if (rawStreamRef.current) {
+      rawStreamRef.current.getTracks().forEach((track) => track.stop());
+      rawStreamRef.current = null;
+    }
+    stopVideoProcessing();
+    setLocalStream(null);
+    localStreamRef.current = null;
+    resetCallState();
+  }, [closePeer, resetCallState, stopVideoProcessing]);
+
+  cleanupCallRef.current = cleanupCall;
+
   const openCallComposer = useCallback((invitees?: VideoCallInvitee[]) => {
     setSelectedInviteesState(invitees || []);
     setStatus("setup");
@@ -989,20 +1043,15 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     if (socketRef.current) {
       socketRef.current.emit("call:leave", { roomId: activeRoomId });
     }
-    peersRef.current.forEach((_, socketId) => closePeer(socketId));
-    peersRef.current.clear();
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((track) => track.stop());
+    cleanupCall();
+  }, [activeRoomId, cleanupCall]);
+
+  const endCall = useCallback(() => {
+    if (socketRef.current && activeRoomId) {
+      socketRef.current.emit("call:end", { roomId: activeRoomId });
     }
-    if (rawStreamRef.current) {
-      rawStreamRef.current.getTracks().forEach((track) => track.stop());
-      rawStreamRef.current = null;
-    }
-    stopVideoProcessing();
-    setLocalStream(null);
-    localStreamRef.current = null;
-    resetCallState();
-  }, [activeRoomId, closePeer, resetCallState, stopVideoProcessing]);
+    cleanupCall();
+  }, [activeRoomId, cleanupCall]);
 
   const toggleVideo = useCallback(() => {
     const rawStream = rawStreamRef.current;
@@ -1072,6 +1121,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       acceptCall,
       declineCall,
       leaveCall,
+      endCall,
       toggleVideo,
       toggleAudio,
       sendMessage,
@@ -1081,6 +1131,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       closeCallComposer,
       declineCall,
       error,
+      endCall,
       incomingCall,
       isAudioEnabled,
       isOpen,
