@@ -488,6 +488,16 @@
   background: rgba(5, 238, 40, 0.97);
 }
 
+.pill2 {
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0,0,0,0.1);
+  color: white;
+}
+
 .hero-cta {
   display: flex;
   gap: 12px;
@@ -771,6 +781,29 @@
   display: grid;
   gap: 8px;
   justify-items: center;
+}
+
+.footer-logo {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: #0b0d14;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+
+.footer-logo img {
+  width: 82%;
+  height: 82%;
+  object-fit: contain;
+  display: block;
+}
+
+.footer-brand .brand-mark {
+  margin-left: 0;
 }
 
 .footer-brand p {

@@ -5,6 +5,10 @@
   align-items: start;
 }
 
+.profile-content .panel-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .profile-column {
   display: grid;
   gap: 14px;

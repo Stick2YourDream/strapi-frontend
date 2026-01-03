@@ -685,9 +685,9 @@ export default function Landing() {
         <section className="hero">
           <div className="hero-copy">
             <div className="hero-badges">
-              <span className="pill">Creators & Builders</span>
-              <span className="pill">Private messages</span>
-              <span className="pill">Daily momentum</span>
+              <span className="pill2">Creators & Builders</span>
+              <span className="pill2">Private messages</span>
+              <span className="pill2">Daily momentum</span>
             </div>
             <h1>
               Let's Build a Community that Supports Each Other.
@@ -844,9 +844,8 @@ export default function Landing() {
 
         <footer className="landing-footer">
           <div className="footer-row footer-brand">
-            <div className="brand-mark">
-              <span>S2YD</span>
-              <span>Stick2YourDreams</span>
+            <div className="footer-logo">
+              <img src="/logo.png" alt="Your Social Place logo" />
             </div>
             <p>
               A motivational support network built for real progress. Beta access
@@ -855,14 +854,18 @@ export default function Landing() {
           </div>
           <div className="footer-row footer-column">
             <span className="footer-title">Explore</span>
-            <a href="/login">Login</a>
-            <a href="/register">Create account</a>
+            {!user && (
+              <>
+                <a href="/login">Login</a>
+                <a href="/register">Create account</a>
+              </>
+            )}
             <a href="/terms">Terms</a>
           </div>
           <div className="footer-row footer-column">
             <span className="footer-title">Connect</span>
-            <a href="mailto:jasonadams@stick2yourdream.com">Contact</a>
-            <span className="footer-muted">support@stick2yourdreams.com</span>
+            <a href="mailto:support@yoursocialplace.com">Contact</a>
+            <span className="footer-muted">support@yoursocialplace.com</span>
           </div>
           <div className="footer-row footer-meta">
             <span>Your Social Place</span>

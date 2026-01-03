@@ -1590,7 +1590,7 @@ export default function Me() {
 
       <Sidebar active="me" />
 
-        <div className="main-content">
+        <div className="main-content profile-content">
           <TopbarSearch />
           <div className="panel-grid profile-appearance-row">
           <section className="panel profile-appearance-panel">
