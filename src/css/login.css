@@ -41,12 +41,21 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
+  width: 38px;
+  height: 38px;
+  border-radius: 999px;
   background: #0b0d14;
   color: #fff;
   font-size: 10px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.auth-brand-mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
 }
 
 .auth-brand-text {

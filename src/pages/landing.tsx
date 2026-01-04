@@ -59,15 +59,15 @@ export default function Landing() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
   usePageMeta({
-    title: "Your Social Place | Build momentum with friends",
+    title: "Your Social Place | Motivational social network without all the fluff",
     description:
-      "Your Social Place is a motivational support network where friends keep you accountable, celebrate progress, and build momentum together.",
+      "Your Social Place is a community driven motivational social network where real people share dreams, goals, progress, and help uplift each other.",
     type: "website",
     canonical: "https://yoursocialplace.com/",
     keywords:
-      "social, social place, accountability, motivational support, community, goals, progress, friends, social network, productivity",
+      "Your Social Place, motivational social network, community driven, accountability, goals, progress, friends, social network",
     image: "https://yoursocialplace.com/logo.png",
-    imageAlt: "Stick2YourDreams Connect logo",
+    imageAlt: "Your Social Place logo",
   });
   const [profileSummary, setProfileSummary] = useState<ProfileSummary | null>(null);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);

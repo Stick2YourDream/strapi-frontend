@@ -1,7 +1,7 @@
 User-agent: *
 Allow: /
-Disallow: /login
-Disallow: /register
+Allow: /login
+Allow: /register
 Disallow: /dashboard
 Disallow: /friends
 Disallow: /me

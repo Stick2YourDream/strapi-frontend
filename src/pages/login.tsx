@@ -98,7 +98,9 @@ export default function Login() {
           className="auth-brand"
           onClick={() => navigate("/")}
         >
-          <span className="auth-brand-mark">Your Social Place</span>
+          <span className="auth-brand-mark" aria-hidden="true">
+            <img src="/logo.png" alt="" />
+          </span>
           <span className="auth-brand-text">| Stick2YourDreams</span>
         </button>
         <h1 className="subhead-top">Welcome back!</h1>

@@ -3,6 +3,12 @@
   <url>
     <loc>https://yoursocialplace.com/</loc>
   </url>
+    <url>
+    <loc>https://yoursocialplace.com/register</loc>
+  </url>
+    <url>
+    <loc>https://yoursocialplace.com/login</loc>
+  </url>
   <url>
     <loc>https://yoursocialplace.com/terms</loc>
   </url>

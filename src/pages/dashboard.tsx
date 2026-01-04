@@ -1,5 +1,5 @@
 // src/pages/Dashboard.tsx
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api/strapi";
 import axios from "axios";
@@ -9,6 +9,7 @@ import Sidebar from "../components/Sidebar";
 import TopbarSearch from "../components/TopbarSearch";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { useUserPreferences } from "../context/UserPreferencesContext";
+import type { SignalTag } from "../constants/signalTags";
 
 type CommentItem = {
   id: string | number;
@@ -23,10 +24,13 @@ type NormalizedPost = {
   content: string;
   imageUrl?: string;
   createdAt?: string;
-  source: "admin" | "user";
+  source: "user" | "group" | "admin";
   ownerName?: string;
   ownerId?: number;
   comments: CommentItem[];
+  groupName?: string;
+  groupId?: number;
+  signalTag?: SignalTag;
 };
 
 type LinkPreview = {
@@ -38,16 +42,79 @@ type LinkPreview = {
   type?: string;
 };
 
-const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
+type UnknownRecord = Record<string, unknown>;
+
+type MediaFormats = {
+  large?: { url?: string };
+  medium?: { url?: string };
+  small?: { url?: string };
+  thumbnail?: { url?: string };
+};
+
+type MediaAttributes = {
+  url?: string;
+  formats?: MediaFormats;
+};
+
+type PostsState = {
+  user: unknown[];
+  group: unknown[];
+  comments: unknown[];
+  admin?: unknown[];
+};
+
+const isRecord = (value: unknown): value is UnknownRecord =>
+  typeof value === "object" && value !== null;
+const asRecord = (value: unknown): UnknownRecord => (isRecord(value) ? value : {});
+const getString = (value: unknown): string | undefined =>
+  typeof value === "string" ? value : undefined;
+const normalize = (entry: unknown): UnknownRecord => {
+  if (!isRecord(entry)) return {};
+  const attrs = entry.attributes;
+  return isRecord(attrs) ? attrs : entry;
+};
+const getEntity = (entry: unknown): unknown => {
+  if (!isRecord(entry)) return entry ?? null;
+  if ("data" in entry) {
+    return entry.data ?? null;
+  }
+  return entry;
+};
+const getEntityId = (entry: unknown) => {
+  const data = getEntity(entry);
+  if (typeof data === "number") return Number.isFinite(data) ? data : undefined;
+  if (typeof data === "string") {
+    const num = Number(data);
+    return Number.isFinite(num) ? num : undefined;
+  }
+  if (isRecord(data)) {
+    const rawId = data.id ?? (isRecord(data.attributes) ? data.attributes.id : undefined);
+    const num = Number(rawId);
+    return Number.isFinite(num) ? num : undefined;
+  }
+  return undefined;
+};
+const getOwnerName = (owner: unknown, fallback: string) => {
+  const ownerAttrs = normalize(getEntity(owner)) as {
+    username?: string;
+    email?: string;
+  };
+  return (
+    getString(ownerAttrs.username) ??
+    getString(ownerAttrs.email) ??
+    (typeof owner === "string" ? owner : fallback)
+  );
+};
 const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
-const pickMediaUrl = (mediaField: any): string | undefined => {
+const pickMediaUrl = (mediaField: unknown): string | undefined => {
   if (!mediaField) return undefined;
+  const data = getEntity(mediaField);
   const candidate =
-    (Array.isArray(mediaField?.data) ? mediaField.data[0] : mediaField?.data) ??
+    (Array.isArray(data) ? data[0] : data) ??
     (Array.isArray(mediaField) ? mediaField[0] : mediaField);
   if (!candidate) return undefined;
-  const attrs = normalize(candidate);
-  let url =
+  const attrs = normalize(candidate) as MediaAttributes;
+  const url =
     attrs.url ||
     attrs.formats?.large?.url ||
     attrs.formats?.medium?.url ||
@@ -240,13 +307,15 @@ const LinkPreviewCard = ({
 };
 
 export default function Dashboard() {
-  const [posts, setPosts] = useState<any>({ admin: [], user: [], comments: [] });
+  const [posts, setPosts] = useState<PostsState>({ user: [], group: [], comments: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [formContent, setFormContent] = useState("");
   const [formFile, setFormFile] = useState<File | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [, setFriendIds] = useState<number[]>([]);
+  const [, setGroupIds] = useState<number[]>([]);
   const [commentInputs, setCommentInputs] = useState<Record<string | number, string>>({});
   const [linkPreview, setLinkPreview] = useState<LinkPreview | null>(null);
   const [linkPreviewLoading, setLinkPreviewLoading] = useState(false);
@@ -266,6 +335,7 @@ export default function Dashboard() {
   });
   const userLabel = user?.username || user?.email || "Guest";
   const userInitial = userLabel.charAt(0).toUpperCase();
+  const userId = user?.id;
 
   useEffect(() => {
     let active = true;
@@ -306,10 +376,66 @@ export default function Dashboard() {
       }
 
       try {
-        // Fetch admin posts, user posts, and all comments
-        const [adminRes, userRes, commentsRes] = await Promise.all([
-          api.get("/posts?populate=Pictures"),
-          api.get("/users-posts?populate=Users_Pictures&populate=owner"),
+        if (!userId) {
+          setLoading(false);
+          return;
+        }
+
+        const friendsRes = await api.get(
+          `/friends?filters[$or][0][requester][id][$eq]=${userId}` +
+            `&filters[$or][1][target][id][$eq]=${userId}` +
+            `&populate=requester&populate=target`
+        );
+
+        const acceptedIds = new Set<number>();
+        (friendsRes.data?.data ?? []).forEach((entry: unknown) => {
+          const attrs = normalize(entry) as {
+            status?: string;
+            requester?: unknown;
+            target?: unknown;
+          };
+          const status = getString(attrs.status) ?? "pending";
+          if (status !== "accepted") return;
+          const requesterId = getEntityId(attrs.requester);
+          const targetId = getEntityId(attrs.target);
+          const otherId = requesterId === userId ? targetId : requesterId;
+          if (otherId) acceptedIds.add(otherId);
+        });
+        const nextFriendIds = Array.from(acceptedIds);
+        setFriendIds(nextFriendIds);
+
+        const groupMembersRes = await api.get(
+          `/group-members?filters[user][id][$eq]=${userId}&populate=group&pagination[pageSize]=200`
+        );
+        const memberGroups: number[] = (groupMembersRes.data?.data ?? [])
+          .map((entry: unknown) => {
+            const attrs = normalize(entry) as { group?: unknown };
+            return getEntityId(attrs.group);
+          })
+          .filter((id: unknown): id is number => typeof id === "number" && Number.isFinite(id));
+        setGroupIds(memberGroups);
+
+        const userFilterIds = Array.from(new Set([userId, ...nextFriendIds]));
+        const userFilter = userFilterIds
+          .map((id, index) => `filters[owner][id][$in][${index}]=${id}`)
+          .join("&");
+        const groupFilter = memberGroups
+          .map((id, index) => `filters[group][id][$in][${index}]=${id}`)
+          .join("&");
+
+        const [userRes, groupRes, commentsRes] = await Promise.all([
+          userFilterIds.length
+            ? api.get(
+                `/users-posts?${userFilter}&populate=Users_Pictures&populate=owner` +
+                  `&sort=createdAt:desc&pagination[pageSize]=200`
+              )
+            : Promise.resolve({ data: { data: [] } }),
+          memberGroups.length
+            ? api.get(
+                `/group-posts?${groupFilter}&populate=media&populate=owner&populate=group` +
+                  `&sort=createdAt:desc&pagination[pageSize]=200`
+              )
+            : Promise.resolve({ data: { data: [] } }),
           api.get("/comments?populate=owner"),
         ]);
 
@@ -317,8 +443,8 @@ export default function Dashboard() {
 
         if (cancelled) return;
         setPosts({
-          admin: adminRes.data?.data ?? [],
           user: userRes.data?.data ?? [],
+          group: groupRes.data?.data ?? [],
           comments: allComments,
         });
       } catch (err: unknown) {
@@ -326,7 +452,9 @@ export default function Dashboard() {
 
         if (axios.isAxiosError(err)) {
           const status = err.response?.status;
-          const data: any = err.response?.data;
+          const data = err.response?.data as
+            | { error?: { message?: string }; message?: string }
+            | undefined;
           const msg =
             data?.error?.message || data?.message || "Failed to load posts";
 
@@ -359,71 +487,74 @@ export default function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [navigate]);
+  }, [navigate, userId]);
 
-  const fetchLinkPreview = async (
-    url: string,
-    options?: { silent?: boolean }
-  ): Promise<LinkPreview | null> => {
-    if (!url) return null;
-    if (previewCache[url] !== undefined) return previewCache[url];
+  const fetchLinkPreview = useCallback(
+    async (url: string, options?: { silent?: boolean }): Promise<LinkPreview | null> => {
+      if (!url) return null;
+      if (previewCache[url] !== undefined) return previewCache[url];
 
-    if (!options?.silent) {
-      setLinkPreviewLoading(true);
-      setLinkPreviewError(null);
-    }
-
-    try {
-      const res = await api.get("/link-preview", { params: { url } });
-      const data = res.data?.data;
-      const preview = data?.url
-        ? {
-            url: data.url,
-            title: data.title,
-            description: data.description,
-            image: data.image,
-            siteName: data.siteName,
-            type: data.type,
-          }
-        : null;
-      setPreviewCache((prev) => ({ ...prev, [url]: preview }));
-      return preview;
-    } catch {
-      setPreviewCache((prev) => ({ ...prev, [url]: null }));
       if (!options?.silent) {
-        setLinkPreviewError("Unable to load link preview.");
+        setLinkPreviewLoading(true);
+        setLinkPreviewError(null);
       }
-      return null;
-    } finally {
-      if (!options?.silent) {
-        setLinkPreviewLoading(false);
+
+      try {
+        const res = await api.get("/link-preview", { params: { url } });
+        const data = res.data?.data;
+        const preview = data?.url
+          ? {
+              url: data.url,
+              title: data.title,
+              description: data.description,
+              image: data.image,
+              siteName: data.siteName,
+              type: data.type,
+            }
+          : null;
+        setPreviewCache((prev) => ({ ...prev, [url]: preview }));
+        return preview;
+      } catch {
+        setPreviewCache((prev) => ({ ...prev, [url]: null }));
+        if (!options?.silent) {
+          setLinkPreviewError("Unable to load link preview.");
+        }
+        return null;
+      } finally {
+        if (!options?.silent) {
+          setLinkPreviewLoading(false);
+        }
       }
-    }
-  };
+    },
+    [previewCache]
+  );
 
   const normalizedPosts: NormalizedPost[] = useMemo(() => {
     const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
-    const allComments = (posts as any).comments ?? [];
+    const allComments = posts.comments ?? [];
 
-    const normalize = (p: any, source: "admin" | "user"): NormalizedPost => {
-      const attributes = p?.attributes ?? p ?? {};
-      const title = attributes.Title || attributes.title || "Untitled";
+    const normalizeUserPost = (post: unknown): NormalizedPost => {
+      const attributes = normalize(post) as {
+        Title?: string;
+        title?: string;
+        Users_Content?: string;
+        content?: string;
+        Users_Pictures?: unknown;
+        pictures?: unknown;
+        owner?: unknown;
+        createdAt?: string;
+        signalTag?: SignalTag;
+      };
+      const title = getString(attributes.Title) ?? getString(attributes.title) ?? "Untitled";
       const content =
-        attributes.Posts_Content || attributes.Users_Content || attributes.content || "";
+        getString(attributes.Users_Content) ?? getString(attributes.content) ?? "";
 
-      const picturesRaw =
-        attributes.Pictures?.data ??
-        attributes.Pictures ??
-        attributes.Users_Pictures?.data ??
-        attributes.Users_Pictures ??
-        attributes.pictures?.data ??
-        attributes.pictures;
-
+      const picturesRaw = getEntity(attributes.Users_Pictures) ?? getEntity(attributes.pictures);
       const mediaItem = Array.isArray(picturesRaw) ? picturesRaw[0] : picturesRaw;
-      const mediaAttr = mediaItem?.attributes ?? mediaItem;
-      const formats = mediaAttr?.formats;
+      const mediaAttr = normalize(mediaItem) as MediaAttributes;
+      const formats = mediaAttr.formats;
       let imageUrl =
-        mediaAttr?.url ||
+        mediaAttr.url ||
         formats?.large?.url ||
         formats?.medium?.url ||
         formats?.small?.url ||
@@ -432,59 +563,118 @@ export default function Dashboard() {
         imageUrl = `${apiBase}${imageUrl}`;
       }
 
-      const targetIdStr = String(p.id ?? "");
+      const postRecord = asRecord(post);
+      const rawPostId = postRecord.id ?? postRecord.documentId;
+      const targetIdStr = rawPostId === undefined ? "" : String(rawPostId);
       const matchedComments = allComments
-        .filter((c: any) => {
-          const targetType = String(c?.target_type ?? "").toLowerCase();
-          const targetId = String(c?.target_id ?? "");
-          return targetType === source && targetId === targetIdStr;
+        .filter((comment) => {
+          const commentRecord = asRecord(comment);
+          const targetType = String(commentRecord.target_type ?? "").toLowerCase();
+          const targetId =
+            commentRecord.target_id === undefined ? "" : String(commentRecord.target_id);
+          return targetType === "user" && targetId === targetIdStr;
         })
-        .map((c: any) => ({
-          id: c.id,
-          body: c.body,
-          owner:
-            c.attributes?.owner?.data?.attributes?.username ||
-            c.owner?.username ||
-            c.owner ||
-            "User",
-          ownerId:
-            c.attributes?.owner?.data?.id ||
-            c.owner?.id,
-        }));
+        .map((comment) => {
+          const commentRecord = asRecord(comment);
+          const commentAttrs = asRecord(commentRecord.attributes);
+          const ownerSource = commentAttrs.owner ?? commentRecord.owner;
+          const commentId =
+            typeof commentRecord.id === "string" || typeof commentRecord.id === "number"
+              ? commentRecord.id
+              : String(commentRecord.id ?? "");
+          return {
+            id: commentId,
+            body: getString(commentRecord.body) ?? "",
+            owner: getOwnerName(ownerSource, "User"),
+            ownerId: getEntityId(ownerSource),
+          };
+        });
 
-      const ownerData = attributes.owner?.data ?? attributes.owner;
-      const ownerAttrs = ownerData?.attributes ?? ownerData;
-      const ownerId =
-        ownerData?.id ?? (typeof ownerData === "number" ? ownerData : ownerAttrs?.id);
+      const ownerData = getEntity(attributes.owner);
+      const ownerAttrs = normalize(ownerData) as { username?: string; email?: string };
+      const ownerId = getEntityId(ownerData);
       const ownerName =
-        source === "user"
-          ? ownerAttrs?.username || ownerAttrs?.email || "User"
-          : "Your Social Place";
+        getString(ownerAttrs.username) ?? getString(ownerAttrs.email) ?? "User";
+      const postId =
+        typeof rawPostId === "string" || typeof rawPostId === "number" ? rawPostId : title;
 
       return {
-        id: p.id ?? p.documentId ?? title,
+        id: postId,
         title,
         content,
         imageUrl,
-        createdAt: attributes.createdAt,
-        source,
+        createdAt: getString(attributes.createdAt),
+        source: "user",
         ownerName,
         ownerId,
         comments: matchedComments,
+        signalTag: attributes.signalTag || "check-in",
       };
     };
 
-    const adminPosts = Array.isArray((posts as any)?.admin)
-      ? (posts as any).admin.map((p: any) => normalize(p, "admin"))
-      : [];
-    const userPosts = Array.isArray((posts as any)?.user)
-      ? (posts as any).user.map((p: any) => normalize(p, "user"))
-      : [];
+    const normalizeGroupPost = (post: unknown): NormalizedPost => {
+      const attributes = normalize(post) as {
+        title?: string;
+        Title?: string;
+        body?: string;
+        content?: string;
+        media?: unknown;
+        owner?: unknown;
+        group?: unknown;
+        createdAt?: string;
+        signalTag?: SignalTag;
+      };
+      const title =
+        getString(attributes.title) ?? getString(attributes.Title) ?? "Group update";
+      const content = getString(attributes.body) ?? getString(attributes.content) ?? "";
+      const mediaItem = getEntity(attributes.media);
+      const mediaAttr = normalize(Array.isArray(mediaItem) ? mediaItem[0] : mediaItem) as
+        MediaAttributes;
+      const formats = mediaAttr.formats;
+      let imageUrl =
+        mediaAttr.url ||
+        formats?.large?.url ||
+        formats?.medium?.url ||
+        formats?.small?.url ||
+        formats?.thumbnail?.url;
+      if (imageUrl && imageUrl.startsWith("/")) {
+        imageUrl = `${apiBase}${imageUrl}`;
+      }
 
-    const sortedAdmin = sortByCreatedAtDesc(adminPosts);
-    const sortedUser = sortByCreatedAtDesc(userPosts);
+      const ownerData = getEntity(attributes.owner);
+      const ownerAttrs = normalize(ownerData) as { username?: string; email?: string };
+      const ownerId = getEntityId(ownerData);
+      const ownerName =
+        getString(ownerAttrs.username) ?? getString(ownerAttrs.email) ?? "Member";
+      const groupData = getEntity(attributes.group);
+      const groupAttrs = normalize(groupData) as { name?: string };
+      const groupName = getString(groupAttrs.name) ?? "Group";
+      const groupId = getEntityId(groupData);
+      const postRecord = asRecord(post);
+      const rawPostId = postRecord.id ?? postRecord.documentId;
+      const postId =
+        typeof rawPostId === "string" || typeof rawPostId === "number" ? rawPostId : title;
 
-    return [...sortedAdmin, ...sortedUser];
+      return {
+        id: postId,
+        title,
+        content,
+        imageUrl,
+        createdAt: getString(attributes.createdAt),
+        source: "group",
+        ownerName,
+        ownerId,
+        comments: [],
+        groupName,
+        groupId,
+        signalTag: attributes.signalTag || "check-in",
+      };
+    };
+
+    const userPosts = posts.user.map((post) => normalizeUserPost(post));
+    const groupPosts = posts.group.map((post) => normalizeGroupPost(post));
+
+    return sortByCreatedAtDesc([...userPosts, ...groupPosts]);
   }, [posts]);
 
   useEffect(() => {
@@ -516,7 +706,7 @@ export default function Dashboard() {
       active = false;
       clearTimeout(handle);
     };
-  }, [formContent, linkPreview?.url, previewCache]);
+  }, [fetchLinkPreview, formContent, linkPreview?.url, previewCache]);
 
   useEffect(() => {
     const urls = Array.from(
@@ -532,7 +722,7 @@ export default function Dashboard() {
       if (previewCache[url] !== undefined) return;
       void fetchLinkPreview(url, { silent: true });
     });
-  }, [normalizedPosts, previewCache]);
+  }, [fetchLinkPreview, normalizedPosts, previewCache]);
 
   const formatDate = (date?: string) => {
     if (!date) return "";
@@ -604,11 +794,12 @@ export default function Dashboard() {
         api.get("/users-posts?populate=Users_Pictures&populate=owner"),
       ]);
       const commentsRes = await api.get("/comments?populate=owner");
-      setPosts({
-        admin: adminRes.data?.data ?? [],
+      setPosts((prev) => ({
+        ...prev,
+        admin: adminRes.data?.data ?? prev.admin ?? [],
         user: userRes.data?.data ?? [],
         comments: commentsRes.data?.data ?? [],
-      });
+      }));
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
         const msg =
@@ -628,9 +819,14 @@ export default function Dashboard() {
     if (!window.confirm("Delete this post?")) return;
     try {
       await api.delete(`/users-posts/${postId}`);
-      setPosts((prev: any) => ({
+      setPosts((prev) => ({
         ...prev,
-        user: (prev.user || []).filter((p: any) => Number(p.id ?? p.documentId) !== postId),
+        user: prev.user.filter((post) => {
+          const record = asRecord(post);
+          const rawId = record.id ?? record.documentId;
+          const idValue = Number(rawId);
+          return !Number.isFinite(idValue) || idValue !== postId;
+        }),
       }));
     } catch (err) {
       console.error("Delete post failed", err);
@@ -893,11 +1089,17 @@ export default function Dashboard() {
                                   onClick={async () => {
                                     try {
                                       await api.delete(`/comments/${c.id}`);
-                                      setPosts((prev: any) => ({
+                                      setPosts((prev) => ({
                                         ...prev,
-                                        comments: (prev.comments || []).filter(
-                                          (cc: any) => cc.id !== c.id
-                                        ),
+                                        comments: prev.comments.filter((comment) => {
+                                          const record = asRecord(comment);
+                                          const commentId =
+                                            typeof record.id === "string" ||
+                                            typeof record.id === "number"
+                                              ? record.id
+                                              : null;
+                                          return commentId !== c.id;
+                                        }),
                                       }));
                                     } catch (err: unknown) {
                                       console.error("Delete comment failed", err);
@@ -939,25 +1141,25 @@ export default function Dashboard() {
                                 },
                               });
                               const res = await api.get("/comments?populate=owner");
-                              setPosts((prev: any) => ({
+                              setPosts((prev) => ({
                                 ...prev,
                                 comments: res.data?.data ?? [],
                               }));
                               setCommentInputs((prev) => ({ ...prev, [post.id]: "" }));
-                          } catch (err: unknown) {
-                            console.error("Add comment failed", err);
-                            if (axios.isAxiosError(err)) {
-                              const msg =
-                                err.response?.data?.error?.message ||
-                                err.response?.data?.message ||
-                                "Failed to add comment";
-                              setError(String(msg));
-                            } else {
-                              setError("Failed to add comment");
+                            } catch (err: unknown) {
+                              console.error("Add comment failed", err);
+                              if (axios.isAxiosError(err)) {
+                                const msg =
+                                  err.response?.data?.error?.message ||
+                                  err.response?.data?.message ||
+                                  "Failed to add comment";
+                                setError(String(msg));
+                              } else {
+                                setError("Failed to add comment");
+                              }
                             }
-                          }
-                        }}
-                      >
+                          }}
+                        >
                           Comment
                         </button>
                       </div>

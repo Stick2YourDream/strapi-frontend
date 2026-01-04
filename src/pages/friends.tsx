@@ -1,5 +1,6 @@
 // src/pages/Friends.tsx
 import { useEffect, useMemo, useState, useRef, useCallback } from "react";
+import axios from "axios";
 import "../css/dashboard.css";
 import "../css/friends.css";
 import { useAuth } from "../context/AuthContext";
@@ -53,6 +54,13 @@ type LinkPreview = {
   siteName?: string;
   type?: string;
 };
+
+type UserActionEntry = {
+  userId: number;
+  recordId: number | string;
+};
+
+type ReportReason = "spam" | "harassment" | "hate" | "impersonation" | "other";
 
 const extractFirstUrl = (text: string) => {
   const match = String(text || "").match(/(https?:\/\/[^\s]+|www\.[^\s]+)/i);
@@ -148,6 +156,15 @@ export default function Friends() {
   }, [linkPreviews]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [blockEntries, setBlockEntries] = useState<UserActionEntry[]>([]);
+  const [muteEntries, setMuteEntries] = useState<UserActionEntry[]>([]);
+  const [actionBusy, setActionBusy] = useState<"block" | "mute" | "report" | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportReason, setReportReason] = useState<ReportReason>("other");
+  const [reportDetails, setReportDetails] = useState("");
+  const [reportError, setReportError] = useState<string | null>(null);
 
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
   const getEntity = (entry: any) => entry?.data ?? entry ?? null;
@@ -177,6 +194,30 @@ export default function Friends() {
       attrs.formats?.thumbnail?.url;
     if (!url) return undefined;
     return url.startsWith("/") ? `${apiBase}${url}` : url;
+  };
+  const getEntryId = (entry: any, attrs: any) =>
+    entry?.id ?? attrs?.documentId ?? entry?.documentId;
+  const parseActionEntries = (
+    rows: any[],
+    relationKey: "blocked" | "muted"
+  ): UserActionEntry[] =>
+    rows
+      .map((entry) => {
+        const attrs = normalize(entry);
+        const userId = getEntityId(attrs[relationKey]);
+        const recordId = getEntryId(entry, attrs);
+        if (!userId || !recordId) return null;
+        return { userId, recordId };
+      })
+      .filter(Boolean) as UserActionEntry[];
+  const getErrorMessage = (err: unknown, fallback: string) => {
+    if (axios.isAxiosError(err)) {
+      const data = err.response?.data as
+        | { error?: { message?: string }; message?: string }
+        | undefined;
+      return data?.error?.message || data?.message || fallback;
+    }
+    return fallback;
   };
 
   const fetchLinkPreview = useCallback(async (url: string) => {
@@ -214,7 +255,27 @@ export default function Friends() {
       }
       setLoading(true);
       setError(null);
+      setActionError(null);
+      setActionNotice(null);
       try {
+        const [blockResult, muteResult] = await Promise.allSettled([
+          api.get("/user-blocks?populate=blocked&pagination[pageSize]=200"),
+          api.get("/user-mutes?populate=muted&pagination[pageSize]=200"),
+        ]);
+
+        if (blockResult.status === "fulfilled") {
+          setBlockEntries(parseActionEntries(blockResult.value.data?.data ?? [], "blocked"));
+        }
+        if (muteResult.status === "fulfilled") {
+          setMuteEntries(parseActionEntries(muteResult.value.data?.data ?? [], "muted"));
+        }
+        if (blockResult.status === "rejected" || muteResult.status === "rejected") {
+          const missing: string[] = [];
+          if (blockResult.status === "rejected") missing.push("blocked users");
+          if (muteResult.status === "rejected") missing.push("muted users");
+          setActionError(`Unable to load ${missing.join(" and ")}.`);
+        }
+
         const friendsRes = await api.get(
           `/friends?filters[$or][0][requester][id][$eq]=${user.id}&filters[$or][1][target][id][$eq]=${user.id}&populate=requester&populate=target`
         );
@@ -358,19 +419,39 @@ export default function Friends() {
   }, [filteredFriends, selectedFriendId]);
 
   useEffect(() => {
-    setShowAllPosts(false);
+    setActionNotice(null);
+    setReportError(null);
+    setReportOpen(false);
   }, [selectedFriendId]);
 
   const selectedFriend = useMemo(() => {
     if (!selectedFriendId) return null;
     return profiles.find((profile) => profile.userId === selectedFriendId) || null;
   }, [profiles, selectedFriendId]);
+  const selectedFriendLabel = selectedFriend
+    ? `${selectedFriend.firstName || ""} ${selectedFriend.lastName || ""}`.trim() ||
+      `@${selectedFriend.handle || selectedFriend.username || "friend"}`
+    : "this user";
 
   const selectedPosts =
     selectedFriend?.userId && postsByOwner[selectedFriend.userId]
       ? postsByOwner[selectedFriend.userId]
       : [];
-  const recentPosts = selectedPosts.slice(0, 3);
+  const blockedEntry = selectedFriend?.userId
+    ? blockEntries.find((entry) => entry.userId === selectedFriend.userId) || null
+    : null;
+  const mutedEntry = selectedFriend?.userId
+    ? muteEntries.find((entry) => entry.userId === selectedFriend.userId) || null
+    : null;
+  const isBlocked = Boolean(blockedEntry);
+  const isMuted = Boolean(mutedEntry);
+  const canViewPosts = !isBlocked && !isMuted;
+  const visiblePosts = canViewPosts ? selectedPosts : [];
+  const recentPosts = visiblePosts.slice(0, 3);
+
+  useEffect(() => {
+    setShowAllPosts(false);
+  }, [isBlocked, isMuted, selectedFriendId]);
 
   const renderAvatar = (profile?: FriendProfile, size = 44) => {
     const handle = profile?.handle || profile?.username || "User";
@@ -416,8 +497,16 @@ export default function Friends() {
     };
   };
 
+  const isUserBlocked = (userId?: number) =>
+    typeof userId === "number" &&
+    blockEntries.some((entry) => entry.userId === userId);
+
   const handleOpenChat = (profile: FriendProfile) => {
     if (!profile.userId) return;
+    if (isUserBlocked(profile.userId)) {
+      setActionNotice("Unblock this user to start a chat.");
+      return;
+    }
     openChat({
       userId: profile.userId,
       handle: profile.handle,
@@ -434,14 +523,109 @@ export default function Friends() {
 
   const handleVideoCall = (profile: FriendProfile) => {
     if (!profile.userId) return;
+    if (isUserBlocked(profile.userId)) {
+      setActionNotice("Unblock this user to start a video call.");
+      return;
+    }
     openCallComposer([toInvitee(profile)]);
   };
 
   const handleShowAllPosts = () => {
-    if (!selectedFriend?.userId) return;
+    if (!selectedFriend?.userId || !canViewPosts) return;
     setShowAllPosts(true);
     if (allPostsRef.current) {
       allPostsRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  };
+
+  const handleToggleBlock = async () => {
+    const targetId = selectedFriend?.userId;
+    if (!targetId) return;
+    setActionError(null);
+    setActionNotice(null);
+    setActionBusy("block");
+    try {
+      if (blockedEntry) {
+        await api.delete(`/user-blocks/${blockedEntry.recordId}`);
+        setBlockEntries((prev) => prev.filter((entry) => entry.userId !== targetId));
+        setActionNotice("User unblocked.");
+      } else {
+        const res = await api.post("/user-blocks", {
+          data: { blocked: targetId },
+        });
+        const created = res.data?.data;
+        const recordId = created?.id ?? created?.documentId;
+        if (recordId) {
+          setBlockEntries((prev) => [...prev, { userId: targetId, recordId }]);
+        }
+        setActionNotice("User blocked.");
+      }
+    } catch (err: unknown) {
+      setActionError(getErrorMessage(err, "Failed to update block."));
+    } finally {
+      setActionBusy(null);
+    }
+  };
+
+  const handleToggleMute = async () => {
+    const targetId = selectedFriend?.userId;
+    if (!targetId) return;
+    setActionError(null);
+    setActionNotice(null);
+    setActionBusy("mute");
+    try {
+      if (mutedEntry) {
+        await api.delete(`/user-mutes/${mutedEntry.recordId}`);
+        setMuteEntries((prev) => prev.filter((entry) => entry.userId !== targetId));
+        setActionNotice("User unmuted.");
+      } else {
+        const res = await api.post("/user-mutes", {
+          data: { muted: targetId },
+        });
+        const created = res.data?.data;
+        const recordId = created?.id ?? created?.documentId;
+        if (recordId) {
+          setMuteEntries((prev) => [...prev, { userId: targetId, recordId }]);
+        }
+        setActionNotice("User muted.");
+      }
+    } catch (err: unknown) {
+      setActionError(getErrorMessage(err, "Failed to update mute."));
+    } finally {
+      setActionBusy(null);
+    }
+  };
+
+  const handleOpenReport = () => {
+    if (!selectedFriend?.userId) return;
+    setReportReason("other");
+    setReportDetails("");
+    setReportError(null);
+    setReportOpen(true);
+  };
+
+  const handleSubmitReport = async () => {
+    const targetId = selectedFriend?.userId;
+    if (!targetId) return;
+    setReportError(null);
+    setActionBusy("report");
+    try {
+      await api.post("/reports", {
+        data: {
+          targetType: "user",
+          targetId: String(targetId),
+          reason: reportReason,
+          details: reportDetails.trim(),
+        },
+      });
+      setReportOpen(false);
+      setReportDetails("");
+      setReportReason("other");
+      setActionNotice("Report submitted.");
+    } catch (err: unknown) {
+      setReportError(getErrorMessage(err, "Failed to submit report."));
+    } finally {
+      setActionBusy(null);
     }
   };
 
@@ -567,6 +751,12 @@ export default function Friends() {
                     <span className="friend-name">
                       @{selectedFriend.handle || selectedFriend.username || "friend"}
                     </span>
+                    {(isBlocked || isMuted) && (
+                      <div className="friend-status-row">
+                        {isBlocked && <span className="friend-status-pill is-blocked">Blocked</span>}
+                        {isMuted && <span className="friend-status-pill is-muted">Muted</span>}
+                      </div>
+                    )}
                   </div>
                 </div>
                 <p className="comment-body">{selectedFriend.bio || "No bio yet."}</p>
@@ -575,6 +765,7 @@ export default function Friends() {
                     className="btn primary"
                     type="button"
                     onClick={() => handleOpenChat(selectedFriend)}
+                    disabled={isBlocked}
                   >
                     Message
                   </button>
@@ -582,6 +773,7 @@ export default function Friends() {
                     className="btn ghost friend-video-call"
                     type="button"
                     onClick={() => handleVideoCall(selectedFriend)}
+                    disabled={isBlocked}
                   >
                     Video call
                   </button>
@@ -589,18 +781,54 @@ export default function Friends() {
                     className="btn ghost"
                     type="button"
                     onClick={handleShowAllPosts}
-                    disabled={!selectedPosts.length}
+                    disabled={!selectedPosts.length || !canViewPosts}
                   >
                     See All
                   </button>
                 </div>
+                <div className="friend-safety-actions">
+                  <button
+                    className="btn ghost friend-action-muted"
+                    type="button"
+                    onClick={handleToggleMute}
+                    disabled={actionBusy === "mute"}
+                  >
+                    {isMuted ? "Unmute" : "Mute"}
+                  </button>
+                  <button
+                    className="btn ghost friend-action-danger"
+                    type="button"
+                    onClick={handleToggleBlock}
+                    disabled={actionBusy === "block"}
+                  >
+                    {isBlocked ? "Unblock" : "Block"}
+                  </button>
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={handleOpenReport}
+                    disabled={actionBusy === "report"}
+                  >
+                    Report
+                  </button>
+                </div>
+                {actionError && <p className="status status-error">{actionError}</p>}
+                {actionNotice && <p className="status">{actionNotice}</p>}
                 <div className="comments">
                   <p className="eyebrow">Most recent posts</p>
-                  {recentPosts.length ? renderPostList(recentPosts) : (
+                  {!canViewPosts ? (
+                    <p className="status">
+                      {isBlocked
+                        ? "You blocked this user. Unblock to see posts."
+                        : "Muted: posts hidden."}
+                    </p>
+                  ) : recentPosts.length ? (
+                    renderPostList(recentPosts)
+                  ) : (
                     <p className="status">No posts yet.</p>
                   )}
                 </div>
-                {showAllPosts && (
+                {showAllPosts && canViewPosts && (
                   <div className="comments" ref={allPostsRef}>
                     <p className="eyebrow">All posts</p>
                     {selectedPosts.length ? renderPostList(selectedPosts, true) : (
@@ -613,6 +841,76 @@ export default function Friends() {
           </section>
         </div>
       </div>
+
+      {reportOpen && selectedFriend && (
+        <div className="friend-report-overlay" role="dialog" aria-modal="true">
+          <div className="friend-report-modal">
+            <div className="friend-report-header">
+              <div>
+                <p className="eyebrow">Report</p>
+                <h3>Report {selectedFriendLabel}</h3>
+                <p className="friend-report-sub">
+                  Help us keep the community safe by sharing the reason.
+                </p>
+              </div>
+              <button
+                className="friend-report-close"
+                type="button"
+                onClick={() => setReportOpen(false)}
+                aria-label="Close report"
+              >
+                Close
+              </button>
+            </div>
+            <div className="friend-report-body">
+              <label className="friend-report-label" htmlFor="report-reason">
+                Reason
+              </label>
+              <select
+                id="report-reason"
+                className="auth-input"
+                value={reportReason}
+                onChange={(e) => setReportReason(e.target.value as ReportReason)}
+              >
+                <option value="spam">Spam</option>
+                <option value="harassment">Harassment</option>
+                <option value="hate">Hate</option>
+                <option value="impersonation">Impersonation</option>
+                <option value="other">Other</option>
+              </select>
+              <label className="friend-report-label" htmlFor="report-details">
+                Details (optional)
+              </label>
+              <textarea
+                id="report-details"
+                className="auth-input friend-report-textarea"
+                rows={4}
+                value={reportDetails}
+                onChange={(e) => setReportDetails(e.target.value)}
+                placeholder="Share context that helps reviewers."
+              />
+              {reportError && <p className="status status-error">{reportError}</p>}
+            </div>
+            <div className="friend-report-actions">
+              <button
+                className="btn ghost"
+                type="button"
+                onClick={() => setReportOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn primary"
+                type="button"
+                onClick={handleSubmitReport}
+                disabled={actionBusy === "report"}
+              >
+                {actionBusy === "report" ? "Sending..." : "Submit report"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
