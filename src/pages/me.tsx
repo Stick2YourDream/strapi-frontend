@@ -1,5 +1,6 @@
 // src/pages/Me.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import "../css/dashboard.css";
 import "../css/profile.css";
 import { useAuth } from "../context/AuthContext";
@@ -215,9 +216,10 @@ const CHAT_PRESETS = [
 ] as const;
 
 export default function Me() {
-  const { user, refreshProfile } = useAuth();
+  const { user, refreshProfile, logout } = useAuth();
   const { preferences, setBackgroundAll, resetBackgroundAll, setChatPrefs, getBackgroundStyle } =
     useUserPreferences();
+  const navigate = useNavigate();
   usePageMeta({
     title: "My Profile | Your Social Place",
     description:
@@ -264,9 +266,13 @@ export default function Me() {
   const [postFile, setPostFile] = useState<File | null>(null);
   const [postSubmitting, setPostSubmitting] = useState(false);
   const [postError, setPostError] = useState<string | null>(null);
+  const [postVisibility, setPostVisibility] = useState("friends");
   const [feedbackAudience, setFeedbackAudience] = useState("none");
   const [feedbackTargetId, setFeedbackTargetId] = useState<number | null>(null);
   const [friendOptions, setFriendOptions] = useState<FriendOption[]>([]);
+  const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
+  const [deleteAccountError, setDeleteAccountError] = useState<string | null>(null);
+  const [deletingAccount, setDeletingAccount] = useState(false);
   const [deletePostTarget, setDeletePostTarget] = useState<MediaPost | null>(null);
   const [linkPreview, setLinkPreview] = useState<LinkPreview | null>(null);
   const [linkPreviewLoading, setLinkPreviewLoading] = useState(false);
@@ -772,6 +778,7 @@ export default function Me() {
           Users_Content: content,
           owner: user.id,
           Users_Pictures: uploadedId ? [uploadedId] : undefined,
+          visibility: postVisibility,
           feedbackAudience,
           feedbackTarget: feedbackAudience === "specific" ? feedbackTargetId : undefined,
         },
@@ -1211,6 +1218,30 @@ export default function Me() {
     setEditing(false);
   };
 
+  const handleDeleteAccount = async () => {
+    if (!user) return;
+    setDeleteAccountError(null);
+    setDeletingAccount(true);
+    try {
+      await api.post("/account/delete", { confirm: "delete" });
+      setDeleteAccountOpen(false);
+      logout();
+      navigate("/");
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Failed to delete profile.";
+        setDeleteAccountError(String(msg));
+      } else {
+        setDeleteAccountError("Failed to delete profile.");
+      }
+    } finally {
+      setDeletingAccount(false);
+    }
+  };
+
   if (!user) return null;
 
   const displayName =
@@ -1606,6 +1637,60 @@ export default function Me() {
         </div>
       )}
 
+      {deleteAccountOpen && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.6)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+        >
+          <div
+            style={{
+              background: "#0f172a",
+              padding: "24px",
+              borderRadius: "12px",
+              boxShadow: "0 12px 40px rgba(0,0,0,0.35)",
+              maxWidth: "520px",
+              width: "90%",
+              border: "1px solid rgba(248, 113, 113, 0.35)",
+            }}
+          >
+            <h3 style={{ margin: "0 0 12px", color: "#f87171" }}>Delete Your Profile</h3>
+            <p style={{ margin: "0 0 16px", color: "#e5e7eb" }}>
+              Are you sure you want to delete your entire profile, you will loose access to Your
+              Social Place and all of your personal data that you have posted on Your Social Place.
+              Once deleted, it cannot be undone, so make sure this is what you really want.
+            </p>
+            {deleteAccountError && (
+              <p style={{ margin: "0 0 12px", color: "#fecaca" }}>{deleteAccountError}</p>
+            )}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px" }}>
+              <button
+                className="btn ghost"
+                type="button"
+                disabled={deletingAccount}
+                onClick={() => setDeleteAccountOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="profile-delete-button"
+                type="button"
+                disabled={deletingAccount}
+                onClick={() => void handleDeleteAccount()}
+              >
+                Yes, Delete My Profile
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {deletePostTarget && (
         <div
           style={{
@@ -1655,6 +1740,15 @@ export default function Me() {
                 Yes, I'm Sure
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {deletingAccount && (
+        <div className="profile-delete-overlay">
+          <div className="profile-delete-modal">
+            <div className="profile-delete-spinner" aria-hidden="true" />
+            <p>Profile Deletion in Progress</p>
           </div>
         </div>
       )}
@@ -2181,6 +2275,21 @@ export default function Me() {
                       Save Profile
                     </button>
                   </div>
+                  <div className="profile-delete-zone">
+                    <p className="profile-delete-note">
+                      Deleting your profile removes your account, posts, and all related data.
+                    </p>
+                    <button
+                      className="profile-delete-button"
+                      type="button"
+                      onClick={() => {
+                        setDeleteAccountError(null);
+                        setDeleteAccountOpen(true);
+                      }}
+                    >
+                      Delete Your Profile
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -2242,6 +2351,24 @@ export default function Me() {
               />
             )}
             {linkPreviewError && <p className="status status-error">{linkPreviewError}</p>}
+
+            <div className="post-composer__feedback">
+              <span className="post-feedback-label">Post visibility</span>
+              <div className="post-feedback-row">
+                <select
+                  className="auth-input post-feedback-select"
+                  value={postVisibility}
+                  onChange={(e) => {
+                    setPostVisibility(e.target.value);
+                    setPostError(null);
+                  }}
+                >
+                  <option value="public">Public</option>
+                  <option value="friends">Friends</option>
+                  <option value="private">Private</option>
+                </select>
+              </div>
+            </div>
 
             <div className="post-composer__feedback">
               <span className="post-feedback-label">Request feedback</span>

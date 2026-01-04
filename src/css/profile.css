@@ -83,6 +83,83 @@
   margin-top: 4px;
 }
 
+.profile-delete-zone {
+  margin-top: 16px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  background: rgba(127, 29, 29, 0.12);
+  display: grid;
+  gap: 10px;
+}
+
+.profile-delete-note {
+  margin: 0;
+  color: #fecaca;
+  font-size: 13px;
+}
+
+.profile-delete-button {
+  border: 1px solid rgba(248, 113, 113, 0.6);
+  background: rgba(248, 113, 113, 0.18);
+  color: #fee2e2;
+  padding: 10px 16px;
+  border-radius: 999px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.profile-delete-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 20px rgba(248, 113, 113, 0.2);
+  background: rgba(248, 113, 113, 0.28);
+}
+
+.profile-delete-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.profile-delete-overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(6, 10, 18, 0.7);
+  z-index: 1100;
+}
+
+.profile-delete-modal {
+  display: grid;
+  gap: 10px;
+  padding: 20px 26px;
+  border-radius: 14px;
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  background: rgba(12, 17, 28, 0.98);
+  color: #fee2e2;
+  text-align: center;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+}
+
+.profile-delete-spinner {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 3px solid rgba(248, 113, 113, 0.3);
+  border-top-color: #fca5a5;
+  animation: profile-delete-spin 0.9s linear infinite;
+  margin: 0 auto;
+}
+
+@keyframes profile-delete-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .profile-appearance {
   margin-top: 18px;
   display: grid;

@@ -68,7 +68,7 @@ type PostsState = {
   user: unknown[];
   group: unknown[];
   comments: unknown[];
-  admin?: unknown[];
+  admin: unknown[];
 };
 
 const isRecord = (value: unknown): value is UnknownRecord =>
@@ -173,6 +173,8 @@ const feedbackLabelFor = (post: NormalizedPost) => {
 };
 const sortByCreatedAtDesc = (items: NormalizedPost[]) =>
   [...items].sort((a, b) => {
+    if (a.source === "admin" && b.source !== "admin") return -1;
+    if (a.source !== "admin" && b.source === "admin") return 1;
     const aParsed = a.createdAt ? Date.parse(a.createdAt) : 0;
     const bParsed = b.createdAt ? Date.parse(b.createdAt) : 0;
     const aTime = Number.isNaN(aParsed) ? 0 : aParsed;
@@ -325,13 +327,19 @@ const LinkPreviewCard = ({
 };
 
 export default function Dashboard() {
-  const [posts, setPosts] = useState<PostsState>({ user: [], group: [], comments: [] });
+  const [posts, setPosts] = useState<PostsState>({
+    user: [],
+    group: [],
+    comments: [],
+    admin: [],
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [formContent, setFormContent] = useState("");
   const [formFile, setFormFile] = useState<File | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [postVisibility, setPostVisibility] = useState("friends");
   const [feedbackAudience, setFeedbackAudience] = useState("none");
   const [feedbackTargetId, setFeedbackTargetId] = useState<number | null>(null);
   const [friendOptions, setFriendOptions] = useState<FriendOption[]>([]);
@@ -471,7 +479,8 @@ export default function Dashboard() {
           .map((id, index) => `filters[group][id][$in][${index}]=${id}`)
           .join("&");
 
-        const [userRes, groupRes, commentsRes] = await Promise.all([
+        const [adminRes, userRes, groupRes, commentsRes] = await Promise.all([
+          api.get("/posts?populate=Pictures"),
           userFilterIds.length
             ? api.get(
                 `/users-posts?${userFilter}&populate=Users_Pictures&populate=owner&populate=feedbackTarget` +
@@ -494,6 +503,7 @@ export default function Dashboard() {
           user: userRes.data?.data ?? [],
           group: groupRes.data?.data ?? [],
           comments: allComments,
+          admin: adminRes.data?.data ?? [],
         });
       } catch (err: unknown) {
         if (cancelled) return;
@@ -735,10 +745,78 @@ export default function Dashboard() {
       };
     };
 
+    const normalizeAdminPost = (post: unknown): NormalizedPost => {
+      const attributes = normalize(post) as {
+        Title?: string;
+        Posts_Content?: string;
+        Pictures?: unknown;
+        createdAt?: string;
+      };
+      const title = getString(attributes.Title) ?? "Announcement";
+      const content = getString(attributes.Posts_Content) ?? "";
+
+      const picturesRaw = getEntity(attributes.Pictures);
+      const mediaItem = Array.isArray(picturesRaw) ? picturesRaw[0] : picturesRaw;
+      const mediaAttr = normalize(mediaItem) as MediaAttributes;
+      const formats = mediaAttr.formats;
+      let imageUrl =
+        mediaAttr.url ||
+        formats?.large?.url ||
+        formats?.medium?.url ||
+        formats?.small?.url ||
+        formats?.thumbnail?.url;
+      if (imageUrl && imageUrl.startsWith("/")) {
+        imageUrl = `${apiBase}${imageUrl}`;
+      }
+
+      const postRecord = asRecord(post);
+      const rawPostId = postRecord.id ?? postRecord.documentId;
+      const targetIdStr = rawPostId === undefined ? "" : String(rawPostId);
+      const matchedComments = allComments
+        .filter((comment) => {
+          const commentRecord = asRecord(comment);
+          const targetType = String(commentRecord.target_type ?? "").toLowerCase();
+          const targetId =
+            commentRecord.target_id === undefined ? "" : String(commentRecord.target_id);
+          return targetType === "admin" && targetId === targetIdStr;
+        })
+        .map((comment) => {
+          const commentRecord = asRecord(comment);
+          const commentAttrs = asRecord(commentRecord.attributes);
+          const ownerSource = commentAttrs.owner ?? commentRecord.owner;
+          const commentId =
+            typeof commentRecord.id === "string" || typeof commentRecord.id === "number"
+              ? commentRecord.id
+              : String(commentRecord.id ?? "");
+          return {
+            id: commentId,
+            body: getString(commentRecord.body) ?? "",
+            owner: getOwnerName(ownerSource, "User"),
+            ownerId: getEntityId(ownerSource),
+          };
+        });
+
+      const postId =
+        typeof rawPostId === "string" || typeof rawPostId === "number" ? rawPostId : title;
+
+      return {
+        id: postId,
+        title,
+        content,
+        imageUrl,
+        createdAt: getString(attributes.createdAt),
+        source: "admin",
+        ownerName: "Your Social Place",
+        comments: matchedComments,
+        signalTag: "check-in",
+      };
+    };
+
     const userPosts = posts.user.map((post) => normalizeUserPost(post));
     const groupPosts = posts.group.map((post) => normalizeGroupPost(post));
+    const adminPosts = posts.admin.map((post) => normalizeAdminPost(post));
 
-    return sortByCreatedAtDesc([...userPosts, ...groupPosts]);
+    return sortByCreatedAtDesc([...adminPosts, ...userPosts, ...groupPosts]);
   }, [posts]);
 
   useEffect(() => {
@@ -850,6 +928,7 @@ export default function Dashboard() {
           Users_Content: content,
           owner: user?.id,
           Users_Pictures: uploadedId ? [uploadedId] : undefined,
+          visibility: postVisibility,
           feedbackAudience,
           feedbackTarget: feedbackAudience === "specific" ? feedbackTargetId : undefined,
         },
@@ -1019,6 +1098,24 @@ export default function Dashboard() {
                 />
               )}
               {linkPreviewError && <p className="status status-error">{linkPreviewError}</p>}
+
+              <div className="post-composer__feedback">
+                <span className="post-feedback-label">Post visibility</span>
+                <div className="post-feedback-row">
+                  <select
+                    className="auth-input post-feedback-select"
+                    value={postVisibility}
+                    onChange={(e) => {
+                      setPostVisibility(e.target.value);
+                      setFormError(null);
+                    }}
+                  >
+                    <option value="public">Public</option>
+                    <option value="friends">Friends</option>
+                    <option value="private">Private</option>
+                  </select>
+                </div>
+              </div>
 
               <div className="post-composer__feedback">
                 <span className="post-feedback-label">Request feedback</span>
