@@ -31,14 +31,20 @@ export default function Terms() {
         <main className="terms-card">
           <h1>{TERMS_TITLE}</h1>
           <p className="terms-updated">{TERMS_UPDATED}</p>
-          {TERMS_SECTIONS.map((section) => (
-            <section key={section.title} className="terms-section" id={section.id}>
-              <h2>{section.title}</h2>
-              {section.body.map((paragraph, index) => (
-                <p key={`${section.title}-${index}`}>{paragraph}</p>
-              ))}
-            </section>
-          ))}
+          {TERMS_SECTIONS.map((section) => {
+            const sectionId = section.title
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, "-")
+              .replace(/^-+|-+$/g, "");
+            return (
+              <section key={sectionId || section.title} className="terms-section" id={sectionId}>
+                <h2>{section.title}</h2>
+                {section.body.map((paragraph, index) => (
+                  <p key={`${section.title}-${index}`}>{paragraph}</p>
+                ))}
+              </section>
+            );
+          })}
           <div className="terms-contact">
             <span>Contact:</span>
             <a href="mailto:support@yoursocialplace.com">support@yoursocialplace.com</a>

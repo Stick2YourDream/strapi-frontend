@@ -257,10 +257,6 @@ export default function Me() {
   const [errorModal, setErrorModal] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [successModal, setSuccessModal] = useState<string | null>(null);
-  const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState("");
-  const [deleteAccountError, setDeleteAccountError] = useState<string | null>(null);
-  const [deletingAccount, setDeletingAccount] = useState(false);
   const [editing, setEditing] = useState(true);
   const [hobbyInput, setHobbyInput] = useState("");
   const [hobbyList, setHobbyList] = useState<string[]>([]);
