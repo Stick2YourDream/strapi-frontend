@@ -11,6 +11,8 @@ import Groups from "../pages/groups";
 import GroupDetail from "../pages/group";
 import Landing from "../pages/landing";
 import Terms from "../pages/terms";
+import Privacy from "../pages/privacy";
+import Guidelines from "../pages/guidelines";
 
 export default function AppRoutes(): JSX.Element {
   return (
@@ -23,6 +25,8 @@ export default function AppRoutes(): JSX.Element {
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
       <Route path="/terms" element={<Terms />} />
+      <Route path="/privacy" element={<Privacy />} />
+      <Route path="/guidelines" element={<Guidelines />} />
       <Route
         path="/dashboard"
         element={

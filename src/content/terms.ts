@@ -19,14 +19,14 @@ export const TERMS_SECTIONS = [
   {
     title: "3. Community Standards",
     body: [
-      "Stick2YourDreams is a motivational support network. Harassment, hateful conduct, threats, impersonation, and discriminatory content are not allowed.",
+      "Your Social Place is a motivational support network operated by Stick2YourDreams. Harassment, hateful conduct, threats, impersonation, and discriminatory content are not allowed.",
       "You agree not to post illegal content, malicious code, spam, or anything that would disrupt the Service or harm other users.",
     ],
   },
   {
     title: "4. Content You Post",
     body: [
-      "You own the content you submit, but you grant Stick2YourDreams a non-exclusive, worldwide, royalty-free license to host, store, and display that content for operating the Service.",
+      "You own the content you submit, but you grant Your Social Place a non-exclusive, worldwide, royalty-free license to host, store, and display that content for operating the Service.",
       "You are responsible for the content you post and for ensuring you have the rights to any media or links you share.",
     ],
   },
@@ -61,7 +61,7 @@ export const TERMS_SECTIONS = [
   {
     title: "9. Limitation of Liability",
     body: [
-      "To the maximum extent permitted by law, Stick2YourDreams will not be liable for any indirect, incidental, special, consequential, or punitive damages.",
+      "To the maximum extent permitted by law, Your Social Place will not be liable for any indirect, incidental, special, consequential, or punitive damages.",
       "Our total liability for any claim related to the Service will not exceed the amount you paid to use the Service in the past 12 months (if any).",
     ],
   },
@@ -81,7 +81,7 @@ export const TERMS_SECTIONS = [
   {
     title: "12. Contact",
     body: [
-      "Questions or concerns can be sent to jasonadams@stick2yourdream.com.",
+      "Questions or concerns can be sent to support@yoursocialplace.com.",
     ],
   },
 ];

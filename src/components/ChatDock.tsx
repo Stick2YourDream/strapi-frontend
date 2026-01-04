@@ -86,7 +86,16 @@ export default function ChatDock() {
   const friendMenuRef = useRef<HTMLDivElement | null>(null);
   const chatPrefs = preferences.chat;
 
-  const hideForRoute = ["/", "/home", "/landing", "/login", "/register"].includes(
+  const hideForRoute = [
+    "/",
+    "/home",
+    "/landing",
+    "/login",
+    "/register",
+    "/terms",
+    "/privacy",
+    "/guidelines",
+  ].includes(
     location.pathname
   );
 

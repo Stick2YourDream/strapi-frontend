@@ -31,6 +31,9 @@ type NormalizedPost = {
   groupName?: string;
   groupId?: number;
   signalTag?: SignalTag;
+  feedbackAudience?: string;
+  feedbackTargetId?: number;
+  feedbackTargetName?: string;
 };
 
 type LinkPreview = {
@@ -40,6 +43,11 @@ type LinkPreview = {
   image?: string;
   siteName?: string;
   type?: string;
+};
+
+type FriendOption = {
+  id: number;
+  label: string;
 };
 
 type UnknownRecord = Record<string, unknown>;
@@ -151,6 +159,16 @@ const isVideoUrl = (value?: string) => !!value && /\.(mp4|webm|mov)$/i.test(valu
 const mediaDescriptor = (mediaUrl?: string, hasLink?: boolean) => {
   if (mediaUrl) return isVideoUrl(mediaUrl) ? "with a video" : "with a picture";
   if (hasLink) return "with a link";
+  return "";
+};
+const feedbackLabelFor = (post: NormalizedPost) => {
+  const audience = post.feedbackAudience;
+  if (!audience || audience === "none") return "";
+  if (audience === "public") return "Feedback: Public";
+  if (audience === "friends") return "Feedback: Friends";
+  if (audience === "specific") {
+    return `Feedback: ${post.feedbackTargetName || "A friend"}`;
+  }
   return "";
 };
 const sortByCreatedAtDesc = (items: NormalizedPost[]) =>
@@ -314,6 +332,9 @@ export default function Dashboard() {
   const [formFile, setFormFile] = useState<File | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [feedbackAudience, setFeedbackAudience] = useState("none");
+  const [feedbackTargetId, setFeedbackTargetId] = useState<number | null>(null);
+  const [friendOptions, setFriendOptions] = useState<FriendOption[]>([]);
   const [, setFriendIds] = useState<number[]>([]);
   const [, setGroupIds] = useState<number[]>([]);
   const [commentInputs, setCommentInputs] = useState<Record<string | number, string>>({});
@@ -336,6 +357,21 @@ export default function Dashboard() {
   const userLabel = user?.username || user?.email || "Guest";
   const userInitial = userLabel.charAt(0).toUpperCase();
   const userId = user?.id;
+
+  useEffect(() => {
+    if (feedbackAudience !== "specific") {
+      setFeedbackTargetId(null);
+      return;
+    }
+    if (!friendOptions.length) {
+      setFeedbackTargetId(null);
+      return;
+    }
+    if (feedbackTargetId && friendOptions.some((option) => option.id === feedbackTargetId)) {
+      return;
+    }
+    setFeedbackTargetId(friendOptions[0].id);
+  }, [feedbackAudience, feedbackTargetId, friendOptions]);
 
   useEffect(() => {
     let active = true;
@@ -388,6 +424,7 @@ export default function Dashboard() {
         );
 
         const acceptedIds = new Set<number>();
+        const friendOptionMap = new Map<number, FriendOption>();
         (friendsRes.data?.data ?? []).forEach((entry: unknown) => {
           const attrs = normalize(entry) as {
             status?: string;
@@ -399,10 +436,21 @@ export default function Dashboard() {
           const requesterId = getEntityId(attrs.requester);
           const targetId = getEntityId(attrs.target);
           const otherId = requesterId === userId ? targetId : requesterId;
-          if (otherId) acceptedIds.add(otherId);
+          const otherUser = requesterId === userId ? attrs.target : attrs.requester;
+          if (otherId) {
+            acceptedIds.add(otherId);
+            friendOptionMap.set(otherId, {
+              id: otherId,
+              label: getOwnerName(otherUser, `User ${otherId}`),
+            });
+          }
         });
         const nextFriendIds = Array.from(acceptedIds);
         setFriendIds(nextFriendIds);
+        const nextFriendOptions = Array.from(friendOptionMap.values()).sort((a, b) =>
+          a.label.localeCompare(b.label)
+        );
+        setFriendOptions(nextFriendOptions);
 
         const groupMembersRes = await api.get(
           `/group-members?filters[user][id][$eq]=${userId}&populate=group&pagination[pageSize]=200`
@@ -426,7 +474,7 @@ export default function Dashboard() {
         const [userRes, groupRes, commentsRes] = await Promise.all([
           userFilterIds.length
             ? api.get(
-                `/users-posts?${userFilter}&populate=Users_Pictures&populate=owner` +
+                `/users-posts?${userFilter}&populate=Users_Pictures&populate=owner&populate=feedbackTarget` +
                   `&sort=createdAt:desc&pagination[pageSize]=200`
               )
             : Promise.resolve({ data: { data: [] } }),
@@ -544,6 +592,8 @@ export default function Dashboard() {
         owner?: unknown;
         createdAt?: string;
         signalTag?: SignalTag;
+        feedbackAudience?: string;
+        feedbackTarget?: unknown;
       };
       const title = getString(attributes.Title) ?? getString(attributes.title) ?? "Untitled";
       const content =
@@ -595,6 +645,17 @@ export default function Dashboard() {
       const ownerId = getEntityId(ownerData);
       const ownerName =
         getString(ownerAttrs.username) ?? getString(ownerAttrs.email) ?? "User";
+      const feedbackTargetData = getEntity(attributes.feedbackTarget);
+      const feedbackTargetAttrs = normalize(feedbackTargetData) as {
+        username?: string;
+        email?: string;
+      };
+      const feedbackTargetId = getEntityId(feedbackTargetData);
+      const feedbackTargetName = feedbackTargetId
+        ? getString(feedbackTargetAttrs.username) ??
+          getString(feedbackTargetAttrs.email) ??
+          `User ${feedbackTargetId}`
+        : undefined;
       const postId =
         typeof rawPostId === "string" || typeof rawPostId === "number" ? rawPostId : title;
 
@@ -609,6 +670,9 @@ export default function Dashboard() {
         ownerId,
         comments: matchedComments,
         signalTag: attributes.signalTag || "check-in",
+        feedbackAudience: getString(attributes.feedbackAudience),
+        feedbackTargetId,
+        feedbackTargetName,
       };
     };
 
@@ -755,6 +819,10 @@ export default function Dashboard() {
       setFormError("Add a message or a photo to post.");
       return;
     }
+    if (feedbackAudience === "specific" && !feedbackTargetId) {
+      setFormError("Choose a friend for a specific feedback request.");
+      return;
+    }
 
     const url = extractFirstUrl(content);
     const previewTitle = linkPreview?.url === url ? linkPreview.title : undefined;
@@ -782,6 +850,8 @@ export default function Dashboard() {
           Users_Content: content,
           owner: user?.id,
           Users_Pictures: uploadedId ? [uploadedId] : undefined,
+          feedbackAudience,
+          feedbackTarget: feedbackAudience === "specific" ? feedbackTargetId : undefined,
         },
       });
 
@@ -789,9 +859,11 @@ export default function Dashboard() {
       setFormFile(null);
       setLinkPreview(null);
       setLinkPreviewError(null);
+      setFeedbackAudience("none");
+      setFeedbackTargetId(null);
       const [adminRes, userRes] = await Promise.all([
         api.get("/posts?populate=Pictures"),
-        api.get("/users-posts?populate=Users_Pictures&populate=owner"),
+        api.get("/users-posts?populate=Users_Pictures&populate=owner&populate=feedbackTarget"),
       ]);
       const commentsRes = await api.get("/comments?populate=owner");
       setPosts((prev) => ({
@@ -948,6 +1020,49 @@ export default function Dashboard() {
               )}
               {linkPreviewError && <p className="status status-error">{linkPreviewError}</p>}
 
+              <div className="post-composer__feedback">
+                <span className="post-feedback-label">Request feedback</span>
+                <div className="post-feedback-row">
+                  <select
+                    className="auth-input post-feedback-select"
+                    value={feedbackAudience}
+                    onChange={(e) => {
+                      setFeedbackAudience(e.target.value);
+                      setFormError(null);
+                    }}
+                  >
+                    <option value="none">No feedback request</option>
+                    <option value="public">Public feedback</option>
+                    <option value="friends">Friends only</option>
+                    <option value="specific">Specific friend</option>
+                  </select>
+                  {feedbackAudience === "specific" && (
+                    <select
+                      className="auth-input post-feedback-select"
+                      value={feedbackTargetId ?? ""}
+                      onChange={(e) => {
+                        const nextId = Number(e.target.value);
+                        setFeedbackTargetId(Number.isFinite(nextId) ? nextId : null);
+                        setFormError(null);
+                      }}
+                      disabled={!friendOptions.length}
+                    >
+                      <option value="">Select a friend</option>
+                      {friendOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+                {feedbackAudience === "specific" && friendOptions.length === 0 && (
+                  <p className="post-feedback-note">
+                    Add a friend first to request feedback from a specific person.
+                  </p>
+                )}
+              </div>
+
               <div className="post-composer__actions">
                 <div className="post-composer__tools">
                   <label className="post-composer__tool">
@@ -1010,6 +1125,7 @@ export default function Dashboard() {
                 post.source === "user" &&
                 Number.isFinite(postId) &&
                 user?.id === post.ownerId;
+              const feedbackLabel = feedbackLabelFor(post);
 
               return (
                 <article key={post.id} className="post-card">
@@ -1050,6 +1166,9 @@ export default function Dashboard() {
                     <div className="post-meta">
                       <span className="pill subtle">Feature</span>
                       <div className="post-meta-right">
+                        {feedbackLabel && (
+                          <span className="post-feedback-tag">{feedbackLabel}</span>
+                        )}
                         {post.createdAt && (
                           <span className="date">{formatDate(post.createdAt)}</span>
                         )}

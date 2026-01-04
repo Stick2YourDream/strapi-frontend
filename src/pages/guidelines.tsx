@@ -1,16 +1,16 @@
 import "../css/terms.css";
 import { useNavigate } from "react-router-dom";
-import { TERMS_SECTIONS, TERMS_TITLE, TERMS_UPDATED } from "../content/terms";
+import { GUIDELINES_SECTIONS, GUIDELINES_TITLE, GUIDELINES_UPDATED } from "../content/guidelines";
 import { usePageMeta } from "../hooks/usePageMeta";
 
-export default function Terms() {
+export default function Guidelines() {
   const navigate = useNavigate();
   usePageMeta({
-    title: "Terms & Conditions | Your Social Place",
+    title: "Community Guidelines | Your Social Place",
     description:
-      "Review the Your Social Place terms and conditions for community guidelines, safety, and platform usage.",
+      "Read the Your Social Place community guidelines for constructive feedback, safety, and reporting.",
     type: "website",
-    canonical: "https://yoursocialplace.com/terms",
+    canonical: "https://yoursocialplace.com/guidelines",
   });
 
   return (
@@ -29,20 +29,20 @@ export default function Terms() {
         </header>
 
         <main className="terms-card">
-          <h1>{TERMS_TITLE}</h1>
-          <p className="terms-updated">{TERMS_UPDATED}</p>
-          {TERMS_SECTIONS.map((section) => (
-            <section key={section.title} className="terms-section" id={section.id}>
+          <h1>{GUIDELINES_TITLE}</h1>
+          <p className="terms-updated">{GUIDELINES_UPDATED}</p>
+          {GUIDELINES_SECTIONS.map((section) => (
+            <section
+              key={section.title}
+              className="terms-section"
+              id={section.id}
+            >
               <h2>{section.title}</h2>
               {section.body.map((paragraph, index) => (
                 <p key={`${section.title}-${index}`}>{paragraph}</p>
               ))}
             </section>
           ))}
-          <div className="terms-contact">
-            <span>Contact:</span>
-            <a href="mailto:support@yoursocialplace.com">support@yoursocialplace.com</a>
-          </div>
         </main>
       </div>
     </div>

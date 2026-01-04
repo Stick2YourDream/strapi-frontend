@@ -36,8 +36,22 @@
 }
 
 .terms-mark {
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: #0b0d14;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.terms-mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
 }
 
 .terms-text {
@@ -87,6 +101,27 @@
   margin: 0 0 10px;
   color: #cbd5e1;
   line-height: 1.6;
+}
+
+.terms-contact {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: #cbd5e1;
+  font-size: 14px;
+}
+
+.terms-contact a {
+  color: #8fb5ff;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.terms-contact a:hover {
+  text-decoration: underline;
 }
 
 @media (max-width: 720px) {

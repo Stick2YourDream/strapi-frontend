@@ -19,6 +19,9 @@ type FriendPost = {
   imageUrl?: string;
   createdAt?: string;
   linkUrl?: string;
+  feedbackAudience?: string;
+  feedbackTargetId?: number;
+  feedbackTargetName?: string;
 };
 
 type FriendProfile = {
@@ -126,6 +129,17 @@ const LinkPreviewCard = ({
       </div>
     </a>
   );
+};
+
+const feedbackLabelFor = (post: FriendPost) => {
+  const audience = post.feedbackAudience;
+  if (!audience || audience === "none") return "";
+  if (audience === "public") return "Feedback: Public";
+  if (audience === "friends") return "Feedback: Friends";
+  if (audience === "specific") {
+    return `Feedback: ${post.feedbackTargetName || "You"}`;
+  }
+  return "";
 };
 
 export default function Friends() {
@@ -333,7 +347,7 @@ export default function Friends() {
           .map((id, index) => `filters[owner][id][$in][${index}]=${id}`)
           .join("&");
         const postsRes = await api.get(
-          `/users-posts?${ownerFilter}&populate=Users_Pictures&populate=owner&sort=createdAt:desc&pagination[pageSize]=200&publicationState=preview`
+          `/users-posts?${ownerFilter}&populate=Users_Pictures&populate=owner&populate=feedbackTarget&sort=createdAt:desc&pagination[pageSize]=200&publicationState=preview`
         );
         const grouped: Record<number, FriendPost[]> = {};
         const linkUrls = new Set<string>();
@@ -343,6 +357,13 @@ export default function Friends() {
           if (!ownerId) return;
           const imageUrl = pickMediaUrl(attrs.Users_Pictures);
           const content = attrs.Users_Content || "";
+          const feedbackTargetId = getEntityId(attrs.feedbackTarget);
+          const feedbackTargetAttrs = getEntityAttrs(attrs.feedbackTarget);
+          const feedbackTargetName = feedbackTargetId
+            ? feedbackTargetAttrs?.username ||
+              feedbackTargetAttrs?.email ||
+              `User ${feedbackTargetId}`
+            : undefined;
           const linkUrl = extractFirstUrl(content);
           if (linkUrl) linkUrls.add(linkUrl);
           (grouped[ownerId] = grouped[ownerId] || []).push({
@@ -352,6 +373,9 @@ export default function Friends() {
             imageUrl,
             createdAt: attrs.createdAt,
             linkUrl: linkUrl || undefined,
+            feedbackAudience: attrs.feedbackAudience || undefined,
+            feedbackTargetId,
+            feedbackTargetName,
           });
         });
         Object.values(grouped).forEach((list) => {
@@ -631,20 +655,26 @@ export default function Friends() {
 
   const renderPostList = (posts: FriendPost[], expanded = false) => (
     <ul className={`comment-list friend-posts-list${expanded ? " is-expanded" : ""}`}>
-      {posts.map((post) => (
-        <li key={post.id} className="comment-item">
-          {post.imageUrl && <img src={post.imageUrl} alt={post.title} className="avatar" />}
-          <div className="comment-body">
-            <strong>{post.title}</strong>
-            <p>{post.content}</p>
-            {post.linkUrl && (
-              <div className="friend-link-preview">
-                <LinkPreviewCard preview={linkPreviews[post.linkUrl]} url={post.linkUrl} compact />
+      {posts.map((post) => {
+        const feedbackLabel = feedbackLabelFor(post);
+        return (
+          <li key={post.id} className="comment-item">
+            {post.imageUrl && <img src={post.imageUrl} alt={post.title} className="avatar" />}
+            <div className="comment-body">
+              <div className="friend-post-title">
+                <strong>{post.title}</strong>
+                {feedbackLabel && <span className="post-feedback-tag">{feedbackLabel}</span>}
               </div>
-            )}
-          </div>
-        </li>
-      ))}
+              <p>{post.content}</p>
+              {post.linkUrl && (
+                <div className="friend-link-preview">
+                  <LinkPreviewCard preview={linkPreviews[post.linkUrl]} url={post.linkUrl} compact />
+                </div>
+              )}
+            </div>
+          </li>
+        );
+      })}
     </ul>
   );
 

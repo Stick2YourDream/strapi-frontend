@@ -22,19 +22,37 @@ const routes = [
   {
     path: "/",
     meta: {
-      title: "Stick2YourDreams Connect | Motivational support network",
+      title: "Your Social Place | Motivational social network without all the fluff",
       description:
-        "Stick2YourDreams Connect is a motivational support network where friends celebrate progress, share updates, and keep each other accountable.",
+        "Your Social Place is a community driven motivational social network where real people share dreams, goals, progress, and help uplift each other.",
       url: "https://yoursocialplace.com/",
     },
   },
   {
     path: "/terms",
     meta: {
-      title: "Terms & Conditions | Stick2YourDreams Connect",
+      title: "Terms & Conditions | Your Social Place",
       description:
-        "Review the Stick2YourDreams Connect terms and conditions for community guidelines, safety, and platform usage.",
+        "Review the Your Social Place terms and conditions for community guidelines, safety, and platform usage.",
       url: "https://yoursocialplace.com/terms",
+    },
+  },
+  {
+    path: "/privacy",
+    meta: {
+      title: "Privacy Policy | Your Social Place",
+      description:
+        "Learn how Your Social Place collects, uses, and protects your information.",
+      url: "https://yoursocialplace.com/privacy",
+    },
+  },
+  {
+    path: "/guidelines",
+    meta: {
+      title: "Community Guidelines | Your Social Place",
+      description:
+        "Read the Your Social Place community guidelines for constructive feedback, safety, and reporting.",
+      url: "https://yoursocialplace.com/guidelines",
     },
   },
 ];

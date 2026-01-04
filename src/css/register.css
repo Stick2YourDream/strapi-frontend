@@ -109,6 +109,77 @@
   text-align: center;
 }
 
+.register-trust-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 auto;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  width: min(620px, 100%);
+}
+
+.register-trust-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: #e9ecf5;
+  text-align: left;
+  font-size: 14px;
+}
+
+.register-trust-list li svg {
+  color: #5cf0c7;
+  flex-shrink: 0;
+}
+
+.register-intent {
+  margin: 18px auto 0;
+  width: min(620px, 100%);
+  display: grid;
+  gap: 10px;
+  text-align: left;
+}
+
+.register-intent-label {
+  margin: 0;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: #8fb5ff;
+  text-align: center;
+}
+
+.register-intent-steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.register-intent-steps li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: #e9ecf5;
+  font-size: 14px;
+}
+
+.register-intent-steps li svg {
+  color: #8fb5ff;
+  flex-shrink: 0;
+}
+
 .register-metrics {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -415,44 +486,52 @@
     width: 100%;
   }
 
-  .subhead-top{
+  .subhead-top {
     padding-top: 1rem;
     padding-bottom: 0.1rem;
   }
 
-  .subhead{
+  .subhead {
     display: flex;
     justify-content: center;
     align-items: center;
     justify-self: center;
     text-align: center;
   }
-  }
+}
 
 @media (max-width: 640px) {
-    .auth-shell {
-      padding: 24px 16px 32px;
-      place-items: start stretch;
-    }
+  .auth-shell {
+    padding: 24px 16px 32px;
+    place-items: start stretch;
+  }
 
-    .auth-card {
-      width: 100%;
-    }
+  .auth-card {
+    width: 100%;
+  }
 
-    .register-metrics {
-      grid-template-columns: 1fr;
-    }
+  .register-metrics {
+    grid-template-columns: 1fr;
+  }
 
-    .auth-brand {
-      width: 100%;
-      justify-content: center;
-    }
+  .register-trust-list {
+    grid-template-columns: 1fr;
+  }
 
-    .subhead{
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      justify-self: center;
-      text-align: center;
+  .register-intent-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .auth-brand {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .subhead {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    justify-self: center;
+    text-align: center;
   }
 }

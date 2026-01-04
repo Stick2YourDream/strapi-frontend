@@ -1,5 +1,5 @@
 import "../css/landing.css";
-import { Infinity } from "lucide-react";
+import { CheckCircle2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api/strapi";
@@ -30,6 +30,39 @@ type LinkPreview = {
   siteName?: string;
   type?: string;
 };
+
+const INTENT_OPTIONS = [
+  { id: "build-habit", label: "Build A Habit", detail: "Daily accountability" },
+  { id: "stay-connected", label: "Stay Connected", detail: "Weekly momentum" },
+  { id: "find-accountability", label: "Find Accountability", detail: "Supportive check-ins" },
+];
+
+const FOCUS_PREVIEW_POSTS: FocusPost[] = [
+  {
+    id: "demo-1",
+    title: "Shipping day 7",
+    excerpt: "Shared my weekly progress and kept the streak alive.",
+    author: "Member",
+  },
+  {
+    id: "demo-2",
+    title: "Habit check-in",
+    excerpt: "30 minutes of deep work before breakfast. Anyone else doing this?",
+    author: "Member",
+  },
+  {
+    id: "demo-3",
+    title: "Feedback loop",
+    excerpt: "Posted my landing page and got two actionable tweaks.",
+    author: "Member",
+  },
+];
+
+const FOCUS_PREVIEW_STATS = [
+  { label: "Wins shipped today", value: "12" },
+  { label: "People asking for feedback", value: "5" },
+  { label: "Active accountability streaks", value: "28" },
+];
 
 const trimText = (value: string, max: number) => {
   const cleaned = String(value || "").replace(/\s+/g, " ").trim();
@@ -76,6 +109,7 @@ export default function Landing() {
   const [adminPosts, setAdminPosts] = useState<FocusPost[]>([]);
   const [focusLoading, setFocusLoading] = useState(true);
   const [focusPreviews, setFocusPreviews] = useState<Record<string, LinkPreview | null>>({});
+  const [selectedIntent, setSelectedIntent] = useState("");
   const [suggestionOpen, setSuggestionOpen] = useState(false);
   const [suggestionName, setSuggestionName] = useState("");
   const [suggestionEmail, setSuggestionEmail] = useState("");
@@ -471,6 +505,9 @@ export default function Landing() {
   );
 
   const focusHasPosts = featuredPosts.length > 0 || adminPosts.length > 0;
+  const selectedIntentOption = INTENT_OPTIONS.find(
+    (option) => option.id === selectedIntent
+  );
   const profileInitial = nameForDisplay.charAt(0).toUpperCase();
 
   const handleSuggestionSubmit = async () => {
@@ -549,7 +586,7 @@ export default function Landing() {
   return (
     <div className="landing-page">
       <div className="landing-shell">
-        <header className="landing-nav">
+        <nav className="landing-nav" aria-label="Primary">
           <button
             type="button"
             className="landing-brand"
@@ -557,11 +594,16 @@ export default function Landing() {
             aria-label="Go to Your Social Place home"
           >
             <span className="landing-brand-mark" aria-hidden="true">
-              <img src="/logo.png" alt="" />
+              <img src="/logo.png" alt="Your Social Place logo" />
             </span>
             <span className="landing-brand-text">Your Social Place</span>
           </button>
           <div className="landing-beta">BETA</div>
+          <div className="landing-links">
+            <a href="/guidelines">Guidelines</a>
+            <a href="#safety">Safety</a>
+            <a href="#reporting">Report</a>
+          </div>
           <div className="nav-actions">
             {user ? (
               <div className="landing-profile">
@@ -680,7 +722,7 @@ export default function Landing() {
               </>
             )}
           </div>
-        </header>
+        </nav>
 
         <section className="hero">
           <div className="hero-copy">
@@ -693,20 +735,62 @@ export default function Landing() {
               Let's Build a Community that Supports Each Other.
             </h1>
             <p>
-              Your Social Place is built on mutual support—because you don’t have to do this alone. 
-              Share what you’re working on, and get real feedback when you’re stuck, encouragement 
-              when you’re tired, and accountability when you need that extra push. And as you grow, 
-              you’ll pass it forward—helping someone else stay in motion, too. No fluff—just people 
+              Your Social Place is built on mutual support-because you don't have to do this alone. 
+              Share what you're working on, and get real feedback when you're stuck, encouragement 
+              when you're tired, and accountability when you need that extra push. And as you grow, 
+              you'll pass it forward-helping someone else stay in motion, too. No fluff-just people 
               lifting each other up and keeping their word.
             </p>
+            <div className="hero-intent">
+              <p className="hero-intent-label">Choose your intention</p>
+              <div className="hero-intent-options">
+                {INTENT_OPTIONS.map((option) => (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={`hero-intent-button${
+                      selectedIntent === option.id ? " is-active" : ""
+                    }`}
+                    onClick={() => setSelectedIntent(option.id)}
+                  >
+                    <span className="hero-intent-title">{option.label}</span>
+                    <span className="hero-intent-sub">{option.detail}</span>
+                  </button>
+                ))}
+              </div>
+              <p className="hero-intent-note">
+                {selectedIntentOption
+                  ? `Great. We'll tailor your onboarding for ${selectedIntentOption.label.toLowerCase()}.`
+                  : "Pick an intention to personalize your start."}
+              </p>
+            </div>
             <div className="hero-cta">
-              <button className="btn-primary" onClick={() => navigate("/register")}>
-                Join the Community!
+              <button
+                className="btn-primary"
+                onClick={() =>
+                  navigate(
+                    selectedIntent
+                      ? `/register?intent=${encodeURIComponent(selectedIntent)}`
+                      : "/register"
+                  )
+                }
+                disabled={!selectedIntent}
+              >
+                {selectedIntent ? "Continue to signup" : "Choose an intention"}
               </button>
               <button className="btn-ghost" onClick={() => navigate("/login")}>
                 Already with us?
               </button>
             </div>
+            {!selectedIntent && (
+              <button
+                type="button"
+                className="hero-cta-skip"
+                onClick={() => navigate("/register")}
+              >
+                Skip for now
+              </button>
+            )}
           </div>
 
           <div className="hero-card">
@@ -742,29 +826,33 @@ export default function Landing() {
                 </div>
               </div>
             ) : (
-              <>
-                {focusLoading && (
-                  <span className="focus-status">Loading the latest posts...</span>
+              <div className="focus-preview">
+                <div className="focus-heading">
+                  <span className="focus-label">Member preview</span>
+                  <span className="focus-sub">A peek at what momentum looks like.</span>
+                </div>
+                {focusLoading && user && (
+                  <span className="focus-status">Loading live updates...</span>
                 )}
-                <div className="hero-grid">
-                  <div className="mini-card">
-                    <strong>Friend Signals</strong>
-                    <p>See who&apos;s active, who needs a nudge, and who just shipped.</p>
+                <div className="focus-preview-grid">
+                  <div className="focus-list">
+                    {FOCUS_PREVIEW_POSTS.map((post) =>
+                      renderFocusItem(post, "DEMO", "preview")
+                    )}
                   </div>
-                  <div className="mini-card">
-                    <strong>Share Posts</strong>
-                    <p>Drop a quick win, a screenshot, or a link for feedback.</p>
-                  </div>
-                  <div className="mini-card">
-                    <strong>Private Threads</strong>
-                    <p>Keep real conversations going without getting buried in noise.</p>
-                  </div>
-                  <div className="mini-card">
-                    <strong>Micro Goals</strong>
-                    <p>Log tiny goals daily so you and your circle stay in sync.</p>
+                  <div className="focus-stats">
+                    {FOCUS_PREVIEW_STATS.map((stat) => (
+                      <div key={stat.label} className="focus-stat">
+                        <span className="focus-stat-value">{stat.value}</span>
+                        <span className="focus-stat-label">{stat.label}</span>
+                      </div>
+                    ))}
                   </div>
                 </div>
-              </>
+                <div className="focus-preview-note">
+                  Create an account to see live posts and join the conversation.
+                </div>
+              </div>
             )}
           </div>
         </section>
@@ -807,23 +895,84 @@ export default function Landing() {
             <h2>What you Get!</h2>
             <span className="muted">Define Trust Within Our Community!</span>
           </div>
-          <div className="metrics">
-            <div className="metric">
-              <strong>Always</strong>
-              <span>A Driven Community</span>
+          <ul className="trust-list">
+            <li>
+              <CheckCircle2 size={20} aria-hidden="true" />
+              <span>No doomscrolling features</span>
+            </li>
+            <li>
+              <CheckCircle2 size={20} aria-hidden="true" />
+              <span>Encouragement and accountability first</span>
+            </li>
+            <li>
+              <CheckCircle2 size={20} aria-hidden="true" />
+              <span>Clear rules with fast reporting</span>
+            </li>
+            <li>
+              <CheckCircle2 size={20} aria-hidden="true" />
+              <span>Safer defaults, private-by-default profiles</span>
+            </li>
+          </ul>
+        </section>
+
+        <section className="section safety-section" id="safety">
+          <div className="section-header">
+            <h2>Safety &amp; Moderation</h2>
+            <span className="muted">Clear expectations, quick action, respectful space.</span>
+          </div>
+          <div className="safety-grid">
+            <div className="safety-card">
+              <h3>Report in a few taps</h3>
+              <p>
+                Flag a post or user from any profile. Reports go straight into our
+                review queue.
+              </p>
             </div>
-            <div className="metric">
-              <strong><Infinity size={30} /></strong>
-              <span>People Who Care</span>
+            <div className="safety-card">
+              <h3>Mute or block instantly</h3>
+              <p>
+                Mute stops inbound messages. Block removes all communication between
+                two users.
+              </p>
             </div>
-            <div className="metric">
-              <strong>0</strong>
-              <span>No Nonsense Distractions</span>
+            <div className="safety-card">
+              <h3>Private-by-default</h3>
+              <p>
+                Share at your pace. Keep your updates in a smaller circle until you
+                decide otherwise.
+              </p>
             </div>
-            <div className="metric">
-              <strong>+</strong>
-              <span>A Cleaner and Safer Community</span>
+          </div>
+          <div className="safety-steps" id="reporting">
+            <div className="safety-step">
+              <span className="safety-step-number">1</span>
+              <div>
+                <strong>Report</strong>
+                <p>Tell us what happened and why it feels unsafe or off-topic.</p>
+              </div>
             </div>
+            <div className="safety-step">
+              <span className="safety-step-number">2</span>
+              <div>
+                <strong>Review</strong>
+                <p>Our team reviews context, history, and impact.</p>
+              </div>
+            </div>
+            <div className="safety-step">
+              <span className="safety-step-number">3</span>
+              <div>
+                <strong>Action</strong>
+                <p>We remove content, warn, or restrict accounts based on severity.</p>
+              </div>
+            </div>
+          </div>
+          <div className="safety-actions">
+            <a className="btn-ghost" href="/guidelines#reporting">
+              Read Community Guidelines
+            </a>
+            <a className="btn-primary" href="/guidelines#reporting">
+              How reporting works
+            </a>
           </div>
         </section>
 
@@ -860,7 +1009,18 @@ export default function Landing() {
                 <a href="/register">Create account</a>
               </>
             )}
+            <a href="/guidelines">Community Guidelines</a>
+          </div>
+          <div className="footer-row footer-column">
+            <span className="footer-title">Safety</span>
+            <a href="#safety">Safety &amp; Moderation</a>
+            <a href="/guidelines#reporting">Report a user</a>
+          </div>
+          <div className="footer-row footer-column">
+            <span className="footer-title">Legal</span>
             <a href="/terms">Terms</a>
+            <a href="/privacy">Privacy</a>
+            <a href="/privacy#cookies">Cookie Policy</a>
           </div>
           <div className="footer-row footer-column">
             <span className="footer-title">Connect</span>
@@ -869,7 +1029,7 @@ export default function Landing() {
           </div>
           <div className="footer-row footer-meta">
             <span>Your Social Place</span>
-            <span>(c) 2025 Stick2YourDreams</span>
+            <span>by Stick2YourDreams</span>
           </div>
         </footer>
       </div>

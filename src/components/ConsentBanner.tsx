@@ -123,6 +123,11 @@ export default function ConsentBanner() {
         <div className="consent-banner__content">
           <p className="consent-banner__title">{copy.title}</p>
           <p className="consent-banner__message">{copy.message}</p>
+          <div className="consent-banner__links">
+            <a href="/privacy">Privacy</a>
+            <a href="/privacy#cookies">Cookie Policy</a>
+            <a href="/privacy#cookies">Manage cookies</a>
+          </div>
         </div>
         <div className="consent-banner__actions">
           <button className="btn ghost" type="button" onClick={() => handleChoice("denied")}>

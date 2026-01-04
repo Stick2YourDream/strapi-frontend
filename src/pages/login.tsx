@@ -101,7 +101,7 @@ export default function Login() {
           <span className="auth-brand-mark" aria-hidden="true">
             <img src="/logo.png" alt="" />
           </span>
-          <span className="auth-brand-text">| Stick2YourDreams</span>
+          <span className="auth-brand-text">Your Social Place</span>
         </button>
         <h1 className="subhead-top">Welcome back!</h1>
         <p className="subhead">

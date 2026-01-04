@@ -45,6 +45,28 @@
   white-space: pre-wrap;
 }
 
+.consent-banner__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.consent-banner__links a {
+  color: #8fb5ff;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.consent-banner__links a:hover {
+  text-decoration: underline;
+}
+
+.consent-banner__links a:focus-visible {
+  outline: none;
+  text-decoration: underline;
+}
+
 .consent-banner__actions {
   display: inline-flex;
   align-items: center;
@@ -61,6 +83,10 @@
 
   .consent-banner__actions {
     width: 100%;
+    justify-content: center;
+  }
+
+  .consent-banner__links {
     justify-content: center;
   }
 }

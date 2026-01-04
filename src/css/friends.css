@@ -353,6 +353,13 @@
   flex-shrink: 0;
 }
 
+.friend-post-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .friend-link-preview {
   margin-top: 8px;
 }

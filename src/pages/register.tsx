@@ -1,7 +1,7 @@
 // src/pages/Register.tsx
-import { Infinity } from "lucide-react";
+import { CheckCircle2 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import api from "../api/strapi";
 import type { RegisterResponse } from "../types/auth";
 import { TERMS_SECTIONS, TERMS_TITLE, TERMS_UPDATED } from "../content/terms";
@@ -81,6 +81,47 @@ const getMaxBirthdate = () => {
   return `${year}-${month}-${day}`;
 };
 
+const INTENT_CONFIG = {
+  "build-habit": {
+    label: "Build A Habit",
+    subhead: "Build consistency with daily check-ins and small wins.",
+    steps: ["Pick a daily focus", "Set a check-in cadence"],
+  },
+  "stay-connected": {
+    label: "Stay Connected",
+    subhead: "Keep your people close with quick updates and encouragement.",
+    steps: ["Choose your core crew", "Turn on check-in nudges"],
+  },
+  "find-accountability": {
+    label: "Find Accountability",
+    subhead: "Find partners who keep you on track and celebrate progress.",
+    steps: ["Share what you need accountability on", "Invite a partner or join a group"],
+  },
+} as const;
+
+type IntentKey = keyof typeof INTENT_CONFIG;
+
+const normalizeIntent = (value?: string | null): IntentKey | null => {
+  if (!value) return null;
+  const cleaned = String(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const aliases: Record<string, IntentKey> = {
+    habit: "build-habit",
+    "build-habit": "build-habit",
+    "build-a-habit": "build-habit",
+    ship: "stay-connected",
+    "stay-connected": "stay-connected",
+    stayconnected: "stay-connected",
+    accountability: "find-accountability",
+    "find-accountability": "find-accountability",
+    findaccountability: "find-accountability",
+  };
+  return aliases[cleaned] ?? null;
+};
+
 export default function Register() {
   const [form, setForm] = useState({
     username: "",
@@ -97,6 +138,10 @@ export default function Register() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const formStartRef = useRef(Date.now());
+  const [searchParams] = useSearchParams();
+  const intentParam = searchParams.get("intent");
+  const intentKey = useMemo(() => normalizeIntent(intentParam), [intentParam]);
+  const intentConfig = intentKey ? INTENT_CONFIG[intentKey] : null;
   usePageMeta({
     title: "Register | Your Social Place",
     description:
@@ -175,13 +220,14 @@ export default function Register() {
         formStart: formStartRef.current,
         botField: form.botField,
         termsAccepted,
+        intent: intentKey || undefined,
       });
 
       // Best-effort: immediately create a linked profile with the chosen handle (username)
       const lockedHandle = slugifyHandle(form.username || form.email);
       const ageValue = String(age);
       try {
-        await api.post("/profiles", {
+        const profilePayload: Record<string, any> = {
           data: {
             handle: lockedHandle,
             firstName: form.username,
@@ -190,6 +236,12 @@ export default function Register() {
             user: res.data.user.id,
             locale: "en",
           },
+        };
+        if (intentKey) {
+          profilePayload.data.intent = intentKey;
+        }
+        await api.post("/profiles", {
+          ...profilePayload,
         });
       } catch {
         // ignore if profile already exists or creation fails (created on first edit instead)
@@ -226,37 +278,52 @@ export default function Register() {
           <span className="auth-brand-mark" aria-hidden="true">
             <img src="/logo.png" alt="" />
           </span>
-          <span className="auth-brand-text">| Stick2YourDreams</span>
+          <span className="auth-brand-text">Your Social Place</span>
         </button>
         <h1 className="subhead-top">Create your account</h1>
         <p className="subhead">
-          Join the community and share your journey!
+          {intentConfig?.subhead || "Join the community and share your journey!"}
         </p>
       </div>
 
       <section className="section register-section">
         <div className="section-header register-section-header">
-          <h2>What you Get!</h2>
-          <p className="muted register-section-sub">Define Trust Within Our Community!</p>
+          <h2>What you get</h2>
+          <p className="muted register-section-sub">
+            Clear rules, safer defaults, real momentum.
+          </p>
         </div>
-        <div className="metrics register-metrics">
-          <div className="metric register-metric">
-            <strong>Always</strong>
-            <span>A Driven Community</span>
+        <ul className="register-trust-list">
+          <li>
+            <CheckCircle2 size={20} aria-hidden="true" />
+            <span>No doomscrolling features</span>
+          </li>
+          <li>
+            <CheckCircle2 size={20} aria-hidden="true" />
+            <span>Encouragement and accountability first</span>
+          </li>
+          <li>
+            <CheckCircle2 size={20} aria-hidden="true" />
+            <span>Clear rules with fast reporting</span>
+          </li>
+          <li>
+            <CheckCircle2 size={20} aria-hidden="true" />
+            <span>Safer defaults, private-by-default profiles</span>
+          </li>
+        </ul>
+        {intentConfig && (
+          <div className="register-intent">
+            <p className="register-intent-label">Next steps for {intentConfig.label}</p>
+            <ul className="register-intent-steps">
+              {intentConfig.steps.map((step) => (
+                <li key={step}>
+                  <CheckCircle2 size={18} aria-hidden="true" />
+                  <span>{step}</span>
+                </li>
+              ))}
+            </ul>
           </div>
-          <div className="metric register-metric">
-            <strong><Infinity size={30} /></strong>
-            <span>People Who Care</span>
-          </div>
-          <div className="metric register-metric">
-            <strong>0</strong>
-            <span>No Nonsense Distractions</span>
-          </div>
-          <div className="metric register-metric">
-            <strong>+</strong>
-            <span>A Cleaner and Safer Community</span>
-          </div>
-        </div>
+        )}
       </section>
 
       <form onSubmit={handleSubmit} className="auth-card">

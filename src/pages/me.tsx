@@ -44,6 +44,14 @@ type MediaPost = {
   documentId?: number | string;
   text: string;
   media?: string;
+  feedbackAudience?: string;
+  feedbackTargetId?: number;
+  feedbackTargetName?: string;
+};
+
+type FriendOption = {
+  id: number;
+  label: string;
 };
 
 type LinkPreview = {
@@ -150,6 +158,16 @@ const mediaDescriptor = (mediaUrl?: string, hasLink?: boolean) => {
   if (hasLink) return "with a link";
   return "";
 };
+const feedbackLabelFor = (post: MediaPost) => {
+  const audience = post.feedbackAudience;
+  if (!audience || audience === "none") return "";
+  if (audience === "public") return "Feedback: Public";
+  if (audience === "friends") return "Feedback: Friends";
+  if (audience === "specific") {
+    return `Feedback: ${post.feedbackTargetName || "A friend"}`;
+  }
+  return "";
+};
 
 const LinkPreviewCard = ({
   preview,
@@ -239,6 +257,10 @@ export default function Me() {
   const [errorModal, setErrorModal] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [successModal, setSuccessModal] = useState<string | null>(null);
+  const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState("");
+  const [deleteAccountError, setDeleteAccountError] = useState<string | null>(null);
+  const [deletingAccount, setDeletingAccount] = useState(false);
   const [editing, setEditing] = useState(true);
   const [hobbyInput, setHobbyInput] = useState("");
   const [hobbyList, setHobbyList] = useState<string[]>([]);
@@ -246,6 +268,9 @@ export default function Me() {
   const [postFile, setPostFile] = useState<File | null>(null);
   const [postSubmitting, setPostSubmitting] = useState(false);
   const [postError, setPostError] = useState<string | null>(null);
+  const [feedbackAudience, setFeedbackAudience] = useState("none");
+  const [feedbackTargetId, setFeedbackTargetId] = useState<number | null>(null);
+  const [friendOptions, setFriendOptions] = useState<FriendOption[]>([]);
   const [deletePostTarget, setDeletePostTarget] = useState<MediaPost | null>(null);
   const [linkPreview, setLinkPreview] = useState<LinkPreview | null>(null);
   const [linkPreviewLoading, setLinkPreviewLoading] = useState(false);
@@ -264,6 +289,22 @@ export default function Me() {
 
   const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
+  const getEntity = (entry: any) => entry?.data ?? entry ?? null;
+  const getEntityId = (entry: any) => {
+    const data = getEntity(entry);
+    if (typeof data === "number") return Number.isFinite(data) ? data : undefined;
+    if (typeof data === "string") {
+      const parsed = Number(data);
+      return Number.isFinite(parsed) ? parsed : undefined;
+    }
+    const rawId = data?.id ?? data?.attributes?.id;
+    const num = Number(rawId);
+    return Number.isFinite(num) ? num : undefined;
+  };
+  const getEntityLabel = (entry: any, fallback: string) => {
+    const attrs = normalize(getEntity(entry));
+    return attrs?.username || attrs?.email || fallback;
+  };
   const filterLocationOptions = (
     options: LocationOption[],
     term: string,
@@ -346,6 +387,21 @@ export default function Me() {
     const base = slug(user.username || user.email || "user");
     return `${base || "user"}-${user.id}`;
   }, [user]);
+
+  useEffect(() => {
+    if (feedbackAudience !== "specific") {
+      setFeedbackTargetId(null);
+      return;
+    }
+    if (!friendOptions.length) {
+      setFeedbackTargetId(null);
+      return;
+    }
+    if (feedbackTargetId && friendOptions.some((option) => option.id === feedbackTargetId)) {
+      return;
+    }
+    setFeedbackTargetId(friendOptions[0].id);
+  }, [feedbackAudience, feedbackTargetId, friendOptions]);
 
   const pickMediaUrl = (mediaField: any): string | undefined => {
     if (!mediaField) return undefined;
@@ -617,12 +673,17 @@ export default function Me() {
     if (!user) return [];
 
     const postsRes = await api.get(
-      `/users-posts?filters[owner][id][$eq]=${user.id}&populate=Users_Pictures&sort=createdAt:desc`
+      `/users-posts?filters[owner][id][$eq]=${user.id}&populate=Users_Pictures&populate=feedbackTarget&sort=createdAt:desc`
     );
 
     const mappedPosts: MediaPost[] = (postsRes.data?.data ?? []).map((p: any) => {
       const attrs = normalize(p);
       const pic = pickMediaUrl(attrs.Users_Pictures);
+      const feedbackTargetData = getEntity(attrs.feedbackTarget);
+      const feedbackTargetId = getEntityId(feedbackTargetData);
+      const feedbackTargetName = feedbackTargetId
+        ? getEntityLabel(feedbackTargetData, `User ${feedbackTargetId}`)
+        : undefined;
       const postId =
         p?.id ??
         attrs?.id ??
@@ -634,6 +695,9 @@ export default function Me() {
         documentId: p?.documentId ?? attrs?.documentId,
         text: attrs.Users_Content || "",
         media: pic,
+        feedbackAudience: attrs.feedbackAudience || undefined,
+        feedbackTargetId,
+        feedbackTargetName,
       };
     });
 
@@ -688,6 +752,10 @@ export default function Me() {
       setPostError("Add a message or a photo to post.");
       return;
     }
+    if (feedbackAudience === "specific" && !feedbackTargetId) {
+      setPostError("Choose a friend for a specific feedback request.");
+      return;
+    }
     setPostError(null);
     setPostSubmitting(true);
     try {
@@ -708,6 +776,8 @@ export default function Me() {
           Users_Content: content,
           owner: user.id,
           Users_Pictures: uploadedId ? [uploadedId] : undefined,
+          feedbackAudience,
+          feedbackTarget: feedbackAudience === "specific" ? feedbackTargetId : undefined,
         },
       });
 
@@ -715,6 +785,8 @@ export default function Me() {
       setPostFile(null);
       setLinkPreview(null);
       setLinkPreviewError(null);
+      setFeedbackAudience("none");
+      setFeedbackTargetId(null);
       await fetchMyPosts();
     } catch (err) {
       if (axios.isAxiosError(err)) {
@@ -858,6 +930,50 @@ export default function Me() {
 
     await saveProfile({ onboardingComplete: true });
   };
+
+  useEffect(() => {
+    let active = true;
+
+    const loadFriends = async () => {
+      if (!user) {
+        if (active) setFriendOptions([]);
+        return;
+      }
+      try {
+        const friendsRes = await api.get(
+          `/friends?filters[$or][0][requester][id][$eq]=${user.id}` +
+            `&filters[$or][1][target][id][$eq]=${user.id}` +
+            `&populate=requester&populate=target`
+        );
+        const optionMap = new Map<number, FriendOption>();
+        (friendsRes.data?.data ?? []).forEach((entry: any) => {
+          const attrs = normalize(entry);
+          const status = attrs.status || "pending";
+          if (status !== "accepted") return;
+          const requesterId = getEntityId(attrs.requester);
+          const targetId = getEntityId(attrs.target);
+          const otherId = requesterId === user.id ? targetId : requesterId;
+          const otherUser = requesterId === user.id ? attrs.target : attrs.requester;
+          if (!otherId) return;
+          optionMap.set(otherId, {
+            id: otherId,
+            label: getEntityLabel(otherUser, `User ${otherId}`),
+          });
+        });
+        const options = Array.from(optionMap.values()).sort((a, b) =>
+          a.label.localeCompare(b.label)
+        );
+        if (active) setFriendOptions(options);
+      } catch {
+        if (active) setFriendOptions([]);
+      }
+    };
+
+    loadFriends();
+    return () => {
+      active = false;
+    };
+  }, [user?.id]);
 
   useEffect(() => {
     const load = async () => {
@@ -2131,6 +2247,49 @@ export default function Me() {
             )}
             {linkPreviewError && <p className="status status-error">{linkPreviewError}</p>}
 
+            <div className="post-composer__feedback">
+              <span className="post-feedback-label">Request feedback</span>
+              <div className="post-feedback-row">
+                <select
+                  className="auth-input post-feedback-select"
+                  value={feedbackAudience}
+                  onChange={(e) => {
+                    setFeedbackAudience(e.target.value);
+                    setPostError(null);
+                  }}
+                >
+                  <option value="none">No feedback request</option>
+                  <option value="public">Public feedback</option>
+                  <option value="friends">Friends only</option>
+                  <option value="specific">Specific friend</option>
+                </select>
+                {feedbackAudience === "specific" && (
+                  <select
+                    className="auth-input post-feedback-select"
+                    value={feedbackTargetId ?? ""}
+                    onChange={(e) => {
+                      const nextId = Number(e.target.value);
+                      setFeedbackTargetId(Number.isFinite(nextId) ? nextId : null);
+                      setPostError(null);
+                    }}
+                    disabled={!friendOptions.length}
+                  >
+                    <option value="">Select a friend</option>
+                    {friendOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+              {feedbackAudience === "specific" && friendOptions.length === 0 && (
+                <p className="post-feedback-note">
+                  Add a friend first to request feedback from a specific person.
+                </p>
+              )}
+            </div>
+
             <div className="post-composer__actions">
               <div className="post-composer__tools">
                 <label className="post-composer__tool">
@@ -2178,6 +2337,7 @@ export default function Me() {
             const hasLink = Boolean(postUrl);
             const descriptor = mediaDescriptor(p.media, hasLink);
             const canDelete = Boolean(p.id ?? p.documentId);
+            const feedbackLabel = feedbackLabelFor(p);
 
             return (
               <article key={String(p.id)} className="post-card">
@@ -2185,6 +2345,7 @@ export default function Me() {
                   <span className="post-meta-name">{displayName}</span>
                   <span className="post-meta-text">just posted an update</span>
                   {descriptor && <span className="post-meta-tag">{descriptor}</span>}
+                  {feedbackLabel && <span className="post-feedback-tag">{feedbackLabel}</span>}
                   {canDelete && (
                     <button
                       className="btn ghost post-delete"
