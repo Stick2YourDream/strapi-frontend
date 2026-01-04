@@ -13,6 +13,9 @@ import Landing from "../pages/landing";
 import Terms from "../pages/terms";
 import Privacy from "../pages/privacy";
 import Guidelines from "../pages/guidelines";
+import Cookies from "../pages/cookies";
+import Safety from "../pages/safety";
+import Report from "../pages/report";
 
 export default function AppRoutes(): JSX.Element {
   return (
@@ -27,6 +30,9 @@ export default function AppRoutes(): JSX.Element {
       <Route path="/terms" element={<Terms />} />
       <Route path="/privacy" element={<Privacy />} />
       <Route path="/guidelines" element={<Guidelines />} />
+      <Route path="/cookies" element={<Cookies />} />
+      <Route path="/safety" element={<Safety />} />
+      <Route path="/report" element={<Report />} />
       <Route
         path="/dashboard"
         element={

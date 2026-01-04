@@ -1,7 +1,8 @@
 import "../css/landing.css";
 import { CheckCircle2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { gsap } from "gsap";
 import api from "../api/strapi";
 import { useAuth } from "../context/AuthContext";
 import { useNotifications, type FriendRequestPreview } from "../hooks/useNotifications";
@@ -91,6 +92,7 @@ const extractFirstUrl = (text: string) => {
 export default function Landing() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
+  const rootRef = useRef<HTMLDivElement | null>(null);
   usePageMeta({
     title: "Your Social Place | Motivational social network without all the fluff",
     description:
@@ -120,6 +122,34 @@ export default function Landing() {
   const { counts, total, loading, refresh, markAllRead, previews, acceptFriendRequest } =
     useNotifications(user?.id);
   const [acceptingRequests, setAcceptingRequests] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    if (typeof window === "undefined") return;
+
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduceMotion) return;
+
+    const ctx = gsap.context(() => {
+      const tl = gsap.timeline({ defaults: { ease: "power3.out", duration: 0.9 } });
+      tl.from(".landing-nav", { y: -12, opacity: 0, duration: 0.6 })
+        .from(".hero-badges .pill2", { y: 16, opacity: 0, stagger: 0.08 }, "-=0.2")
+        .from(".hero-copy h1", { y: 20, opacity: 0 }, "-=0.1")
+        .from(".hero-copy p", { y: 18, opacity: 0 }, "-=0.2")
+        .from(".hero-intent-button", { y: 16, opacity: 0, stagger: 0.07 }, "-=0.2")
+        .from(
+          ".hero-cta .btn-primary, .hero-cta .btn-ghost, .hero-cta-skip",
+          { y: 12, opacity: 0, stagger: 0.06 },
+          "-=0.2"
+        )
+        .from(".hero-card", { y: 26, opacity: 0 }, "-=0.4");
+    }, root);
+
+    return () => {
+      ctx.revert();
+    };
+  }, []);
 
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
   const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
@@ -584,7 +614,7 @@ export default function Landing() {
   };
 
   return (
-    <div className="landing-page">
+    <div className="landing-page" ref={rootRef}>
       <div className="landing-shell">
         <nav className="landing-nav" aria-label="Primary">
           <button
@@ -601,8 +631,8 @@ export default function Landing() {
           <div className="landing-beta">BETA</div>
           <div className="landing-links">
             <a href="/guidelines">Guidelines</a>
-            <a href="#safety">Safety</a>
-            <a href="#reporting">Report</a>
+            <a href="/safety">Safety</a>
+            <a href="/report">Report</a>
           </div>
           <div className="nav-actions">
             {user ? (
@@ -970,7 +1000,7 @@ export default function Landing() {
             <a className="btn-ghost" href="/guidelines#reporting">
               Read Community Guidelines
             </a>
-            <a className="btn-primary" href="/guidelines#reporting">
+            <a className="btn-primary" href="/report">
               How reporting works
             </a>
           </div>
@@ -1013,14 +1043,14 @@ export default function Landing() {
           </div>
           <div className="footer-row footer-column">
             <span className="footer-title">Safety</span>
-            <a href="#safety">Safety &amp; Moderation</a>
-            <a href="/guidelines#reporting">Report a user</a>
+            <a href="/safety">Safety &amp; Moderation</a>
+            <a href="/report">Report a user</a>
           </div>
           <div className="footer-row footer-column">
             <span className="footer-title">Legal</span>
             <a href="/terms">Terms</a>
             <a href="/privacy">Privacy</a>
-            <a href="/privacy#cookies">Cookie Policy</a>
+            <a href="/cookies">Cookie Policy</a>
           </div>
           <div className="footer-row footer-column">
             <span className="footer-title">Connect</span>

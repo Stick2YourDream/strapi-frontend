@@ -1,5 +1,5 @@
 export const PRIVACY_TITLE = "Your Social Place Privacy Policy";
-export const PRIVACY_UPDATED = "Last updated: Jan 15, 2026";
+export const PRIVACY_UPDATED = "Last updated: Jan 4, 2026";
 
 export const PRIVACY_SECTIONS = [
   {
@@ -32,8 +32,8 @@ export const PRIVACY_SECTIONS = [
     id: "cookies",
     title: "4. Cookies and analytics",
     body: [
-      "We use cookies and similar technologies to operate the Service and measure performance. You can accept or decline optional analytics and advertising storage in the cookie banner.",
-      "To change your preferences later, use the Manage cookies option in the banner or revisit this page.",
+      "We use cookies and similar technologies to operate the Service and measure performance. You can accept or decline optional analytics storage in the cookie banner.",
+      "To change your preferences later, use the Manage cookies option in the banner or visit the Cookie Policy page.",
     ],
   },
   {

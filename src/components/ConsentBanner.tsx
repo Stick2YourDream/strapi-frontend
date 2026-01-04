@@ -20,7 +20,7 @@ const STORAGE_KEY = "s2yd_consent_v1";
 const DEFAULT_COPY: Required<Pick<ConsentSettings, "title" | "message" | "acceptText" | "rejectText">> = {
   title: "We value your privacy",
   message:
-    "We use cookies and similar technologies to personalize your experience and measure site usage. You can accept or decline analytics and advertising storage.",
+    "We use cookies and similar technologies to personalize your experience and measure site usage. You can accept or decline analytics storage.",
   acceptText: "Accept",
   rejectText: "Reject",
 };
@@ -59,10 +59,10 @@ const pushGtag = (...args: any[]) => {
 
 const applyConsent = (status: "granted" | "denied") => {
   pushGtag("consent", "update", {
-    ad_storage: status,
     analytics_storage: status,
-    ad_user_data: status,
-    ad_personalization: status,
+    ad_storage: "denied",
+    ad_user_data: "denied",
+    ad_personalization: "denied",
   });
 };
 
@@ -125,8 +125,8 @@ export default function ConsentBanner() {
           <p className="consent-banner__message">{copy.message}</p>
           <div className="consent-banner__links">
             <a href="/privacy">Privacy</a>
-            <a href="/privacy#cookies">Cookie Policy</a>
-            <a href="/privacy#cookies">Manage cookies</a>
+            <a href="/cookies">Cookie Policy</a>
+            <a href="/cookies#preferences">Manage cookies</a>
           </div>
         </div>
         <div className="consent-banner__actions">

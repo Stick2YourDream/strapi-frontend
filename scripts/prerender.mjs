@@ -55,6 +55,53 @@ const routes = [
       url: "https://yoursocialplace.com/guidelines",
     },
   },
+  {
+    path: "/cookies",
+    meta: {
+      title: "Cookie Policy | Your Social Place",
+      description:
+        "Read the Your Social Place Cookie Policy and manage your analytics preferences.",
+      url: "https://yoursocialplace.com/cookies",
+    },
+  },
+  {
+    path: "/safety",
+    meta: {
+      title: "Safety & Moderation | Your Social Place",
+      description:
+        "Learn how Your Social Place keeps the community safe with clear rules, fast reporting, and thoughtful moderation.",
+      url: "https://yoursocialplace.com/safety",
+    },
+  },
+  {
+    path: "/report",
+    meta: {
+      title: "Reporting | Your Social Place",
+      description:
+        "Report a user or post and learn what happens next at Your Social Place.",
+      url: "https://yoursocialplace.com/report",
+    },
+  },
+  {
+    path: "/login",
+    meta: {
+      title: "Login | Your Social Place",
+      description:
+        "Log in to Your Social Place to share progress updates and stay accountable with your support network.",
+      url: "https://yoursocialplace.com/login",
+      robots: "noindex, nofollow",
+    },
+  },
+  {
+    path: "/register",
+    meta: {
+      title: "Register | Your Social Place",
+      description:
+        "Create a Your Social Place account to join a motivational support network that celebrates progress and accountability.",
+      url: "https://yoursocialplace.com/register",
+      robots: "noindex, nofollow",
+    },
+  },
 ];
 
 const escapeHtml = (value) =>
@@ -80,6 +127,9 @@ const replaceTitle = (html, title) =>
 const applyMeta = (html, meta) => {
   let next = replaceTitle(html, meta.title);
   next = replaceMetaContent(next, "name", "description", meta.description);
+  if (meta.robots) {
+    next = replaceMetaContent(next, "name", "robots", meta.robots);
+  }
   next = replaceMetaContent(next, "property", "og:title", meta.title);
   next = replaceMetaContent(next, "property", "og:description", meta.description);
   next = replaceMetaContent(next, "property", "og:url", meta.url);

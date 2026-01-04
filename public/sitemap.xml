@@ -3,17 +3,20 @@
   <url>
     <loc>https://yoursocialplace.com/</loc>
   </url>
-    <url>
-    <loc>https://yoursocialplace.com/register</loc>
-  </url>
-    <url>
-    <loc>https://yoursocialplace.com/login</loc>
-  </url>
   <url>
     <loc>https://yoursocialplace.com/terms</loc>
   </url>
   <url>
     <loc>https://yoursocialplace.com/privacy</loc>
+  </url>
+  <url>
+    <loc>https://yoursocialplace.com/cookies</loc>
+  </url>
+  <url>
+    <loc>https://yoursocialplace.com/safety</loc>
+  </url>
+  <url>
+    <loc>https://yoursocialplace.com/report</loc>
   </url>
   <url>
     <loc>https://yoursocialplace.com/guidelines</loc>
