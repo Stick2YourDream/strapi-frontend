@@ -51,6 +51,28 @@ type VideoCallMessage = {
 
 type VideoCallStatus = "idle" | "setup" | "incoming" | "connecting" | "in-call";
 
+type ScreenControlRequest = {
+  socketId: string;
+  userId: number;
+  displayName: string;
+  handle?: string;
+  avatarUrl?: string;
+};
+
+type ScreenControlCursor = {
+  x: number;
+  y: number;
+  from: string;
+  at: number;
+  kind: "move" | "click";
+};
+
+type ScreenControlEvent = {
+  type: "move" | "click";
+  x: number;
+  y: number;
+};
+
 type VideoCallEffects = {
   blur: boolean;
   background: "none" | "studio" | "sunset" | "mint";
@@ -77,13 +99,16 @@ type VideoCallContextValue = {
   selectedInvitees: VideoCallInvitee[];
   incomingCall: IncomingCall | null;
   localStream: MediaStream | null;
+  localScreenStream: MediaStream | null;
   remoteStreams: Record<string, MediaStream>;
+  remoteScreenStreams: Record<string, MediaStream>;
   remoteParticipants: Record<string, VideoCallParticipant>;
   messages: VideoCallMessage[];
   error: string | null;
   maxParticipants: number;
   isVideoEnabled: boolean;
   isAudioEnabled: boolean;
+  isScreenSharing: boolean;
   videoEffects: VideoCallEffects;
   setVideoEffects: (effects: Partial<VideoCallEffects>) => void;
   onlineUserIds: Set<number>;
@@ -98,6 +123,18 @@ type VideoCallContextValue = {
   endCall: () => void;
   toggleVideo: () => void;
   toggleAudio: () => void;
+  startScreenShare: () => Promise<void>;
+  stopScreenShare: () => void;
+  screenControlRequests: ScreenControlRequest[];
+  pendingScreenControlTargets: string[];
+  activeScreenController: ScreenControlRequest | null;
+  screenControlTarget: string | null;
+  screenControlCursor: ScreenControlCursor | null;
+  requestScreenControl: (targetSocketId: string) => void;
+  grantScreenControl: (requesterSocketId: string) => void;
+  denyScreenControl: (requesterSocketId: string) => void;
+  stopScreenControl: (targetSocketId?: string) => void;
+  sendScreenControlEvent: (targetSocketId: string, event: ScreenControlEvent) => void;
   sendMessage: (body: string, kind?: VideoCallMessage["kind"], gifUrl?: string) => void;
 };
 
@@ -173,7 +210,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null);
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
+  const [remoteScreenStreams, setRemoteScreenStreams] = useState<Record<string, MediaStream>>({});
   const [remoteParticipants, setRemoteParticipants] = useState<
     Record<string, VideoCallParticipant>
   >({});
@@ -181,6 +220,12 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const [error, setError] = useState<string | null>(null);
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
   const [isAudioEnabled, setIsAudioEnabled] = useState(true);
+  const [screenControlRequests, setScreenControlRequests] = useState<ScreenControlRequest[]>([]);
+  const [pendingScreenControlTargets, setPendingScreenControlTargets] = useState<string[]>([]);
+  const [activeScreenController, setActiveScreenController] =
+    useState<ScreenControlRequest | null>(null);
+  const [screenControlTarget, setScreenControlTarget] = useState<string | null>(null);
+  const [screenControlCursor, setScreenControlCursor] = useState<ScreenControlCursor | null>(null);
   const [videoEffects, setVideoEffectsState] = useState<VideoCallEffects>({
     blur: false,
     background: "none",
@@ -189,7 +234,19 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const socketRef = useRef<Socket | null>(null);
   const peersRef = useRef<Map<string, RTCPeerConnection>>(new Map());
   const localStreamRef = useRef<MediaStream | null>(null);
+  const localScreenStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamsRef = useRef<Record<string, MediaStream>>({});
+  const remoteScreenStreamsRef = useRef<Record<string, MediaStream>>({});
   const rawStreamRef = useRef<MediaStream | null>(null);
+  const screenShareSendersRef = useRef<
+    Map<string, { video?: RTCRtpSender; audio?: RTCRtpSender }>
+  >(new Map());
+  const screenShareOwnersRef = useRef<Map<string, string>>(new Map());
+  const screenShareByOwnerRef = useRef<Map<string, string>>(new Map());
+  const peerNegotiationRef = useRef<Map<string, { makingOffer: boolean; isPolite: boolean }>>(
+    new Map()
+  );
+  const localSocketIdRef = useRef<string | null>(null);
   const videoEffectsRef = useRef(videoEffects);
   const videoProcessingRef = useRef<{
     track: MediaStreamTrack | null;
@@ -201,6 +258,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const profileRef = useRef<VideoCallInvitee | null>(null);
   const statusRef = useRef<VideoCallStatus>(status);
   const activeRoomRef = useRef<string | null>(activeRoomId);
+  const activeScreenControllerRef = useRef<ScreenControlRequest | null>(null);
+  const screenControlTargetRef = useRef<string | null>(null);
   const presenceTargetsRef = useRef<number[]>([]);
 
   const buildSocketUrl = () => {
@@ -213,6 +272,16 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
 
   const setVideoEffects = useCallback((effects: Partial<VideoCallEffects>) => {
     setVideoEffectsState((prev) => ({ ...prev, ...effects }));
+  }, []);
+
+  const getPeerNegotiationState = useCallback((socketId: string) => {
+    const existing = peerNegotiationRef.current.get(socketId);
+    if (existing) return existing;
+    const localSocketId = socketRef.current?.id || localSocketIdRef.current || "";
+    const isPolite = localSocketId ? localSocketId.localeCompare(socketId) < 0 : true;
+    const created = { makingOffer: false, isPolite };
+    peerNegotiationRef.current.set(socketId, created);
+    return created;
   }, []);
 
   const stopVideoProcessing = useCallback(() => {
@@ -230,6 +299,120 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       effectsKey: "",
     };
   }, []);
+
+  const attachScreenShareTrack = useCallback(
+    (pc: RTCPeerConnection, socketId: string) => {
+      const screenStream = localScreenStreamRef.current;
+      if (!screenStream) return;
+      const videoTrack = screenStream.getVideoTracks()[0];
+      const audioTrack = screenStream.getAudioTracks()[0];
+      if (!videoTrack && !audioTrack) return;
+      const existing = screenShareSendersRef.current.get(socketId) || {};
+      if (videoTrack) {
+        if (existing.video) {
+          if (existing.video.track?.id !== videoTrack.id) {
+            existing.video.replaceTrack(videoTrack).catch(() => undefined);
+          }
+        } else {
+          try {
+            existing.video = pc.addTrack(videoTrack, screenStream);
+          } catch {
+            // ignore share attach errors
+          }
+        }
+      }
+      if (audioTrack) {
+        if (existing.audio) {
+          if (existing.audio.track?.id !== audioTrack.id) {
+            existing.audio.replaceTrack(audioTrack).catch(() => undefined);
+          }
+        } else {
+          try {
+            existing.audio = pc.addTrack(audioTrack, screenStream);
+          } catch {
+            // ignore share attach errors
+          }
+        }
+      }
+      screenShareSendersRef.current.set(socketId, existing);
+    },
+    []
+  );
+
+  const removeScreenShareTracks = useCallback(() => {
+    screenShareSendersRef.current.forEach((senders, socketId) => {
+      const pc = peersRef.current.get(socketId);
+      if (!pc) return;
+      [senders.video, senders.audio].forEach((sender) => {
+        if (!sender) return;
+        try {
+          pc.removeTrack(sender);
+        } catch {
+          sender.replaceTrack(null).catch(() => undefined);
+        }
+      });
+    });
+    screenShareSendersRef.current.clear();
+  }, []);
+
+  const stopScreenShare = useCallback(
+    (options?: { notify?: boolean }) => {
+      const stream = localScreenStreamRef.current;
+      const streamId = stream?.id;
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+      localScreenStreamRef.current = null;
+      setLocalScreenStream(null);
+      removeScreenShareTracks();
+      setScreenControlCursor(null);
+      const controller = activeScreenControllerRef.current;
+      if (controller && socketRef.current && activeRoomRef.current) {
+        socketRef.current.emit("call:control:stop", {
+          roomId: activeRoomRef.current,
+          to: controller.socketId,
+        });
+      }
+      setActiveScreenController(null);
+      setScreenControlRequests([]);
+      if (options?.notify !== false && streamId && socketRef.current && activeRoomRef.current) {
+        socketRef.current.emit("call:screen:stop", {
+          roomId: activeRoomRef.current,
+          streamId,
+        });
+      }
+    },
+    [removeScreenShareTracks]
+  );
+
+  const startScreenShare = useCallback(async () => {
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      setError("Screen sharing is not supported in this browser.");
+      return;
+    }
+    if (!activeRoomRef.current) {
+      setError("Join a call before sharing your screen.");
+      return;
+    }
+    if (localScreenStreamRef.current) return;
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      const [track] = stream.getVideoTracks();
+      if (!track) return;
+      track.onended = () => stopScreenShare();
+      localScreenStreamRef.current = stream;
+      setLocalScreenStream(stream);
+      peersRef.current.forEach((pc, socketId) => attachScreenShareTrack(pc, socketId));
+      if (socketRef.current && activeRoomRef.current) {
+        socketRef.current.emit("call:screen:start", {
+          roomId: activeRoomRef.current,
+          streamId: stream.id,
+        });
+      }
+    } catch {
+      setError("Unable to start screen sharing.");
+    }
+  }, [attachScreenShareTrack, stopScreenShare]);
 
   const drawBackdrop = useCallback(
     (ctx: CanvasRenderingContext2D, width: number, height: number, mode: VideoCallEffects["background"]) => {
@@ -454,7 +637,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       setLocalStream(stream);
       localStreamRef.current = stream;
 
-      peersRef.current.forEach((pc) => {
+      peersRef.current.forEach((pc, socketId) => {
         audioTracks.forEach((track) => {
           const sender = pc.getSenders().find((s) => s.track?.kind === "audio");
           if (sender) {
@@ -465,7 +648,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
             pc.addTrack(track, stream);
           }
         });
-        const videoSender = pc.getSenders().find((s) => s.track?.kind === "video");
+        const screenSender = screenShareSendersRef.current.get(socketId)?.video;
+        const videoSender = pc
+          .getSenders()
+          .find((s) => s.track?.kind === "video" && s !== screenSender);
         if (videoTrack) {
           if (videoSender) {
             if (videoSender.track?.id !== videoTrack.id) {
@@ -505,7 +691,18 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       pc.close();
       peersRef.current.delete(socketId);
     }
+    screenShareSendersRef.current.delete(socketId);
+    const screenStreamId = screenShareByOwnerRef.current.get(socketId);
+    if (screenStreamId) {
+      screenShareByOwnerRef.current.delete(socketId);
+      screenShareOwnersRef.current.delete(screenStreamId);
+    }
     setRemoteStreams((prev) => {
+      const next = { ...prev };
+      delete next[socketId];
+      return next;
+    });
+    setRemoteScreenStreams((prev) => {
       const next = { ...prev };
       delete next[socketId];
       return next;
@@ -515,6 +712,17 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       delete next[socketId];
       return next;
     });
+    setScreenControlRequests((prev) =>
+      prev.filter((request) => request.socketId !== socketId)
+    );
+    setPendingScreenControlTargets((prev) => prev.filter((entry) => entry !== socketId));
+    if (activeScreenControllerRef.current?.socketId === socketId) {
+      setActiveScreenController(null);
+      setScreenControlCursor(null);
+    }
+    if (screenControlTargetRef.current === socketId) {
+      setScreenControlTarget(null);
+    }
   }, []);
 
   const createPeerConnection = useCallback(
@@ -523,7 +731,24 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       if (existing) return existing;
       const pc = new RTCPeerConnection(RTC_CONFIG);
       peersRef.current.set(socketId, pc);
+      const negotiationState = getPeerNegotiationState(socketId);
+      pc.onnegotiationneeded = async () => {
+        if (!socketRef.current) return;
+        try {
+          negotiationState.makingOffer = true;
+          await pc.setLocalDescription();
+          socketRef.current.emit("call:offer", {
+            to: socketId,
+            sdp: pc.localDescription,
+          });
+        } catch {
+          setError("Failed to renegotiate call.");
+        } finally {
+          negotiationState.makingOffer = false;
+        }
+      };
       attachLocalTracks(pc);
+      attachScreenShareTrack(pc, socketId);
       pc.onicecandidate = (event) => {
         if (event.candidate && socketRef.current) {
           socketRef.current.emit("call:ice", {
@@ -534,6 +759,48 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       };
       pc.ontrack = (event) => {
         const [stream] = event.streams;
+        const nextStream = stream ?? new MediaStream([event.track]);
+        const streamId = nextStream.id;
+        const shareOwner = screenShareOwnersRef.current.get(streamId);
+        const existingCamera = remoteStreamsRef.current[socketId];
+        const shouldTreatAsScreen =
+          shareOwner === socketId ||
+          (event.track.kind === "video" &&
+            existingCamera &&
+            existingCamera.id !== streamId &&
+            !remoteScreenStreamsRef.current[socketId]);
+
+        if (shouldTreatAsScreen) {
+          screenShareOwnersRef.current.set(streamId, socketId);
+          screenShareByOwnerRef.current.set(socketId, streamId);
+          setRemoteScreenStreams((prev) => {
+            const existing = prev[socketId];
+            if (existing) {
+              if (!existing.getTracks().some((track) => track.id === event.track.id)) {
+                existing.addTrack(event.track);
+              }
+              return { ...prev, [socketId]: existing };
+            }
+            return { ...prev, [socketId]: nextStream };
+          });
+          event.track.onended = () => {
+            screenShareOwnersRef.current.delete(streamId);
+            screenShareByOwnerRef.current.delete(socketId);
+            setRemoteScreenStreams((prev) => {
+              const next = { ...prev };
+              delete next[socketId];
+              return next;
+            });
+            if (screenControlTargetRef.current === socketId) {
+              setScreenControlTarget(null);
+            }
+            setPendingScreenControlTargets((prev) =>
+              prev.filter((entry) => entry !== socketId)
+            );
+          };
+          return;
+        }
+
         setRemoteStreams((prev) => {
           const existing = prev[socketId];
           if (existing) {
@@ -542,7 +809,6 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
             }
             return { ...prev, [socketId]: existing };
           }
-          const nextStream = stream ?? new MediaStream([event.track]);
           return { ...prev, [socketId]: nextStream };
         });
       };
@@ -553,13 +819,17 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       };
       return pc;
     },
-    [attachLocalTracks, closePeer]
+    [attachLocalTracks, attachScreenShareTrack, closePeer, getPeerNegotiationState]
   );
 
   useEffect(() => {
     localStreamRef.current = localStream;
     peersRef.current.forEach((pc) => attachLocalTracks(pc));
   }, [attachLocalTracks, localStream]);
+
+  useEffect(() => {
+    peersRef.current.forEach((pc, socketId) => attachScreenShareTrack(pc, socketId));
+  }, [attachScreenShareTrack, localScreenStream]);
 
   useEffect(() => {
     statusRef.current = status;
@@ -572,6 +842,26 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   useEffect(() => {
     activeRoomRef.current = activeRoomId;
   }, [activeRoomId]);
+
+  useEffect(() => {
+    localScreenStreamRef.current = localScreenStream;
+  }, [localScreenStream]);
+
+  useEffect(() => {
+    remoteStreamsRef.current = remoteStreams;
+  }, [remoteStreams]);
+
+  useEffect(() => {
+    remoteScreenStreamsRef.current = remoteScreenStreams;
+  }, [remoteScreenStreams]);
+
+  useEffect(() => {
+    activeScreenControllerRef.current = activeScreenController;
+  }, [activeScreenController]);
+
+  useEffect(() => {
+    screenControlTargetRef.current = screenControlTarget;
+  }, [screenControlTarget]);
 
   useEffect(() => {
     if (!user?.id) {
@@ -626,6 +916,17 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       rawStreamRef.current.getTracks().forEach((track) => track.stop());
       rawStreamRef.current = null;
     }
+    if (localScreenStreamRef.current) {
+      localScreenStreamRef.current.getTracks().forEach((track) => track.stop());
+      localScreenStreamRef.current = null;
+      setLocalScreenStream(null);
+    }
+    setRemoteScreenStreams({});
+    setScreenControlRequests([]);
+    setPendingScreenControlTargets([]);
+    setActiveScreenController(null);
+    setScreenControlTarget(null);
+    setScreenControlCursor(null);
     stopVideoProcessing();
   }, [stopVideoProcessing, user?.id]);
 
@@ -652,6 +953,12 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       },
     });
     socketRef.current = socket;
+    socket.on("connect", () => {
+      localSocketIdRef.current = socket.id ?? null;
+    });
+    socket.on("disconnect", () => {
+      localSocketIdRef.current = null;
+    });
     const presenceTargets = presenceTargetsRef.current;
     if (presenceTargets.length) {
       socket.emit("presence:subscribe", { userIds: presenceTargets });
@@ -694,16 +1001,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           Object.fromEntries(payload.participants.map((p) => [p.socketId, p]))
         );
         setStatus("in-call");
-        payload.participants.forEach(async (participant) => {
+        payload.participants.forEach((participant) => {
           if (peersRef.current.has(participant.socketId)) return;
-          try {
-            const pc = createPeerConnection(participant.socketId);
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            socket.emit("call:offer", { to: participant.socketId, sdp: offer });
-          } catch {
-            setError("Failed to connect to participant.");
-          }
+          createPeerConnection(participant.socketId);
         });
       }
     );
@@ -715,6 +1015,14 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           ...prev,
           [payload.participant.socketId]: payload.participant,
         }));
+        const screenStream = localScreenStreamRef.current;
+        if (screenStream && activeRoomRef.current) {
+          socket.emit("call:screen:start", {
+            roomId: activeRoomRef.current,
+            streamId: screenStream.id,
+            to: payload.participant.socketId,
+          });
+        }
       }
     );
 
@@ -747,10 +1055,20 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
             };
           });
           const pc = createPeerConnection(payload.from);
+          const negotiationState = getPeerNegotiationState(payload.from);
+          const offerCollision =
+            payload.sdp?.type === "offer" &&
+            (negotiationState.makingOffer || pc.signalingState !== "stable");
+          const ignoreOffer = !negotiationState.isPolite && offerCollision;
+          if (ignoreOffer) return;
+          if (offerCollision && negotiationState.isPolite) {
+            await pc.setLocalDescription({ type: "rollback" });
+          }
           await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          socket.emit("call:answer", { to: payload.from, sdp: answer });
+          if (payload.sdp?.type === "offer") {
+            await pc.setLocalDescription();
+            socket.emit("call:answer", { to: payload.from, sdp: pc.localDescription });
+          }
         } catch {
           setError("Failed to respond to call offer.");
         }
@@ -780,6 +1098,148 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     socket.on("call:chat", (payload: VideoCallMessage) => {
       setMessages((prev) => [...prev, { ...payload, id: createMessageId() }]);
     });
+
+    socket.on(
+      "call:screen:start",
+      (payload: { roomId: string; streamId: string; from: string }) => {
+        if (payload?.roomId && payload.roomId !== activeRoomRef.current) return;
+        if (!payload?.streamId || !payload?.from) return;
+        screenShareOwnersRef.current.set(payload.streamId, payload.from);
+        screenShareByOwnerRef.current.set(payload.from, payload.streamId);
+        const existingCamera = remoteStreamsRef.current[payload.from];
+        if (existingCamera && existingCamera.id === payload.streamId) {
+          setRemoteStreams((prev) => {
+            const next = { ...prev };
+            delete next[payload.from];
+            return next;
+          });
+          setRemoteScreenStreams((prev) => ({
+            ...prev,
+            [payload.from]: existingCamera,
+          }));
+        }
+      }
+    );
+
+    socket.on(
+      "call:screen:stop",
+      (payload: { roomId: string; streamId: string; from?: string }) => {
+        if (payload?.roomId && payload.roomId !== activeRoomRef.current) return;
+        if (!payload?.streamId) return;
+        const owner =
+          payload.from || screenShareOwnersRef.current.get(payload.streamId) || "";
+        if (owner) {
+          screenShareByOwnerRef.current.delete(owner);
+        }
+        screenShareOwnersRef.current.delete(payload.streamId);
+        if (owner) {
+          setRemoteScreenStreams((prev) => {
+            const next = { ...prev };
+            delete next[owner];
+            return next;
+          });
+          if (screenControlTargetRef.current === owner) {
+            setScreenControlTarget(null);
+          }
+          setPendingScreenControlTargets((prev) => prev.filter((entry) => entry !== owner));
+        }
+      }
+    );
+
+    socket.on(
+      "call:control:request",
+      (payload: {
+        roomId: string;
+        from: string;
+        userId?: number;
+        displayName?: string;
+        handle?: string;
+        avatarUrl?: string;
+      }) => {
+        if (payload?.roomId && payload.roomId !== activeRoomRef.current) return;
+        if (!payload?.from) return;
+        if (!localScreenStreamRef.current) {
+          if (socketRef.current && activeRoomRef.current) {
+            socketRef.current.emit("call:control:deny", {
+              roomId: activeRoomRef.current,
+              to: payload.from,
+            });
+          }
+          return;
+        }
+        setScreenControlRequests((prev) => {
+          if (prev.some((entry) => entry.socketId === payload.from)) return prev;
+          return [
+            ...prev,
+            {
+              socketId: payload.from,
+              userId: Number(payload.userId) || 0,
+              displayName: payload.displayName || payload.handle || "Friend",
+              handle: payload.handle,
+              avatarUrl: payload.avatarUrl,
+            },
+          ];
+        });
+      }
+    );
+
+    socket.on(
+      "call:control:grant",
+      (payload: { roomId: string; from: string }) => {
+        if (payload?.roomId && payload.roomId !== activeRoomRef.current) return;
+        if (!payload?.from) return;
+        setScreenControlTarget(payload.from);
+        setPendingScreenControlTargets((prev) =>
+          prev.filter((entry) => entry !== payload.from)
+        );
+      }
+    );
+
+    socket.on(
+      "call:control:deny",
+      (payload: { roomId: string; from: string }) => {
+        if (payload?.roomId && payload.roomId !== activeRoomRef.current) return;
+        if (!payload?.from) return;
+        setPendingScreenControlTargets((prev) =>
+          prev.filter((entry) => entry !== payload.from)
+        );
+      }
+    );
+
+    socket.on(
+      "call:control:stop",
+      (payload: { roomId: string; from: string }) => {
+        if (payload?.roomId && payload.roomId !== activeRoomRef.current) return;
+        if (!payload?.from) return;
+        if (screenControlTargetRef.current === payload.from) {
+          setScreenControlTarget(null);
+        }
+        if (activeScreenControllerRef.current?.socketId === payload.from) {
+          setActiveScreenController(null);
+          setScreenControlCursor(null);
+        }
+      }
+    );
+
+    socket.on(
+      "call:control:event",
+      (payload: { roomId: string; from: string; event: ScreenControlEvent }) => {
+        if (payload?.roomId && payload.roomId !== activeRoomRef.current) return;
+        if (!payload?.from || !payload?.event) return;
+        if (activeScreenControllerRef.current?.socketId !== payload.from) return;
+        const x = Math.min(1, Math.max(0, Number(payload.event.x)));
+        const y = Math.min(1, Math.max(0, Number(payload.event.y)));
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        const kind = payload.event.type === "click" ? "click" : "move";
+        setScreenControlCursor({
+          x,
+          y,
+          from: payload.from,
+          at: Date.now(),
+          kind,
+        });
+      }
+    );
 
     socket.on("call:declined", (payload: { roomId: string; from: VideoCallInvitee }) => {
       if (payload?.roomId !== activeRoomRef.current) return;
@@ -816,7 +1276,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       socketRef.current = null;
       setOnlineUserIds(new Set());
     };
-  }, [closePeer, createPeerConnection, user?.email, user?.id, user?.username]);
+  }, [closePeer, createPeerConnection, getPeerNegotiationState, user?.email, user?.id, user?.username]);
 
   const ensureMedia = useCallback(
     async ({ audio, video }: { audio?: boolean; video?: boolean }) => {
@@ -871,7 +1331,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       return await ensureMedia({ audio: true, video: true });
     } catch {
       try {
-        return await ensureMedia({ audio: true, video: false });
+        return await ensureMedia({ audio: false, video: false });
       } catch (err) {
         setError(
           "Please allow microphone access to join the call. Camera is optional. If this is your first time, check browser permissions and use HTTPS (or localhost)."
@@ -922,10 +1382,17 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     setMessages([]);
     setRemoteParticipants({});
     setRemoteStreams({});
+    setRemoteScreenStreams({});
     setIncomingCall(null);
+    setLocalScreenStream(null);
     setStatus("idle");
     setIsOpen(false);
     setError(null);
+    setScreenControlRequests([]);
+    setPendingScreenControlTargets([]);
+    setActiveScreenController(null);
+    setScreenControlTarget(null);
+    setScreenControlCursor(null);
   }, []);
 
   const cleanupCall = useCallback(() => {
@@ -938,11 +1405,16 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       rawStreamRef.current.getTracks().forEach((track) => track.stop());
       rawStreamRef.current = null;
     }
+    stopScreenShare({ notify: false });
+    screenShareOwnersRef.current.clear();
+    screenShareByOwnerRef.current.clear();
+    screenShareSendersRef.current.clear();
+    peerNegotiationRef.current.clear();
     stopVideoProcessing();
     setLocalStream(null);
     localStreamRef.current = null;
     resetCallState();
-  }, [closePeer, resetCallState, stopVideoProcessing]);
+  }, [closePeer, resetCallState, stopScreenShare, stopVideoProcessing]);
 
   cleanupCallRef.current = cleanupCall;
 
@@ -965,9 +1437,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       rawStreamRef.current.getTracks().forEach((track) => track.stop());
       rawStreamRef.current = null;
     }
+    stopScreenShare({ notify: false });
     stopVideoProcessing();
     resetCallState();
-  }, [resetCallState, status, stopVideoProcessing]);
+  }, [resetCallState, status, stopScreenShare, stopVideoProcessing]);
 
   const setSelectedInvitees = useCallback((invitees: VideoCallInvitee[]) => {
     setSelectedInviteesState(invitees);
@@ -1064,6 +1537,90 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     setIsAudioEnabled(nextEnabled);
   }, [ensureMedia]);
 
+  const requestScreenControl = useCallback((targetSocketId: string) => {
+    if (!socketRef.current || !activeRoomRef.current) return;
+    if (screenControlTargetRef.current === targetSocketId) return;
+    setPendingScreenControlTargets((prev) =>
+      prev.includes(targetSocketId) ? prev : [...prev, targetSocketId]
+    );
+    socketRef.current.emit("call:control:request", {
+      roomId: activeRoomRef.current,
+      to: targetSocketId,
+    });
+  }, []);
+
+  const grantScreenControl = useCallback(
+    (requesterSocketId: string) => {
+      if (!socketRef.current || !activeRoomRef.current) return;
+      if (!localScreenStreamRef.current) return;
+      const request = screenControlRequests.find(
+        (entry) => entry.socketId === requesterSocketId
+      );
+      if (!request) return;
+      const activeController = activeScreenControllerRef.current;
+      if (activeController && activeController.socketId !== requesterSocketId) {
+        socketRef.current.emit("call:control:stop", {
+          roomId: activeRoomRef.current,
+          to: activeController.socketId,
+        });
+      }
+      setActiveScreenController(request);
+      setScreenControlRequests((prev) =>
+        prev.filter((entry) => entry.socketId !== requesterSocketId)
+      );
+      socketRef.current.emit("call:control:grant", {
+        roomId: activeRoomRef.current,
+        to: requesterSocketId,
+      });
+    },
+    [screenControlRequests]
+  );
+
+  const denyScreenControl = useCallback((requesterSocketId: string) => {
+    if (!socketRef.current || !activeRoomRef.current) return;
+    setScreenControlRequests((prev) =>
+      prev.filter((entry) => entry.socketId !== requesterSocketId)
+    );
+    socketRef.current.emit("call:control:deny", {
+      roomId: activeRoomRef.current,
+      to: requesterSocketId,
+    });
+  }, []);
+
+  const stopScreenControl = useCallback((targetSocketId?: string) => {
+    if (!socketRef.current || !activeRoomRef.current) return;
+    const controllerId = targetSocketId || activeScreenControllerRef.current?.socketId;
+    const ownerId = targetSocketId || screenControlTargetRef.current;
+
+    if (screenControlTargetRef.current && ownerId === screenControlTargetRef.current) {
+      socketRef.current.emit("call:control:stop", {
+        roomId: activeRoomRef.current,
+        to: ownerId,
+      });
+      setScreenControlTarget(null);
+      return;
+    }
+
+    if (controllerId) {
+      socketRef.current.emit("call:control:stop", {
+        roomId: activeRoomRef.current,
+        to: controllerId,
+      });
+      setActiveScreenController(null);
+      setScreenControlCursor(null);
+    }
+  }, []);
+
+  const sendScreenControlEvent = useCallback((targetSocketId: string, event: ScreenControlEvent) => {
+    if (!socketRef.current || !activeRoomRef.current) return;
+    if (screenControlTargetRef.current !== targetSocketId) return;
+    socketRef.current.emit("call:control:event", {
+      roomId: activeRoomRef.current,
+      to: targetSocketId,
+      event,
+    });
+  }, []);
+
   const sendMessage = useCallback(
     (body: string, kind: VideoCallMessage["kind"] = "text", gifUrl?: string) => {
       if (!socketRef.current || !activeRoomId) return;
@@ -1085,13 +1642,16 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       selectedInvitees,
       incomingCall,
       localStream,
+      localScreenStream,
       remoteStreams,
+      remoteScreenStreams,
       remoteParticipants,
       messages,
       error,
       maxParticipants: MAX_VIDEO_PARTICIPANTS,
       isVideoEnabled,
       isAudioEnabled,
+      isScreenSharing: Boolean(localScreenStream),
       videoEffects,
       setVideoEffects,
       onlineUserIds,
@@ -1106,6 +1666,18 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       endCall,
       toggleVideo,
       toggleAudio,
+      startScreenShare,
+      stopScreenShare,
+      screenControlRequests,
+      pendingScreenControlTargets,
+      activeScreenController,
+      screenControlTarget,
+      screenControlCursor,
+      requestScreenControl,
+      grantScreenControl,
+      denyScreenControl,
+      stopScreenControl,
+      sendScreenControlEvent,
       sendMessage,
     }),
     [
@@ -1118,6 +1690,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       isAudioEnabled,
       isOpen,
       isVideoEnabled,
+      localScreenStream,
       setVideoEffects,
       onlineUserIds,
       leaveCall,
@@ -1125,10 +1698,23 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       messages,
       openCallComposer,
       remoteParticipants,
+      remoteScreenStreams,
       remoteStreams,
       selectedInvitees,
       videoEffects,
       setPresenceTargets,
+      startScreenShare,
+      stopScreenShare,
+      screenControlRequests,
+      pendingScreenControlTargets,
+      activeScreenController,
+      screenControlTarget,
+      screenControlCursor,
+      requestScreenControl,
+      grantScreenControl,
+      denyScreenControl,
+      stopScreenControl,
+      sendScreenControlEvent,
       sendMessage,
       startCall,
       status,

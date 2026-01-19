@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.yoursocialplace.connect",
+      "sha256_cert_fingerprints": [
+        "80:42:A8:4E:23:6B:86:DA:B6:13:A8:31:B5:06:B3:10:34:DE:23:69:CE:4A:3F:83:42:8A:43:DA:E9:72:77:19"
+      ]
+    }
+  }
+]

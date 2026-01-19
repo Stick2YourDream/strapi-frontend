@@ -32,6 +32,7 @@
   margin-bottom: 28px;
   position: relative;
   flex-wrap: wrap;
+  z-index: 12050;
 }
 
 .landing-brand {
@@ -259,7 +260,7 @@
   border-radius: 12px;
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
   overflow: hidden;
-  z-index: 30;
+  z-index: 12000;
 }
 
 .landing-bell {
@@ -310,7 +311,7 @@
   border-radius: 12px;
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
   padding: 12px;
-  z-index: 30;
+  z-index: 12000;
 }
 
 .landing-notification-header {
@@ -550,7 +551,7 @@
 .hero-intent {
   display: grid;
   gap: 12px;
-  margin-bottom: 18px;
+  margin-bottom: 30px;
 }
 
 .hero-intent-label {
@@ -558,7 +559,8 @@
   text-transform: uppercase;
   letter-spacing: 0.2em;
   color: var(--accent-2);
-  margin: 0;
+  padding: 0;
+  color: limegreen !important;
 }
 
 .hero-intent-options {
@@ -608,13 +610,14 @@
 }
 
 .hero-intent-note {
-  margin: 0;
+  margin-top: 2rem;
   font-size: 12px;
   color: var(--muted);
 }
 
 .hero-cta-skip {
-  margin-top: 8px;
+  margin-top: 20px;
+  margin-bottom: 24px;
   background: transparent;
   border: none;
   color: var(--accent-2);
@@ -622,6 +625,7 @@
   cursor: pointer;
   padding: 0;
   text-align: left;
+
 }
 
 .hero-cta-skip:hover {

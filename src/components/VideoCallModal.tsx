@@ -1,4 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent,
+  type PointerEventHandler,
+  type Ref,
+} from "react";
+import { createPortal } from "react-dom";
 import {
   useVideoCall,
   type VideoCallInvitee,
@@ -65,6 +75,15 @@ const VideoTile = ({
   muted,
   status,
   className,
+  badge,
+  children,
+  onPointerMove,
+  onPointerUp,
+  onPointerDown,
+  onPointerLeave,
+  tabIndex,
+  rootRef,
+  dataScreenId,
 }: {
   stream: MediaStream | null;
   label: string;
@@ -72,6 +91,15 @@ const VideoTile = ({
   muted?: boolean;
   status?: string;
   className?: string;
+  badge?: string;
+  children?: React.ReactNode;
+  onPointerMove?: PointerEventHandler<HTMLDivElement>;
+  onPointerUp?: PointerEventHandler<HTMLDivElement>;
+  onPointerDown?: PointerEventHandler<HTMLDivElement>;
+  onPointerLeave?: PointerEventHandler<HTMLDivElement>;
+  tabIndex?: number;
+  rootRef?: Ref<HTMLDivElement>;
+  dataScreenId?: string;
 }) => {
   const ref = useRef<HTMLVideoElement | null>(null);
   const hasVideo = Boolean(stream?.getVideoTracks().some((track) => track.enabled));
@@ -87,7 +115,16 @@ const VideoTile = ({
   }, [stream]);
 
   return (
-    <div className={`video-tile${className ? ` ${className}` : ""}`}>
+    <div
+      ref={rootRef}
+      data-screen-id={dataScreenId}
+      className={`video-tile${className ? ` ${className}` : ""}`}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerDown={onPointerDown}
+      onPointerLeave={onPointerLeave}
+      tabIndex={tabIndex}
+    >
       {stream && (
         <video
           ref={ref}
@@ -110,9 +147,11 @@ const VideoTile = ({
           {status && <span className="video-tile__status">{status}</span>}
         </div>
       )}
+      {badge && <span className="video-tile__badge">{badge}</span>}
       <div className="video-tile__meta">
         <span>{label}</span>
       </div>
+      {children}
     </div>
   );
 };
@@ -130,13 +169,16 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     selectedInvitees,
     incomingCall,
     localStream,
+    localScreenStream,
     remoteStreams,
+    remoteScreenStreams,
     remoteParticipants,
     messages,
     error,
     maxParticipants,
     isVideoEnabled,
     isAudioEnabled,
+    isScreenSharing,
     onlineUserIds,
     videoEffects,
     setVideoEffects,
@@ -149,6 +191,18 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     endCall,
     toggleVideo,
     toggleAudio,
+    startScreenShare,
+    stopScreenShare,
+    screenControlRequests,
+    pendingScreenControlTargets,
+    activeScreenController,
+    screenControlTarget,
+    screenControlCursor,
+    requestScreenControl,
+    grantScreenControl,
+    denyScreenControl,
+    stopScreenControl,
+    sendScreenControlEvent,
     sendMessage,
   } = useVideoCall();
 
@@ -156,18 +210,166 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showGifPicker, setShowGifPicker] = useState(false);
   const [selectionError, setSelectionError] = useState<string | null>(null);
+  const [screenViewMode, setScreenViewMode] = useState<"split" | "screen" | "video">("split");
+  const [isChatVisible, setIsChatVisible] = useState(true);
+  const [isScreenBorderless, setIsScreenBorderless] = useState(false);
+  const [fullscreenTargetId, setFullscreenTargetId] = useState<string | null>(null);
+  const [isPopout, setIsPopout] = useState(false);
+  const [popoutContainer, setPopoutContainer] = useState<HTMLDivElement | null>(null);
   const ringtoneRef = useRef<{ ctx: AudioContext | null; timer: number | null }>({
     ctx: null,
     timer: null,
   });
+  const controlThrottleRef = useRef(0);
+  const screenTileRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const popoutWindowRef = useRef<Window | null>(null);
 
   const showModal = isOpen || status === "incoming";
   const showCallUi = status === "in-call" || status === "connecting";
+  const showChat = showCallUi && isChatVisible;
+  const isRenderingInPopout = Boolean(isPopout && popoutContainer);
+  const overlayClassName = `video-call-overlay${isRenderingInPopout ? " is-popout" : ""}`;
+  const modalClassName = `video-call-modal${showCallUi ? "" : " is-setup"}${
+    showCallUi && !isChatVisible ? " is-chat-hidden" : ""
+  }${isRenderingInPopout ? " is-popout" : ""}`;
+
+  useEffect(() => {
+    if (!showCallUi) {
+      setIsPopout(false);
+    }
+  }, [showCallUi]);
+
+  useEffect(() => {
+    if (!isPopout) {
+      if (popoutWindowRef.current && !popoutWindowRef.current.closed) {
+        popoutWindowRef.current.close();
+      }
+      popoutWindowRef.current = null;
+      setPopoutContainer(null);
+      return;
+    }
+
+    const nextWindow = window.open(
+      "",
+      "Your Social Place Video Call",
+      "popup=yes,width=1120,height=760,resizable=yes"
+    );
+    if (!nextWindow) {
+      setIsPopout(false);
+      return;
+    }
+
+    popoutWindowRef.current = nextWindow;
+    nextWindow.document.title = "Your Social Place - Video call";
+    nextWindow.document.body.style.margin = "0";
+    nextWindow.document.body.style.background = "#05070f";
+
+    const container = nextWindow.document.createElement("div");
+    container.id = "video-call-popout-root";
+    nextWindow.document.body.appendChild(container);
+
+    const head = nextWindow.document.head;
+    document.querySelectorAll('link[rel="stylesheet"], style').forEach((node) => {
+      head.appendChild(node.cloneNode(true));
+    });
+
+    setPopoutContainer(container);
+
+    const handleBeforeUnload = () => {
+      setIsPopout(false);
+    };
+
+    nextWindow.addEventListener("beforeunload", handleBeforeUnload);
+
+    return () => {
+      nextWindow.removeEventListener("beforeunload", handleBeforeUnload);
+      if (!nextWindow.closed) {
+        nextWindow.close();
+      }
+    };
+  }, [isPopout]);
 
   const remoteList = useMemo(
     () => Object.values(remoteParticipants),
     [remoteParticipants]
   );
+
+  const screenShareEntries = useMemo(() => {
+    const entries: Array<{
+      id: string;
+      stream: MediaStream;
+      label: string;
+      isLocal: boolean;
+      socketId?: string;
+    }> = [];
+    if (localScreenStream) {
+      entries.push({
+        id: "local",
+        stream: localScreenStream,
+        label: "Your screen",
+        isLocal: true,
+      });
+    }
+    Object.entries(remoteScreenStreams).forEach(([socketId, stream]) => {
+      const participant = remoteParticipants[socketId];
+      const name = participant?.displayName || participant?.handle || "Friend";
+      entries.push({
+        id: socketId,
+        stream,
+        label: `${name}'s screen`,
+        isLocal: false,
+        socketId,
+      });
+    });
+    return entries;
+  }, [localScreenStream, remoteParticipants, remoteScreenStreams]);
+
+  const hasScreenShares = screenShareEntries.length > 0;
+  const effectiveViewMode = hasScreenShares ? screenViewMode : "video";
+  const showScreenTiles = effectiveViewMode !== "video";
+  const showVideoTiles = effectiveViewMode !== "screen";
+  const gridClassName = `video-call-grid${
+    effectiveViewMode === "screen"
+      ? " is-screen-only"
+      : effectiveViewMode === "video"
+      ? " is-video-only"
+      : " is-split"
+  }${isScreenBorderless ? " is-borderless" : ""}`;
+
+  const registerScreenTile = useCallback((id: string) => {
+    return (node: HTMLDivElement | null) => {
+      if (node) {
+        screenTileRefs.current.set(id, node);
+      } else {
+        screenTileRefs.current.delete(id);
+      }
+    };
+  }, []);
+
+  const toggleFullscreen = useCallback((targetId: string) => {
+    const node = screenTileRefs.current.get(targetId);
+    if (!node) return;
+    if (document.fullscreenElement) {
+      if (document.fullscreenElement === node) {
+        document.exitFullscreen().catch(() => undefined);
+        return;
+      }
+      document.exitFullscreen().catch(() => undefined);
+    }
+    node.requestFullscreen?.().catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const element = document.fullscreenElement as HTMLElement | null;
+      const id = element?.dataset?.screenId || null;
+      setFullscreenTargetId(id);
+    };
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+    };
+  }, []);
 
   const localEffectClass = useMemo(() => {
     const classes = [];
@@ -215,6 +417,23 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const handleGifPick = (gifUrl: string) => {
     sendMessage(gifUrl, "gif", gifUrl);
     setShowGifPicker(false);
+  };
+
+  const sendControlPointer = (
+    event: PointerEvent<HTMLDivElement>,
+    targetSocketId: string,
+    type: "move" | "click"
+  ) => {
+    if (screenControlTarget !== targetSocketId) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const x = (event.clientX - rect.left) / rect.width;
+    const y = (event.clientY - rect.top) / rect.height;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    const now = performance.now();
+    if (type === "move" && now - controlThrottleRef.current < 50) return;
+    controlThrottleRef.current = now;
+    sendScreenControlEvent(targetSocketId, { type, x, y });
   };
 
   const playEndCallTone = async () => {
@@ -325,9 +544,9 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
 
   if (!showModal) return null;
 
-  return (
-    <div className="video-call-overlay">
-      <div className={`video-call-modal${showCallUi ? "" : " is-setup"}`}>
+  const modalContent = (
+    <div className={overlayClassName}>
+      <div className={modalClassName}>
         <div className="video-call-main">
           <div className="video-call-header">
             <div>
@@ -353,6 +572,70 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
               )}
             </div>
           </div>
+
+          {showCallUi && (
+            <div className="video-call-toolbar">
+              <div className="video-call-toolbar-group">
+                <span className="video-call-toolbar-label">View</span>
+                <button
+                  type="button"
+                  className={`video-view-button${
+                    effectiveViewMode === "split" ? " is-active" : ""
+                  }`}
+                  onClick={() => setScreenViewMode("split")}
+                >
+                  Split
+                </button>
+                <button
+                  type="button"
+                  className={`video-view-button${
+                    effectiveViewMode === "screen" ? " is-active" : ""
+                  }`}
+                  onClick={() => setScreenViewMode("screen")}
+                  disabled={!hasScreenShares}
+                >
+                  Screen
+                </button>
+                <button
+                  type="button"
+                  className={`video-view-button${
+                    effectiveViewMode === "video" ? " is-active" : ""
+                  }`}
+                  onClick={() => setScreenViewMode("video")}
+                >
+                  Video
+                </button>
+              </div>
+              <div className="video-call-toolbar-group">
+                <button
+                  type="button"
+                  className={`video-view-button${isScreenBorderless ? " is-active" : ""}`}
+                  onClick={() => setIsScreenBorderless((prev) => !prev)}
+                  disabled={!hasScreenShares}
+                >
+                  {isScreenBorderless ? "Windowed" : "Borderless"}
+                </button>
+                <button
+                  type="button"
+                  className={`video-view-button${showChat ? " is-active" : ""}`}
+                  onClick={() => setIsChatVisible((prev) => !prev)}
+                  disabled={!showCallUi}
+                >
+                  {showChat ? "Hide chat" : "Show chat"}
+                </button>
+              </div>
+              <div className="video-call-toolbar-group">
+                <button
+                  type="button"
+                  className={`video-view-button${isPopout ? " is-active" : ""}`}
+                  onClick={() => setIsPopout((prev) => !prev)}
+                  aria-pressed={isPopout}
+                >
+                  {isPopout ? "Dock" : "Pop out"}
+                </button>
+              </div>
+            </div>
+          )}
 
           {status === "setup" && (
             <div className="video-call-setup">
@@ -530,31 +813,222 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
           {showCallUi && (
             <>
               {error && <p className="status status-error video-call-error">{error}</p>}
-              <div className="video-call-grid">
-                <VideoTile
-                  stream={localStream}
-                  label="You"
-                  muted
-                  status={!localStream ? "Camera off" : isVideoEnabled ? "" : "Camera off"}
-                  className={`is-local ${localEffectClass}`.trim()}
-                />
-                {remoteList.map((participant) => (
-                  <VideoTile
-                    key={participant.socketId}
-                    stream={remoteStreams[participant.socketId] || null}
-                    label={participant.displayName || participant.handle || "Friend"}
-                    avatarUrl={participant.avatarUrl}
-                    status={
-                      remoteStreams[participant.socketId] ? "" : "Waiting for video"
+              {localScreenStream && screenControlRequests.length > 0 && (
+                <div className="screen-control-requests">
+                  <div className="screen-control-title">Screen control requests</div>
+                  {screenControlRequests.map((request) => (
+                    <div key={request.socketId} className="screen-control-request">
+                      <span>
+                        {request.displayName || request.handle || "Friend"} wants control.
+                      </span>
+                      <div className="screen-control-actions">
+                        <button
+                          type="button"
+                          className="btn ghost"
+                          onClick={() => denyScreenControl(request.socketId)}
+                        >
+                          Deny
+                        </button>
+                        <button
+                          type="button"
+                          className="btn primary"
+                          onClick={() => grantScreenControl(request.socketId)}
+                        >
+                          Allow
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className={gridClassName}>
+                {showScreenTiles &&
+                  screenShareEntries.map((entry) => {
+                    const tileId = entry.isLocal
+                      ? "screen-local"
+                      : `screen-${entry.socketId || entry.id}`;
+                    const isFullscreen = fullscreenTargetId === tileId;
+                    if (entry.isLocal) {
+                      return (
+                        <VideoTile
+                          key={entry.id}
+                          stream={entry.stream}
+                          label={entry.label}
+                          muted
+                          badge="Screen"
+                          className="is-screen is-local"
+                          rootRef={registerScreenTile(tileId)}
+                          dataScreenId={tileId}
+                        >
+                          <div className="screen-share-actions">
+                            {activeScreenController && (
+                              <span className="screen-share-status">
+                                Controlled by{" "}
+                                {activeScreenController.displayName ||
+                                  activeScreenController.handle ||
+                                  "Friend"}
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              className="screen-share-control"
+                              onClick={() => toggleFullscreen(tileId)}
+                            >
+                              {isFullscreen ? "Exit full screen" : "Full screen"}
+                            </button>
+                            <button
+                              type="button"
+                              className="screen-share-control"
+                              onClick={() => setIsScreenBorderless((prev) => !prev)}
+                            >
+                              {isScreenBorderless ? "Windowed" : "Borderless"}
+                            </button>
+                            <button
+                              type="button"
+                              className="screen-share-control"
+                              onClick={() => setIsChatVisible((prev) => !prev)}
+                            >
+                              {showChat ? "Hide chat" : "Show chat"}
+                            </button>
+                            {activeScreenController && (
+                              <button
+                                type="button"
+                                className="screen-share-control"
+                                onClick={() =>
+                                  stopScreenControl(activeScreenController.socketId)
+                                }
+                              >
+                                Stop control
+                              </button>
+                            )}
+                          </div>
+                          {activeScreenController && screenControlCursor && (
+                            <span
+                              className={`screen-control-cursor${
+                                screenControlCursor.kind === "click" ? " is-click" : ""
+                              }`}
+                              style={{
+                                left: `${screenControlCursor.x * 100}%`,
+                                top: `${screenControlCursor.y * 100}%`,
+                              }}
+                            />
+                          )}
+                        </VideoTile>
+                      );
                     }
-                  />
-                ))}
-                {status === "connecting" && remoteList.length === 0 && (
-                  <div className="video-tile is-skeleton">
+
+                    const targetId = entry.socketId || entry.id;
+                    const isControlling = screenControlTarget === targetId;
+                    const isPending = pendingScreenControlTargets.includes(targetId);
+
+                    return (
+                      <VideoTile
+                        key={entry.id}
+                        stream={entry.stream}
+                        label={entry.label}
+                        badge="Screen"
+                        className={`is-screen${isControlling ? " is-controlling" : ""}`}
+                        onPointerMove={
+                          isControlling
+                            ? (event) => sendControlPointer(event, targetId, "move")
+                            : undefined
+                        }
+                        onPointerUp={
+                          isControlling
+                            ? (event) => sendControlPointer(event, targetId, "click")
+                            : undefined
+                        }
+                        onPointerLeave={
+                          isControlling
+                            ? (event) => sendControlPointer(event, targetId, "move")
+                            : undefined
+                        }
+                        tabIndex={isControlling ? 0 : undefined}
+                        rootRef={registerScreenTile(tileId)}
+                        dataScreenId={tileId}
+                      >
+                        <div className="screen-share-actions">
+                          <button
+                            type="button"
+                            className="screen-share-control"
+                            onClick={() => toggleFullscreen(tileId)}
+                          >
+                            {isFullscreen ? "Exit full screen" : "Full screen"}
+                          </button>
+                          <button
+                            type="button"
+                            className="screen-share-control"
+                            onClick={() => setIsScreenBorderless((prev) => !prev)}
+                          >
+                            {isScreenBorderless ? "Windowed" : "Borderless"}
+                          </button>
+                          <button
+                            type="button"
+                            className="screen-share-control"
+                            onClick={() => setIsChatVisible((prev) => !prev)}
+                          >
+                            {showChat ? "Hide chat" : "Show chat"}
+                          </button>
+                          {isControlling ? (
+                            <button
+                              type="button"
+                              className="screen-share-control"
+                              onClick={() => stopScreenControl(targetId)}
+                            >
+                              Stop control
+                            </button>
+                          ) : isPending ? (
+                            <span className="screen-share-status">Control requested</span>
+                          ) : (
+                            <button
+                              type="button"
+                              className="screen-share-control"
+                              onClick={() => requestScreenControl(targetId)}
+                            >
+                              Take control
+                            </button>
+                          )}
+                        </div>
+                      </VideoTile>
+                    );
+                  })}
+                {showScreenTiles && screenShareEntries.length === 0 && (
+                  <div className="video-tile is-skeleton is-screen">
                     <div className="video-tile__placeholder">
-                      <span className="video-tile__status">Connecting to friends...</span>
+                      <span className="video-tile__status">No screen share yet</span>
                     </div>
                   </div>
+                )}
+                {showVideoTiles && (
+                  <>
+                    <VideoTile
+                      stream={localStream}
+                      label="You"
+                      muted
+                      status={!localStream ? "Camera off" : isVideoEnabled ? "" : "Camera off"}
+                      className={`is-local ${localEffectClass}`.trim()}
+                    />
+                    {remoteList.map((participant) => (
+                      <VideoTile
+                        key={participant.socketId}
+                        stream={remoteStreams[participant.socketId] || null}
+                        label={participant.displayName || participant.handle || "Friend"}
+                        avatarUrl={participant.avatarUrl}
+                        status={
+                          remoteStreams[participant.socketId] ? "" : "Waiting for video"
+                        }
+                      />
+                    ))}
+                    {status === "connecting" && remoteList.length === 0 && (
+                      <div className="video-tile is-skeleton">
+                        <div className="video-tile__placeholder">
+                          <span className="video-tile__status">
+                            Connecting to friends...
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
               <div className="video-call-controls">
@@ -571,6 +1045,15 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   onClick={toggleVideo}
                 >
                   {isVideoEnabled ? "Cam on" : "Cam off"}
+                </button>
+                <button
+                  type="button"
+                  className={`video-control${isScreenSharing ? " is-active" : ""}`}
+                  onClick={() =>
+                    isScreenSharing ? stopScreenShare() : void startScreenShare()
+                  }
+                >
+                  {isScreenSharing ? "Stop share" : "Share screen"}
                 </button>
                 <button type="button" className="video-control ghost" onClick={leaveCall}>
                   Leave call
@@ -697,4 +1180,10 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
       </div>
     </div>
   );
+
+  if (isRenderingInPopout && popoutContainer) {
+    return createPortal(modalContent, popoutContainer);
+  }
+
+  return modalContent;
 }
