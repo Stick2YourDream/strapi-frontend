@@ -1086,6 +1086,11 @@
   color: #e2e8f0;
 }
 
+.video-chat-toggle {
+  display: none;
+  gap: 6px;
+}
+
 .video-chat-list {
   flex: 1;
   overflow-y: auto;
@@ -1577,6 +1582,14 @@
 
   .video-chat-header {
     padding: 10px 12px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .video-chat-toggle {
+    display: flex;
+    width: 100%;
+    justify-content: center;
   }
 
   .video-chat-list {

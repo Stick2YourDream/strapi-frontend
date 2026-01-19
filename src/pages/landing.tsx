@@ -1050,6 +1050,8 @@ export default function Landing() {
             <span className="footer-title">Legal</span>
             <a href="/terms">Terms</a>
             <a href="/privacy">Privacy</a>
+            <a href="/delete-account">Delete account</a>
+            <a href="/delete-data">Delete data</a>
             <a href="/cookies">Cookie Policy</a>
           </div>
           <div className="footer-row footer-column">

@@ -268,6 +268,17 @@
   color: #a3b1c6;
 }
 
+.friend-report-modal select.auth-input {
+  color-scheme: dark;
+  background: rgba(8, 12, 20, 0.9);
+  color: #f8fafc;
+}
+
+.friend-report-modal select.auth-input option {
+  background: #0b0d14;
+  color: #f8fafc;
+}
+
 .friend-report-textarea {
   resize: vertical;
   min-height: 90px;
@@ -292,6 +303,19 @@
 
 .friend-report-close:hover {
   border-color: rgba(125, 211, 252, 0.5);
+}
+
+@media (prefers-color-scheme: light) {
+  .friend-report-modal select.auth-input {
+    color-scheme: light;
+    background: #ffffff;
+    color: #0b0d14;
+  }
+
+  .friend-report-modal select.auth-input option {
+    background: #ffffff;
+    color: #0b0d14;
+  }
 }
 
 .friend-current-post {

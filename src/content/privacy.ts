@@ -58,7 +58,7 @@ export const PRIVACY_SECTIONS = [
     title: "7. Your choices",
     body: [
       "Access, update, or delete your profile through your account settings.",
-      "Contact us to request a data export or account deletion.",
+      "Use the Delete account or Delete data pages to submit requests.",
     ],
   },
   {

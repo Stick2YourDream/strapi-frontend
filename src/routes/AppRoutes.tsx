@@ -16,6 +16,8 @@ import Guidelines from "../pages/guidelines";
 import Cookies from "../pages/cookies";
 import Safety from "../pages/safety";
 import Report from "../pages/report";
+import DeleteAccount from "../pages/delete-account";
+import DeleteData from "../pages/delete-data";
 
 export default function AppRoutes(): JSX.Element {
   return (
@@ -29,6 +31,8 @@ export default function AppRoutes(): JSX.Element {
       <Route path="/register" element={<Register />} />
       <Route path="/terms" element={<Terms />} />
       <Route path="/privacy" element={<Privacy />} />
+      <Route path="/delete-account" element={<DeleteAccount />} />
+      <Route path="/delete-data" element={<DeleteData />} />
       <Route path="/guidelines" element={<Guidelines />} />
       <Route path="/cookies" element={<Cookies />} />
       <Route path="/safety" element={<Safety />} />

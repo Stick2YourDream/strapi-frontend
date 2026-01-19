@@ -1229,6 +1229,24 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
           <div className="video-chat-header">
             <strong>Call chat</strong>
             <span>{showCallUi ? "Live" : "Ready"}</span>
+            <div className="video-chat-toggle is-mobile-only">
+              <button
+                type="button"
+                className={`video-view-button${mobilePanel === "video" ? " is-active" : ""}`}
+                onClick={() => setMobilePanel("video")}
+                disabled={!showCallUi}
+              >
+                Video
+              </button>
+              <button
+                type="button"
+                className={`video-view-button${mobilePanel === "chat" ? " is-active" : ""}`}
+                onClick={() => setMobilePanel("chat")}
+                disabled={!showCallUi}
+              >
+                Chat
+              </button>
+            </div>
           </div>
           <div className="video-chat-list">
             {messages.length === 0 ? (

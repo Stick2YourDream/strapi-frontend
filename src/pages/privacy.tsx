@@ -43,6 +43,15 @@ export default function Privacy() {
               ))}
             </section>
           ))}
+          <section className="terms-section" id="account-deletion">
+            <h2>Account and data deletion</h2>
+            <p>
+              Use the self-serve forms to request deletion:
+              {" "}
+              <a href="/delete-account">Delete account</a> or{" "}
+              <a href="/delete-data">Delete data</a>.
+            </p>
+          </section>
         </main>
       </div>
     </div>
