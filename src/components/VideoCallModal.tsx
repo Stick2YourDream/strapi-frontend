@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type PointerEvent,
   type PointerEventHandler,
   type Ref,
@@ -84,6 +85,7 @@ const VideoTile = ({
   tabIndex,
   rootRef,
   dataScreenId,
+  style,
 }: {
   stream: MediaStream | null;
   label: string;
@@ -100,6 +102,7 @@ const VideoTile = ({
   tabIndex?: number;
   rootRef?: Ref<HTMLDivElement>;
   dataScreenId?: string;
+  style?: CSSProperties;
 }) => {
   const ref = useRef<HTMLVideoElement | null>(null);
   const hasVideo = Boolean(stream?.getVideoTracks().some((track) => track.enabled));
@@ -119,6 +122,7 @@ const VideoTile = ({
       ref={rootRef}
       data-screen-id={dataScreenId}
       className={`video-tile${className ? ` ${className}` : ""}`}
+      style={style}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerDown={onPointerDown}
@@ -215,6 +219,10 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const [isScreenBorderless, setIsScreenBorderless] = useState(false);
   const [fullscreenTargetId, setFullscreenTargetId] = useState<string | null>(null);
   const [isPopout, setIsPopout] = useState(false);
+  const [mobilePanel, setMobilePanel] = useState<"video" | "chat">("video");
+  const [pipPosition, setPipPosition] = useState<{ x: number; y: number } | null>(null);
+  const [isPipDragging, setIsPipDragging] = useState(false);
+  const [isMobileLayout, setIsMobileLayout] = useState(false);
   const [popoutContainer, setPopoutContainer] = useState<HTMLDivElement | null>(null);
   const ringtoneRef = useRef<{ ctx: AudioContext | null; timer: number | null }>({
     ctx: null,
@@ -222,20 +230,27 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   });
   const controlThrottleRef = useRef(0);
   const screenTileRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const gridRef = useRef<HTMLDivElement | null>(null);
   const popoutWindowRef = useRef<Window | null>(null);
+  const prevHasScreenSharesRef = useRef(false);
+  const pipDragRef = useRef({ active: false, offsetX: 0, offsetY: 0 });
 
   const showModal = isOpen || status === "incoming";
   const showCallUi = status === "in-call" || status === "connecting";
-  const showChat = showCallUi && isChatVisible;
+  const showChat = showCallUi && (isChatVisible || mobilePanel === "chat");
+  const isChatHidden = showCallUi && !isChatVisible && mobilePanel !== "chat";
   const isRenderingInPopout = Boolean(isPopout && popoutContainer);
   const overlayClassName = `video-call-overlay${isRenderingInPopout ? " is-popout" : ""}`;
   const modalClassName = `video-call-modal${showCallUi ? "" : " is-setup"}${
-    showCallUi && !isChatVisible ? " is-chat-hidden" : ""
-  }${isRenderingInPopout ? " is-popout" : ""}`;
+    isChatHidden ? " is-chat-hidden" : ""
+  }${isRenderingInPopout ? " is-popout" : ""}${
+    mobilePanel === "chat" ? " is-mobile-chat" : " is-mobile-video"
+  }`;
 
   useEffect(() => {
     if (!showCallUi) {
       setIsPopout(false);
+      setMobilePanel("video");
     }
   }, [showCallUi]);
 
@@ -328,6 +343,15 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const effectiveViewMode = hasScreenShares ? screenViewMode : "video";
   const showScreenTiles = effectiveViewMode !== "video";
   const showVideoTiles = effectiveViewMode !== "screen";
+  const primaryVideoSocketId = remoteList[0]?.socketId || "local";
+  const isLocalPrimary = primaryVideoSocketId === "local";
+  const primaryScreenTileId = useMemo(() => {
+    if (!showScreenTiles || screenShareEntries.length === 0) return null;
+    const remoteEntry = screenShareEntries.find((entry) => !entry.isLocal);
+    const entry = remoteEntry || screenShareEntries[0];
+    if (!entry) return null;
+    return entry.isLocal ? "screen-local" : `screen-${entry.socketId || entry.id}`;
+  }, [screenShareEntries, showScreenTiles]);
   const gridClassName = `video-call-grid${
     effectiveViewMode === "screen"
       ? " is-screen-only"
@@ -335,6 +359,92 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
       ? " is-video-only"
       : " is-split"
   }${isScreenBorderless ? " is-borderless" : ""}`;
+
+  useEffect(() => {
+    if (hasScreenShares && !prevHasScreenSharesRef.current && screenViewMode === "video") {
+      setScreenViewMode("split");
+    }
+    prevHasScreenSharesRef.current = hasScreenShares;
+  }, [hasScreenShares, screenViewMode]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const media = window.matchMedia("(max-width: 720px)");
+    const handleChange = () => setIsMobileLayout(media.matches);
+    handleChange();
+    if (media.addEventListener) {
+      media.addEventListener("change", handleChange);
+      return () => media.removeEventListener("change", handleChange);
+    }
+    media.addListener(handleChange);
+    return () => media.removeListener(handleChange);
+  }, []);
+
+  useEffect(() => {
+    if (!showCallUi || !isMobileLayout || isLocalPrimary) {
+      setPipPosition(null);
+      setIsPipDragging(false);
+      pipDragRef.current.active = false;
+    }
+  }, [isLocalPrimary, isMobileLayout, showCallUi]);
+
+  const handlePipPointerDown = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (!isMobileLayout || isLocalPrimary) return;
+      const grid = gridRef.current;
+      if (!grid) return;
+      const tile = event.currentTarget;
+      const gridRect = grid.getBoundingClientRect();
+      const tileRect = tile.getBoundingClientRect();
+      if (!gridRect.width || !gridRect.height) return;
+      pipDragRef.current.active = true;
+      pipDragRef.current.offsetX = event.clientX - tileRect.left;
+      pipDragRef.current.offsetY = event.clientY - tileRect.top;
+      setPipPosition({
+        x: tileRect.left - gridRect.left,
+        y: tileRect.top - gridRect.top,
+      });
+      setIsPipDragging(true);
+      tile.setPointerCapture?.(event.pointerId);
+    },
+    [isLocalPrimary, isMobileLayout]
+  );
+
+  const handlePipPointerMove = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (!pipDragRef.current.active || !isMobileLayout || isLocalPrimary) return;
+      const grid = gridRef.current;
+      if (!grid) return;
+      const gridRect = grid.getBoundingClientRect();
+      const tile = event.currentTarget;
+      const width = tile.offsetWidth;
+      const height = tile.offsetHeight;
+      if (!gridRect.width || !gridRect.height || !width || !height) return;
+      let nextX = event.clientX - gridRect.left - pipDragRef.current.offsetX;
+      let nextY = event.clientY - gridRect.top - pipDragRef.current.offsetY;
+      nextX = Math.min(Math.max(0, nextX), gridRect.width - width);
+      nextY = Math.min(Math.max(0, nextY), gridRect.height - height);
+      setPipPosition({ x: nextX, y: nextY });
+    },
+    [isLocalPrimary, isMobileLayout]
+  );
+
+  const handlePipPointerUp = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    if (!pipDragRef.current.active) return;
+    pipDragRef.current.active = false;
+    setIsPipDragging(false);
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+  }, []);
+
+  const pipStyle = useMemo<CSSProperties | undefined>(() => {
+    if (!isMobileLayout || isLocalPrimary || !pipPosition) return undefined;
+    return {
+      left: `${pipPosition.x}px`,
+      top: `${pipPosition.y}px`,
+      right: "auto",
+      bottom: "auto",
+    };
+  }, [isLocalPrimary, isMobileLayout, pipPosition]);
 
   const registerScreenTile = useCallback((id: string) => {
     return (node: HTMLDivElement | null) => {
@@ -617,11 +727,28 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                 </button>
                 <button
                   type="button"
-                  className={`video-view-button${showChat ? " is-active" : ""}`}
+                  className={`video-view-button is-chat-toggle${showChat ? " is-active" : ""}`}
                   onClick={() => setIsChatVisible((prev) => !prev)}
                   disabled={!showCallUi}
                 >
                   {showChat ? "Hide chat" : "Show chat"}
+                </button>
+              </div>
+              <div className="video-call-toolbar-group is-mobile-only">
+                <span className="video-call-toolbar-label">Panel</span>
+                <button
+                  type="button"
+                  className={`video-view-button${mobilePanel === "video" ? " is-active" : ""}`}
+                  onClick={() => setMobilePanel("video")}
+                >
+                  Video
+                </button>
+                <button
+                  type="button"
+                  className={`video-view-button${mobilePanel === "chat" ? " is-active" : ""}`}
+                  onClick={() => setMobilePanel("chat")}
+                >
+                  Chat
                 </button>
               </div>
               <div className="video-call-toolbar-group">
@@ -841,13 +968,14 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   ))}
                 </div>
               )}
-              <div className={gridClassName}>
+              <div className={gridClassName} ref={gridRef}>
                 {showScreenTiles &&
                   screenShareEntries.map((entry) => {
                     const tileId = entry.isLocal
                       ? "screen-local"
                       : `screen-${entry.socketId || entry.id}`;
                     const isFullscreen = fullscreenTargetId === tileId;
+                    const isPrimary = tileId === primaryScreenTileId;
                     if (entry.isLocal) {
                       return (
                         <VideoTile
@@ -856,7 +984,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                           label={entry.label}
                           muted
                           badge="Screen"
-                          className="is-screen is-local"
+                          className={`is-screen is-local${isPrimary ? " is-primary" : ""}`}
                           rootRef={registerScreenTile(tileId)}
                           dataScreenId={tileId}
                         >
@@ -885,7 +1013,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                             </button>
                             <button
                               type="button"
-                              className="screen-share-control"
+                              className="screen-share-control is-chat-toggle"
                               onClick={() => setIsChatVisible((prev) => !prev)}
                             >
                               {showChat ? "Hide chat" : "Show chat"}
@@ -927,7 +1055,9 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                         stream={entry.stream}
                         label={entry.label}
                         badge="Screen"
-                        className={`is-screen${isControlling ? " is-controlling" : ""}`}
+                        className={`is-screen${isControlling ? " is-controlling" : ""}${
+                          isPrimary ? " is-primary" : ""
+                        }`}
                         onPointerMove={
                           isControlling
                             ? (event) => sendControlPointer(event, targetId, "move")
@@ -964,7 +1094,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                           </button>
                           <button
                             type="button"
-                            className="screen-share-control"
+                            className="screen-share-control is-chat-toggle"
                             onClick={() => setIsChatVisible((prev) => !prev)}
                           >
                             {showChat ? "Hide chat" : "Show chat"}
@@ -1006,7 +1136,16 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                       label="You"
                       muted
                       status={!localStream ? "Camera off" : isVideoEnabled ? "" : "Camera off"}
-                      className={`is-local ${localEffectClass}`.trim()}
+                      className={`is-local is-self-video${
+                        isLocalPrimary ? " is-primary" : ""
+                      }${!isLocalPrimary && isMobileLayout ? " is-draggable" : ""}${
+                        isPipDragging ? " is-dragging" : ""
+                      }${localEffectClass ? ` ${localEffectClass}` : ""}`}
+                      style={pipStyle}
+                      onPointerDown={handlePipPointerDown}
+                      onPointerMove={handlePipPointerMove}
+                      onPointerUp={handlePipPointerUp}
+                      onPointerLeave={handlePipPointerUp}
                     />
                     {remoteList.map((participant) => (
                       <VideoTile
@@ -1016,6 +1155,9 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                         avatarUrl={participant.avatarUrl}
                         status={
                           remoteStreams[participant.socketId] ? "" : "Waiting for video"
+                        }
+                        className={
+                          participant.socketId === primaryVideoSocketId ? "is-primary" : undefined
                         }
                       />
                     ))}
@@ -1030,6 +1172,16 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                     )}
                   </>
                 )}
+                <button
+                  type="button"
+                  className="video-call-end-mobile"
+                  onClick={() => {
+                    void playEndCallTone();
+                    endCall();
+                  }}
+                >
+                  End call
+                </button>
               </div>
               <div className="video-call-controls">
                 <button

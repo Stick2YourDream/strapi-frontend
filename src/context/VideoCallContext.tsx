@@ -763,11 +763,18 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         const streamId = nextStream.id;
         const shareOwner = screenShareOwnersRef.current.get(streamId);
         const existingCamera = remoteStreamsRef.current[socketId];
+        const trackLabel = event.track.label?.toLowerCase() || "";
+        const looksLikeScreen = ["screen", "window", "display", "monitor"].some((token) =>
+          trackLabel.includes(token)
+        );
         const shouldTreatAsScreen =
           shareOwner === socketId ||
           (event.track.kind === "video" &&
             existingCamera &&
             existingCamera.id !== streamId &&
+            !remoteScreenStreamsRef.current[socketId]) ||
+          (event.track.kind === "video" &&
+            looksLikeScreen &&
             !remoteScreenStreamsRef.current[socketId]);
 
         if (shouldTreatAsScreen) {

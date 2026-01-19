@@ -592,6 +592,10 @@
   flex-wrap: wrap;
 }
 
+.video-call-toolbar-group.is-mobile-only {
+  display: none;
+}
+
 .video-call-toolbar-label {
   font-size: 0.7rem;
   letter-spacing: 0.14em;
@@ -1016,6 +1020,10 @@
   background: rgba(8, 12, 22, 0.75);
 }
 
+.video-call-end-mobile {
+  display: none;
+}
+
 .video-control {
   padding: 8px 14px;
   border-radius: 999px;
@@ -1408,18 +1416,69 @@
     resize: none;
   }
 
+  .video-call-modal.is-mobile-chat,
+  .video-call-modal.is-mobile-video {
+    grid-template-rows: 1fr;
+  }
+
+  .video-call-modal.is-mobile-chat .video-call-main {
+    display: none;
+  }
+
+  .video-call-modal.is-mobile-video .video-call-sidebar {
+    display: none;
+  }
+
   .video-call-grid {
-    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    position: relative;
+    display: block;
     padding: 10px;
-    gap: 10px;
   }
 
-  .video-call-grid.is-split .video-tile.is-screen {
-    grid-column: auto;
+  .video-call-grid.is-borderless {
+    padding: 0;
   }
 
-  .video-call-grid.is-split {
-    grid-template-columns: 1fr;
+  .video-call-grid .video-tile {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .video-call-grid .video-tile.is-primary {
+    position: relative;
+    inset: auto;
+    opacity: 1;
+    pointer-events: auto;
+    width: 100%;
+    height: 100%;
+  }
+
+  .video-call-grid .video-tile.is-self-video {
+    position: absolute;
+    left: 12px;
+    top: 12px;
+    width: clamp(96px, 36vw, 180px);
+    height: clamp(72px, 28vw, 135px);
+    opacity: 1;
+    pointer-events: auto;
+    z-index: 4;
+    touch-action: none;
+  }
+
+  .video-call-grid .video-tile.is-self-video.is-primary {
+    position: relative;
+    inset: auto;
+    width: 100%;
+    height: 100%;
+    right: auto;
+    bottom: auto;
+  }
+
+  .video-call-grid .video-tile.is-self-video .video-tile__meta,
+  .video-call-grid .video-tile.is-self-video .video-tile__badge {
+    display: none;
   }
 
   .video-call-controls {
@@ -1440,6 +1499,55 @@
 
   .video-call-toolbar {
     padding: 8px 14px;
+  }
+
+  .video-call-toolbar-group.is-mobile-only {
+    display: flex;
+  }
+
+  .video-view-button.is-chat-toggle {
+    display: none;
+  }
+
+  .video-control.end {
+    display: none;
+  }
+
+  .video-call-end-mobile {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    left: 50%;
+    bottom: 12px;
+    transform: translateX(-50%);
+    padding: 14px 28px;
+    min-width: 190px;
+    border-radius: 999px;
+    border: 1px solid rgba(248, 113, 113, 0.7);
+    background: linear-gradient(135deg, rgba(248, 113, 113, 0.98), rgba(239, 68, 68, 0.9));
+    color: #120407;
+    font-weight: 700;
+    font-size: 0.9rem;
+    letter-spacing: 0.02em;
+    z-index: 5;
+    box-shadow: 0 16px 30px rgba(120, 26, 26, 0.45);
+  }
+
+  .video-call-end-mobile:active {
+    transform: translateX(-50%) scale(0.98);
+  }
+
+  .video-call-grid .video-tile.is-self-video.is-draggable {
+    cursor: grab;
+  }
+
+  .video-call-grid .video-tile.is-self-video.is-dragging {
+    cursor: grabbing;
+  }
+
+  .screen-share-control.is-chat-toggle {
+    display: none;
   }
 
   .video-control {
