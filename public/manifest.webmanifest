@@ -4,6 +4,7 @@
   "description": "Your Social Place is a community driven motivational social network where real people share dreams, goals, progress, and help uplift each other.",
   "lang": "en",
   "dir": "ltr",
+  "id": "/",
   "start_url": "/?source=pwa",
   "scope": "/",
   "display": "standalone",
@@ -11,6 +12,24 @@
   "background_color": "#0b0d14",
   "theme_color": "#0b0d14",
   "categories": ["social", "productivity"],
+  "screenshots": [
+    {
+      "src": "/screenshots/screenshot-wide.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Your Social Place overview"
+    },
+    {
+      "src": "/screenshots/screenshot-narrow.png",
+      "sizes": "720x1280",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Your Social Place on mobile"
+    }
+  ],
+  "prefer_related_applications": false,
+  "related_applications": [],
   "icons": [
     {
       "src": "/icons/icon-192.png",
