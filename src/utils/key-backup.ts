@@ -43,6 +43,18 @@ const fromBase64 = (value: string) => {
   return bytes;
 };
 
+const toArrayBuffer = (bytes: Uint8Array): ArrayBuffer => {
+  if (bytes.buffer instanceof ArrayBuffer) {
+    if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
+      return bytes.buffer;
+    }
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  }
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+};
+
 const derivePassphraseKey = async (passphrase: string, salt: Uint8Array, iterations: number) => {
   const baseKey = await crypto.subtle.importKey(
     "raw",
@@ -52,7 +64,7 @@ const derivePassphraseKey = async (passphrase: string, salt: Uint8Array, iterati
     ["deriveKey"]
   );
   return crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
+    { name: "PBKDF2", salt: toArrayBuffer(salt), iterations, hash: "SHA-256" },
     baseKey,
     { name: "AES-GCM", length: 256 },
     false,
