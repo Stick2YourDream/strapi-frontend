@@ -47,6 +47,7 @@ type IncomingCall = {
   hostHandle?: string;
   hostAvatar?: string;
   invitees: number[];
+  e2eeEnabled?: boolean;
 };
 
 type VideoCallMessage = {
@@ -312,6 +313,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const screenControlTargetRef = useRef<string | null>(null);
   const presenceTargetsRef = useRef<number[]>([]);
   const e2eeSupported = useMemo(() => supportsCallE2ee(), []);
+  const callEncryptionEnabledRef = useRef<boolean>(e2eeSupported);
   const callKeyRef = useRef<CryptoKey | null>(null);
   const callKeyRoomRef = useRef<string | null>(null);
   const callKeyRecipientsRef = useRef<Set<number>>(new Set());
@@ -405,9 +407,34 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     isCallHostRef.current = false;
     senderE2eeRef.current = new WeakSet();
     receiverE2eeRef.current = new WeakSet();
-  }, []);
+    callEncryptionEnabledRef.current = e2eeSupported;
+  }, [e2eeSupported]);
+
+  const setCallEncryptionMode = useCallback(
+    (enabled: boolean, reason?: string, options?: { broadcast?: boolean }) => {
+      const nextEnabled = Boolean(enabled && e2eeSupported);
+      callEncryptionEnabledRef.current = nextEnabled;
+      if (!nextEnabled) {
+        callKeyRef.current = null;
+        callKeyRoomRef.current = null;
+        callKeyRecipientsRef.current = new Set();
+        const message = reason ? `E2EE disabled: ${reason}` : "E2EE disabled.";
+        setE2eeDebug(message);
+      } else {
+        setE2eeDebug(null);
+      }
+      if (options?.broadcast && socketRef.current && activeRoomRef.current) {
+        socketRef.current.emit("call:e2ee:mode", {
+          roomId: activeRoomRef.current,
+          enabled: nextEnabled,
+        });
+      }
+    },
+    [e2eeSupported, setE2eeDebug]
+  );
 
   const maybeRequestCallKey = useCallback(async (roomIdOverride?: string) => {
+    if (!e2eeSupported || !callEncryptionEnabledRef.current) return;
     if (isCallHostRef.current || callKeyRef.current) return;
     const roomId = roomIdOverride || activeRoomRef.current;
     if (!roomId) return;
@@ -427,24 +454,34 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       const detail = err instanceof Error ? err.message : "Key request failed";
       setE2eeDebug(`E2EE: ${detail}`);
     }
-  }, [user?.id, setE2eeDebug]);
+  }, [e2eeSupported, user?.id, setE2eeDebug]);
 
   const setupSenderE2ee = useCallback(
     (sender?: RTCRtpSender | null) => {
       if (!sender || !e2eeSupported) return;
+      if (!callEncryptionEnabledRef.current) return;
       if (senderE2eeRef.current.has(sender)) return;
       const streams = (sender as any).createEncodedStreams?.();
       if (!streams?.readable || !streams?.writable) return;
       const transform = new TransformStream({
         async transform(encodedFrame, controller) {
+          if (!encodedFrame) return;
+          if (!callEncryptionEnabledRef.current) {
+            controller.enqueue(encodedFrame);
+            return;
+          }
           const key = callKeyRef.current;
           if (!key || !encodedFrame?.data) return;
           try {
             const encrypted = await encryptFrame(key, encodedFrame.data);
             encodedFrame.data = encrypted;
             controller.enqueue(encodedFrame);
-          } catch {
-            // drop encrypted frame failures
+          } catch (err) {
+            if (callEncryptionEnabledRef.current) {
+              const detail = err instanceof Error ? err.message : "Encryption failed";
+              setCallEncryptionMode(false, detail, { broadcast: true });
+            }
+            controller.enqueue(encodedFrame);
           }
         },
       });
@@ -454,31 +491,47 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         .catch(() => undefined);
       senderE2eeRef.current.add(sender);
     },
-    [e2eeSupported, encryptFrame]
+    [e2eeSupported, encryptFrame, setCallEncryptionMode]
   );
 
   const setupReceiverE2ee = useCallback(
     (receiver?: RTCRtpReceiver | null) => {
       if (!receiver || !e2eeSupported) return;
+      if (!callEncryptionEnabledRef.current) return;
       if (receiverE2eeRef.current.has(receiver)) return;
       const streams = (receiver as any).createEncodedStreams?.();
       if (!streams?.readable || !streams?.writable) return;
       const transform = new TransformStream({
         async transform(encodedFrame, controller) {
+          if (!encodedFrame) return;
+          if (!callEncryptionEnabledRef.current) {
+            controller.enqueue(encodedFrame);
+            return;
+          }
           const key = callKeyRef.current;
-          if (!key || !encodedFrame?.data) {
-            if (!key) {
-              void maybeRequestCallKey();
-            }
+          if (!encodedFrame?.data) return;
+          if (!key) {
+            void maybeRequestCallKey();
+            return;
+          }
+          const dataBuffer = toArrayBuffer(encodedFrame.data);
+          const bytes = new Uint8Array(dataBuffer);
+          const isEncryptedFrame =
+            bytes.length > E2EE_HEADER_BYTES && bytes[0] === E2EE_VERSION;
+          if (!isEncryptedFrame) {
+            setCallEncryptionMode(false, "unencrypted media detected", { broadcast: true });
+            controller.enqueue(encodedFrame);
             return;
           }
           try {
-            const decrypted = await decryptFrame(key, encodedFrame.data);
+            const decrypted = await decryptFrame(key, dataBuffer);
             encodedFrame.data = decrypted;
             controller.enqueue(encodedFrame);
-          } catch {
-            // drop frames that fail to decrypt
-            void maybeRequestCallKey();
+          } catch (err) {
+            if (callEncryptionEnabledRef.current) {
+              const detail = err instanceof Error ? err.message : "Decryption failed";
+              setCallEncryptionMode(false, detail, { broadcast: true });
+            }
           }
         },
       });
@@ -488,7 +541,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         .catch(() => undefined);
       receiverE2eeRef.current.add(receiver);
     },
-    [decryptFrame, e2eeSupported, maybeRequestCallKey]
+    [decryptFrame, e2eeSupported, maybeRequestCallKey, setCallEncryptionMode, toArrayBuffer]
   );
 
   const requestVideoKeyFrame = useCallback((sender?: RTCRtpSender | null) => {
@@ -511,6 +564,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const shareCallKeyWithUser = useCallback(
     async (roomId: string, targetUserId: number) => {
       if (!socketRef.current || !user?.id) return;
+      if (!callEncryptionEnabledRef.current) return;
       if (!callKeyRef.current || !targetUserId) return;
       if (callKeyRoomRef.current && callKeyRoomRef.current !== roomId) return;
       if (targetUserId === user.id) return;
@@ -542,6 +596,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const shareCallKeyWithPublicKey = useCallback(
     async (roomId: string, targetUserId: number, publicKeyText: string) => {
       if (!socketRef.current || !user?.id) return;
+      if (!callEncryptionEnabledRef.current) return;
       if (!callKeyRef.current || !targetUserId || !publicKeyText) return;
       if (callKeyRoomRef.current && callKeyRoomRef.current !== roomId) return;
       if (targetUserId === user.id) return;
@@ -570,6 +625,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const shareCallKeyWithParticipants = useCallback(
     (roomId: string, participants: VideoCallParticipant[]) => {
       if (!isCallHostRef.current) return;
+      if (!callEncryptionEnabledRef.current) return;
       participants.forEach((participant) => {
         if (!participant?.userId) return;
         void shareCallKeyWithUser(roomId, participant.userId);
@@ -1118,7 +1174,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     (socketId: string) => {
       const existing = peersRef.current.get(socketId);
       if (existing) return existing;
-      const rtcConfig = e2eeSupported
+      const useInsertableStreams = e2eeSupported && callEncryptionEnabledRef.current;
+      const rtcConfig = useInsertableStreams
         ? ({ ...RTC_CONFIG, encodedInsertableStreams: true } as RTCConfiguration)
         : RTC_CONFIG;
       const pc = new RTCPeerConnection(rtcConfig);
@@ -1415,7 +1472,20 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
 
     socket.on(
       "call:participants",
-      (payload: { roomId: string; participants: VideoCallParticipant[] }) => {
+      (payload: {
+        roomId: string;
+        participants: VideoCallParticipant[];
+        e2eeEnabled?: boolean;
+      }) => {
+        if (payload.e2eeEnabled === false) {
+          if (callEncryptionEnabledRef.current) {
+            setCallEncryptionMode(false, "disabled by host");
+          }
+        } else if (!e2eeSupported) {
+          setCallEncryptionMode(false, "unsupported browser", { broadcast: true });
+        } else if (!callEncryptionEnabledRef.current) {
+          setCallEncryptionMode(true);
+        }
         setRemoteParticipants(() =>
           Object.fromEntries(payload.participants.map((p) => [p.socketId, p]))
         );
@@ -1465,7 +1535,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       }) => {
         if (!payload?.roomId || !payload?.encryptedKey || !payload?.fromUserId) return;
         if (payload.roomId !== activeRoomRef.current) return;
-        if (!e2eeSupported) return;
+        if (!e2eeSupported || !callEncryptionEnabledRef.current) return;
         try {
           const { privateKey } = await getOrCreateIdentityKeyPair();
           let senderPublicKey: CryptoKey | null = null;
@@ -1490,8 +1560,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           requestAllVideoKeyFrames();
         } catch (err) {
           const detail = err instanceof Error ? err.message : "Key decrypt failed";
-          setE2eeDebug(`E2EE: ${detail}`);
-          setError("Unable to enable call encryption.");
+          setCallEncryptionMode(false, detail, { broadcast: true });
+          setError(null);
         }
       }
     );
@@ -1502,11 +1572,30 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         if (!payload?.roomId || !payload?.fromUserId || !payload?.publicKey) return;
         if (payload.roomId !== activeRoomRef.current) return;
         if (!isCallHostRef.current) return;
+        if (!callEncryptionEnabledRef.current) return;
         await shareCallKeyWithPublicKey(
           payload.roomId,
           payload.fromUserId,
           payload.publicKey
         );
+      }
+    );
+
+    socket.on(
+      "call:e2ee:mode",
+      (payload: { roomId: string; enabled: boolean }) => {
+        if (!payload?.roomId || payload.roomId !== activeRoomRef.current) return;
+        if (!payload.enabled) {
+          if (!callEncryptionEnabledRef.current) return;
+          setCallEncryptionMode(false, "disabled by host");
+          return;
+        }
+        if (callEncryptionEnabledRef.current) return;
+        if (!e2eeSupported) {
+          setCallEncryptionMode(false, "unsupported browser", { broadcast: true });
+          return;
+        }
+        setCallEncryptionMode(true);
       }
     );
 
@@ -1767,6 +1856,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     getPeerNegotiationState,
     maybeRequestCallKey,
     requestAllVideoKeyFrames,
+    setCallEncryptionMode,
     shareCallKeyWithParticipants,
     shareCallKeyWithPublicKey,
     user?.email,
@@ -1947,32 +2037,31 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
 
   const startCall = useCallback(async () => {
     if (!socketRef.current || !user?.id) return;
-    if (!e2eeSupported) {
-      setError("End-to-end encrypted calls require Chrome or Edge.");
-      setE2eeDebug("E2EE: unsupported browser or missing insertable streams.");
-      setStatus("setup");
-      setIsOpen(true);
-      return;
-    }
     if (selectedInvitees.length > MAX_VIDEO_PARTICIPANTS - 1) {
       setError(`Max ${MAX_VIDEO_PARTICIPANTS} participants per call.`);
       return;
     }
     setError(null);
-    setE2eeDebug(null);
     setStatus("connecting");
     setIsOpen(true);
     const roomId = createRoomId();
     resetE2eeState();
     isCallHostRef.current = true;
-    callKeyRoomRef.current = roomId;
-    try {
-      callKeyRef.current = await generateCallKey();
-    } catch {
-      setError("Unable to enable call encryption.");
-      setE2eeDebug("E2EE: failed to generate call key.");
-      setStatus("setup");
-      return;
+    if (!e2eeSupported) {
+      setCallEncryptionMode(false, "unsupported browser or missing insertable streams");
+    } else {
+      setCallEncryptionMode(true);
+    }
+    if (callEncryptionEnabledRef.current) {
+      callKeyRoomRef.current = roomId;
+      try {
+        callKeyRef.current = await generateCallKey();
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : "Failed to generate call key";
+        setCallEncryptionMode(false, detail);
+      }
+    } else {
+      callKeyRoomRef.current = null;
     }
     setActiveRoomId(roomId);
     try {
@@ -1986,22 +2075,31 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     socketRef.current.emit("call:invite", {
       roomId,
       invitees: selectedInvitees.map((invitee) => invitee.userId),
+      e2eeEnabled: callEncryptionEnabledRef.current,
     });
-  }, [e2eeSupported, ensureCallMedia, resetE2eeState, selectedInvitees, user?.id]);
+  }, [
+    e2eeSupported,
+    ensureCallMedia,
+    resetE2eeState,
+    selectedInvitees,
+    setCallEncryptionMode,
+    user?.id,
+  ]);
 
   const acceptCall = useCallback(async () => {
     if (!socketRef.current || !incomingCall) return;
-    if (!e2eeSupported) {
-      setError("End-to-end encrypted calls require Chrome or Edge.");
-      setE2eeDebug("E2EE: unsupported browser or missing insertable streams.");
-      return;
-    }
     resetE2eeState();
-    callKeyRoomRef.current = incomingCall.roomId;
+    if (incomingCall.e2eeEnabled === false) {
+      setCallEncryptionMode(false, "disabled by host");
+    } else if (!e2eeSupported) {
+      setCallEncryptionMode(false, "unsupported browser", { broadcast: true });
+    } else {
+      setCallEncryptionMode(true);
+    }
+    callKeyRoomRef.current = callEncryptionEnabledRef.current ? incomingCall.roomId : null;
     setStatus("connecting");
     setActiveRoomId(incomingCall.roomId);
     setError(null);
-    setE2eeDebug(null);
     try {
       await ensureCallMedia();
     } catch {
@@ -2012,7 +2110,13 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     }
     socketRef.current.emit("call:join", { roomId: incomingCall.roomId });
     setIncomingCall(null);
-  }, [e2eeSupported, ensureCallMedia, incomingCall, resetE2eeState]);
+  }, [
+    e2eeSupported,
+    ensureCallMedia,
+    incomingCall,
+    resetE2eeState,
+    setCallEncryptionMode,
+  ]);
 
   const declineCall = useCallback(() => {
     if (!socketRef.current || !incomingCall) return;
