@@ -3,6 +3,7 @@ import { BrowserRouter } from "react-router-dom";
 import AppRoutes from "./routes/AppRoutes";
 import ChatDock from "./components/ChatDock";
 import ConsentBanner from "./components/ConsentBanner";
+import KeyBackupModal from "./components/KeyBackupModal";
 
 export default function App() {
   return (
@@ -10,6 +11,7 @@ export default function App() {
       <AppRoutes />
       <ChatDock />
       <ConsentBanner />
+      <KeyBackupModal />
     </BrowserRouter>
   );
 }

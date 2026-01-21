@@ -9,6 +9,7 @@
   "scope": "/",
   "scope_extensions": [
     {
+      "type": "origin",
       "origin": "https://testing.yoursocialplace.com"
     }
   ],

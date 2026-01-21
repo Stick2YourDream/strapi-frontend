@@ -1,0 +1,104 @@
+.key-backup-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 6, 12, 0.7);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  z-index: 60;
+}
+
+.key-backup-modal {
+  width: min(560px, 100%);
+  background: rgba(12, 16, 26, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 18px;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  overflow: hidden;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  color: #e9ecf5;
+}
+
+.key-backup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.key-backup-header h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.key-backup-close {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: #e9ecf5;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.key-backup-body {
+  padding: 18px;
+  color: #cbd5e1;
+  display: grid;
+  gap: 14px;
+}
+
+.key-backup-body p {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.key-backup-field {
+  display: grid;
+  gap: 6px;
+}
+
+.key-backup-field label {
+  font-size: 0.8rem;
+  color: #9aa5bb;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.key-backup-field input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  color: #e9ecf5;
+  font-size: 0.95rem;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.key-backup-field input:focus {
+  border-color: #5f8bff;
+  box-shadow: 0 0 0 3px rgba(95, 139, 255, 0.25);
+}
+
+.key-backup-error {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 115, 115, 0.4);
+  background: rgba(255, 115, 115, 0.12);
+  color: #ffb1b1;
+  font-size: 0.85rem;
+}
+
+.key-backup-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}

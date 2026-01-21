@@ -8,6 +8,13 @@ import {
   PROFILE_PII_CLEAR_FIELDS,
   type ProfilePayload,
 } from "../utils/profile-e2ee";
+import { getOrCreateProfileKey } from "../utils/crypto";
+import {
+  createKeyBackup,
+  fetchKeyBackup,
+  hasLocalKeyMaterial,
+  restoreKeyBackup,
+} from "../utils/key-backup";
 
 interface User {
   id: number;
@@ -41,9 +48,15 @@ interface AuthContextType {
   user: User | null;
   profile: ProfileSummary | null;
   profileLoading: boolean;
+  keyBackupStatus: "unknown" | "ready" | "needs-setup" | "needs-restore";
+  keyBackupLoading: boolean;
+  keyBackupError: string | null;
   login: (user: User, token: string) => void;
   logout: () => void;
   refreshProfile: () => Promise<void>;
+  refreshKeyBackup: () => Promise<void>;
+  createKeyBackup: (passphrase: string) => Promise<void>;
+  restoreKeyBackup: (passphrase: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -53,6 +66,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [loading, setLoading] = useState(true); // Track if auth is initializing
   const [profile, setProfile] = useState<ProfileSummary | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
+  const [keyBackupStatus, setKeyBackupStatus] =
+    useState<AuthContextType["keyBackupStatus"]>("unknown");
+  const [keyBackupLoading, setKeyBackupLoading] = useState(false);
+  const [keyBackupError, setKeyBackupError] = useState<string | null>(null);
 
   useEffect(() => {
     const storedUser = localStorage.getItem("user");
@@ -129,6 +146,70 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     }
   };
 
+  const refreshKeyBackup = async () => {
+    if (!user) {
+      setKeyBackupStatus("unknown");
+      setKeyBackupError(null);
+      return;
+    }
+    setKeyBackupLoading(true);
+    setKeyBackupError(null);
+    try {
+      const [hasLocal, backup] = await Promise.all([
+        hasLocalKeyMaterial(user.id),
+        fetchKeyBackup().catch(() => null),
+      ]);
+      const backupExists = Boolean(backup?.encryptedPayload);
+      if (hasLocal) {
+        await ensureUserKeyOnServer();
+        setKeyBackupStatus(backupExists ? "ready" : "needs-setup");
+      } else if (backupExists) {
+        setKeyBackupStatus("needs-restore");
+      } else {
+        await ensureUserKeyOnServer();
+        await getOrCreateProfileKey(user.id);
+        setKeyBackupStatus("needs-setup");
+      }
+    } catch (error) {
+      console.warn("Unable to check key backup status:", error);
+      setKeyBackupError("Unable to check key backup status.");
+    } finally {
+      setKeyBackupLoading(false);
+    }
+  };
+
+  const createKeyBackupWithPassphrase = async (passphrase: string) => {
+    if (!user) return;
+    setKeyBackupLoading(true);
+    setKeyBackupError(null);
+    try {
+      await createKeyBackup(user.id, passphrase);
+      setKeyBackupStatus("ready");
+    } catch (error) {
+      console.warn("Unable to create key backup:", error);
+      setKeyBackupError("Unable to create key backup.");
+    } finally {
+      setKeyBackupLoading(false);
+    }
+  };
+
+  const restoreKeyBackupWithPassphrase = async (passphrase: string) => {
+    if (!user) return;
+    setKeyBackupLoading(true);
+    setKeyBackupError(null);
+    try {
+      await restoreKeyBackup(user.id, passphrase);
+      await ensureUserKeyOnServer();
+      await refreshProfile();
+      setKeyBackupStatus("ready");
+    } catch (error) {
+      console.warn("Unable to restore key backup:", error);
+      setKeyBackupError("Unable to restore key backup. Check your passphrase.");
+    } finally {
+      setKeyBackupLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (!user) {
       setProfile(null);
@@ -140,8 +221,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   }, [user?.id]);
 
   useEffect(() => {
-    if (!user) return;
-    void ensureUserKeyOnServer();
+    if (!user) {
+      setKeyBackupStatus("unknown");
+      setKeyBackupError(null);
+      return;
+    }
+    void refreshKeyBackup();
   }, [user?.id]);
 
   // Auto-logout when the session window expires
@@ -177,6 +262,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     setUser(null);
     setProfile(null);
     setProfileLoading(false);
+    setKeyBackupStatus("unknown");
+    setKeyBackupLoading(false);
+    setKeyBackupError(null);
     localStorage.removeItem("user");
     localStorage.removeItem("token");
     localStorage.removeItem("expiresAt");
@@ -185,7 +273,20 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   return (
     <AuthContext.Provider
-      value={{ user, profile, profileLoading, login, logout, refreshProfile }}
+      value={{
+        user,
+        profile,
+        profileLoading,
+        keyBackupStatus,
+        keyBackupLoading,
+        keyBackupError,
+        login,
+        logout,
+        refreshProfile,
+        refreshKeyBackup,
+        createKeyBackup: createKeyBackupWithPassphrase,
+        restoreKeyBackup: restoreKeyBackupWithPassphrase,
+      }}
     >
       {/* Prevent rendering children until auth state is loaded */}
       {!loading && children}
@@ -198,9 +299,15 @@ export const StaticAuthProvider = ({ children }: { children: React.ReactNode }) 
     user: null,
     profile: null,
     profileLoading: false,
+    keyBackupStatus: "unknown",
+    keyBackupLoading: false,
+    keyBackupError: null,
     login: () => undefined,
     logout: () => undefined,
     refreshProfile: async () => undefined,
+    refreshKeyBackup: async () => undefined,
+    createKeyBackup: async () => undefined,
+    restoreKeyBackup: async () => undefined,
   };
   return <AuthContext.Provider value={emptyAuth}>{children}</AuthContext.Provider>;
 };

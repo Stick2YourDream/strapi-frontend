@@ -115,17 +115,15 @@ export const fetchUserKeys = async (userIds: number[]) => {
     return userKeyCache;
   }
 
-  const filters = missing
-    .map((id, index) => `filters[owner][id][$in][${index}]=${id}`)
-    .join("&");
+  const idsParam = missing.join(",");
   try {
-    const res = await api.get(
-      `/user-keys?${filters}&populate=owner&pagination[pageSize]=${missing.length}`
-    );
+    const res = await api.get("/user-keys/lookup", {
+      params: { userIds: idsParam },
+    });
     const rows = res.data?.data ?? [];
     rows.forEach((row: any) => {
       const attrs = normalize(row);
-      const ownerId = getEntityId(attrs.owner);
+      const ownerId = getEntityId(attrs.owner) ?? Number(attrs.ownerId);
       if (!ownerId || !attrs.publicKey) return;
       userKeyCache.set(ownerId, {
         ownerId,
@@ -134,7 +132,27 @@ export const fetchUserKeys = async (userIds: number[]) => {
       });
     });
   } catch (error) {
-    console.warn("Unable to load user public keys:", error);
+    const filters = missing
+      .map((id, index) => `filters[owner][id][$in][${index}]=${id}`)
+      .join("&");
+    try {
+      const res = await api.get(
+        `/user-keys?${filters}&populate=owner&pagination[pageSize]=${missing.length}`
+      );
+      const rows = res.data?.data ?? [];
+      rows.forEach((row: any) => {
+        const attrs = normalize(row);
+        const ownerId = getEntityId(attrs.owner) ?? Number(attrs.ownerId);
+        if (!ownerId || !attrs.publicKey) return;
+        userKeyCache.set(ownerId, {
+          ownerId,
+          publicKey: attrs.publicKey,
+          keyVersion: Number(attrs.keyVersion) || 1,
+        });
+      });
+    } catch (fallbackError) {
+      console.warn("Unable to load user public keys:", fallbackError);
+    }
   }
   return userKeyCache;
 };
