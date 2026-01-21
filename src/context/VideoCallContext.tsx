@@ -336,13 +336,25 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     return created;
   }, []);
 
-  const toArrayBuffer = useCallback((data: ArrayBuffer | ArrayBufferView) => {
-    if (data instanceof ArrayBuffer) return data;
-    if (ArrayBuffer.isView(data)) {
-      return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-    }
-    return data as ArrayBuffer;
-  }, []);
+  const toArrayBuffer = useCallback(
+    (data: ArrayBuffer | SharedArrayBuffer | ArrayBufferView) => {
+      if (data instanceof ArrayBuffer) return data;
+      if (typeof SharedArrayBuffer !== "undefined" && data instanceof SharedArrayBuffer) {
+        const view = new Uint8Array(data);
+        const copy = new Uint8Array(view.byteLength);
+        copy.set(view);
+        return copy.buffer;
+      }
+      if (ArrayBuffer.isView(data)) {
+        const view = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+        const copy = new Uint8Array(view.byteLength);
+        copy.set(view);
+        return copy.buffer;
+      }
+      return data as ArrayBuffer;
+    },
+    []
+  );
 
   const encryptFrame = useCallback(
     async (key: CryptoKey, data: ArrayBuffer | ArrayBufferView) => {
