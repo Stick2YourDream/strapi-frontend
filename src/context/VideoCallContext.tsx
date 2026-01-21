@@ -159,6 +159,7 @@ const MAX_VIDEO_PARTICIPANTS = 8;
 const E2EE_VERSION = 1;
 const E2EE_IV_BYTES = 12;
 const E2EE_HEADER_BYTES = 1 + E2EE_IV_BYTES;
+const CALL_KEY_GRACE_MS = 2000;
 
 const isChromeOrEdge = () => {
   if (typeof navigator === "undefined") return false;
@@ -318,6 +319,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const callKeyRoomRef = useRef<string | null>(null);
   const callKeyRecipientsRef = useRef<Set<number>>(new Set());
   const isCallHostRef = useRef(false);
+  const missingCallKeySinceRef = useRef<number | null>(null);
   const senderE2eeRef = useRef<WeakSet<RTCRtpSender>>(new WeakSet());
   const receiverE2eeRef = useRef<WeakSet<RTCRtpReceiver>>(new WeakSet());
   const lastCallKeyRequestRef = useRef(0);
@@ -408,6 +410,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     senderE2eeRef.current = new WeakSet();
     receiverE2eeRef.current = new WeakSet();
     callEncryptionEnabledRef.current = e2eeSupported;
+    missingCallKeySinceRef.current = null;
   }, [e2eeSupported]);
 
   const setCallEncryptionMode = useCallback(
@@ -470,8 +473,21 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
             controller.enqueue(encodedFrame);
             return;
           }
+          if (!encodedFrame?.data) return;
           const key = callKeyRef.current;
-          if (!key || !encodedFrame?.data) return;
+          if (!key) {
+            const now = Date.now();
+            if (!missingCallKeySinceRef.current) {
+              missingCallKeySinceRef.current = now;
+            }
+            void maybeRequestCallKey();
+            if (now - (missingCallKeySinceRef.current ?? now) >= CALL_KEY_GRACE_MS) {
+              setCallEncryptionMode(false, "missing call key", { broadcast: true });
+              controller.enqueue(encodedFrame);
+            }
+            return;
+          }
+          missingCallKeySinceRef.current = null;
           try {
             const encrypted = await encryptFrame(key, encodedFrame.data);
             encodedFrame.data = encrypted;
@@ -491,7 +507,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         .catch(() => undefined);
       senderE2eeRef.current.add(sender);
     },
-    [e2eeSupported, encryptFrame, setCallEncryptionMode]
+    [e2eeSupported, encryptFrame, maybeRequestCallKey, setCallEncryptionMode]
   );
 
   const setupReceiverE2ee = useCallback(
@@ -511,9 +527,18 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           const key = callKeyRef.current;
           if (!encodedFrame?.data) return;
           if (!key) {
+            const now = Date.now();
+            if (!missingCallKeySinceRef.current) {
+              missingCallKeySinceRef.current = now;
+            }
             void maybeRequestCallKey();
+            if (now - (missingCallKeySinceRef.current ?? now) >= CALL_KEY_GRACE_MS) {
+              setCallEncryptionMode(false, "missing call key", { broadcast: true });
+              controller.enqueue(encodedFrame);
+            }
             return;
           }
+          missingCallKeySinceRef.current = null;
           const dataBuffer = toArrayBuffer(encodedFrame.data);
           const bytes = new Uint8Array(dataBuffer);
           const isEncryptedFrame =
@@ -1555,6 +1580,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           const callKey = await decryptWrappedKey(sharedKey, payload.encryptedKey);
           callKeyRef.current = callKey;
           callKeyRoomRef.current = payload.roomId;
+          missingCallKeySinceRef.current = null;
           setError(null);
           setE2eeDebug(null);
           requestAllVideoKeyFrames();
