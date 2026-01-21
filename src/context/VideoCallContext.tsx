@@ -549,24 +549,6 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     [user?.id]
   );
 
-  const requestCallKeyFromHost = useCallback(
-    async (roomId: string) => {
-      if (!socketRef.current || !user?.id) return;
-      if (isCallHostRef.current) return;
-      try {
-        const { publicKey } = await getOrCreateIdentityKeyPair();
-        const publicKeyText = await exportPublicKey(publicKey);
-        socketRef.current.emit("call:e2ee:request", {
-          roomId,
-          publicKey: publicKeyText,
-        });
-      } catch {
-        // ignore key request errors
-      }
-    },
-    [user?.id]
-  );
-
   const shareCallKeyWithParticipants = useCallback(
     (roomId: string, participants: VideoCallParticipant[]) => {
       if (!isCallHostRef.current) return;
@@ -696,6 +678,12 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     }
     if (localScreenStreamRef.current) return;
     try {
+      const videoConstraints: MediaTrackConstraints & {
+        cursor?: "always" | "motion" | "never";
+      } = {
+        frameRate: { ideal: 30, max: 60 },
+        cursor: "always",
+      };
       const displayOptions: DisplayMediaStreamOptions & {
         preferCurrentTab?: boolean;
         selfBrowserSurface?: "include" | "exclude";
@@ -703,10 +691,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         monitorTypeSurfaces?: "include" | "exclude";
         systemAudio?: "include" | "exclude";
       } = {
-        video: {
-          frameRate: { ideal: 30, max: 60 },
-          cursor: "always",
-        },
+        video: videoConstraints,
         audio: true,
         preferCurrentTab: true,
         selfBrowserSurface: "include",
