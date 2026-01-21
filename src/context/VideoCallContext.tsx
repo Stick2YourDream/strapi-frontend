@@ -455,6 +455,23 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     [decryptFrame, e2eeSupported]
   );
 
+  const requestVideoKeyFrame = useCallback((sender?: RTCRtpSender | null) => {
+    if (!sender || sender.track?.kind !== "video") return;
+    const request = (sender as any).requestKeyFrame;
+    if (typeof request !== "function") return;
+    try {
+      request.call(sender);
+    } catch {
+      // ignore keyframe request failures
+    }
+  }, []);
+
+  const requestAllVideoKeyFrames = useCallback(() => {
+    peersRef.current.forEach((pc) => {
+      pc.getSenders().forEach((sender) => requestVideoKeyFrame(sender));
+    });
+  }, [requestVideoKeyFrame]);
+
   const shareCallKeyWithUser = useCallback(
     async (roomId: string, targetUserId: number) => {
       if (!socketRef.current || !user?.id) return;
@@ -525,10 +542,12 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
             existing.video.replaceTrack(videoTrack).catch(() => undefined);
           }
           setupSenderE2ee(existing.video);
+          requestVideoKeyFrame(existing.video);
         } else {
           try {
             existing.video = pc.addTrack(videoTrack, screenStream);
             setupSenderE2ee(existing.video);
+            requestVideoKeyFrame(existing.video);
           } catch {
             // ignore share attach errors
           }
@@ -551,7 +570,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       }
       screenShareSendersRef.current.set(socketId, existing);
     },
-    [setupSenderE2ee]
+    [requestVideoKeyFrame, setupSenderE2ee]
   );
 
   const removeScreenShareTracks = useCallback(() => {
@@ -611,7 +630,19 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     }
     if (localScreenStreamRef.current) return;
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      const displayOptions: any = {
+        video: {
+          frameRate: { ideal: 30, max: 60 },
+          cursor: "always",
+        },
+        audio: true,
+        preferCurrentTab: true,
+        selfBrowserSurface: "include",
+        surfaceSwitching: "exclude",
+      };
+      const stream = await navigator.mediaDevices.getDisplayMedia(
+        displayOptions as DisplayMediaStreamOptions
+      );
       const [track] = stream.getVideoTracks();
       if (!track) return;
       track.onended = () => stopScreenShare();
@@ -1259,6 +1290,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           createPeerConnection(participant.socketId);
         });
         shareCallKeyWithParticipants(payload.roomId, payload.participants);
+        requestAllVideoKeyFrames();
       }
     );
 
@@ -1280,6 +1312,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         if (payload?.roomId) {
           void shareCallKeyWithParticipants(payload.roomId, [payload.participant]);
         }
+        requestAllVideoKeyFrames();
       }
     );
 
@@ -1306,6 +1339,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           const callKey = await decryptWrappedKey(sharedKey, payload.encryptedKey);
           callKeyRef.current = callKey;
           callKeyRoomRef.current = payload.roomId;
+          requestAllVideoKeyFrames();
         } catch {
           setError("Unable to enable call encryption.");
         }
@@ -1567,6 +1601,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     createPeerConnection,
     e2eeSupported,
     getPeerNegotiationState,
+    requestAllVideoKeyFrames,
     shareCallKeyWithParticipants,
     user?.email,
     user?.id,
