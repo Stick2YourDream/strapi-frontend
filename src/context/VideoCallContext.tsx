@@ -14,6 +14,7 @@ import {
   decryptWrappedKey,
   deriveSharedKey,
   encryptKeyForRecipient,
+  exportPublicKey,
   generateCallKey,
   getOrCreateIdentityKeyPair,
   importPublicKey,
@@ -88,7 +89,8 @@ type ScreenControlEvent = {
 
 type VideoCallEffects = {
   blur: boolean;
-  background: "none" | "studio" | "sunset" | "mint";
+  background: "none" | "studio" | "sunset" | "mint" | "aurora" | "ember";
+  filter: "none" | "vivid" | "noir" | "warm" | "cool";
 };
 
 type SelfieSegmentationResults = {
@@ -274,6 +276,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const [videoEffects, setVideoEffectsState] = useState<VideoCallEffects>({
     blur: false,
     background: "none",
+    filter: "none",
   });
   const [onlineUserIds, setOnlineUserIds] = useState<Set<number>>(new Set());
   const socketRef = useRef<Socket | null>(null);
@@ -313,6 +316,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const isCallHostRef = useRef(false);
   const senderE2eeRef = useRef<WeakSet<RTCRtpSender>>(new WeakSet());
   const receiverE2eeRef = useRef<WeakSet<RTCRtpReceiver>>(new WeakSet());
+  const lastCallKeyRequestRef = useRef(0);
 
   const buildSocketUrl = () => {
     const envUrl = String(import.meta.env.VITE_SOCKET_URL || "").trim();
@@ -336,14 +340,16 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     return created;
   }, []);
 
-  const isSharedArrayBuffer = (value: unknown): value is SharedArrayBuffer =>
-    typeof SharedArrayBuffer !== "undefined" && value instanceof SharedArrayBuffer;
+  const isSharedArrayBuffer = (value: unknown) => {
+    const ctor = typeof globalThis !== "undefined" ? (globalThis as any).SharedArrayBuffer : null;
+    return typeof ctor === "function" && value instanceof ctor;
+  };
 
   const toArrayBuffer = useCallback(
-    (data: ArrayBuffer | SharedArrayBuffer | ArrayBufferView) => {
+    (data: ArrayBuffer | ArrayBufferView | unknown) => {
       if (data instanceof ArrayBuffer) return data;
       if (isSharedArrayBuffer(data)) {
-        const view = new Uint8Array(data);
+        const view = new Uint8Array(data as unknown as ArrayBufferLike);
         const copy = new Uint8Array(view.byteLength);
         copy.set(view);
         return copy.buffer;
@@ -399,6 +405,16 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     receiverE2eeRef.current = new WeakSet();
   }, []);
 
+  const maybeRequestCallKey = useCallback(() => {
+    if (isCallHostRef.current || callKeyRef.current) return;
+    const roomId = activeRoomRef.current;
+    if (!roomId) return;
+    const now = Date.now();
+    if (now - lastCallKeyRequestRef.current < 3000) return;
+    lastCallKeyRequestRef.current = now;
+    void requestCallKeyFromHost(roomId);
+  }, [requestCallKeyFromHost]);
+
   const setupSenderE2ee = useCallback(
     (sender?: RTCRtpSender | null) => {
       if (!sender || !e2eeSupported) return;
@@ -436,13 +452,19 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       const transform = new TransformStream({
         async transform(encodedFrame, controller) {
           const key = callKeyRef.current;
-          if (!key || !encodedFrame?.data) return;
+          if (!key || !encodedFrame?.data) {
+            if (!key) {
+              maybeRequestCallKey();
+            }
+            return;
+          }
           try {
             const decrypted = await decryptFrame(key, encodedFrame.data);
             encodedFrame.data = decrypted;
             controller.enqueue(encodedFrame);
           } catch {
             // drop frames that fail to decrypt
+            maybeRequestCallKey();
           }
         },
       });
@@ -452,7 +474,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         .catch(() => undefined);
       receiverE2eeRef.current.add(receiver);
     },
-    [decryptFrame, e2eeSupported]
+    [decryptFrame, e2eeSupported, maybeRequestCallKey]
   );
 
   const requestVideoKeyFrame = useCallback((sender?: RTCRtpSender | null) => {
@@ -496,6 +518,50 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         callKeyRecipientsRef.current.add(targetUserId);
       } catch {
         // ignore key share errors
+      }
+    },
+    [user?.id]
+  );
+
+  const shareCallKeyWithPublicKey = useCallback(
+    async (roomId: string, targetUserId: number, publicKeyText: string) => {
+      if (!socketRef.current || !user?.id) return;
+      if (!callKeyRef.current || !targetUserId || !publicKeyText) return;
+      if (callKeyRoomRef.current && callKeyRoomRef.current !== roomId) return;
+      if (targetUserId === user.id) return;
+      if (callKeyRecipientsRef.current.has(targetUserId)) return;
+      try {
+        const { privateKey } = await getOrCreateIdentityKeyPair();
+        const targetPublicKey = await importPublicKey(publicKeyText);
+        const sharedKey = await deriveSharedKey(privateKey, targetPublicKey);
+        const encryptedKey = await encryptKeyForRecipient(sharedKey, callKeyRef.current);
+        socketRef.current.emit("call:e2ee:key", {
+          roomId,
+          toUserId: targetUserId,
+          encryptedKey,
+          keyVersion: 1,
+        });
+        callKeyRecipientsRef.current.add(targetUserId);
+      } catch {
+        // ignore key share errors
+      }
+    },
+    [user?.id]
+  );
+
+  const requestCallKeyFromHost = useCallback(
+    async (roomId: string) => {
+      if (!socketRef.current || !user?.id) return;
+      if (isCallHostRef.current) return;
+      try {
+        const { publicKey } = await getOrCreateIdentityKeyPair();
+        const publicKeyText = await exportPublicKey(publicKey);
+        socketRef.current.emit("call:e2ee:request", {
+          roomId,
+          publicKey: publicKeyText,
+        });
+      } catch {
+        // ignore key request errors
       }
     },
     [user?.id]
@@ -630,7 +696,13 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     }
     if (localScreenStreamRef.current) return;
     try {
-      const displayOptions: any = {
+      const displayOptions: DisplayMediaStreamOptions & {
+        preferCurrentTab?: boolean;
+        selfBrowserSurface?: "include" | "exclude";
+        surfaceSwitching?: "include" | "exclude";
+        monitorTypeSurfaces?: "include" | "exclude";
+        systemAudio?: "include" | "exclude";
+      } = {
         video: {
           frameRate: { ideal: 30, max: 60 },
           cursor: "always",
@@ -638,13 +710,30 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         audio: true,
         preferCurrentTab: true,
         selfBrowserSurface: "include",
-        surfaceSwitching: "exclude",
+        surfaceSwitching: "include",
+        monitorTypeSurfaces: "include",
+        systemAudio: "include",
       };
-      const stream = await navigator.mediaDevices.getDisplayMedia(
-        displayOptions as DisplayMediaStreamOptions
-      );
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getDisplayMedia(displayOptions);
+      } catch {
+        try {
+          stream = await navigator.mediaDevices.getDisplayMedia({
+            video: true,
+            audio: true,
+          });
+        } catch {
+          stream = await navigator.mediaDevices.getDisplayMedia({
+            video: true,
+          });
+        }
+      }
       const [track] = stream.getVideoTracks();
       if (!track) return;
+      if ("contentHint" in track) {
+        track.contentHint = "detail";
+      }
       track.onended = () => stopScreenShare();
       localScreenStreamRef.current = stream;
       setLocalScreenStream(stream);
@@ -654,6 +743,11 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           roomId: activeRoomRef.current,
           streamId: stream.id,
         });
+      }
+      try {
+        window.focus();
+      } catch {
+        // ignore focus errors
       }
     } catch {
       setError("Unable to start screen sharing.");
@@ -676,6 +770,14 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           gradient.addColorStop(0, "#22c55e");
           gradient.addColorStop(1, "#38bdf8");
           break;
+        case "aurora":
+          gradient.addColorStop(0, "#0f172a");
+          gradient.addColorStop(1, "#22d3ee");
+          break;
+        case "ember":
+          gradient.addColorStop(0, "#ef4444");
+          gradient.addColorStop(1, "#f59e0b");
+          break;
         default:
           gradient.addColorStop(0, "#0b0d14");
           gradient.addColorStop(1, "#0b0d14");
@@ -685,6 +787,21 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     },
     []
   );
+
+  const getCameraFilter = useCallback((filter: VideoCallEffects["filter"]) => {
+    switch (filter) {
+      case "vivid":
+        return "contrast(1.12) saturate(1.25)";
+      case "noir":
+        return "grayscale(1) contrast(1.2)";
+      case "warm":
+        return "saturate(1.1) sepia(0.25)";
+      case "cool":
+        return "saturate(1.05) hue-rotate(190deg)";
+      default:
+        return "none";
+    }
+  }, []);
 
   const createProcessedVideoTrack = useCallback(
     (rawTrack: MediaStreamTrack, effects: VideoCallEffects) => {
@@ -707,25 +824,29 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       const segmentationIntervalMs = 1000 / 12;
       let segmenter: SelfieSegmentationInstance | null = null;
       let closed = false;
+      const needsSegmentation = effects.blur || effects.background !== "none";
+      const cameraFilter = getCameraFilter(effects.filter);
 
-      loadSelfieSegmentation()
-        .then((SelfieSegmentationCtor) => {
-          if (!SelfieSegmentationCtor || closed) return;
-          try {
-            segmenter = new SelfieSegmentationCtor({
-              locateFile: (file) => `${mediapipeBase}/${file}`,
-            });
-            segmenter.setOptions({ modelSelection: 1, selfieMode: true });
-            segmenter.onResults((results) => {
-              maskSource = results?.segmentationMask || null;
-            });
-          } catch {
+      if (needsSegmentation) {
+        loadSelfieSegmentation()
+          .then((SelfieSegmentationCtor) => {
+            if (!SelfieSegmentationCtor || closed) return;
+            try {
+              segmenter = new SelfieSegmentationCtor({
+                locateFile: (file) => `${mediapipeBase}/${file}`,
+              });
+              segmenter.setOptions({ modelSelection: 1, selfieMode: true });
+              segmenter.onResults((results) => {
+                maskSource = results?.segmentationMask || null;
+              });
+            } catch {
+              segmentationFailed = true;
+            }
+          })
+          .catch(() => {
             segmentationFailed = true;
-          }
-        })
-        .catch(() => {
-          segmentationFailed = true;
-        });
+          });
+      }
 
       const drawCover = (context: CanvasRenderingContext2D, width: number, height: number) => {
         const vw = video.videoWidth || width;
@@ -739,7 +860,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       };
 
       const maybeSegment = () => {
-        if (!segmenter || segmentationFailed || segmenting) return;
+        if (!needsSegmentation || !segmenter || segmentationFailed || segmenting) return;
         const now = performance.now();
         if (now - lastSegmentationTs < segmentationIntervalMs) return;
         segmenting = true;
@@ -773,19 +894,40 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           foregroundCanvas.height = height;
         }
 
-        maybeSegment();
+        const shouldBlur = effects.blur && effects.background === "none";
+        const filterParts = [];
+        if (cameraFilter !== "none") {
+          filterParts.push(cameraFilter);
+        }
+        if (shouldBlur) {
+          filterParts.push("blur(10px)");
+        }
+        const baseFilter = filterParts.length ? filterParts.join(" ") : "none";
 
-        if (!maskSource || !foregroundCtx) {
+        if (!needsSegmentation) {
           ctx.clearRect(0, 0, width, height);
+          ctx.filter = cameraFilter;
           drawCover(ctx, width, height);
+          ctx.filter = "none";
           rafId = window.requestAnimationFrame(drawFrame);
           return;
         }
 
-        const shouldBlur = effects.blur && effects.background === "none";
+        maybeSegment();
+
+        if (!maskSource || !foregroundCtx) {
+          ctx.clearRect(0, 0, width, height);
+          ctx.filter = baseFilter;
+          drawCover(ctx, width, height);
+          ctx.filter = "none";
+          rafId = window.requestAnimationFrame(drawFrame);
+          return;
+        }
 
         foregroundCtx.clearRect(0, 0, width, height);
+        foregroundCtx.filter = cameraFilter;
         drawCover(foregroundCtx, width, height);
+        foregroundCtx.filter = "none";
         foregroundCtx.globalCompositeOperation = "destination-in";
         foregroundCtx.drawImage(maskSource, 0, 0, width, height);
         foregroundCtx.globalCompositeOperation = "source-over";
@@ -794,7 +936,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           drawBackdrop(ctx, width, height, effects.background);
         } else {
           ctx.clearRect(0, 0, width, height);
-          ctx.filter = shouldBlur ? "blur(10px)" : "none";
+          ctx.filter = baseFilter;
           drawCover(ctx, width, height);
           ctx.filter = "none";
         }
@@ -829,7 +971,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
 
       return { track, cleanup };
     },
-    [drawBackdrop]
+    [drawBackdrop, getCameraFilter]
   );
 
   const applyVideoEffects = useCallback(() => {
@@ -841,13 +983,14 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     }
 
     const effects = videoEffectsRef.current;
-    const needsProcessing = effects.blur || effects.background !== "none";
+    const needsProcessing =
+      effects.blur || effects.background !== "none" || effects.filter !== "none";
     if (!needsProcessing) {
       stopVideoProcessing();
       return rawTrack;
     }
 
-    const effectsKey = `${effects.blur ? "1" : "0"}-${effects.background}`;
+    const effectsKey = `${effects.blur ? "1" : "0"}-${effects.background}-${effects.filter}`;
     const current = videoProcessingRef.current;
     if (current.track && current.sourceId === rawTrack.id && current.effectsKey === effectsKey) {
       current.track.enabled = rawTrack.enabled;
@@ -1291,6 +1434,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         });
         shareCallKeyWithParticipants(payload.roomId, payload.participants);
         requestAllVideoKeyFrames();
+        if (!isCallHostRef.current && !callKeyRef.current) {
+          void requestCallKeyFromHost(payload.roomId);
+        }
       }
     );
 
@@ -1343,6 +1489,20 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         } catch {
           setError("Unable to enable call encryption.");
         }
+      }
+    );
+
+    socket.on(
+      "call:e2ee:request",
+      async (payload: { roomId: string; fromUserId: number; publicKey: string }) => {
+        if (!payload?.roomId || !payload?.fromUserId || !payload?.publicKey) return;
+        if (payload.roomId !== activeRoomRef.current) return;
+        if (!isCallHostRef.current) return;
+        await shareCallKeyWithPublicKey(
+          payload.roomId,
+          payload.fromUserId,
+          payload.publicKey
+        );
       }
     );
 
@@ -1602,7 +1762,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     e2eeSupported,
     getPeerNegotiationState,
     requestAllVideoKeyFrames,
+    requestCallKeyFromHost,
     shareCallKeyWithParticipants,
+    shareCallKeyWithPublicKey,
     user?.email,
     user?.id,
     user?.username,

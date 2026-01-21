@@ -62,6 +62,23 @@ const GIFS = [
   },
 ];
 
+const BACKGROUND_OPTIONS = [
+  { id: "none", label: "None" },
+  { id: "studio", label: "Studio" },
+  { id: "sunset", label: "Sunset" },
+  { id: "mint", label: "Mint" },
+  { id: "aurora", label: "Aurora" },
+  { id: "ember", label: "Ember" },
+];
+
+const FILTER_OPTIONS = [
+  { id: "none", label: "Clean" },
+  { id: "vivid", label: "Vivid" },
+  { id: "noir", label: "Noir" },
+  { id: "warm", label: "Warm" },
+  { id: "cool", label: "Cool" },
+];
+
 const getInitials = (value: string) => {
   const parts = String(value || "").trim().split(/\s+/);
   if (!parts.length) return "?";
@@ -213,6 +230,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const [chatInput, setChatInput] = useState("");
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showGifPicker, setShowGifPicker] = useState(false);
+  const [showEffectsPanel, setShowEffectsPanel] = useState(false);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [screenViewMode, setScreenViewMode] = useState<"split" | "screen" | "video">("split");
   const [isChatVisible, setIsChatVisible] = useState(true);
@@ -251,6 +269,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     if (!showCallUi) {
       setIsPopout(false);
       setMobilePanel("video");
+      setShowEffectsPanel(false);
     }
   }, [showCallUi]);
 
@@ -811,14 +830,32 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   </div>
                   <div className="video-preview-row">
                     <div className="video-preview-group is-wide">
+                      <span className="video-preview-label">Camera</span>
+                      <div className="video-preview-backgrounds">
+                        {FILTER_OPTIONS.map((option) => (
+                          <button
+                            key={option.id}
+                            type="button"
+                            className={`video-preview-bg${
+                              videoEffects.filter === option.id ? " is-active" : ""
+                            }`}
+                            onClick={() =>
+                              setVideoEffects({
+                                filter: option.id as typeof videoEffects.filter,
+                              })
+                            }
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="video-preview-row">
+                    <div className="video-preview-group is-wide">
                       <span className="video-preview-label">Background</span>
                       <div className="video-preview-backgrounds">
-                        {[
-                          { id: "none", label: "None" },
-                          { id: "studio", label: "Studio" },
-                          { id: "sunset", label: "Sunset" },
-                          { id: "mint", label: "Mint" },
-                        ].map((option) => (
+                        {BACKGROUND_OPTIONS.map((option) => (
                           <button
                             key={option.id}
                             type="button"
@@ -1183,6 +1220,68 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   End call
                 </button>
               </div>
+              {showEffectsPanel && (
+                <div className="video-call-effects">
+                  <div className="video-preview-row">
+                    <div className="video-preview-group">
+                      <span className="video-preview-label">Blur</span>
+                      <button
+                        type="button"
+                        className={`video-preview-toggle${videoEffects.blur ? " is-active" : ""}`}
+                        onClick={() => setVideoEffects({ blur: !videoEffects.blur })}
+                      >
+                        {videoEffects.blur ? "On" : "Off"}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="video-preview-row">
+                    <div className="video-preview-group is-wide">
+                      <span className="video-preview-label">Camera</span>
+                      <div className="video-preview-backgrounds">
+                        {FILTER_OPTIONS.map((option) => (
+                          <button
+                            key={option.id}
+                            type="button"
+                            className={`video-preview-bg${
+                              videoEffects.filter === option.id ? " is-active" : ""
+                            }`}
+                            onClick={() =>
+                              setVideoEffects({
+                                filter: option.id as typeof videoEffects.filter,
+                              })
+                            }
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="video-preview-row">
+                    <div className="video-preview-group is-wide">
+                      <span className="video-preview-label">Background</span>
+                      <div className="video-preview-backgrounds">
+                        {BACKGROUND_OPTIONS.map((option) => (
+                          <button
+                            key={option.id}
+                            type="button"
+                            className={`video-preview-bg${
+                              videoEffects.background === option.id ? " is-active" : ""
+                            }`}
+                            onClick={() =>
+                              setVideoEffects({
+                                background: option.id as typeof videoEffects.background,
+                              })
+                            }
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
               <div className="video-call-controls">
                 <button
                   type="button"
@@ -1206,6 +1305,14 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   }
                 >
                   {isScreenSharing ? "Stop share" : "Share screen"}
+                </button>
+                <button
+                  type="button"
+                  className={`video-control ghost${showEffectsPanel ? " is-active" : ""}`}
+                  onClick={() => setShowEffectsPanel((prev) => !prev)}
+                  aria-pressed={showEffectsPanel}
+                >
+                  Effects
                 </button>
                 <button type="button" className="video-control ghost" onClick={leaveCall}>
                   Leave call

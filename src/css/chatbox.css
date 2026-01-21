@@ -824,6 +824,18 @@
     rgba(8, 18, 28, 0.85);
 }
 
+.video-tile.has-backdrop-aurora {
+  background: radial-gradient(circle at 15% 15%, rgba(34, 211, 238, 0.28), transparent 60%),
+    radial-gradient(circle at 80% 60%, rgba(14, 116, 144, 0.2), transparent 55%),
+    rgba(5, 12, 22, 0.9);
+}
+
+.video-tile.has-backdrop-ember {
+  background: radial-gradient(circle at 20% 20%, rgba(248, 113, 113, 0.28), transparent 60%),
+    radial-gradient(circle at 80% 50%, rgba(245, 158, 11, 0.22), transparent 55%),
+    rgba(20, 10, 6, 0.9);
+}
+
 @media (max-width: 720px) {
   .video-setup-preview {
     grid-template-columns: 1fr;
@@ -1011,6 +1023,14 @@
   color: #94a3b8;
 }
 
+.video-call-effects {
+  display: grid;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(8, 12, 22, 0.7);
+}
+
 .video-call-controls {
   display: flex;
   gap: 10px;
@@ -1058,6 +1078,12 @@
   background: rgba(15, 23, 42, 0.7);
   border-color: rgba(148, 163, 184, 0.35);
   color: #d7deee;
+}
+
+.video-control.ghost.is-active {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(59, 130, 246, 0.5);
+  color: #f8fafc;
 }
 
 .video-control.end {
