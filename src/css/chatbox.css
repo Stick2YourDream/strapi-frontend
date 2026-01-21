@@ -1364,6 +1364,16 @@
   padding: 0 18px;
 }
 
+.video-call-debug {
+  margin: 8px 18px 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.55);
+  color: #cbd5e1;
+  font-size: 0.72rem;
+}
+
 .video-call-modal.is-chat-hidden {
   grid-template-columns: 1fr;
 }

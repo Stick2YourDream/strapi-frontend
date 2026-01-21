@@ -120,6 +120,7 @@ type VideoCallContextValue = {
   remoteParticipants: Record<string, VideoCallParticipant>;
   messages: VideoCallMessage[];
   error: string | null;
+  e2eeDebug: string | null;
   maxParticipants: number;
   isVideoEnabled: boolean;
   isAudioEnabled: boolean;
@@ -265,6 +266,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   >({});
   const [messages, setMessages] = useState<VideoCallMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [e2eeDebug, setE2eeDebug] = useState<string | null>(null);
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
   const [isAudioEnabled, setIsAudioEnabled] = useState(true);
   const [screenControlRequests, setScreenControlRequests] = useState<ScreenControlRequest[]>([]);
@@ -420,10 +422,12 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         roomId,
         publicKey: publicKeyText,
       });
-    } catch {
-      // ignore key request errors
+      setE2eeDebug(null);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : "Key request failed";
+      setE2eeDebug(`E2EE: ${detail}`);
     }
-  }, [user?.id]);
+  }, [user?.id, setE2eeDebug]);
 
   const setupSenderE2ee = useCallback(
     (sender?: RTCRtpSender | null) => {
@@ -515,15 +519,17 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         const cache = await fetchUserKeys([targetUserId]);
         const entry = cache.get(targetUserId);
         if (!entry?.publicKey) return;
-        const { privateKey } = await getOrCreateIdentityKeyPair();
+        const { privateKey, publicKey } = await getOrCreateIdentityKeyPair();
         const targetPublicKey = await importPublicKey(entry.publicKey);
         const sharedKey = await deriveSharedKey(privateKey, targetPublicKey);
         const encryptedKey = await encryptKeyForRecipient(sharedKey, callKeyRef.current);
+        const senderPublicKey = await exportPublicKey(publicKey);
         socketRef.current.emit("call:e2ee:key", {
           roomId,
           toUserId: targetUserId,
           encryptedKey,
           keyVersion: 1,
+          senderPublicKey,
         });
         callKeyRecipientsRef.current.add(targetUserId);
       } catch {
@@ -541,15 +547,17 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       if (targetUserId === user.id) return;
       if (callKeyRecipientsRef.current.has(targetUserId)) return;
       try {
-        const { privateKey } = await getOrCreateIdentityKeyPair();
+        const { privateKey, publicKey } = await getOrCreateIdentityKeyPair();
         const targetPublicKey = await importPublicKey(publicKeyText);
         const sharedKey = await deriveSharedKey(privateKey, targetPublicKey);
         const encryptedKey = await encryptKeyForRecipient(sharedKey, callKeyRef.current);
+        const senderPublicKey = await exportPublicKey(publicKey);
         socketRef.current.emit("call:e2ee:key", {
           roomId,
           toUserId: targetUserId,
           encryptedKey,
           keyVersion: 1,
+          senderPublicKey,
         });
         callKeyRecipientsRef.current.add(targetUserId);
       } catch {
@@ -694,20 +702,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         frameRate: { ideal: 30, max: 60 },
         cursor: "always",
       };
-      const displayOptions: DisplayMediaStreamOptions & {
-        preferCurrentTab?: boolean;
-        selfBrowserSurface?: "include" | "exclude";
-        surfaceSwitching?: "include" | "exclude";
-        monitorTypeSurfaces?: "include" | "exclude";
-        systemAudio?: "include" | "exclude";
-      } = {
+      const displayOptions: DisplayMediaStreamOptions = {
         video: videoConstraints,
         audio: true,
-        preferCurrentTab: true,
-        selfBrowserSurface: "include",
-        surfaceSwitching: "include",
-        monitorTypeSurfaces: "include",
-        systemAudio: "include",
       };
       let stream: MediaStream;
       try {
@@ -1464,24 +1461,36 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         fromUserId: number;
         encryptedKey: string;
         keyVersion?: number;
+        senderPublicKey?: string;
       }) => {
         if (!payload?.roomId || !payload?.encryptedKey || !payload?.fromUserId) return;
         if (payload.roomId !== activeRoomRef.current) return;
         if (!e2eeSupported) return;
         try {
-          const cache = await fetchUserKeys([payload.fromUserId]);
-          const entry = cache.get(payload.fromUserId);
-          if (!entry?.publicKey) {
+          const { privateKey } = await getOrCreateIdentityKeyPair();
+          let senderPublicKey: CryptoKey | null = null;
+          if (payload.senderPublicKey) {
+            senderPublicKey = await importPublicKey(payload.senderPublicKey);
+          } else {
+            const cache = await fetchUserKeys([payload.fromUserId]);
+            const entry = cache.get(payload.fromUserId);
+            if (entry?.publicKey) {
+              senderPublicKey = await importPublicKey(entry.publicKey);
+            }
+          }
+          if (!senderPublicKey) {
             throw new Error("Missing sender key");
           }
-          const { privateKey } = await getOrCreateIdentityKeyPair();
-          const senderPublicKey = await importPublicKey(entry.publicKey);
           const sharedKey = await deriveSharedKey(privateKey, senderPublicKey);
           const callKey = await decryptWrappedKey(sharedKey, payload.encryptedKey);
           callKeyRef.current = callKey;
           callKeyRoomRef.current = payload.roomId;
+          setError(null);
+          setE2eeDebug(null);
           requestAllVideoKeyFrames();
-        } catch {
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : "Key decrypt failed";
+          setE2eeDebug(`E2EE: ${detail}`);
           setError("Unable to enable call encryption.");
         }
       }
@@ -1875,6 +1884,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     setStatus("idle");
     setIsOpen(false);
     setError(null);
+    setE2eeDebug(null);
     setScreenControlRequests([]);
     setPendingScreenControlTargets([]);
     setActiveScreenController(null);
@@ -1939,6 +1949,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     if (!socketRef.current || !user?.id) return;
     if (!e2eeSupported) {
       setError("End-to-end encrypted calls require Chrome or Edge.");
+      setE2eeDebug("E2EE: unsupported browser or missing insertable streams.");
       setStatus("setup");
       setIsOpen(true);
       return;
@@ -1948,6 +1959,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       return;
     }
     setError(null);
+    setE2eeDebug(null);
     setStatus("connecting");
     setIsOpen(true);
     const roomId = createRoomId();
@@ -1958,6 +1970,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       callKeyRef.current = await generateCallKey();
     } catch {
       setError("Unable to enable call encryption.");
+      setE2eeDebug("E2EE: failed to generate call key.");
       setStatus("setup");
       return;
     }
@@ -1980,6 +1993,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     if (!socketRef.current || !incomingCall) return;
     if (!e2eeSupported) {
       setError("End-to-end encrypted calls require Chrome or Edge.");
+      setE2eeDebug("E2EE: unsupported browser or missing insertable streams.");
       return;
     }
     resetE2eeState();
@@ -1987,6 +2001,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     setStatus("connecting");
     setActiveRoomId(incomingCall.roomId);
     setError(null);
+    setE2eeDebug(null);
     try {
       await ensureCallMedia();
     } catch {
@@ -2161,6 +2176,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       remoteParticipants,
       messages,
       error,
+      e2eeDebug,
       maxParticipants: MAX_VIDEO_PARTICIPANTS,
       isVideoEnabled,
       isAudioEnabled,
@@ -2198,6 +2214,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       closeCallComposer,
       declineCall,
       error,
+      e2eeDebug,
       endCall,
       incomingCall,
       isAudioEnabled,

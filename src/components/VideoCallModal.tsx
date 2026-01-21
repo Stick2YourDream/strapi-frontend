@@ -196,6 +196,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     remoteParticipants,
     messages,
     error,
+    e2eeDebug,
     maxParticipants,
     isVideoEnabled,
     isAudioEnabled,
@@ -977,6 +978,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
           {showCallUi && (
             <>
               {error && <p className="status status-error video-call-error">{error}</p>}
+              {e2eeDebug && <div className="video-call-debug">{e2eeDebug}</div>}
               {localScreenStream && screenControlRequests.length > 0 && (
                 <div className="screen-control-requests">
                   <div className="screen-control-title">Screen control requests</div>

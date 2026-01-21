@@ -137,6 +137,7 @@ export default function Register() {
   const [termsRead, setTermsRead] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
   const formStartRef = useRef(Date.now());
   const [searchParams] = useSearchParams();
   const intentParam = searchParams.get("intent");
@@ -152,6 +153,8 @@ export default function Register() {
 
   const navigate = useNavigate();
   const maxBirthdate = useMemo(() => getMaxBirthdate(), []);
+  const successMessage =
+    "Thank you for registering with Your Social Place. We are excited to have you on board with us. Please check your email for a confirmation link to login.";
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setForm({ ...form, [e.target.name]: e.target.value });
@@ -238,13 +241,8 @@ export default function Register() {
         // ignore if profile already exists or creation fails (created on first edit instead)
       }
 
-      setInfo(
-        res.data.message ||
-          "Account created! Please check your email to confirm your account."
-      );
-
-      // Optional: send them to login page after a moment
-      setTimeout(() => navigate("/login"), 1500);
+      setInfo(successMessage);
+      setShowSuccessModal(true);
     } catch (err) {
       if (axios.isAxiosError(err)) {
         setError(
@@ -442,7 +440,7 @@ export default function Register() {
         </div>
 
         {error && <p className="auth-message error">{error}</p>}
-        {info && <p className="auth-message info">{info}</p>}
+        {info && !showSuccessModal && <p className="auth-message info">{info}</p>}
 
         <div className="auth-actions">
           <button type="submit" className="btn primary">
@@ -457,6 +455,42 @@ export default function Register() {
           </button>
         </div>
       </form>
+
+      {showSuccessModal && (
+        <div className="register-success-overlay" role="dialog" aria-modal="true">
+          <div className="register-success-modal">
+            <div className="register-success-header">
+              <h3>Registration complete</h3>
+              <button
+                type="button"
+                className="register-success-close"
+                onClick={() => setShowSuccessModal(false)}
+              >
+                Close
+              </button>
+            </div>
+            <div className="register-success-body">
+              <p>{successMessage}</p>
+            </div>
+            <div className="register-success-actions">
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={() => setShowSuccessModal(false)}
+              >
+                Got it
+              </button>
+              <button
+                type="button"
+                className="btn primary"
+                onClick={() => navigate("/login")}
+              >
+                Go to login
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {termsOpen && (
         <div className="terms-overlay" role="dialog" aria-modal="true">
