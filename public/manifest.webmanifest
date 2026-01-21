@@ -7,7 +7,16 @@
   "id": "/",
   "start_url": "/?source=pwa",
   "scope": "/",
+  "scope_extensions": [
+    {
+      "origin": "https://testing.yoursocialplace.com"
+    }
+  ],
   "display": "standalone",
+  "display_override": ["window-controls-overlay", "tabbed", "standalone"],
+  "launch_handler": {
+    "client_mode": ["focus-existing", "navigate-existing"]
+  },
   "orientation": "any",
   "background_color": "#0b0d14",
   "theme_color": "#0b0d14",
@@ -28,8 +37,120 @@
       "label": "Your Social Place on mobile"
     }
   ],
+  "shortcuts": [
+    {
+      "name": "Open Dashboard",
+      "short_name": "Dashboard",
+      "description": "Jump back into your feed and updates.",
+      "url": "/dashboard?source=pwa-shortcut",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Find Friends",
+      "short_name": "Friends",
+      "description": "Discover and connect with friends.",
+      "url": "/friends?source=pwa-shortcut",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Explore Groups",
+      "short_name": "Groups",
+      "description": "Browse accountability groups.",
+      "url": "/groups?source=pwa-shortcut",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "My Profile",
+      "short_name": "Profile",
+      "description": "Update your profile details.",
+      "url": "/me?source=pwa-shortcut",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
+  ],
+  "share_target": {
+    "action": "/share",
+    "method": "GET",
+    "enctype": "application/x-www-form-urlencoded",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  },
+  "file_handlers": [
+    {
+      "action": "/share",
+      "accept": {
+        "image/*": [".png", ".jpg", ".jpeg", ".webp", ".gif"],
+        "text/plain": [".txt", ".md"]
+      }
+    }
+  ],
+  "protocol_handlers": [
+    {
+      "protocol": "web+yoursocialplace",
+      "url": "/protocol?url=%s"
+    }
+  ],
+  "note_taking": {
+    "new_note_url": "/notes/new"
+  },
+  "widgets": [
+    {
+      "name": "Daily Check-in",
+      "short_name": "Check-in",
+      "description": "Log a quick update and celebrate progress.",
+      "tag": "daily-checkin",
+      "template": "/widgets/checkin.html",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ],
+      "size": {
+        "min_width": 2,
+        "min_height": 2,
+        "max_width": 4,
+        "max_height": 4
+      }
+    }
+  ],
+  "edge_side_panel": {
+    "preferred_width": 420
+  },
   "prefer_related_applications": false,
-  "related_applications": [],
+  "related_applications": [
+    {
+      "platform": "play",
+      "id": "com.yoursocialplace.connect"
+    }
+  ],
   "icons": [
     {
       "src": "/icons/icon-192.png",

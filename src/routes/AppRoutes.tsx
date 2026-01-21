@@ -18,6 +18,9 @@ import Safety from "../pages/safety";
 import Report from "../pages/report";
 import DeleteAccount from "../pages/delete-account";
 import DeleteData from "../pages/delete-data";
+import ShareTarget from "../pages/share";
+import ProtocolHandler from "../pages/protocol";
+import NewNote from "../pages/notes-new";
 
 export default function AppRoutes(): JSX.Element {
   return (
@@ -37,6 +40,9 @@ export default function AppRoutes(): JSX.Element {
       <Route path="/cookies" element={<Cookies />} />
       <Route path="/safety" element={<Safety />} />
       <Route path="/report" element={<Report />} />
+      <Route path="/share" element={<ShareTarget />} />
+      <Route path="/protocol" element={<ProtocolHandler />} />
+      <Route path="/notes/new" element={<NewNote />} />
       <Route
         path="/dashboard"
         element={

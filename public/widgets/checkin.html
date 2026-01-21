@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Your Social Place Widget</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Inter", "Satoshi", system-ui, -apple-system, sans-serif;
+        background: radial-gradient(120% 140% at 20% 10%, #1f1b2c 0%, #0b0d14 60%, #05060a 100%);
+        color: #e9ecf5;
+        display: grid;
+        place-items: center;
+        min-height: 100vh;
+      }
+
+      .widget {
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 20px;
+        padding: 20px;
+        text-align: center;
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
+        width: min(320px, 90vw);
+      }
+
+      .logo {
+        width: 48px;
+        height: 48px;
+        border-radius: 16px;
+        margin-bottom: 12px;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 20px;
+      }
+
+      p {
+        margin: 0 0 16px;
+        color: #c7cede;
+        font-size: 14px;
+        line-height: 1.4;
+      }
+
+      a {
+        display: inline-block;
+        padding: 10px 14px;
+        border-radius: 12px;
+        background: linear-gradient(135deg, #5f8bff, #44d2ff);
+        color: #0b0d14;
+        font-weight: 700;
+        text-decoration: none;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="widget">
+      <img class="logo" src="/logo.png" alt="" />
+      <h1>Daily Check-in</h1>
+      <p>Open Your Social Place to share a quick update and keep your momentum.</p>
+      <a href="/?source=widget">Open app</a>
+    </main>
+  </body>
+</html>
