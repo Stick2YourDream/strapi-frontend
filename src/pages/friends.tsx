@@ -11,6 +11,12 @@ import api from "../api/strapi";
 import Sidebar from "../components/Sidebar";
 import TopbarSearch from "../components/TopbarSearch";
 import { usePageMeta } from "../hooks/usePageMeta";
+import {
+  buildProfilePayloadFromAttrs,
+  decryptFriendProfilePayload,
+  ensureProfileKeyShares,
+  type ProfilePayload,
+} from "../utils/profile-e2ee";
 
 type FriendPost = {
   id: number | string;
@@ -323,25 +329,45 @@ export default function Friends() {
         const friendFilter = friendIds
           .map((id, index) => `filters[user][id][$in][${index}]=${id}`)
           .join("&");
+        await ensureProfileKeyShares(user.id, friendIds);
+
         const profilesRes = await api.get(
           `/profiles?${friendFilter}&populate[0]=user&populate[1]=avatar&pagination[pageSize]=200`
         );
-        const mappedProfiles: FriendProfile[] = (profilesRes.data?.data ?? []).map((p: any) => {
-          const attrs = normalize(p);
-          const userAttrs = getEntityAttrs(attrs.user);
-          const userId = getEntityId(attrs.user);
-          return {
-            id: p.id ?? attrs.documentId,
-            userId,
-            username: userAttrs?.username,
-            firstName: attrs.firstName || "",
-            lastName: attrs.lastName || "",
-            handle: attrs.handle || userAttrs?.username || `user-${p.id ?? attrs.documentId}`,
-            bio: attrs.bio || "",
-            avatarUrl: pickMediaUrl(attrs.avatar),
-          };
-        });
-        setProfiles(mappedProfiles);
+        const mappedProfiles = await Promise.all(
+          (profilesRes.data?.data ?? []).map(async (p: any) => {
+            const attrs = normalize(p);
+            const userAttrs = getEntityAttrs(attrs.user);
+            const friendUserId = getEntityId(attrs.user);
+            if (!friendUserId) return null;
+            let payload: ProfilePayload | null = null;
+            if (attrs.encryptedProfile) {
+              try {
+                payload = await decryptFriendProfilePayload(
+                  friendUserId,
+                  user.id,
+                  attrs.encryptedProfile
+                );
+              } catch {
+                payload = null;
+              }
+            }
+            if (!payload) {
+              payload = buildProfilePayloadFromAttrs(attrs);
+            }
+            return {
+              id: p.id ?? attrs.documentId,
+              userId: friendUserId,
+              username: userAttrs?.username,
+              firstName: payload.firstName || "",
+              lastName: payload.lastName || "",
+              handle: attrs.handle || userAttrs?.username || `user-${p.id ?? attrs.documentId}`,
+              bio: payload.bio || "",
+              avatarUrl: pickMediaUrl(attrs.avatar),
+            } as FriendProfile;
+          })
+        );
+        setProfiles(mappedProfiles.filter(Boolean) as FriendProfile[]);
 
         const ownerFilter = friendIds
           .map((id, index) => `filters[owner][id][$in][${index}]=${id}`)

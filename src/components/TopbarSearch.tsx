@@ -2,6 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import api from "../api/strapi";
 import { useAuth } from "../context/AuthContext";
 import "../css/topbar.css";
+import {
+  buildProfilePayloadFromAttrs,
+  decryptFriendProfilePayload,
+  type ProfilePayload,
+} from "../utils/profile-e2ee";
 
 type DirectoryProfile = {
   id: number | string;
@@ -88,24 +93,6 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
         ]);
 
         if (!active) return;
-        const mappedProfiles: DirectoryProfile[] = (profilesRes.data?.data ?? []).map(
-          (p: any) => {
-            const attrs = normalize(p);
-            const userAttrs = getEntityAttrs(attrs.user);
-            const userId = getEntityId(attrs.user);
-            return {
-              id: p.id ?? attrs.documentId,
-              userId,
-              username: userAttrs?.username,
-              handle: attrs.handle || userAttrs?.username || `user-${p.id ?? attrs.documentId}`,
-              firstName: attrs.firstName || "",
-              lastName: attrs.lastName || "",
-              avatarUrl: pickMediaUrl(attrs.avatar),
-            };
-          }
-        );
-        setProfiles(mappedProfiles);
-
         const mappedRelations: FriendRelation[] = (friendsRes.data?.data ?? []).map((f: any) => {
           const attrs = normalize(f);
           return {
@@ -115,6 +102,49 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
           };
         });
         setRelations(mappedRelations);
+
+        const acceptedIds = new Set<number>();
+        mappedRelations.forEach((relation) => {
+          if (relation.status !== "accepted") return;
+          const requesterId = relation.requesterId;
+          const targetId = relation.targetId;
+          const otherId = requesterId === user.id ? targetId : requesterId;
+          if (otherId) acceptedIds.add(otherId);
+        });
+
+        const mappedProfiles = await Promise.all(
+          (profilesRes.data?.data ?? []).map(async (p: any) => {
+            const attrs = normalize(p);
+            const userAttrs = getEntityAttrs(attrs.user);
+            const profileUserId = getEntityId(attrs.user);
+            if (!profileUserId) return null;
+            let payload: ProfilePayload | null = null;
+            if (acceptedIds.has(profileUserId) && attrs.encryptedProfile) {
+              try {
+                payload = await decryptFriendProfilePayload(
+                  profileUserId,
+                  user.id,
+                  attrs.encryptedProfile
+                );
+              } catch {
+                payload = null;
+              }
+            }
+            if (!payload && acceptedIds.has(profileUserId)) {
+              payload = buildProfilePayloadFromAttrs(attrs);
+            }
+            return {
+              id: p.id ?? attrs.documentId,
+              userId: profileUserId,
+              username: userAttrs?.username,
+              handle: attrs.handle || userAttrs?.username || `user-${p.id ?? attrs.documentId}`,
+              firstName: payload?.firstName || "",
+              lastName: payload?.lastName || "",
+              avatarUrl: pickMediaUrl(attrs.avatar),
+            };
+          })
+        );
+        setProfiles(mappedProfiles.filter(Boolean) as DirectoryProfile[]);
       } catch {
         if (active) setError("Unable to load directory.");
       } finally {

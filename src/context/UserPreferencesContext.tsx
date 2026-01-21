@@ -2,6 +2,12 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { CSSProperties } from "react";
 import { useAuth } from "./AuthContext";
 import api from "../api/strapi";
+import {
+  buildProfilePayloadFromAttrs,
+  decryptOwnProfilePayload,
+  encryptProfilePayload,
+  PROFILE_PII_CLEAR_FIELDS,
+} from "../utils/profile-e2ee";
 
 export type PageKey = "dashboard" | "profile" | "friends";
 
@@ -135,7 +141,19 @@ export const UserPreferencesProvider = ({ children }: { children: React.ReactNod
         const res = await api.get("/profiles/me");
         const data = res.data?.data;
         const attrs = data?.attributes ?? data ?? {};
-        if (attrs?.backgrounds && typeof attrs.backgrounds === "object") {
+        if (attrs?.encryptedProfile) {
+          try {
+            const payload = await decryptOwnProfilePayload(user.id, attrs.encryptedProfile);
+            if (payload?.backgrounds && typeof payload.backgrounds === "object") {
+              setPreferences((prev) => ({
+                ...prev,
+                backgrounds: mergeBackgrounds(prev.backgrounds, payload.backgrounds),
+              }));
+            }
+          } catch {
+            // ignore decrypt failures
+          }
+        } else if (attrs?.backgrounds && typeof attrs.backgrounds === "object") {
           setPreferences((prev) => ({
             ...prev,
             backgrounds: mergeBackgrounds(prev.backgrounds, attrs.backgrounds),
@@ -173,7 +191,24 @@ export const UserPreferencesProvider = ({ children }: { children: React.ReactNod
         }
       });
       try {
-        await api.put("/profiles/me", { data: { backgrounds: payload } });
+        const res = await api.get("/profiles/me");
+        const data = res.data?.data;
+        const attrs = data?.attributes ?? data ?? {};
+        const existingPayload = attrs?.encryptedProfile
+          ? await decryptOwnProfilePayload(user.id, attrs.encryptedProfile)
+          : buildProfilePayloadFromAttrs(attrs);
+        const nextPayload = {
+          ...existingPayload,
+          backgrounds: payload,
+        };
+        const encryptedProfile = await encryptProfilePayload(user.id, nextPayload);
+        await api.put("/profiles/me", {
+          data: {
+            encryptedProfile,
+            profileKeyVersion: 1,
+            ...PROFILE_PII_CLEAR_FIELDS,
+          },
+        });
       } catch {
         // ignore save errors
       }

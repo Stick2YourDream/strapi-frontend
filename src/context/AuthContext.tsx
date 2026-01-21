@@ -1,5 +1,13 @@
 import { createContext, useContext, useState, useEffect } from "react";
 import api from "../api/strapi";
+import {
+  buildProfilePayloadFromAttrs,
+  decryptOwnProfilePayload,
+  encryptProfilePayload,
+  ensureUserKeyOnServer,
+  PROFILE_PII_CLEAR_FIELDS,
+  type ProfilePayload,
+} from "../utils/profile-e2ee";
 
 interface User {
   id: number;
@@ -10,13 +18,23 @@ interface User {
 interface ProfileSummary {
   id?: number | string;
   onboardingComplete?: boolean;
+  intent?: string;
   firstName?: string;
   lastName?: string;
+  age?: string;
+  birthday?: string;
+  gender?: string;
   religion?: string;
   hobbies?: string;
+  occupation?: string;
+  bio?: string;
+  phone?: string;
   country?: string;
+  countryCode?: string;
   state?: string;
+  stateCode?: string;
   city?: string;
+  backgrounds?: Record<string, { color?: string; image?: string }>;
 }
 
 interface AuthContextType {
@@ -64,11 +82,46 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       const res = await api.get("/profiles/me");
       const data = res.data?.data;
       const attrs = data?.attributes ?? data ?? null;
-      if (attrs && typeof attrs.onboardingComplete !== "boolean") {
-        setProfile({ ...attrs, onboardingComplete: true });
-      } else {
-        setProfile(attrs);
+      if (!attrs) {
+        setProfile(null);
+        return;
       }
+
+      let payload: ProfilePayload | null = null;
+      if (attrs.encryptedProfile) {
+        try {
+          payload = await decryptOwnProfilePayload(user.id, attrs.encryptedProfile);
+        } catch (error) {
+          console.warn("Unable to decrypt profile payload:", error);
+        }
+      }
+
+      if (!payload) {
+        payload = buildProfilePayloadFromAttrs(attrs);
+        if (Object.values(payload).some((value) => value)) {
+          try {
+            const encryptedProfile = await encryptProfilePayload(user.id, payload);
+            await api.put("/profiles/me", {
+              data: {
+                encryptedProfile,
+                profileKeyVersion: 1,
+                ...PROFILE_PII_CLEAR_FIELDS,
+              },
+            });
+          } catch (error) {
+            console.warn("Unable to migrate profile encryption:", error);
+          }
+        }
+      }
+
+      const onboardingComplete =
+        typeof payload?.onboardingComplete === "boolean"
+          ? payload.onboardingComplete
+          : typeof attrs.onboardingComplete === "boolean"
+          ? attrs.onboardingComplete
+          : true;
+
+      setProfile({ ...payload, onboardingComplete });
     } catch {
       setProfile(null);
     } finally {
@@ -84,6 +137,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     }
     setProfileLoading(true);
     void refreshProfile();
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user) return;
+    void ensureUserKeyOnServer();
   }, [user?.id]);
 
   // Auto-logout when the session window expires

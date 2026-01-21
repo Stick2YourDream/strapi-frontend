@@ -7,6 +7,11 @@ import api from "../api/strapi";
 import { useAuth } from "../context/AuthContext";
 import { useNotifications, type FriendRequestPreview } from "../hooks/useNotifications";
 import { usePageMeta } from "../hooks/usePageMeta";
+import {
+  buildProfilePayloadFromAttrs,
+  decryptOwnProfilePayload,
+  type ProfilePayload,
+} from "../utils/profile-e2ee";
 
 type ProfileSummary = {
   displayName: string;
@@ -292,9 +297,20 @@ export default function Landing() {
         const entry = Array.isArray(data) ? data[0] : data;
         const attrs = normalize(entry);
         if (!attrs || Array.isArray(attrs)) return;
+        let payload: ProfilePayload | null = null;
+        if (attrs.encryptedProfile) {
+          try {
+            payload = await decryptOwnProfilePayload(user.id, attrs.encryptedProfile);
+          } catch {
+            payload = null;
+          }
+        }
+        if (!payload) {
+          payload = buildProfilePayloadFromAttrs(attrs);
+        }
         const displayName =
-          attrs.firstName || attrs.lastName
-            ? `${attrs.firstName || ""} ${attrs.lastName || ""}`.trim()
+          payload.firstName || payload.lastName
+            ? `${payload.firstName || ""} ${payload.lastName || ""}`.trim()
             : attrs.handle || attrs.username || user.username;
         setProfileSummary({
           displayName,

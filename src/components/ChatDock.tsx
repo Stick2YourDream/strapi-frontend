@@ -7,6 +7,12 @@ import type { ChatFriend } from "../context/ChatContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";
 import { useVideoCall, type VideoCallInvitee } from "../context/VideoCallContext";
 import "../css/chatbox.css";
+import {
+  buildProfilePayloadFromAttrs,
+  decryptFriendProfilePayload,
+  ensureProfileKeyShares,
+  type ProfilePayload,
+} from "../utils/profile-e2ee";
 import VideoCallModal from "./VideoCallModal";
 
 type LinkMeta = {
@@ -267,32 +273,51 @@ export default function ChatDock() {
         const filter = friendIds
           .map((id, index) => `filters[user][id][$in][${index}]=${id}`)
           .join("&");
+        await ensureProfileKeyShares(user.id, friendIds);
+
         const profilesRes = await api.get(
           `/profiles?${filter}&populate=avatar&populate=user&pagination[pageSize]=200`
         );
 
-        const mapped: ChatFriend[] = (profilesRes.data?.data ?? [])
-          .map((p: any) => {
+        const mapped = await Promise.all(
+          (profilesRes.data?.data ?? []).map(async (p: any) => {
             const attrs = normalize(p);
             const userAttrs = getEntityAttrs(attrs.user);
-            const userId = getEntityId(attrs.user);
-            if (!userId) return null;
+            const friendUserId = getEntityId(attrs.user);
+            if (!friendUserId) return null;
+            let payload: ProfilePayload | null = null;
+            if (attrs.encryptedProfile) {
+              try {
+                payload = await decryptFriendProfilePayload(
+                  friendUserId,
+                  user.id,
+                  attrs.encryptedProfile
+                );
+              } catch {
+                payload = null;
+              }
+            }
+            if (!payload) {
+              payload = buildProfilePayloadFromAttrs(attrs);
+            }
             return {
-              userId,
+              userId: friendUserId,
               handle: attrs.handle || userAttrs?.username || "",
-              firstName: attrs.firstName || "",
-              lastName: attrs.lastName || "",
+              firstName: payload.firstName || "",
+              lastName: payload.lastName || "",
               avatarUrl: pickMediaUrl(attrs.avatar),
             } as ChatFriend;
           })
-          .filter(Boolean) as ChatFriend[];
+        );
 
-        mapped.sort((a, b) =>
+        const filtered = mapped.filter(Boolean) as ChatFriend[];
+
+        filtered.sort((a, b) =>
           getDisplayName(a.handle, a.firstName, a.lastName).localeCompare(
             getDisplayName(b.handle, b.firstName, b.lastName)
           )
         );
-        if (active) setFriendOptions(mapped);
+        if (active) setFriendOptions(filtered);
       } catch {
         if (active) setFriendsError("Unable to load friends.");
       } finally {

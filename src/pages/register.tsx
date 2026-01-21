@@ -223,25 +223,16 @@ export default function Register() {
         intent: intentKey || undefined,
       });
 
-      // Best-effort: immediately create a linked profile with the chosen handle (username)
-      const lockedHandle = slugifyHandle(form.username || form.email);
-      const ageValue = String(age);
+      // Best-effort: create a minimal profile shell; encrypted profile fields are set after login.
+      const lockedHandle =
+        slugifyHandle(form.username || form.email) || `user-${res.data.user.id}`;
       try {
-        const profilePayload: Record<string, any> = {
+        await api.post("/profiles", {
           data: {
             handle: lockedHandle,
-            firstName: form.username,
-            birthday: form.birthday,
-            age: ageValue,
             user: res.data.user.id,
             locale: "en",
           },
-        };
-        if (intentKey) {
-          profilePayload.data.intent = intentKey;
-        }
-        await api.post("/profiles", {
-          ...profilePayload,
         });
       } catch {
         // ignore if profile already exists or creation fails (created on first edit instead)

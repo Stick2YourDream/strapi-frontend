@@ -12,6 +12,14 @@ import TopbarSearch from "../components/TopbarSearch";
 import { HOBBY_OPTIONS } from "./me_hobbies";
 import { RELIGION_OPTIONS } from "./me_religions";
 import { usePageMeta } from "../hooks/usePageMeta";
+import {
+  buildProfilePayloadFromAttrs,
+  decryptOwnProfilePayload,
+  encryptProfilePayload,
+  ensureProfileKeyShares,
+  PROFILE_PII_CLEAR_FIELDS,
+  type ProfilePayload,
+} from "../utils/profile-e2ee";
 
 type Profile = {
   firstName: string;
@@ -249,6 +257,7 @@ export default function Me() {
   });
 
   const profileSnapshotRef = useRef<Profile | null>(null);
+  const profilePayloadRef = useRef<ProfilePayload | null>(null);
   const hobbySnapshotRef = useRef<string[]>([]);
   const profileIdRef = useRef<string | number | null>(null);
   const handleFixAttemptedRef = useRef(false);
@@ -584,7 +593,7 @@ export default function Me() {
       .then((res) => {
         const updated = res.data?.data;
         if (updated) {
-          setProfileFromEntry(updated);
+          void setProfileFromEntry(updated);
         } else {
           setProfile((prev) => ({ ...prev, handle: lockedUniqueHandle }));
         }
@@ -594,31 +603,49 @@ export default function Me() {
       });
   }, [loading, lockedUniqueHandle, profile.handle, user]);
 
-  const setProfileFromEntry = (entry: any) => {
+  const setProfileFromEntry = async (entry: any) => {
     if (!entry) return;
     const attrs = normalize(entry);
     profileIdRef.current = entry?.documentId ?? entry?.id ?? null;
-    const parsedHobbies = parseHobbies(attrs.hobbies || "");
+
+    let payload: ProfilePayload | null = null;
+    if (attrs.encryptedProfile && user?.id) {
+      try {
+        payload = await decryptOwnProfilePayload(user.id, attrs.encryptedProfile);
+      } catch {
+        payload = null;
+      }
+    }
+    if (!payload) {
+      payload = buildProfilePayloadFromAttrs(attrs);
+    }
+    profilePayloadRef.current = payload;
+
+    const parsedHobbies = parseHobbies(payload.hobbies || "");
     setHobbyList(parsedHobbies);
 
     const onboardingComplete =
-      typeof attrs.onboardingComplete === "boolean" ? attrs.onboardingComplete : true;
+      typeof payload.onboardingComplete === "boolean"
+        ? payload.onboardingComplete
+        : typeof attrs.onboardingComplete === "boolean"
+        ? attrs.onboardingComplete
+        : true;
     const nextProfile: Profile = {
-      firstName: attrs.firstName || "",
-      lastName: attrs.lastName || "",
-      age: attrs.age || "",
-      birthday: attrs.birthday || "",
-      gender: attrs.gender || "",
-      religion: attrs.religion || "",
-      country: attrs.country || "",
-      countryCode: attrs.countryCode || "",
-      state: attrs.state || "",
-      stateCode: attrs.stateCode || "",
-      city: attrs.city || "",
+      firstName: payload.firstName || "",
+      lastName: payload.lastName || "",
+      age: payload.age || "",
+      birthday: payload.birthday || "",
+      gender: payload.gender || "",
+      religion: payload.religion || "",
+      country: payload.country || "",
+      countryCode: payload.countryCode || "",
+      state: payload.state || "",
+      stateCode: payload.stateCode || "",
+      city: payload.city || "",
       hobbies: parsedHobbies.join(", "),
-      occupation: attrs.occupation || "",
-      bio: attrs.bio || "",
-      phone: formatPhone(attrs.phone || ""),
+      occupation: payload.occupation || "",
+      bio: payload.bio || "",
+      phone: formatPhone(payload.phone || ""),
       handle: attrs.handle || "",
       avatarUrl: pickMediaUrl(attrs.avatar),
       onboardingComplete,
@@ -1016,7 +1043,7 @@ export default function Me() {
           return;
         }
 
-        setProfileFromEntry(mine);
+        await setProfileFromEntry(mine);
         setEditing(false);
         await fetchMyPosts();
       } catch {
@@ -1091,9 +1118,9 @@ export default function Me() {
       const safeFirst = mergedProfile.firstName || user.username || user.email || "user";
       const normalizedHandle = (mergedProfile.handle || "").trim();
       const baseHandle =
-          normalizedHandle && normalizedHandle.toLowerCase() !== "user"
-            ? normalizedHandle
-            : lockedUniqueHandle;
+        normalizedHandle && normalizedHandle.toLowerCase() !== "user"
+          ? normalizedHandle
+          : lockedUniqueHandle;
       const buildUniqueHandle = () =>
         `${baseHandle}-${user.id}-${Math.floor(1000 + Math.random() * 9000)}`;
 
@@ -1114,32 +1141,68 @@ export default function Me() {
         uploadedAvatarUrl = pickMediaUrl(uploadRes.data?.[0]);
       }
 
+      const onboardingComplete =
+        typeof mergedProfile.onboardingComplete === "boolean"
+          ? mergedProfile.onboardingComplete
+          : true;
+
+      let existingPayload: ProfilePayload | null = null;
+      try {
+        const current = await fetchMyProfileByUser();
+        if (current) {
+          const attrs = normalize(current);
+          if (attrs.encryptedProfile && user.id) {
+            try {
+              existingPayload = await decryptOwnProfilePayload(
+                user.id,
+                attrs.encryptedProfile
+              );
+            } catch {
+              existingPayload = null;
+            }
+          }
+          if (!existingPayload) {
+            existingPayload = buildProfilePayloadFromAttrs(attrs);
+          }
+        }
+      } catch {
+        existingPayload = null;
+      }
+      if (!existingPayload) {
+        existingPayload = profilePayloadRef.current || {};
+      }
+
+      const nextPayload: ProfilePayload = {
+        ...existingPayload,
+        firstName: safeFirst,
+        lastName: mergedProfile.lastName,
+        age: mergedProfile.age,
+        birthday: mergedProfile.birthday || "",
+        gender: mergedProfile.gender,
+        religion: mergedProfile.religion,
+        country: mergedProfile.country,
+        countryCode: mergedProfile.countryCode,
+        state: mergedProfile.state,
+        stateCode: mergedProfile.stateCode,
+        city: mergedProfile.city,
+        hobbies: mergedProfile.hobbies,
+        occupation: mergedProfile.occupation,
+        bio: mergedProfile.bio,
+        phone: phoneClean || "",
+        onboardingComplete,
+      };
+
+      const encryptedProfile = await encryptProfilePayload(user.id, nextPayload);
+
       const buildPayload = (handleValue: string) => {
-        const onboardingComplete =
-          typeof mergedProfile.onboardingComplete === "boolean"
-            ? mergedProfile.onboardingComplete
-            : true;
         const data: any = {
-          firstName: safeFirst,
-          lastName: mergedProfile.lastName,
-          age: mergedProfile.age,
-          birthday: mergedProfile.birthday || null,
-          gender: mergedProfile.gender,
-          religion: mergedProfile.religion,
-          country: mergedProfile.country,
-          countryCode: mergedProfile.countryCode,
-          state: mergedProfile.state,
-          stateCode: mergedProfile.stateCode,
-          city: mergedProfile.city,
-          hobbies: mergedProfile.hobbies,
-          occupation: mergedProfile.occupation,
-          bio: mergedProfile.bio,
-          onboardingComplete,
+          encryptedProfile,
+          profileKeyVersion: 1,
           handle: handleValue,
           locale: "en",
           user: user.id,
+          ...PROFILE_PII_CLEAR_FIELDS,
         };
-        data.phone = phoneClean ? phoneClean : null;
         if (avatarId) data.avatar = avatarId;
         return data;
       };
@@ -1179,14 +1242,20 @@ export default function Me() {
       }
 
       if (saved) {
-        setProfileFromEntry(saved);
+        await setProfileFromEntry(saved);
       } else {
         const mine = await fetchMyProfileByUser();
         if (!mine) throw new Error("Save succeeded but no profile found");
-        setProfileFromEntry(mine);
+        await setProfileFromEntry(mine);
       }
 
       void refreshProfile();
+      if (friendOptions.length) {
+        void ensureProfileKeyShares(
+          user.id,
+          friendOptions.map((option) => option.id)
+        );
+      }
 
       setSuccess("Profile saved successfully.");
       setSuccessModal("Profile saved successfully.");

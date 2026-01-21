@@ -10,6 +10,19 @@ import {
 import { io, type Socket } from "socket.io-client";
 import api from "../api/strapi";
 import { useAuth } from "./AuthContext";
+import {
+  decryptWrappedKey,
+  deriveSharedKey,
+  encryptKeyForRecipient,
+  generateCallKey,
+  getOrCreateIdentityKeyPair,
+  importPublicKey,
+} from "../utils/crypto";
+import {
+  buildProfilePayloadFromAttrs,
+  decryptOwnProfilePayload,
+  fetchUserKeys,
+} from "../utils/profile-e2ee";
 
 type VideoCallInvitee = {
   userId: number;
@@ -139,6 +152,38 @@ type VideoCallContextValue = {
 };
 
 const MAX_VIDEO_PARTICIPANTS = 8;
+const E2EE_VERSION = 1;
+const E2EE_IV_BYTES = 12;
+const E2EE_HEADER_BYTES = 1 + E2EE_IV_BYTES;
+
+const isChromeOrEdge = () => {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  const uaData = (navigator as any).userAgentData as { brands?: { brand: string }[] } | undefined;
+  if (uaData?.brands?.length) {
+    const brands = uaData.brands
+      .map((brand) => brand.brand.toLowerCase())
+      .join(" ");
+    return brands.includes("edge") || brands.includes("chrome");
+  }
+  if (/\bEdg\//.test(ua)) return true;
+  if (/\bChrome\//.test(ua) && !/\bOPR\//.test(ua) && !/\bOpera\//.test(ua)) {
+    return true;
+  }
+  return false;
+};
+
+const supportsCallE2ee = () => {
+  if (typeof window === "undefined") return false;
+  const sender = (window as any).RTCRtpSender?.prototype;
+  const receiver = (window as any).RTCRtpReceiver?.prototype;
+  const hasInsertable =
+    typeof sender?.createEncodedStreams === "function" &&
+    typeof receiver?.createEncodedStreams === "function" &&
+    typeof (window as any).TransformStream === "function";
+  return isChromeOrEdge() && hasInsertable && Boolean(window.crypto?.subtle);
+};
+
 const RTC_CONFIG: RTCConfiguration = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
@@ -261,6 +306,13 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const activeScreenControllerRef = useRef<ScreenControlRequest | null>(null);
   const screenControlTargetRef = useRef<string | null>(null);
   const presenceTargetsRef = useRef<number[]>([]);
+  const e2eeSupported = useMemo(() => supportsCallE2ee(), []);
+  const callKeyRef = useRef<CryptoKey | null>(null);
+  const callKeyRoomRef = useRef<string | null>(null);
+  const callKeyRecipientsRef = useRef<Set<number>>(new Set());
+  const isCallHostRef = useRef(false);
+  const senderE2eeRef = useRef<WeakSet<RTCRtpSender>>(new WeakSet());
+  const receiverE2eeRef = useRef<WeakSet<RTCRtpReceiver>>(new WeakSet());
 
   const buildSocketUrl = () => {
     const envUrl = String(import.meta.env.VITE_SOCKET_URL || "").trim();
@@ -283,6 +335,150 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     peerNegotiationRef.current.set(socketId, created);
     return created;
   }, []);
+
+  const toArrayBuffer = useCallback((data: ArrayBuffer | ArrayBufferView) => {
+    if (data instanceof ArrayBuffer) return data;
+    if (ArrayBuffer.isView(data)) {
+      return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+    }
+    return data as ArrayBuffer;
+  }, []);
+
+  const encryptFrame = useCallback(
+    async (key: CryptoKey, data: ArrayBuffer | ArrayBufferView) => {
+      const iv = crypto.getRandomValues(new Uint8Array(E2EE_IV_BYTES));
+      const encrypted = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv },
+        key,
+        toArrayBuffer(data)
+      );
+      const output = new Uint8Array(E2EE_HEADER_BYTES + encrypted.byteLength);
+      output[0] = E2EE_VERSION;
+      output.set(iv, 1);
+      output.set(new Uint8Array(encrypted), E2EE_HEADER_BYTES);
+      return output.buffer;
+    },
+    [toArrayBuffer]
+  );
+
+  const decryptFrame = useCallback(
+    async (key: CryptoKey, data: ArrayBuffer | ArrayBufferView) => {
+      const buffer = toArrayBuffer(data);
+      const bytes = new Uint8Array(buffer);
+      if (bytes.length <= E2EE_HEADER_BYTES || bytes[0] !== E2EE_VERSION) {
+        throw new Error("Invalid frame");
+      }
+      const iv = bytes.slice(1, E2EE_HEADER_BYTES);
+      const encrypted = bytes.slice(E2EE_HEADER_BYTES);
+      return crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, encrypted);
+    },
+    [toArrayBuffer]
+  );
+
+  const resetE2eeState = useCallback(() => {
+    callKeyRef.current = null;
+    callKeyRoomRef.current = null;
+    callKeyRecipientsRef.current = new Set();
+    isCallHostRef.current = false;
+    senderE2eeRef.current = new WeakSet();
+    receiverE2eeRef.current = new WeakSet();
+  }, []);
+
+  const setupSenderE2ee = useCallback(
+    (sender?: RTCRtpSender | null) => {
+      if (!sender || !e2eeSupported) return;
+      if (senderE2eeRef.current.has(sender)) return;
+      const streams = (sender as any).createEncodedStreams?.();
+      if (!streams?.readable || !streams?.writable) return;
+      const transform = new TransformStream({
+        async transform(encodedFrame, controller) {
+          const key = callKeyRef.current;
+          if (!key || !encodedFrame?.data) return;
+          try {
+            const encrypted = await encryptFrame(key, encodedFrame.data);
+            encodedFrame.data = encrypted;
+            controller.enqueue(encodedFrame);
+          } catch {
+            // drop encrypted frame failures
+          }
+        },
+      });
+      streams.readable
+        .pipeThrough(transform)
+        .pipeTo(streams.writable)
+        .catch(() => undefined);
+      senderE2eeRef.current.add(sender);
+    },
+    [e2eeSupported, encryptFrame]
+  );
+
+  const setupReceiverE2ee = useCallback(
+    (receiver?: RTCRtpReceiver | null) => {
+      if (!receiver || !e2eeSupported) return;
+      if (receiverE2eeRef.current.has(receiver)) return;
+      const streams = (receiver as any).createEncodedStreams?.();
+      if (!streams?.readable || !streams?.writable) return;
+      const transform = new TransformStream({
+        async transform(encodedFrame, controller) {
+          const key = callKeyRef.current;
+          if (!key || !encodedFrame?.data) return;
+          try {
+            const decrypted = await decryptFrame(key, encodedFrame.data);
+            encodedFrame.data = decrypted;
+            controller.enqueue(encodedFrame);
+          } catch {
+            // drop frames that fail to decrypt
+          }
+        },
+      });
+      streams.readable
+        .pipeThrough(transform)
+        .pipeTo(streams.writable)
+        .catch(() => undefined);
+      receiverE2eeRef.current.add(receiver);
+    },
+    [decryptFrame, e2eeSupported]
+  );
+
+  const shareCallKeyWithUser = useCallback(
+    async (roomId: string, targetUserId: number) => {
+      if (!socketRef.current || !user?.id) return;
+      if (!callKeyRef.current || !targetUserId) return;
+      if (callKeyRoomRef.current && callKeyRoomRef.current !== roomId) return;
+      if (targetUserId === user.id) return;
+      if (callKeyRecipientsRef.current.has(targetUserId)) return;
+      try {
+        const cache = await fetchUserKeys([targetUserId]);
+        const entry = cache.get(targetUserId);
+        if (!entry?.publicKey) return;
+        const { privateKey } = await getOrCreateIdentityKeyPair();
+        const targetPublicKey = await importPublicKey(entry.publicKey);
+        const sharedKey = await deriveSharedKey(privateKey, targetPublicKey);
+        const encryptedKey = await encryptKeyForRecipient(sharedKey, callKeyRef.current);
+        socketRef.current.emit("call:e2ee:key", {
+          roomId,
+          toUserId: targetUserId,
+          encryptedKey,
+          keyVersion: 1,
+        });
+        callKeyRecipientsRef.current.add(targetUserId);
+      } catch {
+        // ignore key share errors
+      }
+    },
+    [user?.id]
+  );
+
+  const shareCallKeyWithParticipants = useCallback(
+    (roomId: string, participants: VideoCallParticipant[]) => {
+      if (!isCallHostRef.current) return;
+      participants.forEach((participant) => {
+        if (!participant?.userId) return;
+        void shareCallKeyWithUser(roomId, participant.userId);
+      });
+    },
+    [shareCallKeyWithUser]
+  );
 
   const stopVideoProcessing = useCallback(() => {
     const current = videoProcessingRef.current;
@@ -313,9 +509,11 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           if (existing.video.track?.id !== videoTrack.id) {
             existing.video.replaceTrack(videoTrack).catch(() => undefined);
           }
+          setupSenderE2ee(existing.video);
         } else {
           try {
             existing.video = pc.addTrack(videoTrack, screenStream);
+            setupSenderE2ee(existing.video);
           } catch {
             // ignore share attach errors
           }
@@ -326,9 +524,11 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           if (existing.audio.track?.id !== audioTrack.id) {
             existing.audio.replaceTrack(audioTrack).catch(() => undefined);
           }
+          setupSenderE2ee(existing.audio);
         } else {
           try {
             existing.audio = pc.addTrack(audioTrack, screenStream);
+            setupSenderE2ee(existing.audio);
           } catch {
             // ignore share attach errors
           }
@@ -336,7 +536,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       }
       screenShareSendersRef.current.set(socketId, existing);
     },
-    []
+    [setupSenderE2ee]
   );
 
   const removeScreenShareTracks = useCallback(() => {
@@ -644,8 +844,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
             if (sender.track?.id !== track.id) {
               sender.replaceTrack(track);
             }
+            setupSenderE2ee(sender);
           } else {
-            pc.addTrack(track, stream);
+            const newSender = pc.addTrack(track, stream);
+            setupSenderE2ee(newSender);
           }
         });
         const screenSender = screenShareSendersRef.current.get(socketId)?.video;
@@ -657,8 +859,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
             if (videoSender.track?.id !== videoTrack.id) {
               videoSender.replaceTrack(videoTrack);
             }
+            setupSenderE2ee(videoSender);
           } else {
-            pc.addTrack(videoTrack, stream);
+            const newSender = pc.addTrack(videoTrack, stream);
+            setupSenderE2ee(newSender);
           }
         } else if (videoSender) {
           try {
@@ -669,18 +873,22 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         }
       });
     },
-    []
+    [setupSenderE2ee]
   );
 
   const attachLocalTracks = useCallback((pc: RTCPeerConnection) => {
     const stream = localStreamRef.current;
     if (!stream) return;
-    const existing = pc.getSenders().map((sender) => sender.track?.id).filter(Boolean);
     stream.getTracks().forEach((track) => {
-      if (existing.includes(track.id)) return;
-      pc.addTrack(track, stream);
+      const sender = pc.getSenders().find((candidate) => candidate.track?.id === track.id);
+      if (sender) {
+        setupSenderE2ee(sender);
+        return;
+      }
+      const newSender = pc.addTrack(track, stream);
+      setupSenderE2ee(newSender);
     });
-  }, []);
+  }, [setupSenderE2ee]);
 
   const closePeer = useCallback((socketId: string) => {
     const pc = peersRef.current.get(socketId);
@@ -729,7 +937,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     (socketId: string) => {
       const existing = peersRef.current.get(socketId);
       if (existing) return existing;
-      const pc = new RTCPeerConnection(RTC_CONFIG);
+      const rtcConfig = e2eeSupported
+        ? ({ ...RTC_CONFIG, encodedInsertableStreams: true } as RTCConfiguration)
+        : RTC_CONFIG;
+      const pc = new RTCPeerConnection(rtcConfig);
       peersRef.current.set(socketId, pc);
       const negotiationState = getPeerNegotiationState(socketId);
       pc.onnegotiationneeded = async () => {
@@ -758,6 +969,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         }
       };
       pc.ontrack = (event) => {
+        setupReceiverE2ee(event.receiver);
         const [stream] = event.streams;
         const nextStream = stream ?? new MediaStream([event.track]);
         const streamId = nextStream.id;
@@ -826,7 +1038,14 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       };
       return pc;
     },
-    [attachLocalTracks, attachScreenShareTrack, closePeer, getPeerNegotiationState]
+    [
+      attachLocalTracks,
+      attachScreenShareTrack,
+      closePeer,
+      e2eeSupported,
+      getPeerNegotiationState,
+      setupReceiverE2ee,
+    ]
   );
 
   useEffect(() => {
@@ -881,9 +1100,20 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         const res = await api.get(`/profiles?filters[user][id][$eq]=${user.id}&populate=avatar`);
         const entry = res.data?.data?.[0];
         const attrs = entry ? normalize(entry) : {};
+        let payload = null;
+        if (attrs.encryptedProfile) {
+          try {
+            payload = await decryptOwnProfilePayload(user.id, attrs.encryptedProfile);
+          } catch {
+            payload = null;
+          }
+        }
+        if (!payload) {
+          payload = buildProfilePayloadFromAttrs(attrs);
+        }
         const displayName =
-          attrs.firstName || attrs.lastName
-            ? `${attrs.firstName || ""} ${attrs.lastName || ""}`.trim()
+          payload.firstName || payload.lastName
+            ? `${payload.firstName || ""} ${payload.lastName || ""}`.trim()
             : user.username || user.email;
         const handle = attrs.handle || user.username || "";
         const avatarUrl = pickMediaUrl(attrs.avatar);
@@ -935,7 +1165,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     setScreenControlTarget(null);
     setScreenControlCursor(null);
     stopVideoProcessing();
-  }, [stopVideoProcessing, user?.id]);
+    resetE2eeState();
+  }, [resetE2eeState, stopVideoProcessing, user?.id]);
 
   useEffect(() => {
     if (!user?.id) {
@@ -1012,6 +1243,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           if (peersRef.current.has(participant.socketId)) return;
           createPeerConnection(participant.socketId);
         });
+        shareCallKeyWithParticipants(payload.roomId, payload.participants);
       }
     );
 
@@ -1029,6 +1261,38 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
             streamId: screenStream.id,
             to: payload.participant.socketId,
           });
+        }
+        if (payload?.roomId) {
+          void shareCallKeyWithParticipants(payload.roomId, [payload.participant]);
+        }
+      }
+    );
+
+    socket.on(
+      "call:e2ee:key",
+      async (payload: {
+        roomId: string;
+        fromUserId: number;
+        encryptedKey: string;
+        keyVersion?: number;
+      }) => {
+        if (!payload?.roomId || !payload?.encryptedKey || !payload?.fromUserId) return;
+        if (payload.roomId !== activeRoomRef.current) return;
+        if (!e2eeSupported) return;
+        try {
+          const cache = await fetchUserKeys([payload.fromUserId]);
+          const entry = cache.get(payload.fromUserId);
+          if (!entry?.publicKey) {
+            throw new Error("Missing sender key");
+          }
+          const { privateKey } = await getOrCreateIdentityKeyPair();
+          const senderPublicKey = await importPublicKey(entry.publicKey);
+          const sharedKey = await deriveSharedKey(privateKey, senderPublicKey);
+          const callKey = await decryptWrappedKey(sharedKey, payload.encryptedKey);
+          callKeyRef.current = callKey;
+          callKeyRoomRef.current = payload.roomId;
+        } catch {
+          setError("Unable to enable call encryption.");
         }
       }
     );
@@ -1283,7 +1547,16 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       socketRef.current = null;
       setOnlineUserIds(new Set());
     };
-  }, [closePeer, createPeerConnection, getPeerNegotiationState, user?.email, user?.id, user?.username]);
+  }, [
+    closePeer,
+    createPeerConnection,
+    e2eeSupported,
+    getPeerNegotiationState,
+    shareCallKeyWithParticipants,
+    user?.email,
+    user?.id,
+    user?.username,
+  ]);
 
   const ensureMedia = useCallback(
     async ({ audio, video }: { audio?: boolean; video?: boolean }) => {
@@ -1420,8 +1693,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     stopVideoProcessing();
     setLocalStream(null);
     localStreamRef.current = null;
+    resetE2eeState();
     resetCallState();
-  }, [closePeer, resetCallState, stopScreenShare, stopVideoProcessing]);
+  }, [closePeer, resetCallState, resetE2eeState, stopScreenShare, stopVideoProcessing]);
 
   cleanupCallRef.current = cleanupCall;
 
@@ -1446,8 +1720,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     }
     stopScreenShare({ notify: false });
     stopVideoProcessing();
+    resetE2eeState();
     resetCallState();
-  }, [resetCallState, status, stopScreenShare, stopVideoProcessing]);
+  }, [resetCallState, resetE2eeState, status, stopScreenShare, stopVideoProcessing]);
 
   const setSelectedInvitees = useCallback((invitees: VideoCallInvitee[]) => {
     setSelectedInviteesState(invitees);
@@ -1455,6 +1730,12 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
 
   const startCall = useCallback(async () => {
     if (!socketRef.current || !user?.id) return;
+    if (!e2eeSupported) {
+      setError("End-to-end encrypted calls require Chrome or Edge.");
+      setStatus("setup");
+      setIsOpen(true);
+      return;
+    }
     if (selectedInvitees.length > MAX_VIDEO_PARTICIPANTS - 1) {
       setError(`Max ${MAX_VIDEO_PARTICIPANTS} participants per call.`);
       return;
@@ -1463,10 +1744,21 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     setStatus("connecting");
     setIsOpen(true);
     const roomId = createRoomId();
+    resetE2eeState();
+    isCallHostRef.current = true;
+    callKeyRoomRef.current = roomId;
+    try {
+      callKeyRef.current = await generateCallKey();
+    } catch {
+      setError("Unable to enable call encryption.");
+      setStatus("setup");
+      return;
+    }
     setActiveRoomId(roomId);
     try {
       await ensureCallMedia();
     } catch {
+      resetE2eeState();
       setStatus("setup");
       return;
     }
@@ -1475,23 +1767,30 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       roomId,
       invitees: selectedInvitees.map((invitee) => invitee.userId),
     });
-  }, [ensureCallMedia, selectedInvitees, user?.id]);
+  }, [e2eeSupported, ensureCallMedia, resetE2eeState, selectedInvitees, user?.id]);
 
   const acceptCall = useCallback(async () => {
     if (!socketRef.current || !incomingCall) return;
+    if (!e2eeSupported) {
+      setError("End-to-end encrypted calls require Chrome or Edge.");
+      return;
+    }
+    resetE2eeState();
+    callKeyRoomRef.current = incomingCall.roomId;
     setStatus("connecting");
     setActiveRoomId(incomingCall.roomId);
     setError(null);
     try {
       await ensureCallMedia();
     } catch {
+      resetE2eeState();
       setStatus("idle");
       setIsOpen(false);
       return;
     }
     socketRef.current.emit("call:join", { roomId: incomingCall.roomId });
     setIncomingCall(null);
-  }, [ensureCallMedia, incomingCall]);
+  }, [e2eeSupported, ensureCallMedia, incomingCall, resetE2eeState]);
 
   const declineCall = useCallback(() => {
     if (!socketRef.current || !incomingCall) return;

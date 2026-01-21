@@ -3,6 +3,11 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import api from "../api/strapi";
 import { useNotifications, type FriendRequestPreview } from "../hooks/useNotifications";
+import {
+  buildProfilePayloadFromAttrs,
+  decryptOwnProfilePayload,
+  type ProfilePayload,
+} from "../utils/profile-e2ee";
 import "../css/sidebar.css";
 
 type ProfileSummary = {
@@ -61,21 +66,32 @@ export default function Sidebar({ active }: SidebarProps) {
     const load = async () => {
       if (!user) return;
       try {
-        const res = await api.get(`/profiles?filters[user][id][$eq]=${user.id}&populate=avatar`);
-        const entry = res.data?.data?.[0];
+        const res = await api.get("/profiles/me?populate=avatar");
+        const entry = res.data?.data;
         if (!entry) return;
         const attrs = normalize(entry);
+        let payload: ProfilePayload | null = null;
+        if (attrs.encryptedProfile) {
+          try {
+            payload = await decryptOwnProfilePayload(user.id, attrs.encryptedProfile);
+          } catch {
+            payload = null;
+          }
+        }
+        if (!payload) {
+          payload = buildProfilePayloadFromAttrs(attrs);
+        }
         const displayName =
-          attrs.firstName || attrs.lastName
-            ? `${attrs.firstName || ""} ${attrs.lastName || ""}`.trim()
-            : attrs.handle || attrs.username || user.username;
+          payload.firstName || payload.lastName
+            ? `${payload.firstName || ""} ${payload.lastName || ""}`.trim()
+            : attrs.handle || user.username;
         setProfileSummary({
           displayName,
           handle: attrs.handle || user.username,
           avatarUrl: pickMediaUrl(attrs.avatar),
-          age: attrs.age || "",
-          hobbies: attrs.hobbies || "",
-          bio: attrs.bio || "",
+          age: payload.age || "",
+          hobbies: payload.hobbies || "",
+          bio: payload.bio || "",
         });
       } catch {
         // ignore sidebar profile errors

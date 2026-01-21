@@ -1,0 +1,256 @@
+import api from "../api/strapi";
+import {
+  decryptJson,
+  decryptWrappedKey,
+  deriveSharedKey,
+  encryptJson,
+  encryptKeyForRecipient,
+  exportPublicKey,
+  getOrCreateIdentityKeyPair,
+  getOrCreateProfileKey,
+  importPublicKey,
+} from "./crypto";
+
+export type ProfilePayload = {
+  firstName?: string;
+  lastName?: string;
+  age?: string;
+  birthday?: string;
+  gender?: string;
+  religion?: string;
+  country?: string;
+  countryCode?: string;
+  state?: string;
+  stateCode?: string;
+  city?: string;
+  hobbies?: string;
+  occupation?: string;
+  bio?: string;
+  phone?: string;
+  backgrounds?: Record<string, { color?: string; image?: string }>;
+  intent?: string;
+  onboardingComplete?: boolean;
+};
+
+export const PROFILE_PII_CLEAR_FIELDS = {
+  firstName: null,
+  lastName: null,
+  age: null,
+  birthday: null,
+  gender: null,
+  religion: null,
+  country: null,
+  countryCode: null,
+  state: null,
+  stateCode: null,
+  city: null,
+  hobbies: null,
+  occupation: null,
+  bio: null,
+  phone: null,
+  backgrounds: null,
+  intent: null,
+  onboardingComplete: null,
+} as const;
+
+type UserKeyEntry = {
+  ownerId: number;
+  publicKey: string;
+  keyVersion?: number;
+};
+
+const userKeyCache = new Map<number, UserKeyEntry>();
+const profileKeyCache = new Map<number, CryptoKey>();
+
+const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
+const getEntity = (entry: any) => entry?.data ?? entry ?? null;
+const getEntityId = (entry: any) => {
+  const data = getEntity(entry);
+  const rawId = data?.id ?? (typeof data === "number" ? data : data?.attributes?.id);
+  const num = Number(rawId);
+  return Number.isFinite(num) ? num : null;
+};
+
+export const buildProfilePayloadFromAttrs = (attrs: any): ProfilePayload => ({
+  firstName: attrs?.firstName || "",
+  lastName: attrs?.lastName || "",
+  age: attrs?.age || "",
+  birthday: attrs?.birthday || "",
+  gender: attrs?.gender || "",
+  religion: attrs?.religion || "",
+  country: attrs?.country || "",
+  countryCode: attrs?.countryCode || "",
+  state: attrs?.state || "",
+  stateCode: attrs?.stateCode || "",
+  city: attrs?.city || "",
+  hobbies: attrs?.hobbies || "",
+  occupation: attrs?.occupation || "",
+  bio: attrs?.bio || "",
+  phone: attrs?.phone || "",
+  backgrounds: attrs?.backgrounds || undefined,
+  intent: attrs?.intent || undefined,
+  onboardingComplete:
+    typeof attrs?.onboardingComplete === "boolean" ? attrs.onboardingComplete : undefined,
+});
+
+export const ensureUserKeyOnServer = async () => {
+  const { publicKey } = await getOrCreateIdentityKeyPair();
+  const publicKeyText = await exportPublicKey(publicKey);
+  try {
+    await api.put("/user-keys/me", {
+      data: {
+        publicKey: publicKeyText,
+        keyVersion: 1,
+      },
+    });
+  } catch (error) {
+    console.warn("Unable to sync public key to server:", error);
+  }
+  return publicKeyText;
+};
+
+export const fetchUserKeys = async (userIds: number[]) => {
+  const missing = userIds.filter((id) => !userKeyCache.has(id));
+  if (!missing.length) {
+    return userKeyCache;
+  }
+
+  const filters = missing
+    .map((id, index) => `filters[owner][id][$in][${index}]=${id}`)
+    .join("&");
+  try {
+    const res = await api.get(
+      `/user-keys?${filters}&populate=owner&pagination[pageSize]=${missing.length}`
+    );
+    const rows = res.data?.data ?? [];
+    rows.forEach((row: any) => {
+      const attrs = normalize(row);
+      const ownerId = getEntityId(attrs.owner);
+      if (!ownerId || !attrs.publicKey) return;
+      userKeyCache.set(ownerId, {
+        ownerId,
+        publicKey: attrs.publicKey,
+        keyVersion: Number(attrs.keyVersion) || 1,
+      });
+    });
+  } catch (error) {
+    console.warn("Unable to load user public keys:", error);
+  }
+  return userKeyCache;
+};
+
+export const getOrCreateSelfProfileKey = async (userId: number) => {
+  const cached = profileKeyCache.get(userId);
+  if (cached) return cached;
+  const key = await getOrCreateProfileKey(userId);
+  profileKeyCache.set(userId, key);
+  return key;
+};
+
+export const encryptProfilePayload = async (userId: number, payload: ProfilePayload) => {
+  const key = await getOrCreateSelfProfileKey(userId);
+  return encryptJson(key, payload);
+};
+
+export const decryptOwnProfilePayload = async <T = ProfilePayload>(
+  userId: number,
+  encryptedPayload: string
+) => {
+  const key = await getOrCreateSelfProfileKey(userId);
+  return decryptJson<T>(key, encryptedPayload);
+};
+
+export const ensureProfileKeyShares = async (
+  ownerId: number,
+  friendIds: number[]
+) => {
+  if (!friendIds.length) return;
+  await fetchUserKeys(friendIds);
+  const { privateKey } = await getOrCreateIdentityKeyPair();
+  const profileKey = await getOrCreateSelfProfileKey(ownerId);
+
+  const existingShares = new Set<number>();
+  try {
+    const res = await api.get("/profile-key-shares", {
+      params: { ownerId },
+    });
+    (res.data?.data ?? []).forEach((entry: any) => {
+      const attrs = normalize(entry);
+      const recipientId = getEntityId(attrs.recipient);
+      if (recipientId) existingShares.add(recipientId);
+    });
+  } catch (error) {
+    console.warn("Unable to check existing key shares:", error);
+  }
+
+  await Promise.all(
+    friendIds.map(async (friendId) => {
+      if (existingShares.has(friendId)) return;
+      const friendKey = userKeyCache.get(friendId);
+      if (!friendKey?.publicKey) return;
+      const friendPublicKey = await importPublicKey(friendKey.publicKey);
+      const sharedKey = await deriveSharedKey(privateKey, friendPublicKey);
+      const encryptedKey = await encryptKeyForRecipient(sharedKey, profileKey);
+      try {
+        await api.post("/profile-key-shares", {
+          data: {
+            recipient: friendId,
+            encryptedKey,
+            keyVersion: 1,
+          },
+        });
+      } catch (error) {
+        console.warn("Unable to share profile key:", error);
+      }
+    })
+  );
+};
+
+export const getFriendProfileKey = async (
+  ownerId: number,
+  viewerId: number
+) => {
+  const cached = profileKeyCache.get(ownerId);
+  if (cached) return cached;
+
+  await fetchUserKeys([ownerId]);
+  const ownerKey = userKeyCache.get(ownerId);
+  if (!ownerKey?.publicKey) {
+    throw new Error("Missing owner public key");
+  }
+
+  let sharePayload: string | null = null;
+  try {
+    const res = await api.get("/profile-key-shares", {
+      params: { ownerId, recipientId: viewerId },
+    });
+    const entries = res.data?.data ?? [];
+    const entry = entries[0];
+    if (entry) {
+      const attrs = normalize(entry);
+      sharePayload = attrs.encryptedKey || null;
+    }
+  } catch (error) {
+    console.warn("Unable to load profile key share:", error);
+  }
+
+  if (!sharePayload) {
+    throw new Error("Missing profile key share");
+  }
+
+  const { privateKey } = await getOrCreateIdentityKeyPair();
+  const ownerPublicKey = await importPublicKey(ownerKey.publicKey);
+  const sharedKey = await deriveSharedKey(privateKey, ownerPublicKey);
+  const profileKey = await decryptWrappedKey(sharedKey, sharePayload);
+  profileKeyCache.set(ownerId, profileKey);
+  return profileKey;
+};
+
+export const decryptFriendProfilePayload = async <T = ProfilePayload>(
+  ownerId: number,
+  viewerId: number,
+  encryptedPayload: string
+) => {
+  const key = await getFriendProfileKey(ownerId, viewerId);
+  return decryptJson<T>(key, encryptedPayload);
+};
