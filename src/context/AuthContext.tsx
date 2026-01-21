@@ -56,7 +56,7 @@ interface AuthContextType {
   refreshProfile: () => Promise<void>;
   refreshKeyBackup: () => Promise<void>;
   createKeyBackup: (passphrase: string) => Promise<void>;
-  restoreKeyBackup: (passphrase: string) => Promise<void>;
+  restoreKeyBackup: (passphrase: string) => Promise<boolean>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -194,7 +194,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   const restoreKeyBackupWithPassphrase = async (passphrase: string) => {
-    if (!user) return;
+    if (!user) return false;
     setKeyBackupLoading(true);
     setKeyBackupError(null);
     try {
@@ -202,9 +202,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       await ensureUserKeyOnServer();
       await refreshProfile();
       setKeyBackupStatus("ready");
+      return true;
     } catch (error) {
       console.warn("Unable to restore key backup:", error);
       setKeyBackupError("Unable to restore key backup. Check your passphrase.");
+      return false;
     } finally {
       setKeyBackupLoading(false);
     }
@@ -307,7 +309,7 @@ export const StaticAuthProvider = ({ children }: { children: React.ReactNode }) 
     refreshProfile: async () => undefined,
     refreshKeyBackup: async () => undefined,
     createKeyBackup: async () => undefined,
-    restoreKeyBackup: async () => undefined,
+    restoreKeyBackup: async () => false,
   };
   return <AuthContext.Provider value={emptyAuth}>{children}</AuthContext.Provider>;
 };

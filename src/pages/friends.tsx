@@ -96,6 +96,9 @@ const isYoutubeUrl = (value: string) => {
   }
 };
 
+const normalizeFriendSearch = (value: string) =>
+  value.trim().replace(/@+/g, "").replace(/\s+/g, " ").toLowerCase();
+
 const LinkPreviewCard = ({
   preview,
   url,
@@ -441,13 +444,15 @@ export default function Friends() {
   }, [presenceIds, setPresenceTargets]);
 
   const filteredFriends = useMemo(() => {
-    const q = friendQuery.trim().toLowerCase();
+    const q = normalizeFriendSearch(friendQuery);
     if (!q) return profiles;
     return profiles.filter((friend) => {
-      const handle = (friend.handle || friend.username || "").toLowerCase();
-      const first = (friend.firstName || "").toLowerCase();
-      const last = (friend.lastName || "").toLowerCase();
-      const full = `${first} ${last}`.trim();
+      const handle = normalizeFriendSearch(friend.handle || friend.username || "");
+      const first = normalizeFriendSearch(friend.firstName || "");
+      const last = normalizeFriendSearch(friend.lastName || "");
+      const full = normalizeFriendSearch(
+        `${friend.firstName || ""} ${friend.lastName || ""}`
+      );
       return (
         handle.includes(q) ||
         first.includes(q) ||

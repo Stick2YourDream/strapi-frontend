@@ -76,6 +76,15 @@ const EMOJIS = [
   "\u{1F499}",
 ];
 
+const REACTION_EMOJIS = [
+  "\u{1F44D}",
+  "\u2764",
+  "\u{1F602}",
+  "\u{1F525}",
+  "\u{1F44F}",
+  "\u{1F62E}",
+];
+
 const GIFS = [
   {
     label: "Hype",
@@ -153,18 +162,16 @@ const GIFS = [
 
 const BACKGROUND_OPTIONS = [
   { id: "none", label: "None" },
-  { id: "studio", label: "Studio" },
-  { id: "loft", label: "Loft" },
-  { id: "gallery", label: "Gallery" },
-  { id: "library", label: "Library" },
-  { id: "cafe", label: "Cafe" },
-  { id: "garden", label: "Garden" },
-  { id: "coast", label: "Coast" },
-  { id: "sunset", label: "Sunset" },
-  { id: "aurora", label: "Aurora" },
-  { id: "mint", label: "Mint" },
-  { id: "ember", label: "Ember" },
-  { id: "night", label: "Night City" },
+  { id: "backdrop1", label: "Backdrop 1" },
+  { id: "backdrop2", label: "Backdrop 2" },
+  { id: "backdrop3", label: "Backdrop 3" },
+  { id: "backdrop4", label: "Backdrop 4" },
+  { id: "backdrop5", label: "Backdrop 5" },
+  { id: "backdrop6", label: "Backdrop 6" },
+  { id: "backdrop7", label: "Backdrop 7" },
+  { id: "backdrop8", label: "Backdrop 8" },
+  { id: "backdrop9", label: "Backdrop 9" },
+  { id: "backdrop10", label: "Backdrop 10" },
 ];
 
 const FILTER_OPTIONS = [
@@ -293,6 +300,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     status,
     selectedInvitees,
     incomingCall,
+    isCallHost,
     localStream,
     localScreenStream,
     remoteStreams,
@@ -654,6 +662,10 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const handleGifPick = (gifUrl: string) => {
     sendMessage(gifUrl, "gif", gifUrl);
     setShowGifPicker(false);
+  };
+
+  const handleReaction = (emoji: string) => {
+    sendMessage(emoji, "emoji");
   };
 
   const sendControlPointer = (
@@ -1353,10 +1365,14 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   className="video-call-end-mobile"
                   onClick={() => {
                     void playEndCallTone();
-                    endCall();
+                    if (isCallHost) {
+                      endCall();
+                    } else {
+                      leaveCall();
+                    }
                   }}
                 >
-                  End call
+                  {isCallHost ? "End call" : "Leave call"}
                 </button>
               </div>
               {showEffectsPanel && (
@@ -1456,16 +1472,18 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                 <button type="button" className="video-control ghost" onClick={leaveCall}>
                   Leave call
                 </button>
-                <button
-                  type="button"
-                  className="video-control end"
-                  onClick={() => {
-                    void playEndCallTone();
-                    endCall();
-                  }}
-                >
-                  End call
-                </button>
+                {isCallHost && (
+                  <button
+                    type="button"
+                    className="video-control end"
+                    onClick={() => {
+                      void playEndCallTone();
+                      endCall();
+                    }}
+                  >
+                    End call
+                  </button>
+                )}
               </div>
             </>
           )}
@@ -1499,7 +1517,12 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
               <p className="status">Messages appear here during the call.</p>
             ) : (
               messages.map((message) => (
-                <div key={message.id} className="video-chat-message">
+                <div
+                  key={message.id}
+                  className={`video-chat-message${message.kind === "emoji" ? " is-emoji" : ""}${
+                    message.kind === "gif" ? " is-gif" : ""
+                  }`}
+                >
                   <div className="video-chat-meta">
                     <span>{message.from.displayName || "Friend"}</span>
                     <span>
@@ -1509,7 +1532,11 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                       })}
                     </span>
                   </div>
-                  <div className="video-chat-body">
+                  <div
+                    className={`video-chat-body${
+                      message.kind === "emoji" ? " is-emoji" : ""
+                    }`}
+                  >
                     {message.kind === "gif" && message.gifUrl ? (
                       <img src={message.gifUrl} alt="GIF" loading="lazy" />
                     ) : (
@@ -1544,6 +1571,20 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
               >
                 GIF
               </button>
+            </div>
+            <div className="video-chat-reactions">
+              {REACTION_EMOJIS.map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  className="video-chat-reaction"
+                  onClick={() => handleReaction(emoji)}
+                  aria-label={`React with ${emoji}`}
+                  disabled={!showCallUi}
+                >
+                  {emoji}
+                </button>
+              ))}
             </div>
             {showEmojiPicker && (
               <div className="video-chat-picker">

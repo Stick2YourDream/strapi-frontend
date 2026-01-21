@@ -1,4 +1,4 @@
-const VERSION = "v1";
+const VERSION = "v2";
 const APP_SHELL_CACHE = `ysp-app-shell-${VERSION}`;
 const RUNTIME_CACHE = `ysp-runtime-${VERSION}`;
 const PRECACHE_URLS = [

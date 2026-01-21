@@ -316,19 +316,6 @@ export default function Me() {
     const attrs = normalize(getEntity(entry));
     return attrs?.username || attrs?.email || fallback;
   };
-  const filterLocationOptions = (
-    options: LocationOption[],
-    term: string,
-    limit = 200
-  ) => {
-    if (!options.length) return [];
-    const query = term.trim().toLowerCase();
-    const filtered = query
-      ? options.filter((option) => option.name.toLowerCase().includes(query))
-      : options;
-    return filtered.slice(0, limit);
-  };
-
   const currentBackground = preferences.backgrounds.dashboard;
   const appearanceColor = currentBackground.color || "#0b0d14";
 
@@ -436,7 +423,7 @@ export default function Me() {
   };
 
   const handleCountryChange = (value: string) => {
-    const match = matchByName(countryOptions, value);
+    const match = value ? matchByName(countryOptions, value) : undefined;
     setProfile((prev) => ({
       ...prev,
       country: value,
@@ -450,7 +437,7 @@ export default function Me() {
   };
 
   const handleStateChange = (value: string) => {
-    const match = matchByName(stateOptions, value);
+    const match = value ? matchByName(stateOptions, value) : undefined;
     setProfile((prev) => ({
       ...prev,
       state: value,
@@ -906,19 +893,6 @@ export default function Me() {
     });
     return matches.slice(0, 50);
   }, [hobbyInput, hobbyList]);
-
-  const countrySuggestions = useMemo(
-    () => filterLocationOptions(countryOptions, profile.country),
-    [countryOptions, profile.country]
-  );
-  const stateSuggestions = useMemo(
-    () => filterLocationOptions(stateOptions, profile.state),
-    [stateOptions, profile.state]
-  );
-  const citySuggestions = useMemo(
-    () => filterLocationOptions(cityOptions, profile.city),
-    [cityOptions, profile.city]
-  );
 
   const onboardingSteps = ["Basics", "Beliefs & Interests", "Location", "About you"];
   const hasBasics =
@@ -1533,58 +1507,62 @@ export default function Me() {
           <div className="onboarding-fields">
             <label className="profile-field">
               <span className="profile-field-label">Country</span>
-              <input
+              <select
                 className="auth-input"
-                list="country-options-onboarding"
-                placeholder="Search country"
                 value={profile.country}
                 onChange={(e) => handleCountryChange(e.target.value)}
-              />
-              <datalist id="country-options-onboarding">
-                {countrySuggestions.map((country) => (
-                  <option key={country.code || country.name} value={country.name} />
+              >
+                <option value="">Select country</option>
+                {countryOptions.map((country) => (
+                  <option key={country.code || country.name} value={country.name}>
+                    {country.name}
+                  </option>
                 ))}
-              </datalist>
+              </select>
             </label>
             <label className="profile-field">
               <span className="profile-field-label">{stateLabel}</span>
-              <input
+              <select
                 className="auth-input"
-                list="state-options-onboarding"
-                placeholder={
-                  stateOptions.length ? `Search ${stateLabel.toLowerCase()}` : "Select country first"
-                }
                 value={profile.state}
                 onChange={(e) => handleStateChange(e.target.value)}
                 disabled={!profile.countryCode || !stateOptions.length}
-              />
-              <datalist id="state-options-onboarding">
-                {stateSuggestions.map((state) => (
-                  <option key={state.code || state.name} value={state.name} />
+              >
+                <option value="">
+                  {!profile.countryCode
+                    ? "Select country first"
+                    : needsState
+                    ? `Select ${stateLabel.toLowerCase()}`
+                    : "No regions"}
+                </option>
+                {stateOptions.map((state) => (
+                  <option key={state.code || state.name} value={state.name}>
+                    {state.name}
+                  </option>
                 ))}
-              </datalist>
+              </select>
             </label>
             <label className="profile-field">
               <span className="profile-field-label">City</span>
-              <input
+              <select
                 className="auth-input"
-                list="city-options-onboarding"
-                placeholder={
-                  !profile.countryCode
-                    ? "Select country first"
-                    : stateOptions.length && !profile.stateCode
-                    ? `Select ${stateLabel.toLowerCase()} first`
-                    : "Search city"
-                }
                 value={profile.city}
                 onChange={(e) => handleCityChange(e.target.value)}
                 disabled={!profile.countryCode || (stateOptions.length > 0 && !profile.stateCode)}
-              />
-              <datalist id="city-options-onboarding">
-                {citySuggestions.map((city) => (
-                  <option key={city.name} value={city.name} />
+              >
+                <option value="">
+                  {!profile.countryCode
+                    ? "Select country first"
+                    : needsState && !profile.stateCode
+                    ? `Select ${stateLabel.toLowerCase()} first`
+                    : "Select city"}
+                </option>
+                {cityOptions.map((city) => (
+                  <option key={city.code || city.name} value={city.name}>
+                    {city.name}
+                  </option>
                 ))}
-              </datalist>
+              </select>
             </label>
             {locationError && <p className="profile-location-error">{locationError}</p>}
           </div>
@@ -2193,58 +2171,64 @@ export default function Me() {
 
                   <label className="profile-field">
                     <span className="profile-field-label">Country</span>
-                    <input
+                    <select
                       className="auth-input"
-                      list="country-options"
-                      placeholder="Search country"
                       value={profile.country}
                       onChange={(e) => handleCountryChange(e.target.value)}
-                    />
-                    <datalist id="country-options">
-                      {countrySuggestions.map((country) => (
-                        <option key={country.code || country.name} value={country.name} />
+                    >
+                      <option value="">Select country</option>
+                      {countryOptions.map((country) => (
+                        <option key={country.code || country.name} value={country.name}>
+                          {country.name}
+                        </option>
                       ))}
-                    </datalist>
+                    </select>
                   </label>
 
                   <label className="profile-field">
                     <span className="profile-field-label">{stateLabel}</span>
-                    <input
+                    <select
                       className="auth-input"
-                      list="state-options"
-                      placeholder={stateOptions.length ? `Search ${stateLabel.toLowerCase()}` : "Select country first"}
                       value={profile.state}
                       onChange={(e) => handleStateChange(e.target.value)}
                       disabled={!profile.countryCode || !stateOptions.length}
-                    />
-                    <datalist id="state-options">
-                      {stateSuggestions.map((state) => (
-                        <option key={state.code || state.name} value={state.name} />
+                    >
+                      <option value="">
+                        {!profile.countryCode
+                          ? "Select country first"
+                          : needsState
+                          ? `Select ${stateLabel.toLowerCase()}`
+                          : "No regions"}
+                      </option>
+                      {stateOptions.map((state) => (
+                        <option key={state.code || state.name} value={state.name}>
+                          {state.name}
+                        </option>
                       ))}
-                    </datalist>
+                    </select>
                   </label>
 
                   <label className="profile-field">
                     <span className="profile-field-label">City</span>
-                    <input
+                    <select
                       className="auth-input"
-                      list="city-options"
-                      placeholder={
-                        !profile.countryCode
-                          ? "Select country first"
-                          : stateOptions.length && !profile.stateCode
-                          ? `Select ${stateLabel.toLowerCase()} first`
-                          : "Search city"
-                      }
                       value={profile.city}
                       onChange={(e) => handleCityChange(e.target.value)}
                       disabled={!profile.countryCode || (stateOptions.length > 0 && !profile.stateCode)}
-                    />
-                    <datalist id="city-options">
-                      {citySuggestions.map((city) => (
-                        <option key={city.name} value={city.name} />
+                    >
+                      <option value="">
+                        {!profile.countryCode
+                          ? "Select country first"
+                          : needsState && !profile.stateCode
+                          ? `Select ${stateLabel.toLowerCase()} first`
+                          : "Select city"}
+                      </option>
+                      {cityOptions.map((city) => (
+                        <option key={city.code || city.name} value={city.name}>
+                          {city.name}
+                        </option>
                       ))}
-                    </datalist>
+                    </select>
                   </label>
 
                   {locationError && (

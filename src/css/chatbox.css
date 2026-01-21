@@ -836,6 +836,46 @@
     rgba(20, 10, 6, 0.9);
 }
 
+.video-tile.has-backdrop-backdrop1 {
+  background: url("/backdrops/backdrop1.jpg") center / cover no-repeat;
+}
+
+.video-tile.has-backdrop-backdrop2 {
+  background: url("/backdrops/backdrop2.jpg") center / cover no-repeat;
+}
+
+.video-tile.has-backdrop-backdrop3 {
+  background: url("/backdrops/backdrop3.jpg") center / cover no-repeat;
+}
+
+.video-tile.has-backdrop-backdrop4 {
+  background: url("/backdrops/backdrop4.jpg") center / cover no-repeat;
+}
+
+.video-tile.has-backdrop-backdrop5 {
+  background: url("/backdrops/backdrop5.jpg") center / cover no-repeat;
+}
+
+.video-tile.has-backdrop-backdrop6 {
+  background: url("/backdrops/backdrop6.jpg") center / cover no-repeat;
+}
+
+.video-tile.has-backdrop-backdrop7 {
+  background: url("/backdrops/backdrop7.jpg") center / cover no-repeat;
+}
+
+.video-tile.has-backdrop-backdrop8 {
+  background: url("/backdrops/backdrop8.jpeg") center / cover no-repeat;
+}
+
+.video-tile.has-backdrop-backdrop9 {
+  background: url("/backdrops/backdrop9.jpeg") center / cover no-repeat;
+}
+
+.video-tile.has-backdrop-backdrop10 {
+  background: url("/backdrops/backdrop10.jpg") center / cover no-repeat;
+}
+
 .video-tile.has-backdrop-loft {
   background: linear-gradient(
       180deg,
@@ -1213,12 +1253,11 @@
 }
 
 .video-chat-message {
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(15, 23, 42, 0.55);
-  padding: 8px 10px;
   display: grid;
-  gap: 6px;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: transparent;
 }
 
 .video-chat-meta {
@@ -1231,6 +1270,12 @@
 .video-chat-body {
   font-size: 0.85rem;
   color: #e2e8f0;
+  line-height: 1.45;
+}
+
+.video-chat-body.is-emoji {
+  font-size: 1.35rem;
+  line-height: 1.1;
 }
 
 .video-chat-body img {
@@ -1249,6 +1294,27 @@
 .video-chat-tools {
   display: flex;
   gap: 8px;
+}
+
+.video-chat-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.video-chat-reaction {
+  border: none;
+  background: rgba(255, 255, 255, 0.04);
+  color: #e2e8f0;
+  padding: 4px 6px;
+  border-radius: 999px;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.video-chat-reaction:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .video-chat-tool {

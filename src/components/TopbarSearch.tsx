@@ -16,6 +16,18 @@ type DirectoryProfile = {
   lastName?: string;
   username?: string;
   avatarUrl?: string;
+  country?: string;
+  state?: string;
+  city?: string;
+  hobbies?: string;
+  hobbyTags?: string[];
+  hobbyKeys?: string[];
+};
+
+type LocationOption = {
+  name: string;
+  code: string;
+  countryCode?: string;
 };
 
 type FriendRelation = {
@@ -59,8 +71,30 @@ const pickMediaUrl = (mediaField: any): string | undefined => {
   return url.startsWith("/") ? `${apiBase}${url}` : url;
 };
 
+const normalizeText = (value: string) => value.trim().toLowerCase();
+const normalizeQuery = (value: string) =>
+  normalizeText(value).replace(/@+/g, "").replace(/\s+/g, " ").trim();
+const normalizeLocation = (value?: string) => normalizeText(value || "");
+const matchByName = (list: LocationOption[], value: string) =>
+  list.find((item) => normalizeLocation(item.name) === normalizeLocation(value));
+const normalizeHobby = (value: string) => value.trim().replace(/\s+/g, " ");
+const hobbyKey = (value: string) => normalizeHobby(value).toLowerCase();
+const parseHobbyList = (value?: string) => {
+  const seen = new Set<string>();
+  return (value || "")
+    .split(/[,;\n]+/)
+    .map((entry) => normalizeHobby(entry))
+    .filter((entry) => {
+      if (!entry) return false;
+      const key = hobbyKey(entry);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+};
+
 export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const [query, setQuery] = useState(value ?? "");
   const [profiles, setProfiles] = useState<DirectoryProfile[]>([]);
   const [relations, setRelations] = useState<FriendRelation[]>([]);
@@ -68,7 +102,20 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | string | null>(null);
+  const [countryFilter, setCountryFilter] = useState("");
+  const [countryCodeFilter, setCountryCodeFilter] = useState("");
+  const [stateFilter, setStateFilter] = useState("");
+  const [stateCodeFilter, setStateCodeFilter] = useState("");
+  const [cityFilter, setCityFilter] = useState("");
+  const [hobbyFilter, setHobbyFilter] = useState("");
+  const [similarOnly, setSimilarOnly] = useState(false);
+  const [countryOptions, setCountryOptions] = useState<LocationOption[]>([]);
+  const [stateOptions, setStateOptions] = useState<LocationOption[]>([]);
+  const [cityOptions, setCityOptions] = useState<LocationOption[]>([]);
+  const [locationError, setLocationError] = useState<string | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const rawQuery = value ?? query;
+  const trimmedQuery = rawQuery.trim();
 
   useEffect(() => {
     if (value === undefined) return;
@@ -130,17 +177,23 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
                 payload = null;
               }
             }
-            if (!payload && acceptedIds.has(profileUserId)) {
-              payload = buildProfilePayloadFromAttrs(attrs);
-            }
+            const fallbackPayload = buildProfilePayloadFromAttrs(attrs);
+            const resolvedPayload = payload ?? fallbackPayload;
+            const hobbyTags = parseHobbyList(resolvedPayload.hobbies);
             return {
               id: p.id ?? attrs.documentId,
               userId: profileUserId,
               username: userAttrs?.username,
               handle: attrs.handle || userAttrs?.username || `user-${p.id ?? attrs.documentId}`,
-              firstName: payload?.firstName || "",
-              lastName: payload?.lastName || "",
+              firstName: resolvedPayload.firstName || "",
+              lastName: resolvedPayload.lastName || "",
               avatarUrl: pickMediaUrl(attrs.avatar),
+              country: resolvedPayload.country || "",
+              state: resolvedPayload.state || "",
+              city: resolvedPayload.city || "",
+              hobbies: resolvedPayload.hobbies || "",
+              hobbyTags,
+              hobbyKeys: hobbyTags.map(hobbyKey),
             };
           })
         );
@@ -169,10 +222,138 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    const loadCountries = async () => {
+      try {
+        const res = await api.get("/locations/countries");
+        const list = (res.data?.data ?? []).map((country: any) => ({
+          name: country.name,
+          code: country.code || country.isoCode || "",
+        }));
+        if (active) {
+          setCountryOptions(list);
+          setLocationError(null);
+        }
+      } catch {
+        if (active) setLocationError("Unable to load country list.");
+      }
+    };
+    loadCountries();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!countryCodeFilter) {
+      setStateOptions([]);
+      setCityOptions([]);
+      return;
+    }
+    let active = true;
+    const loadStates = async () => {
+      try {
+        const res = await api.get("/locations/states", {
+          params: { country: countryCodeFilter },
+        });
+        const list = (res.data?.data ?? []).map((state: any) => ({
+          name: state.name,
+          code: state.code || state.isoCode || "",
+          countryCode: state.countryCode,
+        }));
+        if (active) {
+          setStateOptions(list);
+          setLocationError(null);
+        }
+      } catch {
+        if (active) setLocationError("Unable to load states or regions.");
+      }
+    };
+    loadStates();
+    return () => {
+      active = false;
+    };
+  }, [countryCodeFilter]);
+
+  useEffect(() => {
+    if (!countryCodeFilter) {
+      setCityOptions([]);
+      return;
+    }
+    const needsState = stateOptions.length > 0;
+    if (needsState && !stateCodeFilter) {
+      setCityOptions([]);
+      return;
+    }
+    let active = true;
+    const loadCities = async () => {
+      try {
+        const res = await api.get("/locations/cities", {
+          params: {
+            country: countryCodeFilter,
+            state: stateCodeFilter || undefined,
+          },
+        });
+        const list = (res.data?.data ?? []).map((city: any) => ({
+          name: city.name,
+          code: city.name,
+        }));
+        if (active) {
+          setCityOptions(list);
+          setLocationError(null);
+        }
+      } catch {
+        if (active) setLocationError("Unable to load cities.");
+      }
+    };
+    loadCities();
+    return () => {
+      active = false;
+    };
+  }, [countryCodeFilter, stateCodeFilter, stateOptions.length]);
+
+  useEffect(() => {
+    if (
+      !trimmedQuery &&
+      !similarOnly &&
+      !countryFilter &&
+      !stateFilter &&
+      !cityFilter &&
+      !hobbyFilter
+    ) {
+      return;
+    }
+    setOpen(true);
+  }, [trimmedQuery, similarOnly, countryFilter, stateFilter, cityFilter, hobbyFilter]);
+
   const updateQuery = (next: string) => {
     if (onChange) onChange(next);
     if (value === undefined) setQuery(next);
-    setOpen(Boolean(next.trim()));
+    setOpen(true);
+  };
+
+  const handleCountryFilterChange = (value: string) => {
+    const match = matchByName(countryOptions, value);
+    setCountryFilter(value);
+    setCountryCodeFilter(match?.code || "");
+    setStateFilter("");
+    setStateCodeFilter("");
+    setCityFilter("");
+    setStateOptions([]);
+    setCityOptions([]);
+  };
+
+  const handleStateFilterChange = (value: string) => {
+    const match = matchByName(stateOptions, value);
+    setStateFilter(value);
+    setStateCodeFilter(match?.code || "");
+    setCityFilter("");
+    setCityOptions([]);
+  };
+
+  const handleCityFilterChange = (value: string) => {
+    setCityFilter(value);
   };
 
   const relationStatusFor = (profileUserId?: number) => {
@@ -209,16 +390,46 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
     }
   };
 
-  const activeQuery = (value ?? query).trim().toLowerCase();
+  const activeQuery = normalizeQuery(rawQuery);
+  const manualFiltersEnabled = !similarOnly;
+  const normalizedCountry = manualFiltersEnabled ? normalizeLocation(countryFilter) : "";
+  const normalizedState = manualFiltersEnabled ? normalizeLocation(stateFilter) : "";
+  const normalizedCity = manualFiltersEnabled ? normalizeLocation(cityFilter) : "";
+  const hobbyFilterKeys = useMemo(
+    () => (manualFiltersEnabled ? parseHobbyList(hobbyFilter).map(hobbyKey) : []),
+    [hobbyFilter, manualFiltersEnabled]
+  );
+  const filtersActive =
+    Boolean(normalizedCountry) ||
+    Boolean(normalizedState) ||
+    Boolean(normalizedCity) ||
+    hobbyFilterKeys.length > 0 ||
+    similarOnly;
+  const userHobbyKeys = useMemo(
+    () => parseHobbyList(profile?.hobbies).map(hobbyKey),
+    [profile?.hobbies]
+  );
+  const userCountry = normalizeLocation(profile?.country);
+  const userState = normalizeLocation(profile?.state);
+  const userCity = normalizeLocation(profile?.city);
+  const hasUserHobbies = userHobbyKeys.length > 0;
+  const hasUserLocation = Boolean(userCountry);
+  const needsSimilarProfile = similarOnly && (!hasUserHobbies || !hasUserLocation);
+  const isIdleSearch = !activeQuery && !filtersActive;
+  const isAtQueryOnly = /^@+$/.test(trimmedQuery);
+  const stateLabel = countryCodeFilter === "US" ? "State" : "State/Province";
+  const needsState = stateOptions.length > 0;
   const results = useMemo(() => {
-    if (!activeQuery) return [];
+    if (!activeQuery && !filtersActive) return [];
+    const userHobbySet = new Set(userHobbyKeys);
     return profiles
       .filter((p) => p.userId && p.userId !== user?.id)
       .filter((p) => {
-        const handle = (p.handle || "").toLowerCase();
-        const username = (p.username || "").toLowerCase();
-        const first = (p.firstName || "").toLowerCase();
-        const last = (p.lastName || "").toLowerCase();
+        if (!activeQuery) return true;
+        const handle = normalizeQuery(p.handle || p.username || "");
+        const username = normalizeQuery(p.username || "");
+        const first = normalizeText(p.firstName || "");
+        const last = normalizeText(p.lastName || "");
         const full = `${first} ${last}`.trim();
         return (
           handle.includes(activeQuery) ||
@@ -228,8 +439,64 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
           full.includes(activeQuery)
         );
       })
+      .filter((p) => {
+        if (normalizedCountry && !normalizeLocation(p.country).includes(normalizedCountry)) {
+          return false;
+        }
+        if (normalizedState && !normalizeLocation(p.state).includes(normalizedState)) {
+          return false;
+        }
+        if (normalizedCity && !normalizeLocation(p.city).includes(normalizedCity)) {
+          return false;
+        }
+        return true;
+      })
+      .filter((p) => {
+        if (!hobbyFilterKeys.length) return true;
+        const profileHobbies = p.hobbyKeys || [];
+        if (!profileHobbies.length) return false;
+        return hobbyFilterKeys.some((filterKey) =>
+          profileHobbies.some((hobby) => hobby.includes(filterKey))
+        );
+      })
+      .filter((p) => {
+        if (!similarOnly) return true;
+        if (!hasUserHobbies || !hasUserLocation) return false;
+        const profileHobbies = p.hobbyKeys || [];
+        if (!profileHobbies.length) return false;
+        const sharesHobby = profileHobbies.some((hobby) => {
+          if (userHobbySet.has(hobby)) return true;
+          return userHobbyKeys.some(
+            (userHobby) => hobby.includes(userHobby) || userHobby.includes(hobby)
+          );
+        });
+        if (!sharesHobby) return false;
+        const profileCountry = normalizeLocation(p.country);
+        if (!profileCountry || profileCountry !== userCountry) return false;
+        const profileState = normalizeLocation(p.state);
+        const profileCity = normalizeLocation(p.city);
+        if (userState && profileState && profileState !== userState) return false;
+        if (userCity && profileCity && profileCity !== userCity) return false;
+        return true;
+      })
       .slice(0, 6);
-  }, [activeQuery, profiles, user?.id]);
+  }, [
+    activeQuery,
+    filtersActive,
+    profiles,
+    user?.id,
+    normalizedCountry,
+    normalizedState,
+    normalizedCity,
+    hobbyFilterKeys,
+    similarOnly,
+    hasUserHobbies,
+    hasUserLocation,
+    userHobbyKeys,
+    userCountry,
+    userState,
+    userCity,
+  ]);
 
   if (!user) return null;
 
@@ -239,24 +506,139 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
         <div className="topbar-search">
           <input
             type="text"
-            value={value ?? query}
+            value={rawQuery}
             onChange={(e) => updateQuery(e.target.value)}
-            onFocus={() => setOpen(Boolean((value ?? query).trim()))}
-            placeholder="Find you friends by Name or Handle"
+            onFocus={() => setOpen(true)}
+            placeholder="Find friends by @handle or name"
             aria-label="Search by handle or name"
           />
           {open && (
             <div className="topbar-results">
+              <div className="topbar-filters">
+                <div className="topbar-filter-header">Filters</div>
+                <div className="topbar-filter-grid">
+                  <label className="topbar-filter-field">
+                    <span>Country</span>
+                    <select
+                      value={countryFilter}
+                      onChange={(e) => handleCountryFilterChange(e.target.value)}
+                      disabled={similarOnly}
+                    >
+                      <option value="">Any country</option>
+                      {countryOptions.map((country) => (
+                        <option key={country.code || country.name} value={country.name}>
+                          {country.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="topbar-filter-field">
+                    <span>{stateLabel}</span>
+                    <select
+                      value={stateFilter}
+                      onChange={(e) => handleStateFilterChange(e.target.value)}
+                      disabled={similarOnly || !countryCodeFilter || !stateOptions.length}
+                    >
+                      <option value="">
+                        {!countryCodeFilter
+                          ? "Select country first"
+                          : needsState
+                          ? `Any ${stateLabel.toLowerCase()}`
+                          : "No regions"}
+                      </option>
+                      {stateOptions.map((state) => (
+                        <option key={state.code || state.name} value={state.name}>
+                          {state.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="topbar-filter-field">
+                    <span>City</span>
+                    <select
+                      value={cityFilter}
+                      onChange={(e) => handleCityFilterChange(e.target.value)}
+                      disabled={
+                        similarOnly ||
+                        !countryCodeFilter ||
+                        (needsState && !stateCodeFilter)
+                      }
+                    >
+                      <option value="">
+                        {!countryCodeFilter
+                          ? "Select country first"
+                          : needsState && !stateCodeFilter
+                          ? `Select ${stateLabel.toLowerCase()} first`
+                          : "Any city"}
+                      </option>
+                      {cityOptions.map((city) => (
+                        <option key={city.code || city.name} value={city.name}>
+                          {city.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="topbar-filter-field">
+                    <span>Hobbies</span>
+                    <input
+                      type="text"
+                      value={hobbyFilter}
+                      onChange={(e) => setHobbyFilter(e.target.value)}
+                      placeholder="Hobby keywords"
+                      disabled={similarOnly}
+                    />
+                  </label>
+                </div>
+                <label className="topbar-filter-toggle">
+                  <input
+                    type="checkbox"
+                    checked={similarOnly}
+                    onChange={(e) => setSimilarOnly(e.target.checked)}
+                  />
+                  Similar hobbies near me
+                </label>
+                {needsSimilarProfile && (
+                  <div className="topbar-filter-note">
+                    Add a country and at least one hobby in your profile to use suggestions.
+                  </div>
+                )}
+                {locationError && (
+                  <div className="topbar-filter-note">{locationError}</div>
+                )}
+              </div>
               {loading && <div className="topbar-status">Loading directory...</div>}
               {error && <div className="topbar-status">{error}</div>}
-              {!loading && !error && results.length === 0 && (
-                <div className="topbar-status">No matches found.</div>
+              {!loading && !error && needsSimilarProfile && (
+                <div className="topbar-status">Suggestions need your location and hobbies.</div>
+              )}
+              {!loading && !error && !needsSimilarProfile && isAtQueryOnly && (
+                <div className="topbar-status">Keep typing after @ to search handles.</div>
+              )}
+              {!loading && !error && !needsSimilarProfile && isIdleSearch && (
+                <div className="topbar-status">
+                  Start typing or use filters to search for friends.
+                </div>
+              )}
+              {!loading &&
+                !error &&
+                !needsSimilarProfile &&
+                !isIdleSearch &&
+                results.length === 0 && (
+                  <div className="topbar-status">No matches found.</div>
+                )}
+              {!loading && !error && similarOnly && !activeQuery && results.length > 0 && (
+                <div className="topbar-section-title">Suggested near you</div>
               )}
               {!loading &&
                 !error &&
                 results.map((profile) => {
                   const status = relationStatusFor(profile.userId);
                   const fullName = `${profile.firstName || ""} ${profile.lastName || ""}`.trim();
+                  const locationParts = [profile.city, profile.state, profile.country].filter(
+                    Boolean
+                  );
+                  const locationLabel = locationParts.join(", ");
+                  const hobbyTags = profile.hobbyTags?.slice(0, 3) ?? [];
                   return (
                     <div className="topbar-result" key={profile.id}>
                       {profile.avatarUrl ? (
@@ -274,6 +656,18 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
                       <div className="topbar-result-meta">
                         <strong>{fullName || profile.handle || profile.username || "User"}</strong>
                         <span>@{profile.handle || profile.username || "user"}</span>
+                        {locationLabel && (
+                          <span className="topbar-result-location">{locationLabel}</span>
+                        )}
+                        {hobbyTags.length > 0 && (
+                          <div className="topbar-result-tags">
+                            {hobbyTags.map((hobby) => (
+                              <span className="topbar-tag" key={hobby}>
+                                {hobby}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                       <div className="topbar-result-actions">
                         {status === "accepted" ? (

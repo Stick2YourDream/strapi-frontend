@@ -56,6 +56,12 @@
   line-height: 1.6;
 }
 
+.key-backup-hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #9aa5bb;
+}
+
 .key-backup-field {
   display: grid;
   gap: 6px;

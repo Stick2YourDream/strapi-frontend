@@ -92,18 +92,16 @@ type VideoCallEffects = {
   blur: boolean;
   background:
     | "none"
-    | "studio"
-    | "sunset"
-    | "mint"
-    | "aurora"
-    | "ember"
-    | "loft"
-    | "gallery"
-    | "library"
-    | "cafe"
-    | "garden"
-    | "coast"
-    | "night";
+    | "backdrop1"
+    | "backdrop2"
+    | "backdrop3"
+    | "backdrop4"
+    | "backdrop5"
+    | "backdrop6"
+    | "backdrop7"
+    | "backdrop8"
+    | "backdrop9"
+    | "backdrop10";
   filter:
     | "none"
     | "vivid"
@@ -140,6 +138,7 @@ type VideoCallContextValue = {
   status: VideoCallStatus;
   selectedInvitees: VideoCallInvitee[];
   incomingCall: IncomingCall | null;
+  isCallHost: boolean;
   localStream: MediaStream | null;
   localScreenStream: MediaStream | null;
   remoteStreams: Record<string, MediaStream>;
@@ -182,6 +181,7 @@ type VideoCallContextValue = {
 };
 
 const MAX_VIDEO_PARTICIPANTS = 8;
+const CALL_CONNECT_TIMEOUT_MS = 20000;
 const E2EE_VERSION = 1;
 const E2EE_IV_BYTES = 12;
 const E2EE_HEADER_BYTES = 1 + E2EE_IV_BYTES;
@@ -245,6 +245,29 @@ const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
 const mediapipeBase =
   String(import.meta.env.VITE_MEDIAPIPE_ASSETS_URL || "").trim() ||
   "https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation";
+const BACKDROP_ASSETS = {
+  backdrop1: "/backdrops/backdrop1.jpg",
+  backdrop2: "/backdrops/backdrop2.jpg",
+  backdrop3: "/backdrops/backdrop3.jpg",
+  backdrop4: "/backdrops/backdrop4.jpg",
+  backdrop5: "/backdrops/backdrop5.jpg",
+  backdrop6: "/backdrops/backdrop6.jpg",
+  backdrop7: "/backdrops/backdrop7.jpg",
+  backdrop8: "/backdrops/backdrop8.jpeg",
+  backdrop9: "/backdrops/backdrop9.jpeg",
+  backdrop10: "/backdrops/backdrop10.jpg",
+} as const;
+const backdropImageCache = new Map<string, HTMLImageElement>();
+const getBackdropImage = (src: string) => {
+  if (typeof Image === "undefined") return null;
+  const cached = backdropImageCache.get(src);
+  if (cached) return cached;
+  const img = new Image();
+  img.decoding = "async";
+  img.src = src;
+  backdropImageCache.set(src, img);
+  return img;
+};
 let selfieSegmentationPromise: Promise<SelfieSegmentationConstructor | null> | null = null;
 const loadSelfieSegmentation = () => {
   if (!selfieSegmentationPromise) {
@@ -289,6 +312,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const [selectedInvitees, setSelectedInviteesState] = useState<VideoCallInvitee[]>([]);
   const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null);
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
+  const [isCallHost, setIsCallHost] = useState(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [localScreenStream, setLocalScreenStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
@@ -329,7 +353,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     new Map()
   );
   const localSocketIdRef = useRef<string | null>(null);
+  const incomingCallRef = useRef<IncomingCall | null>(null);
   const videoEffectsRef = useRef(videoEffects);
+  const callTimeoutRef = useRef<number | null>(null);
   const videoProcessingRef = useRef<{
     track: MediaStreamTrack | null;
     cleanup: (() => void) | null;
@@ -354,6 +380,13 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const receiverE2eeRef = useRef<WeakSet<RTCRtpReceiver>>(new WeakSet());
   const lastCallKeyRequestRef = useRef(0);
 
+  const clearCallTimeout = useCallback(() => {
+    if (callTimeoutRef.current) {
+      window.clearTimeout(callTimeoutRef.current);
+      callTimeoutRef.current = null;
+    }
+  }, []);
+
   const buildSocketUrl = () => {
     const envUrl = String(import.meta.env.VITE_SOCKET_URL || "").trim();
     if (envUrl) return envUrl;
@@ -363,7 +396,11 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   };
 
   const setVideoEffects = useCallback((effects: Partial<VideoCallEffects>) => {
-    setVideoEffectsState((prev) => ({ ...prev, ...effects }));
+    setVideoEffectsState((prev) => {
+      const next = { ...prev, ...effects };
+      videoEffectsRef.current = next;
+      return next;
+    });
   }, []);
 
   const getPeerNegotiationState = useCallback((socketId: string) => {
@@ -437,6 +474,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     callKeyRoomRef.current = null;
     callKeyRecipientsRef.current = new Set();
     isCallHostRef.current = false;
+    setIsCallHost(false);
     senderE2eeRef.current = new WeakSet();
     receiverE2eeRef.current = new WeakSet();
     callEncryptionEnabledRef.current = e2eeSupported;
@@ -872,176 +910,32 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       height: number,
       mode: VideoCallEffects["background"]
     ) => {
-      const gradient = ctx.createLinearGradient(0, 0, width, height);
-      const minDim = Math.min(width, height);
-      const addGlow = (x: number, y: number, radius: number, color: string) => {
-        const glow = ctx.createRadialGradient(x, y, 0, x, y, radius);
-        glow.addColorStop(0, color);
-        glow.addColorStop(1, "rgba(0, 0, 0, 0)");
-        ctx.fillStyle = glow;
-        ctx.beginPath();
-        ctx.arc(x, y, radius, 0, Math.PI * 2);
-        ctx.fill();
-      };
-
-      switch (mode) {
-        case "studio":
-          gradient.addColorStop(0, "#0f172a");
-          gradient.addColorStop(1, "#1f2937");
-          break;
-        case "sunset":
-          gradient.addColorStop(0, "#f97316");
-          gradient.addColorStop(1, "#ec4899");
-          break;
-        case "mint":
-          gradient.addColorStop(0, "#22c55e");
-          gradient.addColorStop(1, "#38bdf8");
-          break;
-        case "aurora":
-          gradient.addColorStop(0, "#0f172a");
-          gradient.addColorStop(1, "#22d3ee");
-          break;
-        case "ember":
-          gradient.addColorStop(0, "#ef4444");
-          gradient.addColorStop(1, "#f59e0b");
-          break;
-        case "loft":
-          gradient.addColorStop(0, "#0f172a");
-          gradient.addColorStop(1, "#1f2937");
-          break;
-        case "gallery":
-          gradient.addColorStop(0, "#f8fafc");
-          gradient.addColorStop(1, "#e2e8f0");
-          break;
-        case "library":
-          gradient.addColorStop(0, "#0b1020");
-          gradient.addColorStop(1, "#1b1f2b");
-          break;
-        case "cafe":
-          gradient.addColorStop(0, "#2b140a");
-          gradient.addColorStop(1, "#140804");
-          break;
-        case "garden":
-          gradient.addColorStop(0, "#0f2a1a");
-          gradient.addColorStop(1, "#0b1f16");
-          break;
-        case "coast":
-          gradient.addColorStop(0, "#0b1d2a");
-          gradient.addColorStop(1, "#1e3a8a");
-          break;
-        case "night":
-          gradient.addColorStop(0, "#050816");
-          gradient.addColorStop(1, "#0d1326");
-          break;
-        default:
-          gradient.addColorStop(0, "#0b0d14");
-          gradient.addColorStop(1, "#0b0d14");
+      if (mode === "none") {
+        ctx.fillStyle = "#0b0d14";
+        ctx.fillRect(0, 0, width, height);
+        return;
       }
-      ctx.fillStyle = gradient;
-      ctx.fillRect(0, 0, width, height);
 
-      switch (mode) {
-        case "loft":
-          ctx.fillStyle = "rgba(248, 250, 252, 0.08)";
-          ctx.fillRect(width * 0.12, height * 0.1, width * 0.28, height * 0.5);
-          ctx.fillStyle = "rgba(8, 12, 20, 0.6)";
-          ctx.fillRect(0, height * 0.65, width, height * 0.35);
-          addGlow(width * 0.22, height * 0.2, minDim * 0.35, "rgba(148, 163, 184, 0.2)");
-          break;
-        case "gallery":
-          ctx.fillStyle = "rgba(248, 250, 252, 0.35)";
-          ctx.fillRect(width * 0.12, height * 0.2, width * 0.22, height * 0.32);
-          ctx.fillRect(width * 0.66, height * 0.22, width * 0.2, height * 0.3);
-          ctx.strokeStyle = "rgba(148, 163, 184, 0.5)";
-          ctx.lineWidth = Math.max(1, minDim * 0.01);
-          ctx.strokeRect(width * 0.12, height * 0.2, width * 0.22, height * 0.32);
-          ctx.strokeRect(width * 0.66, height * 0.22, width * 0.2, height * 0.3);
-          addGlow(width * 0.28, height * 0.18, minDim * 0.2, "rgba(255, 255, 255, 0.25)");
-          addGlow(width * 0.76, height * 0.2, minDim * 0.18, "rgba(255, 255, 255, 0.22)");
-          break;
-        case "library": {
-          const shelfTop = height * 0.58;
-          const shelfHeight = height * 0.04;
-          const bookTop = shelfTop + shelfHeight;
-          const bookHeight = height * 0.32;
-          const bookWidth = width / 14;
-          const bookColors = [
-            "rgba(148, 163, 184, 0.4)",
-            "rgba(94, 234, 212, 0.35)",
-            "rgba(250, 204, 21, 0.35)",
-            "rgba(248, 113, 113, 0.35)",
-            "rgba(167, 139, 250, 0.35)",
-          ];
-          ctx.fillStyle = "rgba(8, 12, 20, 0.65)";
-          ctx.fillRect(0, shelfTop, width, shelfHeight);
-          ctx.fillRect(0, shelfTop + height * 0.16, width, shelfHeight);
-          for (let i = 0; i < 12; i += 1) {
-            ctx.fillStyle = bookColors[i % bookColors.length];
-            ctx.fillRect(
-              i * bookWidth + bookWidth * 0.1,
-              bookTop,
-              bookWidth * 0.7,
-              bookHeight
-            );
-          }
-          addGlow(width * 0.8, height * 0.2, minDim * 0.28, "rgba(234, 179, 8, 0.12)");
-          break;
-        }
-        case "cafe": {
-          const lightY = height * 0.18;
-          const spacing = width / 6;
-          for (let i = 0; i < 5; i += 1) {
-            addGlow(
-              spacing * (i + 0.5),
-              lightY,
-              minDim * 0.08,
-              "rgba(253, 230, 138, 0.35)"
-            );
-          }
-          ctx.fillStyle = "rgba(10, 6, 4, 0.6)";
-          ctx.fillRect(0, height * 0.7, width, height * 0.3);
-          break;
-        }
-        case "garden":
-          addGlow(width * 0.22, height * 0.28, minDim * 0.3, "rgba(34, 197, 94, 0.25)");
-          addGlow(width * 0.7, height * 0.22, minDim * 0.25, "rgba(16, 185, 129, 0.25)");
-          addGlow(width * 0.6, height * 0.7, minDim * 0.22, "rgba(14, 116, 144, 0.2)");
-          ctx.fillStyle = "rgba(7, 20, 16, 0.5)";
-          ctx.fillRect(0, height * 0.65, width, height * 0.35);
-          break;
-        case "coast":
-          addGlow(width * 0.8, height * 0.22, minDim * 0.35, "rgba(251, 191, 36, 0.22)");
-          ctx.fillStyle = "rgba(226, 232, 240, 0.12)";
-          ctx.fillRect(0, height * 0.56, width, height * 0.02);
-          ctx.fillStyle = "rgba(15, 23, 42, 0.35)";
-          ctx.fillRect(0, height * 0.6, width, height * 0.4);
-          break;
-        case "night": {
-          addGlow(width * 0.22, height * 0.2, minDim * 0.25, "rgba(59, 130, 246, 0.2)");
-          ctx.fillStyle = "rgba(4, 7, 14, 0.85)";
-          ctx.fillRect(0, height * 0.6, width, height * 0.4);
-          ctx.fillStyle = "rgba(250, 204, 21, 0.3)";
-          const windowWidth = width * 0.035;
-          const windowHeight = height * 0.03;
-          const startX = width * 0.1;
-          const startY = height * 0.65;
-          const gapX = width * 0.12;
-          const gapY = height * 0.08;
-          for (let row = 0; row < 3; row += 1) {
-            for (let col = 0; col < 6; col += 1) {
-              ctx.fillRect(
-                startX + gapX * col,
-                startY + gapY * row,
-                windowWidth,
-                windowHeight
-              );
-            }
-          }
-          break;
-        }
-        default:
-          break;
+      const src = BACKDROP_ASSETS[mode as keyof typeof BACKDROP_ASSETS];
+      if (!src) {
+        ctx.fillStyle = "#0b0d14";
+        ctx.fillRect(0, 0, width, height);
+        return;
       }
+
+      const image = getBackdropImage(src);
+      if (!image || !image.complete || !image.naturalWidth) {
+        ctx.fillStyle = "#0b0d14";
+        ctx.fillRect(0, 0, width, height);
+        return;
+      }
+
+      const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight);
+      const sw = width / scale;
+      const sh = height / scale;
+      const sx = (image.naturalWidth - sw) / 2;
+      const sy = (image.naturalHeight - sh) / 2;
+      ctx.drawImage(image, sx, sy, sw, sh, 0, 0, width, height);
     },
     []
   );
@@ -1078,7 +972,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   }, []);
 
   const createProcessedVideoTrack = useCallback(
-    (rawTrack: MediaStreamTrack, effects: VideoCallEffects) => {
+    (rawTrack: MediaStreamTrack, effectsRef: { current: VideoCallEffects }) => {
       const sourceStream = new MediaStream([rawTrack]);
       const video = document.createElement("video");
       video.muted = true;
@@ -1095,16 +989,21 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       let lastSegmentationTs = 0;
       let segmenting = false;
       let segmentationFailed = false;
-      const segmentationIntervalMs = 1000 / 12;
+      let segmentationLoading = false;
+      const segmentationIntervalMs = 1000 / 24;
+      const maskBlurPx = 6;
       let segmenter: SelfieSegmentationInstance | null = null;
       let closed = false;
-      const needsSegmentation = effects.blur || effects.background !== "none";
-      const cameraFilter = getCameraFilter(effects.filter);
 
-      if (needsSegmentation) {
+      const ensureSegmentation = () => {
+        if (segmenter || segmentationFailed || segmentationLoading) return;
+        segmentationLoading = true;
         loadSelfieSegmentation()
           .then((SelfieSegmentationCtor) => {
-            if (!SelfieSegmentationCtor || closed) return;
+            if (!SelfieSegmentationCtor || closed) {
+              segmentationFailed = true;
+              return;
+            }
             try {
               segmenter = new SelfieSegmentationCtor({
                 locateFile: (file) => `${mediapipeBase}/${file}`,
@@ -1119,8 +1018,11 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           })
           .catch(() => {
             segmentationFailed = true;
+          })
+          .finally(() => {
+            segmentationLoading = false;
           });
-      }
+      };
 
       const drawCover = (context: CanvasRenderingContext2D, width: number, height: number) => {
         const vw = video.videoWidth || width;
@@ -1133,8 +1035,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         context.drawImage(video, sx, sy, sw, sh, 0, 0, width, height);
       };
 
-      const maybeSegment = () => {
-        if (!needsSegmentation || !segmenter || segmentationFailed || segmenting) return;
+      const maybeSegment = (shouldSegment: boolean) => {
+        if (!shouldSegment || !segmenter || segmentationFailed || segmenting) return;
         const now = performance.now();
         if (now - lastSegmentationTs < segmentationIntervalMs) return;
         segmenting = true;
@@ -1168,6 +1070,14 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           foregroundCanvas.height = height;
         }
 
+        const effects = effectsRef.current;
+        const needsSegmentation = effects.blur || effects.background !== "none";
+        if (needsSegmentation) {
+          ensureSegmentation();
+        } else {
+          maskSource = null;
+        }
+        const cameraFilter = getCameraFilter(effects.filter);
         const shouldBlur = effects.blur && effects.background === "none";
         const filterParts = [];
         if (cameraFilter !== "none") {
@@ -1187,7 +1097,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           return;
         }
 
-        maybeSegment();
+        maybeSegment(needsSegmentation);
 
         if (!maskSource || !foregroundCtx) {
           ctx.clearRect(0, 0, width, height);
@@ -1203,7 +1113,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         drawCover(foregroundCtx, width, height);
         foregroundCtx.filter = "none";
         foregroundCtx.globalCompositeOperation = "destination-in";
+        foregroundCtx.filter = `blur(${maskBlurPx}px)`;
         foregroundCtx.drawImage(maskSource, 0, 0, width, height);
+        foregroundCtx.filter = "none";
         foregroundCtx.globalCompositeOperation = "source-over";
 
         if (effects.background !== "none") {
@@ -1257,23 +1169,27 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     }
 
     const effects = videoEffectsRef.current;
+    const forceProcessing = status === "connecting" || status === "in-call";
     const needsProcessing =
-      effects.blur || effects.background !== "none" || effects.filter !== "none";
+      forceProcessing ||
+      effects.blur ||
+      effects.background !== "none" ||
+      effects.filter !== "none";
     if (!needsProcessing) {
       stopVideoProcessing();
       return rawTrack;
     }
 
-    const effectsKey = `${effects.blur ? "1" : "0"}-${effects.background}-${effects.filter}`;
     const current = videoProcessingRef.current;
-    if (current.track && current.sourceId === rawTrack.id && current.effectsKey === effectsKey) {
+    if (current.track && current.sourceId === rawTrack.id) {
       current.track.enabled = rawTrack.enabled;
+      current.effectsKey = `${effects.blur ? "1" : "0"}-${effects.background}-${effects.filter}`;
       return current.track;
     }
 
     stopVideoProcessing();
     try {
-      const { track, cleanup } = createProcessedVideoTrack(rawTrack, effects);
+      const { track, cleanup } = createProcessedVideoTrack(rawTrack, videoEffectsRef);
       if (!track) {
         return rawTrack;
       }
@@ -1281,14 +1197,14 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         track,
         cleanup,
         sourceId: rawTrack.id,
-        effectsKey,
+        effectsKey: `${effects.blur ? "1" : "0"}-${effects.background}-${effects.filter}`,
       };
       return track;
     } catch {
       stopVideoProcessing();
       return rawTrack;
     }
-  }, [createProcessedVideoTrack, stopVideoProcessing]);
+  }, [createProcessedVideoTrack, status, stopVideoProcessing]);
 
   const syncLocalStream = useCallback(
     (videoTrack: MediaStreamTrack | null) => {
@@ -1305,7 +1221,11 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           const sender = pc.getSenders().find((s) => s.track?.kind === "audio");
           if (sender) {
             if (sender.track?.id !== track.id) {
-              sender.replaceTrack(track);
+              try {
+                void sender.replaceTrack(track).catch(() => undefined);
+              } catch {
+                // ignore replace failures
+              }
             }
             setupSenderE2ee(sender);
           } else {
@@ -1320,12 +1240,18 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         if (videoTrack) {
           if (videoSender) {
             if (videoSender.track?.id !== videoTrack.id) {
-              videoSender.replaceTrack(videoTrack);
+              try {
+                void videoSender.replaceTrack(videoTrack).catch(() => undefined);
+              } catch {
+                // ignore replace failures
+              }
             }
             setupSenderE2ee(videoSender);
+            requestVideoKeyFrame(videoSender);
           } else {
             const newSender = pc.addTrack(videoTrack, stream);
             setupSenderE2ee(newSender);
+            requestVideoKeyFrame(newSender);
           }
         } else if (videoSender) {
           try {
@@ -1336,7 +1262,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         }
       });
     },
-    [setupSenderE2ee]
+    [requestVideoKeyFrame, setupSenderE2ee]
   );
 
   const attachLocalTracks = useCallback((pc: RTCPeerConnection) => {
@@ -1524,6 +1450,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
+
+  useEffect(() => {
+    incomingCallRef.current = incomingCall;
+  }, [incomingCall]);
 
   useEffect(() => {
     videoEffectsRef.current = videoEffects;
@@ -2097,6 +2027,36 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     user?.username,
   ]);
 
+  useEffect(() => {
+    clearCallTimeout();
+    if (status === "incoming" && incomingCall) {
+      callTimeoutRef.current = window.setTimeout(() => {
+        if (statusRef.current !== "incoming") return;
+        const invite = incomingCallRef.current;
+        if (socketRef.current && invite) {
+          socketRef.current.emit("call:decline", { roomId: invite.roomId });
+        }
+        setIncomingCall(null);
+        setStatus("idle");
+        setIsOpen(false);
+      }, CALL_CONNECT_TIMEOUT_MS);
+      return () => clearCallTimeout();
+    }
+
+    if (status === "connecting" && isCallHostRef.current) {
+      callTimeoutRef.current = window.setTimeout(() => {
+        if (statusRef.current !== "connecting" || !isCallHostRef.current) return;
+        if (socketRef.current && activeRoomRef.current) {
+          socketRef.current.emit("call:end", { roomId: activeRoomRef.current });
+        }
+        cleanupCallRef.current();
+      }, CALL_CONNECT_TIMEOUT_MS);
+      return () => clearCallTimeout();
+    }
+
+    return () => clearCallTimeout();
+  }, [clearCallTimeout, incomingCall, status]);
+
   const ensureMedia = useCallback(
     async ({ audio, video }: { audio?: boolean; video?: boolean }) => {
       const existingRaw = rawStreamRef.current ?? new MediaStream();
@@ -2207,6 +2167,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     setStatus("idle");
     setIsOpen(false);
     setError(null);
+    setIsCallHost(false);
     setE2eeDebug(null);
     setScreenControlRequests([]);
     setPendingScreenControlTargets([]);
@@ -2280,6 +2241,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     const roomId = createRoomId();
     resetE2eeState();
     isCallHostRef.current = true;
+    setIsCallHost(true);
     if (!CALL_E2EE_ENABLED) {
       setCallEncryptionMode(false, "disabled in settings", { suppressBanner: true });
     } else if (!e2eeSupported) {
@@ -2324,6 +2286,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const acceptCall = useCallback(async () => {
     if (!socketRef.current || !incomingCall) return;
     resetE2eeState();
+    setIsCallHost(false);
     if (!CALL_E2EE_ENABLED) {
       setCallEncryptionMode(false, "disabled in settings", { suppressBanner: true });
     } else if (incomingCall.e2eeEnabled === false) {
@@ -2371,11 +2334,15 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   }, [activeRoomId, cleanupCall]);
 
   const endCall = useCallback(() => {
+    if (!isCallHostRef.current) {
+      leaveCall();
+      return;
+    }
     if (socketRef.current && activeRoomId) {
       socketRef.current.emit("call:end", { roomId: activeRoomId });
     }
     cleanupCall();
-  }, [activeRoomId, cleanupCall]);
+  }, [activeRoomId, cleanupCall, leaveCall]);
 
   const toggleVideo = useCallback(() => {
     const rawStream = rawStreamRef.current;
@@ -2510,6 +2477,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       status,
       selectedInvitees,
       incomingCall,
+      isCallHost,
       localStream,
       localScreenStream,
       remoteStreams,
@@ -2558,6 +2526,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       e2eeDebug,
       endCall,
       incomingCall,
+      isCallHost,
       isAudioEnabled,
       isOpen,
       isVideoEnabled,

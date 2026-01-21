@@ -1,6 +1,6 @@
 // src/pages/Register.tsx
 import { CheckCircle2 } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import api from "../api/strapi";
 import type { RegisterResponse } from "../types/auth";
@@ -122,6 +122,16 @@ const normalizeIntent = (value?: string | null): IntentKey | null => {
   return aliases[cleaned] ?? null;
 };
 
+type LocationOption = {
+  name: string;
+  code: string;
+  countryCode?: string;
+};
+
+const normalizeLocation = (value: string) => value.trim().toLowerCase();
+const matchByName = (list: LocationOption[], value: string) =>
+  list.find((item) => normalizeLocation(item.name) === normalizeLocation(value));
+
 export default function Register() {
   const [form, setForm] = useState({
     username: "",
@@ -130,6 +140,11 @@ export default function Register() {
     birthday: "",
     password: "",
     confirmPassword: "",
+    country: "",
+    countryCode: "",
+    state: "",
+    stateCode: "",
+    city: "",
     botField: "",
   });
   const [termsOpen, setTermsOpen] = useState(false);
@@ -138,6 +153,10 @@ export default function Register() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [countryOptions, setCountryOptions] = useState<LocationOption[]>([]);
+  const [stateOptions, setStateOptions] = useState<LocationOption[]>([]);
+  const [cityOptions, setCityOptions] = useState<LocationOption[]>([]);
+  const [locationError, setLocationError] = useState<string | null>(null);
   const formStartRef = useRef(Date.now());
   const [searchParams] = useSearchParams();
   const intentParam = searchParams.get("intent");
@@ -155,10 +174,133 @@ export default function Register() {
   const maxBirthdate = useMemo(() => getMaxBirthdate(), []);
   const successMessage =
     "Thank you for registering with Your Social Place. We are excited to have you on board with us. Please check your email for a confirmation link to login.";
+  const stateLabel = form.countryCode === "US" ? "State" : "Province/Region";
+  const needsState = stateOptions.length > 0;
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setForm({ ...form, [e.target.name]: e.target.value });
   };
+
+  const updateLocation = (changes: Partial<typeof form>) => {
+    setForm((prev) => ({ ...prev, ...changes }));
+  };
+
+  const handleCountryChange = (value: string) => {
+    const match = value ? matchByName(countryOptions, value) : undefined;
+    updateLocation({
+      country: value,
+      countryCode: match?.code || "",
+      state: "",
+      stateCode: "",
+      city: "",
+    });
+    setStateOptions([]);
+    setCityOptions([]);
+  };
+
+  const handleStateChange = (value: string) => {
+    const match = value ? matchByName(stateOptions, value) : undefined;
+    updateLocation({
+      state: value,
+      stateCode: match?.code || "",
+      city: "",
+    });
+    setCityOptions([]);
+  };
+
+  const handleCityChange = (value: string) => {
+    updateLocation({ city: value });
+  };
+
+  useEffect(() => {
+    let active = true;
+    const loadCountries = async () => {
+      try {
+        const res = await api.get("/locations/countries");
+        const list = (res.data?.data ?? []).map((country: any) => ({
+          name: country.name,
+          code: country.code || country.isoCode || "",
+        }));
+        if (active) {
+          setCountryOptions(list);
+          setLocationError(null);
+        }
+      } catch {
+        if (active) setLocationError("Unable to load country list.");
+      }
+    };
+    loadCountries();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!form.countryCode) {
+      setStateOptions([]);
+      setCityOptions([]);
+      return;
+    }
+    let active = true;
+    const loadStates = async () => {
+      try {
+        const res = await api.get("/locations/states", {
+          params: { country: form.countryCode },
+        });
+        const list = (res.data?.data ?? []).map((state: any) => ({
+          name: state.name,
+          code: state.code || state.isoCode || "",
+          countryCode: state.countryCode,
+        }));
+        if (active) {
+          setStateOptions(list);
+          setLocationError(null);
+        }
+      } catch {
+        if (active) setLocationError("Unable to load states or regions.");
+      }
+    };
+    loadStates();
+    return () => {
+      active = false;
+    };
+  }, [form.countryCode]);
+
+  useEffect(() => {
+    if (!form.countryCode) {
+      setCityOptions([]);
+      return;
+    }
+    if (needsState && !form.stateCode) {
+      setCityOptions([]);
+      return;
+    }
+    let active = true;
+    const loadCities = async () => {
+      try {
+        const res = await api.get("/locations/cities", {
+          params: {
+            country: form.countryCode,
+            state: form.stateCode || undefined,
+          },
+        });
+        const list = (res.data?.data ?? []).map((city: any) => ({
+          name: city.name,
+          code: city.name,
+        }));
+        if (active) {
+          setCityOptions(list);
+          setLocationError(null);
+        }
+      } catch {
+        if (active) setLocationError("Unable to load cities.");
+      }
+    };
+    loadCities();
+    return () => {
+      active = false;
+    };
+  }, [form.countryCode, form.stateCode, needsState]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -230,11 +372,24 @@ export default function Register() {
       const lockedHandle =
         slugifyHandle(form.username || form.email) || `user-${res.data.user.id}`;
       try {
+        const profileLocation: Record<string, string> = {};
+        if (form.countryCode) {
+          profileLocation.country = form.country.trim();
+          profileLocation.countryCode = form.countryCode;
+        }
+        if (form.state || form.stateCode) {
+          profileLocation.state = form.state.trim();
+          profileLocation.stateCode = form.stateCode;
+        }
+        if (form.city) {
+          profileLocation.city = form.city.trim();
+        }
         await api.post("/profiles", {
           data: {
             handle: lockedHandle,
             user: res.data.user.id,
             locale: "en",
+            ...profileLocation,
           },
         });
       } catch {
@@ -380,6 +535,71 @@ export default function Register() {
           />
           <small className="auth-hint">You must be 18 or older to sign up.</small>
         </div>
+
+        <div className="field">
+          <label>Country</label>
+          <select
+            className="auth-input"
+            value={form.country}
+            onChange={(e) => handleCountryChange(e.target.value)}
+          >
+            <option value="">Select country</option>
+            {countryOptions.map((country) => (
+              <option key={country.code || country.name} value={country.name}>
+                {country.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field">
+          <label>{stateLabel}</label>
+          <select
+            className="auth-input"
+            value={form.state}
+            onChange={(e) => handleStateChange(e.target.value)}
+            disabled={!form.countryCode || !stateOptions.length}
+          >
+            <option value="">
+              {!form.countryCode
+                ? "Select country first"
+                : needsState
+                ? `Select ${stateLabel.toLowerCase()}`
+                : "No regions"}
+            </option>
+            {stateOptions.map((state) => (
+              <option key={state.code || state.name} value={state.name}>
+                {state.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field">
+          <label>City</label>
+          <select
+            className="auth-input"
+            value={form.city}
+            onChange={(e) => handleCityChange(e.target.value)}
+            disabled={!form.countryCode || (needsState && !form.stateCode)}
+          >
+            <option value="">
+              {!form.countryCode
+                ? "Select country first"
+                : needsState && !form.stateCode
+                ? `Select ${stateLabel.toLowerCase()} first`
+                : "Select city"}
+            </option>
+            {cityOptions.map((city) => (
+              <option key={city.code || city.name} value={city.name}>
+                {city.name}
+              </option>
+            ))}
+          </select>
+          <small className="auth-hint">Optional. Helps suggest nearby friends.</small>
+        </div>
+
+        {locationError && <p className="auth-message error">{locationError}</p>}
 
         <div className="field">
           <label>Password</label>
