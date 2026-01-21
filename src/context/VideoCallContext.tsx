@@ -336,10 +336,13 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     return created;
   }, []);
 
+  const isSharedArrayBuffer = (value: unknown): value is SharedArrayBuffer =>
+    typeof SharedArrayBuffer !== "undefined" && value instanceof SharedArrayBuffer;
+
   const toArrayBuffer = useCallback(
     (data: ArrayBuffer | SharedArrayBuffer | ArrayBufferView) => {
       if (data instanceof ArrayBuffer) return data;
-      if (typeof SharedArrayBuffer !== "undefined" && data instanceof SharedArrayBuffer) {
+      if (isSharedArrayBuffer(data)) {
         const view = new Uint8Array(data);
         const copy = new Uint8Array(view.byteLength);
         copy.set(view);
@@ -351,7 +354,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         copy.set(view);
         return copy.buffer;
       }
-      return data as ArrayBuffer;
+      throw new Error("Unsupported frame data type");
     },
     []
   );
