@@ -405,15 +405,25 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     receiverE2eeRef.current = new WeakSet();
   }, []);
 
-  const maybeRequestCallKey = useCallback(() => {
+  const maybeRequestCallKey = useCallback(async (roomIdOverride?: string) => {
     if (isCallHostRef.current || callKeyRef.current) return;
-    const roomId = activeRoomRef.current;
+    const roomId = roomIdOverride || activeRoomRef.current;
     if (!roomId) return;
     const now = Date.now();
     if (now - lastCallKeyRequestRef.current < 3000) return;
     lastCallKeyRequestRef.current = now;
-    void requestCallKeyFromHost(roomId);
-  }, [requestCallKeyFromHost]);
+    if (!socketRef.current || !user?.id) return;
+    try {
+      const { publicKey } = await getOrCreateIdentityKeyPair();
+      const publicKeyText = await exportPublicKey(publicKey);
+      socketRef.current.emit("call:e2ee:request", {
+        roomId,
+        publicKey: publicKeyText,
+      });
+    } catch {
+      // ignore key request errors
+    }
+  }, [user?.id]);
 
   const setupSenderE2ee = useCallback(
     (sender?: RTCRtpSender | null) => {
@@ -454,7 +464,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           const key = callKeyRef.current;
           if (!key || !encodedFrame?.data) {
             if (!key) {
-              maybeRequestCallKey();
+              void maybeRequestCallKey();
             }
             return;
           }
@@ -464,7 +474,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
             controller.enqueue(encodedFrame);
           } catch {
             // drop frames that fail to decrypt
-            maybeRequestCallKey();
+            void maybeRequestCallKey();
           }
         },
       });
@@ -1420,7 +1430,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         shareCallKeyWithParticipants(payload.roomId, payload.participants);
         requestAllVideoKeyFrames();
         if (!isCallHostRef.current && !callKeyRef.current) {
-          void requestCallKeyFromHost(payload.roomId);
+          void maybeRequestCallKey(payload.roomId);
         }
       }
     );
@@ -1746,8 +1756,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     createPeerConnection,
     e2eeSupported,
     getPeerNegotiationState,
+    maybeRequestCallKey,
     requestAllVideoKeyFrames,
-    requestCallKeyFromHost,
     shareCallKeyWithParticipants,
     shareCallKeyWithPublicKey,
     user?.email,
