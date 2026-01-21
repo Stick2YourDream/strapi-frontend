@@ -836,6 +836,93 @@
     rgba(20, 10, 6, 0.9);
 }
 
+.video-tile.has-backdrop-loft {
+  background: linear-gradient(
+      180deg,
+      rgba(15, 23, 42, 0.9) 0%,
+      rgba(15, 23, 42, 0.9) 64%,
+      rgba(7, 12, 20, 0.95) 64%,
+      rgba(7, 12, 20, 0.95) 100%
+    ),
+    radial-gradient(circle at 18% 18%, rgba(148, 163, 184, 0.22), transparent 55%),
+    linear-gradient(90deg, rgba(248, 250, 252, 0.1) 0%, rgba(248, 250, 252, 0.1) 18%, transparent 18%),
+    linear-gradient(180deg, rgba(248, 250, 252, 0.06) 0%, rgba(248, 250, 252, 0.06) 58%, transparent 58%);
+}
+
+.video-tile.has-backdrop-gallery {
+  background: radial-gradient(circle at 25% 25%, rgba(255, 255, 255, 0.45), transparent 45%),
+    radial-gradient(circle at 75% 30%, rgba(255, 255, 255, 0.35), transparent 45%),
+    linear-gradient(135deg, rgba(248, 250, 252, 0.92) 0%, rgba(226, 232, 240, 0.88) 60%, rgba(148, 163, 184, 0.6) 100%);
+}
+
+.video-tile.has-backdrop-library {
+  background: radial-gradient(circle at 85% 18%, rgba(234, 179, 8, 0.18), transparent 45%),
+    repeating-linear-gradient(
+      90deg,
+      rgba(148, 163, 184, 0.2) 0px,
+      rgba(148, 163, 184, 0.2) 8px,
+      rgba(30, 41, 59, 0.45) 8px,
+      rgba(30, 41, 59, 0.45) 16px
+    ),
+    linear-gradient(
+      180deg,
+      rgba(12, 16, 28, 0.95) 0%,
+      rgba(12, 16, 28, 0.95) 55%,
+      rgba(8, 12, 20, 0.98) 55%,
+      rgba(8, 12, 20, 0.98) 100%
+    );
+}
+
+.video-tile.has-backdrop-cafe {
+  background: radial-gradient(circle at 15% 18%, rgba(253, 230, 138, 0.35), transparent 45%),
+    radial-gradient(circle at 45% 16%, rgba(253, 230, 138, 0.28), transparent 40%),
+    radial-gradient(circle at 75% 20%, rgba(253, 230, 138, 0.3), transparent 42%),
+    linear-gradient(
+      180deg,
+      rgba(34, 16, 10, 0.92) 0%,
+      rgba(34, 16, 10, 0.92) 70%,
+      rgba(10, 6, 4, 0.96) 70%,
+      rgba(10, 6, 4, 0.96) 100%
+    );
+}
+
+.video-tile.has-backdrop-garden {
+  background: radial-gradient(circle at 18% 28%, rgba(34, 197, 94, 0.3), transparent 50%),
+    radial-gradient(circle at 70% 22%, rgba(16, 185, 129, 0.28), transparent 45%),
+    radial-gradient(circle at 60% 70%, rgba(14, 116, 144, 0.22), transparent 45%),
+    linear-gradient(180deg, rgba(12, 28, 24, 0.92) 0%, rgba(7, 20, 16, 0.96) 100%);
+}
+
+.video-tile.has-backdrop-coast {
+  background: radial-gradient(circle at 80% 22%, rgba(251, 191, 36, 0.3), transparent 45%),
+    linear-gradient(
+      180deg,
+      rgba(226, 232, 240, 0.12) 0%,
+      rgba(226, 232, 240, 0.12) 55%,
+      rgba(15, 23, 42, 0.55) 55%,
+      rgba(15, 23, 42, 0.55) 100%
+    ),
+    linear-gradient(180deg, rgba(14, 65, 140, 0.85) 0%, rgba(15, 23, 42, 0.9) 100%);
+}
+
+.video-tile.has-backdrop-night {
+  background: radial-gradient(circle at 20% 18%, rgba(59, 130, 246, 0.22), transparent 50%),
+    repeating-linear-gradient(
+      90deg,
+      rgba(250, 204, 21, 0.2) 0px,
+      rgba(250, 204, 21, 0.2) 6px,
+      transparent 6px,
+      transparent 20px
+    ),
+    linear-gradient(
+      180deg,
+      rgba(9, 12, 24, 0.92) 0%,
+      rgba(9, 12, 24, 0.92) 60%,
+      rgba(3, 5, 10, 0.98) 60%,
+      rgba(3, 5, 10, 0.98) 100%
+    );
+}
+
 @media (max-width: 720px) {
   .video-setup-preview {
     grid-template-columns: 1fr;

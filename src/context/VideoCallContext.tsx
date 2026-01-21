@@ -90,8 +90,34 @@ type ScreenControlEvent = {
 
 type VideoCallEffects = {
   blur: boolean;
-  background: "none" | "studio" | "sunset" | "mint" | "aurora" | "ember";
-  filter: "none" | "vivid" | "noir" | "warm" | "cool";
+  background:
+    | "none"
+    | "studio"
+    | "sunset"
+    | "mint"
+    | "aurora"
+    | "ember"
+    | "loft"
+    | "gallery"
+    | "library"
+    | "cafe"
+    | "garden"
+    | "coast"
+    | "night";
+  filter:
+    | "none"
+    | "vivid"
+    | "crisp"
+    | "cinema"
+    | "matte"
+    | "soft"
+    | "warm"
+    | "cool"
+    | "amber"
+    | "teal"
+    | "rose"
+    | "noir"
+    | "midnight";
 };
 
 type SelfieSegmentationResults = {
@@ -840,8 +866,24 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   }, [attachScreenShareTrack, stopScreenShare]);
 
   const drawBackdrop = useCallback(
-    (ctx: CanvasRenderingContext2D, width: number, height: number, mode: VideoCallEffects["background"]) => {
+    (
+      ctx: CanvasRenderingContext2D,
+      width: number,
+      height: number,
+      mode: VideoCallEffects["background"]
+    ) => {
       const gradient = ctx.createLinearGradient(0, 0, width, height);
+      const minDim = Math.min(width, height);
+      const addGlow = (x: number, y: number, radius: number, color: string) => {
+        const glow = ctx.createRadialGradient(x, y, 0, x, y, radius);
+        glow.addColorStop(0, color);
+        glow.addColorStop(1, "rgba(0, 0, 0, 0)");
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fill();
+      };
+
       switch (mode) {
         case "studio":
           gradient.addColorStop(0, "#0f172a");
@@ -863,12 +905,143 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           gradient.addColorStop(0, "#ef4444");
           gradient.addColorStop(1, "#f59e0b");
           break;
+        case "loft":
+          gradient.addColorStop(0, "#0f172a");
+          gradient.addColorStop(1, "#1f2937");
+          break;
+        case "gallery":
+          gradient.addColorStop(0, "#f8fafc");
+          gradient.addColorStop(1, "#e2e8f0");
+          break;
+        case "library":
+          gradient.addColorStop(0, "#0b1020");
+          gradient.addColorStop(1, "#1b1f2b");
+          break;
+        case "cafe":
+          gradient.addColorStop(0, "#2b140a");
+          gradient.addColorStop(1, "#140804");
+          break;
+        case "garden":
+          gradient.addColorStop(0, "#0f2a1a");
+          gradient.addColorStop(1, "#0b1f16");
+          break;
+        case "coast":
+          gradient.addColorStop(0, "#0b1d2a");
+          gradient.addColorStop(1, "#1e3a8a");
+          break;
+        case "night":
+          gradient.addColorStop(0, "#050816");
+          gradient.addColorStop(1, "#0d1326");
+          break;
         default:
           gradient.addColorStop(0, "#0b0d14");
           gradient.addColorStop(1, "#0b0d14");
       }
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, width, height);
+
+      switch (mode) {
+        case "loft":
+          ctx.fillStyle = "rgba(248, 250, 252, 0.08)";
+          ctx.fillRect(width * 0.12, height * 0.1, width * 0.28, height * 0.5);
+          ctx.fillStyle = "rgba(8, 12, 20, 0.6)";
+          ctx.fillRect(0, height * 0.65, width, height * 0.35);
+          addGlow(width * 0.22, height * 0.2, minDim * 0.35, "rgba(148, 163, 184, 0.2)");
+          break;
+        case "gallery":
+          ctx.fillStyle = "rgba(248, 250, 252, 0.35)";
+          ctx.fillRect(width * 0.12, height * 0.2, width * 0.22, height * 0.32);
+          ctx.fillRect(width * 0.66, height * 0.22, width * 0.2, height * 0.3);
+          ctx.strokeStyle = "rgba(148, 163, 184, 0.5)";
+          ctx.lineWidth = Math.max(1, minDim * 0.01);
+          ctx.strokeRect(width * 0.12, height * 0.2, width * 0.22, height * 0.32);
+          ctx.strokeRect(width * 0.66, height * 0.22, width * 0.2, height * 0.3);
+          addGlow(width * 0.28, height * 0.18, minDim * 0.2, "rgba(255, 255, 255, 0.25)");
+          addGlow(width * 0.76, height * 0.2, minDim * 0.18, "rgba(255, 255, 255, 0.22)");
+          break;
+        case "library": {
+          const shelfTop = height * 0.58;
+          const shelfHeight = height * 0.04;
+          const bookTop = shelfTop + shelfHeight;
+          const bookHeight = height * 0.32;
+          const bookWidth = width / 14;
+          const bookColors = [
+            "rgba(148, 163, 184, 0.4)",
+            "rgba(94, 234, 212, 0.35)",
+            "rgba(250, 204, 21, 0.35)",
+            "rgba(248, 113, 113, 0.35)",
+            "rgba(167, 139, 250, 0.35)",
+          ];
+          ctx.fillStyle = "rgba(8, 12, 20, 0.65)";
+          ctx.fillRect(0, shelfTop, width, shelfHeight);
+          ctx.fillRect(0, shelfTop + height * 0.16, width, shelfHeight);
+          for (let i = 0; i < 12; i += 1) {
+            ctx.fillStyle = bookColors[i % bookColors.length];
+            ctx.fillRect(
+              i * bookWidth + bookWidth * 0.1,
+              bookTop,
+              bookWidth * 0.7,
+              bookHeight
+            );
+          }
+          addGlow(width * 0.8, height * 0.2, minDim * 0.28, "rgba(234, 179, 8, 0.12)");
+          break;
+        }
+        case "cafe": {
+          const lightY = height * 0.18;
+          const spacing = width / 6;
+          for (let i = 0; i < 5; i += 1) {
+            addGlow(
+              spacing * (i + 0.5),
+              lightY,
+              minDim * 0.08,
+              "rgba(253, 230, 138, 0.35)"
+            );
+          }
+          ctx.fillStyle = "rgba(10, 6, 4, 0.6)";
+          ctx.fillRect(0, height * 0.7, width, height * 0.3);
+          break;
+        }
+        case "garden":
+          addGlow(width * 0.22, height * 0.28, minDim * 0.3, "rgba(34, 197, 94, 0.25)");
+          addGlow(width * 0.7, height * 0.22, minDim * 0.25, "rgba(16, 185, 129, 0.25)");
+          addGlow(width * 0.6, height * 0.7, minDim * 0.22, "rgba(14, 116, 144, 0.2)");
+          ctx.fillStyle = "rgba(7, 20, 16, 0.5)";
+          ctx.fillRect(0, height * 0.65, width, height * 0.35);
+          break;
+        case "coast":
+          addGlow(width * 0.8, height * 0.22, minDim * 0.35, "rgba(251, 191, 36, 0.22)");
+          ctx.fillStyle = "rgba(226, 232, 240, 0.12)";
+          ctx.fillRect(0, height * 0.56, width, height * 0.02);
+          ctx.fillStyle = "rgba(15, 23, 42, 0.35)";
+          ctx.fillRect(0, height * 0.6, width, height * 0.4);
+          break;
+        case "night": {
+          addGlow(width * 0.22, height * 0.2, minDim * 0.25, "rgba(59, 130, 246, 0.2)");
+          ctx.fillStyle = "rgba(4, 7, 14, 0.85)";
+          ctx.fillRect(0, height * 0.6, width, height * 0.4);
+          ctx.fillStyle = "rgba(250, 204, 21, 0.3)";
+          const windowWidth = width * 0.035;
+          const windowHeight = height * 0.03;
+          const startX = width * 0.1;
+          const startY = height * 0.65;
+          const gapX = width * 0.12;
+          const gapY = height * 0.08;
+          for (let row = 0; row < 3; row += 1) {
+            for (let col = 0; col < 6; col += 1) {
+              ctx.fillRect(
+                startX + gapX * col,
+                startY + gapY * row,
+                windowWidth,
+                windowHeight
+              );
+            }
+          }
+          break;
+        }
+        default:
+          break;
+      }
     },
     []
   );
@@ -877,12 +1050,28 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     switch (filter) {
       case "vivid":
         return "contrast(1.12) saturate(1.25)";
+      case "crisp":
+        return "contrast(1.18) saturate(1.08) brightness(1.02)";
+      case "cinema":
+        return "contrast(1.15) saturate(0.9) brightness(0.98)";
+      case "matte":
+        return "contrast(0.92) saturate(0.95) brightness(1.06)";
+      case "soft":
+        return "contrast(0.95) saturate(0.9) brightness(1.05)";
       case "noir":
         return "grayscale(1) contrast(1.2)";
       case "warm":
         return "saturate(1.1) sepia(0.25)";
       case "cool":
         return "saturate(1.05) hue-rotate(190deg)";
+      case "amber":
+        return "sepia(0.35) saturate(1.1) contrast(1.03)";
+      case "teal":
+        return "hue-rotate(160deg) saturate(1.08) contrast(1.05)";
+      case "rose":
+        return "hue-rotate(-15deg) saturate(1.12) brightness(1.02)";
+      case "midnight":
+        return "brightness(0.85) contrast(1.1) saturate(0.9)";
       default:
         return "none";
     }

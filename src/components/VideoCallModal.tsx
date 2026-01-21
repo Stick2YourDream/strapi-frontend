@@ -15,6 +15,7 @@ import {
   type VideoCallInvitee,
   type VideoCallMessage,
 } from "../context/VideoCallContext";
+import callRingtoneUrl from "../assets/call.mp3";
 
 type VideoCallModalProps = {
   friends: VideoCallInvitee[];
@@ -22,17 +23,57 @@ type VideoCallModalProps = {
 
 const EMOJIS = [
   "\u{1F44D}",
+  "\u{1F44E}",
   "\u{1F44F}",
-  "\u{1F525}",
-  "\u{1F389}",
+  "\u{1F44A}",
+  "\u{1F91D}",
+  "\u{1F64F}",
   "\u{1F64C}",
-  "\u{1F60E}",
-  "\u{1F602}",
-  "\u{1F60A}",
-  "\u{1F62E}",
-  "\u{1F622}",
-  "\u{1F970}",
+  "\u{1F4AA}",
+  "\u{1F525}",
+  "\u{1F4AF}",
+  "\u{2728}",
+  "\u{1F389}",
+  "\u{1F38A}",
+  "\u{1F381}",
+  "\u{1F3C6}",
   "\u{1F680}",
+  "\u{1F4A1}",
+  "\u{1F31F}",
+  "\u{1F60E}",
+  "\u{1F60A}",
+  "\u{1F603}",
+  "\u{1F604}",
+  "\u{1F606}",
+  "\u{1F602}",
+  "\u{1F923}",
+  "\u{1F609}",
+  "\u{1F60D}",
+  "\u{1F618}",
+  "\u{1F970}",
+  "\u{1F929}",
+  "\u{1F972}",
+  "\u{1F913}",
+  "\u{1F914}",
+  "\u{1F92F}",
+  "\u{1F62E}",
+  "\u{1F632}",
+  "\u{1F622}",
+  "\u{1F62D}",
+  "\u{1F620}",
+  "\u{1F621}",
+  "\u{1F624}",
+  "\u{1F607}",
+  "\u{1F47B}",
+  "\u{1F47D}",
+  "\u{1F984}",
+  "\u{1F33F}",
+  "\u{1F339}",
+  "\u{1F30A}",
+  "\u{1F387}",
+  "\u{2764}",
+  "\u{1F49A}",
+  "\u{1F499}",
 ];
 
 const GIFS = [
@@ -60,23 +101,86 @@ const GIFS = [
     label: "Mind blown",
     url: "https://media.giphy.com/media/3oriO0OEd9QIDdllqo/giphy.gif",
   },
+  {
+    label: "Excited",
+    url: "https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.gif",
+  },
+  {
+    label: "Happy dance",
+    url: "https://media.giphy.com/media/ASd0Ukj0y3qMM/giphy.gif",
+  },
+  {
+    label: "Big yes",
+    url: "https://media.giphy.com/media/5GoVLqeAOo6PK/giphy.gif",
+  },
+  {
+    label: "Clap",
+    url: "https://media.giphy.com/media/13HgwGsXF0aiGY/giphy.gif",
+  },
+  {
+    label: "Lets go",
+    url: "https://media.giphy.com/media/3o7aD2saalBwwftBIY/giphy.gif",
+  },
+  {
+    label: "Nailed it",
+    url: "https://media.giphy.com/media/3oEjI6SIIHBdRxXI40/giphy.gif",
+  },
+  {
+    label: "Fire",
+    url: "https://media.giphy.com/media/l0MYC0LajbaPoEADu/giphy.gif",
+  },
+  {
+    label: "Mic drop",
+    url: "https://media.giphy.com/media/3o6Zt9jaIlgVHWUZ1K/giphy.gif",
+  },
+  {
+    label: "Victory",
+    url: "https://media.giphy.com/media/3o6Zt481isNVuQI1l6/giphy.gif",
+  },
+  {
+    label: "Wow",
+    url: "https://media.giphy.com/media/26gslfJ7oM1aBH1e8/giphy.gif",
+  },
+  {
+    label: "Thank you",
+    url: "https://media.giphy.com/media/xUPGcguWZHRC2HyBRS/giphy.gif",
+  },
+  {
+    label: "High five",
+    url: "https://media.giphy.com/media/3o6Zt5b8oCV0nG5CQU/giphy.gif",
+  },
 ];
 
 const BACKGROUND_OPTIONS = [
   { id: "none", label: "None" },
   { id: "studio", label: "Studio" },
+  { id: "loft", label: "Loft" },
+  { id: "gallery", label: "Gallery" },
+  { id: "library", label: "Library" },
+  { id: "cafe", label: "Cafe" },
+  { id: "garden", label: "Garden" },
+  { id: "coast", label: "Coast" },
   { id: "sunset", label: "Sunset" },
-  { id: "mint", label: "Mint" },
   { id: "aurora", label: "Aurora" },
+  { id: "mint", label: "Mint" },
   { id: "ember", label: "Ember" },
+  { id: "night", label: "Night City" },
 ];
 
 const FILTER_OPTIONS = [
   { id: "none", label: "Clean" },
   { id: "vivid", label: "Vivid" },
-  { id: "noir", label: "Noir" },
+  { id: "crisp", label: "Crisp" },
+  { id: "cinema", label: "Cinema" },
+  { id: "matte", label: "Matte" },
+  { id: "soft", label: "Soft" },
   { id: "warm", label: "Warm" },
   { id: "cool", label: "Cool" },
+  { id: "amber", label: "Amber" },
+  { id: "teal", label: "Teal" },
+  { id: "rose", label: "Rose" },
+  { id: "noir", label: "Noir" },
+  { id: "midnight", label: "Midnight" },
 ];
 
 const getInitials = (value: string) => {
@@ -243,7 +347,10 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const [isPipDragging, setIsPipDragging] = useState(false);
   const [isMobileLayout, setIsMobileLayout] = useState(false);
   const [popoutContainer, setPopoutContainer] = useState<HTMLDivElement | null>(null);
-  const ringtoneRef = useRef<{ ctx: AudioContext | null; timer: number | null }>({
+  const ringtoneRef = useRef<{ audio: HTMLAudioElement | null }>({
+    audio: null,
+  });
+  const ringbackRef = useRef<{ ctx: AudioContext | null; timer: number | null }>({
     ctx: null,
     timer: null,
   });
@@ -599,22 +706,52 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
 
   useEffect(() => {
     const stopRingtone = () => {
-      if (ringtoneRef.current.timer) {
-        window.clearInterval(ringtoneRef.current.timer);
-        ringtoneRef.current.timer = null;
-      }
-      if (ringtoneRef.current.ctx) {
-        ringtoneRef.current.ctx.close().catch(() => undefined);
-        ringtoneRef.current.ctx = null;
-      }
+      const audio = ringtoneRef.current.audio;
+      if (!audio) return;
+      audio.pause();
+      audio.currentTime = 0;
+      ringtoneRef.current.audio = null;
     };
 
-    if (status !== "connecting") {
+    if (status !== "incoming" || !incomingCall) {
       stopRingtone();
       return;
     }
 
     const startRingtone = async () => {
+      try {
+        const audio = new Audio(callRingtoneUrl);
+        audio.loop = true;
+        ringtoneRef.current.audio = audio;
+        await audio.play();
+      } catch {
+        // ignore audio errors
+      }
+    };
+
+    void startRingtone();
+
+    return () => stopRingtone();
+  }, [incomingCall, status]);
+
+  useEffect(() => {
+    const stopRingback = () => {
+      if (ringbackRef.current.timer) {
+        window.clearInterval(ringbackRef.current.timer);
+        ringbackRef.current.timer = null;
+      }
+      if (ringbackRef.current.ctx) {
+        ringbackRef.current.ctx.close().catch(() => undefined);
+        ringbackRef.current.ctx = null;
+      }
+    };
+
+    if (status !== "connecting") {
+      stopRingback();
+      return;
+    }
+
+    const startRingback = async () => {
       try {
         const AudioCtor =
           window.AudioContext ||
@@ -622,13 +759,13 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
             .webkitAudioContext;
         if (!AudioCtor) return;
         const ctx = new AudioCtor();
-        ringtoneRef.current.ctx = ctx;
+        ringbackRef.current.ctx = ctx;
         if (ctx.state === "suspended") {
           await ctx.resume();
         }
 
         const playRingBurst = (offset: number) => {
-          if (!ringtoneRef.current.ctx) return;
+          if (!ringbackRef.current.ctx) return;
           const startAt = ctx.currentTime + offset;
           const duration = 0.45;
           const oscA = ctx.createOscillator();
@@ -661,15 +798,15 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
         };
 
         playCadence();
-        ringtoneRef.current.timer = window.setInterval(playCadence, 3200);
+        ringbackRef.current.timer = window.setInterval(playCadence, 3200);
       } catch {
         // ignore audio errors
       }
     };
 
-    void startRingtone();
+    void startRingback();
 
-    return () => stopRingtone();
+    return () => stopRingback();
   }, [status]);
 
   if (!showModal) return null;
