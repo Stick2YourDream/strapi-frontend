@@ -160,6 +160,9 @@ const E2EE_VERSION = 1;
 const E2EE_IV_BYTES = 12;
 const E2EE_HEADER_BYTES = 1 + E2EE_IV_BYTES;
 const CALL_KEY_GRACE_MS = 2000;
+const CALL_E2EE_ENABLED = ["1", "true", "on", "yes"].includes(
+  String(import.meta.env.VITE_CALL_E2EE || "").toLowerCase()
+);
 
 const isChromeOrEdge = () => {
   if (typeof navigator === "undefined") return false;
@@ -180,6 +183,7 @@ const isChromeOrEdge = () => {
 
 const supportsCallE2ee = () => {
   if (typeof window === "undefined") return false;
+  if (!CALL_E2EE_ENABLED) return false;
   const sender = (window as any).RTCRtpSender?.prototype;
   const receiver = (window as any).RTCRtpReceiver?.prototype;
   const hasInsertable =
@@ -414,15 +418,23 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   }, [e2eeSupported]);
 
   const setCallEncryptionMode = useCallback(
-    (enabled: boolean, reason?: string, options?: { broadcast?: boolean }) => {
+    (
+      enabled: boolean,
+      reason?: string,
+      options?: { broadcast?: boolean; suppressBanner?: boolean }
+    ) => {
       const nextEnabled = Boolean(enabled && e2eeSupported);
       callEncryptionEnabledRef.current = nextEnabled;
       if (!nextEnabled) {
         callKeyRef.current = null;
         callKeyRoomRef.current = null;
         callKeyRecipientsRef.current = new Set();
-        const message = reason ? `E2EE disabled: ${reason}` : "E2EE disabled.";
-        setE2eeDebug(message);
+        if (options?.suppressBanner) {
+          setE2eeDebug(null);
+        } else {
+          const message = reason ? `E2EE disabled: ${reason}` : "E2EE disabled.";
+          setE2eeDebug(message);
+        }
       } else {
         setE2eeDebug(null);
       }
@@ -1502,7 +1514,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         participants: VideoCallParticipant[];
         e2eeEnabled?: boolean;
       }) => {
-        if (payload.e2eeEnabled === false) {
+        if (!CALL_E2EE_ENABLED) {
+          setCallEncryptionMode(false, "disabled in settings", { suppressBanner: true });
+        } else if (payload.e2eeEnabled === false) {
           if (callEncryptionEnabledRef.current) {
             setCallEncryptionMode(false, "disabled by host");
           }
@@ -1611,6 +1625,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       "call:e2ee:mode",
       (payload: { roomId: string; enabled: boolean }) => {
         if (!payload?.roomId || payload.roomId !== activeRoomRef.current) return;
+        if (!CALL_E2EE_ENABLED) {
+          setCallEncryptionMode(false, "disabled in settings", { suppressBanner: true });
+          return;
+        }
         if (!payload.enabled) {
           if (!callEncryptionEnabledRef.current) return;
           setCallEncryptionMode(false, "disabled by host");
@@ -2073,7 +2091,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     const roomId = createRoomId();
     resetE2eeState();
     isCallHostRef.current = true;
-    if (!e2eeSupported) {
+    if (!CALL_E2EE_ENABLED) {
+      setCallEncryptionMode(false, "disabled in settings", { suppressBanner: true });
+    } else if (!e2eeSupported) {
       setCallEncryptionMode(false, "unsupported browser or missing insertable streams");
     } else {
       setCallEncryptionMode(true);
@@ -2115,7 +2135,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const acceptCall = useCallback(async () => {
     if (!socketRef.current || !incomingCall) return;
     resetE2eeState();
-    if (incomingCall.e2eeEnabled === false) {
+    if (!CALL_E2EE_ENABLED) {
+      setCallEncryptionMode(false, "disabled in settings", { suppressBanner: true });
+    } else if (incomingCall.e2eeEnabled === false) {
       setCallEncryptionMode(false, "disabled by host");
     } else if (!e2eeSupported) {
       setCallEncryptionMode(false, "unsupported browser", { broadcast: true });
