@@ -2,10 +2,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import api from "../api/strapi";
 import { useAuth } from "../context/AuthContext";
 import "../css/topbar.css";
+import { HOBBY_OPTIONS } from "../pages/me_hobbies";
 import {
   buildProfilePayloadFromAttrs,
   decryptFriendProfilePayload,
+  type PrivacySettings,
+  type ProfileVisibility,
   type ProfilePayload,
+  type VisibilityLevel,
 } from "../utils/profile-e2ee";
 
 type DirectoryProfile = {
@@ -23,6 +27,10 @@ type DirectoryProfile = {
   hobbies?: string;
   hobbyTags?: string[];
   hobbyKeys?: string[];
+  profileVisibility?: ProfileVisibility;
+  privacySettings?: PrivacySettings;
+  searchIndexingEnabled?: boolean;
+  activityVisibility?: VisibilityLevel;
 };
 
 type LocationOption = {
@@ -80,6 +88,57 @@ const normalizeSearch = (value: string) =>
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+const normalizeVisibility = (
+  value: unknown,
+  fallback: VisibilityLevel = "public"
+): VisibilityLevel => {
+  if (value === "public" || value === "followers" || value === "private") {
+    return value;
+  }
+  return fallback;
+};
+const normalizeProfileVisibility = (value: unknown): ProfileVisibility => {
+  if (value === "custom") return "custom";
+  return normalizeVisibility(value, "public");
+};
+const normalizePrivacySettings = (value: unknown): PrivacySettings => {
+  const base: PrivacySettings = {
+    bio: "public",
+    links: "public",
+    location: "public",
+    birthday: "public",
+    followers: "public",
+    following: "public",
+    activity: "public",
+  };
+  if (!value || typeof value !== "object") return base;
+  const settings = value as PrivacySettings;
+  return {
+    bio: normalizeVisibility(settings.bio, base.bio),
+    links: normalizeVisibility(settings.links, base.links),
+    location: normalizeVisibility(settings.location, base.location),
+    birthday: normalizeVisibility(settings.birthday, base.birthday),
+    followers: normalizeVisibility(settings.followers, base.followers),
+    following: normalizeVisibility(settings.following, base.following),
+    activity: normalizeVisibility(settings.activity, base.activity),
+  };
+};
+const resolveFieldVisibility = (
+  profileVisibility: ProfileVisibility,
+  privacySettings: PrivacySettings,
+  field: keyof PrivacySettings,
+  fallback: VisibilityLevel = "public"
+) => {
+  if (profileVisibility === "custom") {
+    return normalizeVisibility(privacySettings[field], fallback);
+  }
+  return normalizeVisibility(profileVisibility, fallback);
+};
+const canView = (audience: "public" | "followers", visibility: VisibilityLevel) => {
+  if (visibility === "public") return true;
+  if (visibility === "followers") return audience === "followers";
+  return false;
+};
 const normalizeLocation = (value?: string) => normalizeText(value || "");
 const matchByName = (list: LocationOption[], value: string) =>
   list.find((item) => normalizeLocation(item.name) === normalizeLocation(value));
@@ -113,13 +172,16 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
   const [stateFilter, setStateFilter] = useState("");
   const [stateCodeFilter, setStateCodeFilter] = useState("");
   const [cityFilter, setCityFilter] = useState("");
-  const [hobbyFilter, setHobbyFilter] = useState("");
+  const [hobbyFilterInput, setHobbyFilterInput] = useState("");
+  const [hobbyFilterList, setHobbyFilterList] = useState<string[]>([]);
+  const [hobbyFilterOpen, setHobbyFilterOpen] = useState(false);
   const [similarOnly, setSimilarOnly] = useState(false);
   const [countryOptions, setCountryOptions] = useState<LocationOption[]>([]);
   const [stateOptions, setStateOptions] = useState<LocationOption[]>([]);
   const [cityOptions, setCityOptions] = useState<LocationOption[]>([]);
   const [locationError, setLocationError] = useState<string | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const hobbyFilterBlurRef = useRef<number | null>(null);
   const rawQuery = value ?? query;
   const trimmedQuery = rawQuery.trim();
 
@@ -184,7 +246,39 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
               }
             }
             const fallbackPayload = buildProfilePayloadFromAttrs(attrs);
-            const resolvedPayload = payload ?? fallbackPayload;
+            const resolvedPayload = payload
+              ? { ...fallbackPayload, ...payload }
+              : fallbackPayload;
+            const searchIndexingEnabled =
+              typeof resolvedPayload.searchIndexingEnabled === "boolean"
+                ? resolvedPayload.searchIndexingEnabled
+                : true;
+            const profileVisibility = normalizeProfileVisibility(
+              resolvedPayload.profileVisibility
+            );
+            const privacySettings = normalizePrivacySettings(
+              resolvedPayload.privacySettings
+            );
+            const isFriend = acceptedIds.has(profileUserId);
+            const canSeeProfile =
+              profileVisibility === "public" ||
+              profileVisibility === "custom" ||
+              (profileVisibility === "followers" && isFriend);
+            if (!canSeeProfile) return null;
+            if (!isFriend && !searchIndexingEnabled) return null;
+            const audience: "public" | "followers" = isFriend ? "followers" : "public";
+            const locationVisibility = resolveFieldVisibility(
+              profileVisibility,
+              privacySettings,
+              "location",
+              "public"
+            );
+            const baseVisibility =
+              profileVisibility === "custom"
+                ? "public"
+                : normalizeVisibility(profileVisibility, "public");
+            const canShowLocation = canView(audience, locationVisibility);
+            const canShowHobbies = canView(audience, baseVisibility);
             const userFirstName = userAttrs?.firstName || userAttrs?.firstname || "";
             const userLastName = userAttrs?.lastName || userAttrs?.lastname || "";
             const profileFirstName = resolvedPayload.firstName || userFirstName || "";
@@ -196,7 +290,8 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
               attrs.displayName ||
               attrs.name ||
               "";
-            const hobbyTags = parseHobbyList(resolvedPayload.hobbies);
+            const visibleHobbies = canShowHobbies ? resolvedPayload.hobbies || "" : "";
+            const hobbyTags = parseHobbyList(visibleHobbies);
             return {
               id: p.id ?? attrs.documentId,
               userId: profileUserId,
@@ -206,12 +301,19 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
               lastName: profileLastName,
               displayName,
               avatarUrl: pickMediaUrl(attrs.avatar),
-              country: resolvedPayload.country || "",
-              state: resolvedPayload.state || "",
-              city: resolvedPayload.city || "",
-              hobbies: resolvedPayload.hobbies || "",
+              country: canShowLocation ? resolvedPayload.country || "" : "",
+              state: canShowLocation ? resolvedPayload.state || "" : "",
+              city: canShowLocation ? resolvedPayload.city || "" : "",
+              hobbies: visibleHobbies,
               hobbyTags,
               hobbyKeys: hobbyTags.map(hobbyKey),
+              profileVisibility,
+              privacySettings,
+              searchIndexingEnabled,
+              activityVisibility: normalizeVisibility(
+                resolvedPayload.activityVisibility,
+                "public"
+              ),
             };
           })
         );
@@ -338,12 +440,21 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
       !countryFilter &&
       !stateFilter &&
       !cityFilter &&
-      !hobbyFilter
+      !hobbyFilterList.length &&
+      !hobbyFilterInput
     ) {
       return;
     }
     setOpen(true);
-  }, [trimmedQuery, similarOnly, countryFilter, stateFilter, cityFilter, hobbyFilter]);
+  }, [
+    trimmedQuery,
+    similarOnly,
+    countryFilter,
+    stateFilter,
+    cityFilter,
+    hobbyFilterList.length,
+    hobbyFilterInput,
+  ]);
 
   const updateQuery = (next: string) => {
     if (onChange) onChange(next);
@@ -373,6 +484,50 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
   const handleCityFilterChange = (value: string) => {
     setCityFilter(value);
   };
+
+  const openHobbyFilter = () => {
+    if (hobbyFilterBlurRef.current) {
+      window.clearTimeout(hobbyFilterBlurRef.current);
+    }
+    setHobbyFilterOpen(true);
+  };
+
+  const closeHobbyFilter = () => {
+    if (hobbyFilterBlurRef.current) {
+      window.clearTimeout(hobbyFilterBlurRef.current);
+    }
+    hobbyFilterBlurRef.current = window.setTimeout(() => {
+      setHobbyFilterOpen(false);
+    }, 120);
+  };
+
+  const addHobbyFilterValue = (value: string) => {
+    const candidate = normalizeHobby(value);
+    if (!candidate) return;
+    const match = HOBBY_OPTIONS.find((hobby) => hobbyKey(hobby) === hobbyKey(candidate));
+    if (!match) return;
+    if (hobbyFilterList.some((entry) => hobbyKey(entry) === hobbyKey(match))) {
+      setHobbyFilterInput("");
+      return;
+    }
+    setHobbyFilterList((prev) => [...prev, match]);
+    setHobbyFilterInput("");
+  };
+
+  const removeHobbyFilterValue = (value: string) => {
+    const key = hobbyKey(value);
+    setHobbyFilterList((prev) => prev.filter((entry) => hobbyKey(entry) !== key));
+  };
+
+  const hobbyFilterSuggestions = useMemo(() => {
+    const term = hobbyFilterInput.trim().toLowerCase();
+    const selected = new Set(hobbyFilterList.map((entry) => hobbyKey(entry)));
+    const matches = HOBBY_OPTIONS.filter((hobby) => {
+      if (selected.has(hobbyKey(hobby))) return false;
+      return term ? hobby.toLowerCase().includes(term) : true;
+    });
+    return matches.slice(0, 12);
+  }, [hobbyFilterInput, hobbyFilterList]);
 
   const relationStatusFor = (profileUserId?: number) => {
     if (!profileUserId || !relations.length) return null;
@@ -414,8 +569,22 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
   const normalizedState = manualFiltersEnabled ? normalizeLocation(stateFilter) : "";
   const normalizedCity = manualFiltersEnabled ? normalizeLocation(cityFilter) : "";
   const hobbyFilterKeys = useMemo(
-    () => (manualFiltersEnabled ? parseHobbyList(hobbyFilter).map(hobbyKey) : []),
-    [hobbyFilter, manualFiltersEnabled]
+    () => {
+      if (!manualFiltersEnabled) return [];
+      const combined = [...hobbyFilterList];
+      const inputValue = normalizeHobby(hobbyFilterInput);
+      if (inputValue) combined.push(inputValue);
+      const seen = new Set<string>();
+      return combined
+        .map(hobbyKey)
+        .filter((key) => {
+          if (!key) return false;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+    },
+    [hobbyFilterList, hobbyFilterInput, manualFiltersEnabled]
   );
   const filtersActive =
     Boolean(normalizedCountry) ||
@@ -596,13 +765,74 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
                   </label>
                   <label className="topbar-filter-field">
                     <span>Hobbies</span>
-                    <input
-                      type="text"
-                      value={hobbyFilter}
-                      onChange={(e) => setHobbyFilter(e.target.value)}
-                      placeholder="Hobby keywords"
-                      disabled={similarOnly}
-                    />
+                    <div className="topbar-hobby-picker">
+                      <div className="topbar-hobby-input">
+                        <input
+                          type="text"
+                          value={hobbyFilterInput}
+                          onChange={(e) => setHobbyFilterInput(e.target.value)}
+                          onFocus={openHobbyFilter}
+                          onBlur={closeHobbyFilter}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              addHobbyFilterValue(hobbyFilterInput);
+                            }
+                          }}
+                          placeholder="Search hobbies"
+                          disabled={similarOnly}
+                        />
+                        <button
+                          type="button"
+                          className="topbar-hobby-add"
+                          onClick={() => addHobbyFilterValue(hobbyFilterInput)}
+                          disabled={similarOnly}
+                        >
+                          Add
+                        </button>
+                      </div>
+                      {hobbyFilterOpen && (
+                        <div className="topbar-hobby-dropdown">
+                          {hobbyFilterSuggestions.length ? (
+                            hobbyFilterSuggestions.map((hobby) => (
+                              <button
+                                key={hobby}
+                                type="button"
+                                className="topbar-hobby-option"
+                                onMouseDown={(event) => {
+                                  event.preventDefault();
+                                  addHobbyFilterValue(hobby);
+                                  openHobbyFilter();
+                                }}
+                              >
+                                {hobby}
+                              </button>
+                            ))
+                          ) : (
+                            <div className="topbar-hobby-option is-empty">No matches</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    {hobbyFilterList.length ? (
+                      <div className="topbar-hobby-chips">
+                        {hobbyFilterList.map((hobby) => (
+                          <span className="topbar-hobby-chip" key={hobby}>
+                            {hobby}
+                            <button
+                              type="button"
+                              className="topbar-hobby-remove"
+                              onClick={() => removeHobbyFilterValue(hobby)}
+                              disabled={similarOnly}
+                            >
+                              x
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="topbar-hobby-empty">Pick one or more hobbies.</div>
+                    )}
                   </label>
                 </div>
                 <label className="topbar-filter-toggle">

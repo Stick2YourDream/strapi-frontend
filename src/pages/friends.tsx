@@ -15,7 +15,10 @@ import {
   buildProfilePayloadFromAttrs,
   decryptFriendProfilePayload,
   ensureProfileKeyShares,
+  type PrivacySettings,
   type ProfilePayload,
+  type ProfileVisibility,
+  type VisibilityLevel,
 } from "../utils/profile-e2ee";
 
 type FriendPost = {
@@ -44,6 +47,10 @@ type FriendProfile = {
   state?: string;
   city?: string;
   avatarUrl?: string;
+  profileVisibility?: ProfileVisibility;
+  privacySettings?: PrivacySettings;
+  activityVisibility?: VisibilityLevel;
+  lastSeenAt?: string;
 };
 
 type FriendRelation = {
@@ -98,6 +105,78 @@ const isYoutubeUrl = (value: string) => {
 
 const normalizeFriendSearch = (value: string) =>
   value.trim().replace(/@+/g, "").replace(/\s+/g, " ").toLowerCase();
+
+const DEFAULT_PRIVACY_SETTINGS: PrivacySettings = {
+  bio: "public",
+  links: "public",
+  location: "public",
+  birthday: "public",
+  followers: "public",
+  following: "public",
+  activity: "public",
+};
+
+const normalizeVisibility = (value: any, fallback: VisibilityLevel): VisibilityLevel => {
+  if (value === "public" || value === "followers" || value === "private") {
+    return value;
+  }
+  return fallback;
+};
+
+const normalizeProfileVisibility = (value: any): ProfileVisibility => {
+  if (
+    value === "public" ||
+    value === "followers" ||
+    value === "private" ||
+    value === "custom"
+  ) {
+    return value;
+  }
+  return "public";
+};
+
+const normalizePrivacySettings = (settings?: PrivacySettings | null) => ({
+  bio: normalizeVisibility(settings?.bio, DEFAULT_PRIVACY_SETTINGS.bio),
+  links: normalizeVisibility(settings?.links, DEFAULT_PRIVACY_SETTINGS.links),
+  location: normalizeVisibility(settings?.location, DEFAULT_PRIVACY_SETTINGS.location),
+  birthday: normalizeVisibility(settings?.birthday, DEFAULT_PRIVACY_SETTINGS.birthday),
+  followers: normalizeVisibility(settings?.followers, DEFAULT_PRIVACY_SETTINGS.followers),
+  following: normalizeVisibility(settings?.following, DEFAULT_PRIVACY_SETTINGS.following),
+  activity: normalizeVisibility(settings?.activity, DEFAULT_PRIVACY_SETTINGS.activity),
+});
+
+const resolveFieldVisibility = (
+  profileVisibility: ProfileVisibility,
+  privacySettings: PrivacySettings,
+  field: keyof PrivacySettings,
+  fallback: VisibilityLevel
+) => {
+  if (profileVisibility === "custom") {
+    return normalizeVisibility(privacySettings[field], fallback);
+  }
+  return normalizeVisibility(profileVisibility, fallback);
+};
+
+const canView = (audience: "public" | "followers", visibility: VisibilityLevel) => {
+  if (visibility === "public") return true;
+  if (visibility === "followers") return audience === "followers";
+  return false;
+};
+
+const formatLastSeen = (value?: string) => {
+  if (!value) return "Last seen recently";
+  const time = new Date(value).getTime();
+  if (!Number.isFinite(time)) return "Last seen recently";
+  const diff = Date.now() - time;
+  if (diff < 60_000) return "Active just now";
+  if (diff < 3_600_000) return `Last seen ${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `Last seen ${Math.floor(diff / 3_600_000)}h ago`;
+  const days = Math.floor(diff / 86_400_000);
+  if (days < 7) return `Last seen ${days}d ago`;
+  return `Last seen ${new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(
+    new Date(time)
+  )}`;
+};
 
 const LinkPreviewCard = ({
   preview,
@@ -355,9 +434,20 @@ export default function Friends() {
                 payload = null;
               }
             }
-            if (!payload) {
-              payload = buildProfilePayloadFromAttrs(attrs);
+            const basePayload = buildProfilePayloadFromAttrs(attrs);
+            if (payload) {
+              payload = { ...basePayload, ...payload };
+            } else {
+              payload = basePayload;
             }
+            const profileVisibility = normalizeProfileVisibility(
+              payload.profileVisibility
+            );
+            const privacySettings = normalizePrivacySettings(payload.privacySettings);
+            const activityVisibility = normalizeVisibility(
+              payload.activityVisibility,
+              "public"
+            );
             return {
               id: p.id ?? attrs.documentId,
               userId: friendUserId,
@@ -367,6 +457,10 @@ export default function Friends() {
               handle: attrs.handle || userAttrs?.username || `user-${p.id ?? attrs.documentId}`,
               bio: payload.bio || "",
               avatarUrl: pickMediaUrl(attrs.avatar),
+              profileVisibility,
+              privacySettings,
+              activityVisibility,
+              lastSeenAt: payload.lastSeenAt,
             } as FriendProfile;
           })
         );
@@ -487,6 +581,32 @@ export default function Friends() {
     ? `${selectedFriend.firstName || ""} ${selectedFriend.lastName || ""}`.trim() ||
       `@${selectedFriend.handle || selectedFriend.username || "friend"}`
     : "this user";
+  const selectedVisibility = normalizeProfileVisibility(
+    selectedFriend?.profileVisibility
+  );
+  const selectedPrivacy = normalizePrivacySettings(selectedFriend?.privacySettings);
+  const selectedAudience: "public" | "followers" = "followers";
+  const selectedBioVisibility = resolveFieldVisibility(
+    selectedVisibility,
+    selectedPrivacy,
+    "bio",
+    "public"
+  );
+  const canShowSelectedBio =
+    selectedVisibility !== "private" && canView(selectedAudience, selectedBioVisibility);
+  const selectedActivityVisibility = normalizeVisibility(
+    selectedFriend?.activityVisibility,
+    "public"
+  );
+  const canShowSelectedActivity =
+    selectedVisibility !== "private" &&
+    canView(selectedAudience, selectedActivityVisibility);
+  const selectedOnline = selectedFriend?.userId
+    ? onlineUserIds.has(selectedFriend.userId)
+    : false;
+  const selectedActivityLabel = selectedOnline
+    ? "Active now"
+    : formatLastSeen(selectedFriend?.lastSeenAt);
 
   const selectedPosts =
     selectedFriend?.userId && postsByOwner[selectedFriend.userId]
@@ -511,7 +631,11 @@ export default function Friends() {
   const renderAvatar = (profile?: FriendProfile, size = 44) => {
     const handle = profile?.handle || profile?.username || "User";
     const isOnline = profile?.userId ? onlineUserIds.has(profile.userId) : false;
-    const statusLabel = isOnline ? "Online" : "Offline";
+    const profileVisibility = normalizeProfileVisibility(profile?.profileVisibility);
+    const activityVisibility = normalizeVisibility(profile?.activityVisibility, "public");
+    const canShowActivity =
+      profileVisibility !== "private" && canView("followers", activityVisibility);
+    const statusLabel = isOnline ? "Active now" : "Offline";
     const avatar = profile?.avatarUrl ? (
       <img
         src={profile.avatarUrl}
@@ -532,11 +656,13 @@ export default function Friends() {
     return (
       <span className="presence-avatar" style={{ width: size, height: size }}>
         {avatar}
-        <span
-          className={`presence-dot ${isOnline ? "is-online" : "is-offline"}`}
-          title={statusLabel}
-          aria-label={statusLabel}
-        />
+        {canShowActivity && (
+          <span
+            className={`presence-dot ${isOnline ? "is-online" : "is-offline"}`}
+            title={statusLabel}
+            aria-label={statusLabel}
+          />
+        )}
       </span>
     );
   };
@@ -816,6 +942,9 @@ export default function Friends() {
                     <span className="friend-name">
                       @{selectedFriend.handle || selectedFriend.username || "friend"}
                     </span>
+                    {canShowSelectedActivity && (
+                      <span className="friend-activity">{selectedActivityLabel}</span>
+                    )}
                     {(isBlocked || isMuted) && (
                       <div className="friend-status-row">
                         {isBlocked && <span className="friend-status-pill is-blocked">Blocked</span>}
@@ -824,7 +953,11 @@ export default function Friends() {
                     )}
                   </div>
                 </div>
-                <p className="comment-body">{selectedFriend.bio || "No bio yet."}</p>
+                <p className="comment-body">
+                  {canShowSelectedBio
+                    ? selectedFriend.bio || "No bio yet."
+                    : "Bio hidden by privacy settings."}
+                </p>
                 <div className="friend-detail-actions">
                   <button
                     className="btn primary"

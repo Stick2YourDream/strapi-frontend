@@ -200,6 +200,111 @@
   color: #f1f5f9;
 }
 
+.topbar-hobby-picker {
+  position: relative;
+  display: grid;
+  gap: 6px;
+}
+
+.topbar-hobby-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.topbar-hobby-input input {
+  flex: 1;
+}
+
+.topbar-hobby-add {
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  background: rgba(15, 23, 42, 0.7);
+  color: #e2e8f0;
+  font-size: 11px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+}
+
+.topbar-hobby-add:hover:enabled {
+  border-color: rgba(96, 165, 250, 0.7);
+  background: rgba(30, 41, 59, 0.7);
+  transform: translateY(-1px);
+}
+
+.topbar-hobby-add:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.topbar-hobby-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: #0b1220;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 12px;
+  box-shadow: 0 16px 28px rgba(0, 0, 0, 0.4);
+  max-height: 220px;
+  overflow-y: auto;
+  z-index: 5;
+}
+
+.topbar-hobby-option {
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  color: #e2e8f0;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.topbar-hobby-option:hover {
+  background: rgba(59, 130, 246, 0.15);
+}
+
+.topbar-hobby-option.is-empty {
+  cursor: default;
+  color: #94a3b8;
+}
+
+.topbar-hobby-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.topbar-hobby-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(96, 165, 250, 0.4);
+  background: rgba(59, 130, 246, 0.12);
+  color: #dbeafe;
+  font-size: 11px;
+}
+
+.topbar-hobby-remove {
+  border: none;
+  background: transparent;
+  color: #93c5fd;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0;
+}
+
+.topbar-hobby-empty {
+  font-size: 11px;
+  color: #7f8ca5;
+}
+
 .topbar-filter-toggle {
   display: flex;
   align-items: center;

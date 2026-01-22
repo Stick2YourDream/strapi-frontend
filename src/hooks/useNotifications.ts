@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import api from "../api/strapi";
-import { ensureProfileKeyShares } from "../utils/profile-e2ee";
+import { ensureProfileKeyShares, type NotificationSettings } from "../utils/profile-e2ee";
 import notificationSoundUrl from "../assets/notificationsoundeffect.mp3";
 
 type NotificationCounts = {
@@ -122,7 +122,35 @@ const setLikeSnapshot = (userId: number, snapshot: Record<string, number>) => {
   localStorage.setItem(NOTIF_LIKE_SNAPSHOT_KEY, JSON.stringify(next));
 };
 
-export const useNotifications = (userId?: number | null) => {
+export const useNotifications = (
+  userId?: number | null,
+  settings?: NotificationSettings
+) => {
+  const normalizeTime = (value?: string) => {
+    if (!value) return null;
+    const match = /^(\d{2}):(\d{2})$/.exec(value);
+    if (!match) return null;
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+    return { hours, minutes };
+  };
+
+  const isWithinQuietHours = (settings?: NotificationSettings) => {
+    if (!settings?.quietHoursStart || !settings?.quietHoursEnd) return false;
+    const start = normalizeTime(settings.quietHoursStart);
+    const end = normalizeTime(settings.quietHoursEnd);
+    if (!start || !end) return false;
+    const now = new Date();
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const startMinutes = start.hours * 60 + start.minutes;
+    const endMinutes = end.hours * 60 + end.minutes;
+    if (startMinutes === endMinutes) return false;
+    if (startMinutes < endMinutes) {
+      return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+    }
+    return currentMinutes >= startMinutes || currentMinutes < endMinutes;
+  };
   const [counts, setCounts] = useState<NotificationCounts>({
     messages: 0,
     requests: 0,
@@ -177,15 +205,23 @@ export const useNotifications = (userId?: number | null) => {
         counts.comments > previous.comments ||
         counts.likes > previous.likes ||
         counts.groupUpdates > previous.groupUpdates);
-    if (hasIncrease) {
+    const dndActive = Boolean(settings?.dndEnabled) || isWithinQuietHours(settings);
+    const soundEnabled = settings?.soundEnabled !== false;
+    const vibrationEnabled = settings?.vibrationEnabled !== false;
+    if (hasIncrease && !dndActive) {
+      if (soundEnabled) {
       audioRef.current.currentTime = 0;
       const playPromise = audioRef.current.play();
       if (playPromise) {
         playPromise.catch(() => undefined);
       }
+      }
+      if (vibrationEnabled && typeof navigator !== "undefined" && navigator.vibrate) {
+        navigator.vibrate(180);
+      }
     }
     lastCountsRef.current = { ...counts };
-  }, [counts]);
+  }, [counts, settings]);
 
   const refresh = useCallback(async () => {
     if (!userId || !Number.isFinite(Number(userId))) {

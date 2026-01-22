@@ -18,7 +18,11 @@ import {
   encryptProfilePayload,
   ensureProfileKeyShares,
   PROFILE_PII_CLEAR_FIELDS,
+  type NotificationSettings,
+  type PrivacySettings,
+  type ProfileVisibility,
   type ProfilePayload,
+  type VisibilityLevel,
 } from "../utils/profile-e2ee";
 import { getOrCreateDeviceId } from "../utils/device-id";
 
@@ -42,6 +46,12 @@ type Profile = {
   phone?: string;
   preferredVerificationMethod: VerificationMethod;
   showPhoneOnProfile: boolean;
+  profileVisibility: ProfileVisibility;
+  privacySettings: PrivacySettings;
+  searchIndexingEnabled: boolean;
+  externalIndexingEnabled: boolean;
+  activityVisibility: VisibilityLevel;
+  notificationSettings: NotificationSettings;
   handle?: string;
   avatarUrl?: string;
   onboardingComplete?: boolean;
@@ -86,6 +96,16 @@ type RegistrationLocks = {
   country?: boolean;
   state?: boolean;
   city?: boolean;
+};
+
+type AccountStatus = {
+  deactivatedAt?: string | null;
+  deactivatedUntil?: string | null;
+  usernameChangeAvailableAt?: string | null;
+  emailChangeAvailableAt?: string | null;
+  usernameCooldownDays?: number;
+  emailCooldownDays?: number;
+  deactivationDays?: number;
 };
 
 type LinkPreview = {
@@ -274,8 +294,87 @@ const CHAT_PRESETS = [
   { id: "xlarge", label: "X-Large", width: 480, height: 680 },
 ] as const;
 
+const DEFAULT_PRIVACY_SETTINGS: Required<PrivacySettings> = {
+  bio: "public",
+  links: "public",
+  location: "public",
+  birthday: "public",
+  followers: "public",
+  following: "public",
+  activity: "public",
+};
+
+const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
+  dndEnabled: false,
+  quietHoursStart: "",
+  quietHoursEnd: "",
+  soundEnabled: true,
+  vibrationEnabled: true,
+};
+
+const normalizeVisibility = (value: any, fallback: VisibilityLevel): VisibilityLevel => {
+  if (value === "public" || value === "followers" || value === "private") {
+    return value;
+  }
+  return fallback;
+};
+
+const normalizeProfileVisibility = (value: any): ProfileVisibility => {
+  if (
+    value === "public" ||
+    value === "followers" ||
+    value === "private" ||
+    value === "custom"
+  ) {
+    return value;
+  }
+  return "public";
+};
+
+const normalizePrivacySettings = (
+  settings?: PrivacySettings | null
+): Required<PrivacySettings> => ({
+  bio: normalizeVisibility(settings?.bio, DEFAULT_PRIVACY_SETTINGS.bio),
+  links: normalizeVisibility(settings?.links, DEFAULT_PRIVACY_SETTINGS.links),
+  location: normalizeVisibility(settings?.location, DEFAULT_PRIVACY_SETTINGS.location),
+  birthday: normalizeVisibility(settings?.birthday, DEFAULT_PRIVACY_SETTINGS.birthday),
+  followers: normalizeVisibility(settings?.followers, DEFAULT_PRIVACY_SETTINGS.followers),
+  following: normalizeVisibility(settings?.following, DEFAULT_PRIVACY_SETTINGS.following),
+  activity: normalizeVisibility(settings?.activity, DEFAULT_PRIVACY_SETTINGS.activity),
+});
+
+const normalizeNotificationSettings = (settings?: NotificationSettings | null) => ({
+  dndEnabled: Boolean(settings?.dndEnabled),
+  quietHoursStart: settings?.quietHoursStart || "",
+  quietHoursEnd: settings?.quietHoursEnd || "",
+  soundEnabled: settings?.soundEnabled !== false,
+  vibrationEnabled: settings?.vibrationEnabled !== false,
+});
+
+const resolveFieldVisibility = (
+  profileVisibility: ProfileVisibility,
+  privacySettings: PrivacySettings,
+  field: keyof PrivacySettings,
+  fallback: VisibilityLevel
+) => {
+  if (profileVisibility === "custom") {
+    return normalizeVisibility(privacySettings[field], fallback);
+  }
+  return normalizeVisibility(profileVisibility, fallback);
+};
+
+const formatDateTime = (value?: string | null) => {
+  if (!value) return "Unknown";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unknown";
+  return new Intl.DateTimeFormat("en", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+};
+
 export default function Me() {
-  const { user, refreshProfile, logout } = useAuth();
+  const { user, refreshProfile, logout, updateUser } = useAuth();
   const { preferences, setBackgroundAll, resetBackgroundAll, setChatPrefs, getBackgroundStyle } =
     useUserPreferences();
   const navigate = useNavigate();
@@ -306,6 +405,12 @@ export default function Me() {
     phone: "",
     preferredVerificationMethod: "email",
     showPhoneOnProfile: false,
+    profileVisibility: "public",
+    privacySettings: DEFAULT_PRIVACY_SETTINGS,
+    searchIndexingEnabled: true,
+    externalIndexingEnabled: false,
+    activityVisibility: "public",
+    notificationSettings: DEFAULT_NOTIFICATION_SETTINGS,
     handle: "",
   });
 
@@ -313,6 +418,7 @@ export default function Me() {
   const profilePayloadRef = useRef<ProfilePayload | null>(null);
   const registrationLocksRef = useRef<RegistrationLocks>({});
   const hobbySnapshotRef = useRef<string[]>([]);
+  const hobbyBlurTimeoutRef = useRef<number | null>(null);
   const profileIdRef = useRef<string | number | null>(null);
   const handleFixAttemptedRef = useRef(false);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
@@ -326,6 +432,9 @@ export default function Me() {
   const [settingsView, setSettingsView] = useState<"profile" | "settings">("profile");
   const [hobbyInput, setHobbyInput] = useState("");
   const [hobbyList, setHobbyList] = useState<string[]>([]);
+  const [activeHobbyPicker, setActiveHobbyPicker] = useState<
+    "onboarding" | "profile" | null
+  >(null);
   const [postContent, setPostContent] = useState("");
   const [postFile, setPostFile] = useState<File | null>(null);
   const [postSubmitting, setPostSubmitting] = useState(false);
@@ -367,6 +476,37 @@ export default function Me() {
   const [passwordResetLoading, setPasswordResetLoading] = useState(false);
   const [passwordResetError, setPasswordResetError] = useState<string | null>(null);
   const [passwordResetSuccess, setPasswordResetSuccess] = useState<string | null>(null);
+  const [preferredMethodSaving, setPreferredMethodSaving] = useState(false);
+  const [preferredMethodError, setPreferredMethodError] = useState<string | null>(null);
+  const [preferredMethodSuccess, setPreferredMethodSuccess] = useState<string | null>(null);
+  const [privacySaving, setPrivacySaving] = useState(false);
+  const [privacyError, setPrivacyError] = useState<string | null>(null);
+  const [privacySuccess, setPrivacySuccess] = useState<string | null>(null);
+  const [notificationSaving, setNotificationSaving] = useState(false);
+  const [notificationError, setNotificationError] = useState<string | null>(null);
+  const [notificationSuccess, setNotificationSuccess] = useState<string | null>(null);
+  const [accountStatus, setAccountStatus] = useState<AccountStatus | null>(null);
+  const [accountStatusLoading, setAccountStatusLoading] = useState(false);
+  const [accountStatusError, setAccountStatusError] = useState<string | null>(null);
+  const [usernameDraft, setUsernameDraft] = useState("");
+  const [emailDraft, setEmailDraft] = useState("");
+  const [usernameChangeLoading, setUsernameChangeLoading] = useState(false);
+  const [usernameChangeError, setUsernameChangeError] = useState<string | null>(null);
+  const [usernameChangeSuccess, setUsernameChangeSuccess] = useState<string | null>(null);
+  const [emailChangeLoading, setEmailChangeLoading] = useState(false);
+  const [emailChangeError, setEmailChangeError] = useState<string | null>(null);
+  const [emailChangeSuccess, setEmailChangeSuccess] = useState<string | null>(null);
+  const [deactivateLoading, setDeactivateLoading] = useState(false);
+  const [deactivateError, setDeactivateError] = useState<string | null>(null);
+  const [deactivateSuccess, setDeactivateSuccess] = useState<string | null>(null);
+  const [deactivateReason, setDeactivateReason] = useState("");
+  const [reactivateLoading, setReactivateLoading] = useState(false);
+  const [reactivateError, setReactivateError] = useState<string | null>(null);
+  const [reactivateSuccess, setReactivateSuccess] = useState<string | null>(null);
+  const [previewAudience, setPreviewAudience] = useState<
+    "me" | "public" | "followers"
+  >("me");
+  const isSettingsView = settingsView === "settings";
 
   const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
@@ -495,6 +635,302 @@ export default function Me() {
       } else {
         setTrustedError("Unable to sign out other devices.");
       }
+    }
+  };
+
+  const loadAccountStatus = async () => {
+    if (!user) return;
+    setAccountStatusLoading(true);
+    setAccountStatusError(null);
+    try {
+      const res = await api.get("/account/status");
+      const data = res.data ?? {};
+      const status: AccountStatus = {
+        deactivatedAt: data.deactivatedAt ?? null,
+        deactivatedUntil: data.deactivatedUntil ?? null,
+        usernameChangeAvailableAt: data.usernameChangeAvailableAt ?? null,
+        emailChangeAvailableAt: data.emailChangeAvailableAt ?? null,
+        usernameCooldownDays: data.usernameCooldownDays ?? undefined,
+        emailCooldownDays: data.emailCooldownDays ?? undefined,
+        deactivationDays: data.deactivationDays ?? data.accountDeactivationDays ?? undefined,
+      };
+      setAccountStatus(status);
+      if (data.user?.id) {
+        updateUser(data.user);
+      }
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to load account status.";
+        setAccountStatusError(String(msg));
+      } else {
+        setAccountStatusError("Unable to load account status.");
+      }
+    } finally {
+      setAccountStatusLoading(false);
+    }
+  };
+
+  const persistProfileSettings = async (nextProfile: Profile) => {
+    if (!user) return;
+    const normalizedProfileVisibility = normalizeProfileVisibility(
+      nextProfile.profileVisibility
+    );
+    const normalizedPrivacySettings = normalizePrivacySettings(nextProfile.privacySettings);
+    const normalizedNotificationSettings = normalizeNotificationSettings(
+      nextProfile.notificationSettings
+    );
+    const normalizedActivityVisibility = normalizeVisibility(
+      nextProfile.activityVisibility,
+      "public"
+    );
+    const searchIndexingEnabled =
+      typeof nextProfile.searchIndexingEnabled === "boolean"
+        ? nextProfile.searchIndexingEnabled
+        : true;
+    const externalIndexingEnabled = Boolean(nextProfile.externalIndexingEnabled);
+    const basePayload =
+      profilePayloadRef.current ||
+      buildProfilePayloadFromAttrs({
+        ...nextProfile,
+        onboardingComplete: nextProfile.onboardingComplete,
+      });
+    const updatedPayload: ProfilePayload = {
+      ...basePayload,
+      profileVisibility: normalizedProfileVisibility,
+      privacySettings: normalizedPrivacySettings,
+      searchIndexingEnabled,
+      externalIndexingEnabled,
+      activityVisibility: normalizedActivityVisibility,
+      notificationSettings: normalizedNotificationSettings,
+    };
+    const encryptedProfile = await encryptProfilePayload(user.id, updatedPayload);
+    await api.put("/profiles/me", {
+      data: {
+        encryptedProfile,
+        profileKeyVersion: 1,
+        profileVisibility: normalizedProfileVisibility,
+        privacySettings: normalizedPrivacySettings,
+        searchIndexingEnabled,
+        externalIndexingEnabled,
+        activityVisibility: normalizedActivityVisibility,
+        notificationSettings: normalizedNotificationSettings,
+        showPhoneOnProfile: nextProfile.showPhoneOnProfile,
+      },
+    });
+    profilePayloadRef.current = updatedPayload;
+    setProfile((prev) => ({
+      ...prev,
+      profileVisibility: normalizedProfileVisibility,
+      privacySettings: normalizedPrivacySettings,
+      searchIndexingEnabled,
+      externalIndexingEnabled,
+      activityVisibility: normalizedActivityVisibility,
+      notificationSettings: normalizedNotificationSettings,
+      showPhoneOnProfile: nextProfile.showPhoneOnProfile,
+    }));
+    if (profileSnapshotRef.current) {
+      profileSnapshotRef.current = {
+        ...profileSnapshotRef.current,
+        profileVisibility: normalizedProfileVisibility,
+        privacySettings: normalizedPrivacySettings,
+        searchIndexingEnabled,
+        externalIndexingEnabled,
+        activityVisibility: normalizedActivityVisibility,
+        notificationSettings: normalizedNotificationSettings,
+        showPhoneOnProfile: nextProfile.showPhoneOnProfile,
+      };
+    }
+    void refreshProfile();
+  };
+
+  const handleSavePrivacySettings = async () => {
+    setPrivacyError(null);
+    setPrivacySuccess(null);
+    setPrivacySaving(true);
+    try {
+      await persistProfileSettings(profile);
+      setPrivacySuccess("Privacy settings saved.");
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to save privacy settings.";
+        setPrivacyError(String(msg));
+      } else {
+        setPrivacyError("Unable to save privacy settings.");
+      }
+    } finally {
+      setPrivacySaving(false);
+    }
+  };
+
+  const handleSaveNotificationSettings = async () => {
+    setNotificationError(null);
+    setNotificationSuccess(null);
+    setNotificationSaving(true);
+    try {
+      await persistProfileSettings(profile);
+      setNotificationSuccess("Notification settings saved.");
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to save notification settings.";
+        setNotificationError(String(msg));
+      } else {
+        setNotificationError("Unable to save notification settings.");
+      }
+    } finally {
+      setNotificationSaving(false);
+    }
+  };
+
+  const updatePrivacySetting = (field: keyof PrivacySettings, value: VisibilityLevel) => {
+    setProfile((prev) => ({
+      ...prev,
+      privacySettings: {
+        ...prev.privacySettings,
+        [field]: value,
+      },
+    }));
+  };
+
+  const handleUsernameChange = async () => {
+    const nextUsername = usernameDraft.trim();
+    if (!nextUsername) {
+      setUsernameChangeError("Username is required.");
+      return;
+    }
+    setUsernameChangeError(null);
+    setUsernameChangeSuccess(null);
+    setUsernameChangeLoading(true);
+    try {
+      const res = await api.post("/account/change/username", {
+        username: nextUsername,
+      });
+      const data = res.data ?? {};
+      if (data.user?.id) {
+        updateUser(data.user);
+        setUsernameDraft(data.user.username || nextUsername);
+      }
+      setUsernameChangeSuccess("Username updated.");
+      void loadAccountStatus();
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to update username.";
+        setUsernameChangeError(String(msg));
+      } else {
+        setUsernameChangeError("Unable to update username.");
+      }
+    } finally {
+      setUsernameChangeLoading(false);
+    }
+  };
+
+  const handleEmailChange = async () => {
+    const nextEmail = emailDraft.trim().toLowerCase();
+    if (!nextEmail) {
+      setEmailChangeError("Email address is required.");
+      return;
+    }
+    setEmailChangeError(null);
+    setEmailChangeSuccess(null);
+    setEmailChangeLoading(true);
+    try {
+      const res = await api.post("/account/change/email", {
+        email: nextEmail,
+      });
+      const data = res.data ?? {};
+      if (data.user?.id) {
+        updateUser(data.user);
+        setEmailDraft(data.user.email || nextEmail);
+      }
+      const message = data.requiresConfirmation
+        ? "Email updated. Check your inbox to confirm."
+        : "Email updated.";
+      setEmailChangeSuccess(message);
+      void loadAccountStatus();
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to update email.";
+        setEmailChangeError(String(msg));
+      } else {
+        setEmailChangeError("Unable to update email.");
+      }
+    } finally {
+      setEmailChangeLoading(false);
+    }
+  };
+
+  const handleDeactivateAccount = async () => {
+    if (!user) return;
+    setDeactivateError(null);
+    setDeactivateSuccess(null);
+    setDeactivateLoading(true);
+    try {
+      const res = await api.post("/account/deactivate", {
+        reason: deactivateReason.trim() || undefined,
+      });
+      const data = res.data ?? {};
+      setDeactivateSuccess("Account deactivated.");
+      setAccountStatus((prev) => ({
+        ...prev,
+        deactivatedAt: data.deactivatedAt ?? prev?.deactivatedAt ?? null,
+        deactivatedUntil: data.deactivatedUntil ?? prev?.deactivatedUntil ?? null,
+      }));
+      void refreshProfile();
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to deactivate account.";
+        setDeactivateError(String(msg));
+      } else {
+        setDeactivateError("Unable to deactivate account.");
+      }
+    } finally {
+      setDeactivateLoading(false);
+    }
+  };
+
+  const handleReactivateAccount = async () => {
+    if (!user) return;
+    setReactivateError(null);
+    setReactivateSuccess(null);
+    setReactivateLoading(true);
+    try {
+      await api.post("/account/reactivate");
+      setReactivateSuccess("Account reactivated.");
+      setAccountStatus((prev) => ({
+        ...prev,
+        deactivatedAt: null,
+        deactivatedUntil: null,
+      }));
+      void refreshProfile();
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to reactivate account.";
+        setReactivateError(String(msg));
+      } else {
+        setReactivateError("Unable to reactivate account.");
+      }
+    } finally {
+      setReactivateLoading(false);
     }
   };
 
@@ -635,6 +1071,35 @@ export default function Me() {
       }
     } finally {
       setPasswordResetLoading(false);
+    }
+  };
+
+  const handlePreferredMethodUpdate = async () => {
+    if (!user?.id) return;
+    setPreferredMethodError(null);
+    setPreferredMethodSuccess(null);
+    if (!profile.preferredVerificationMethod) {
+      setPreferredMethodError("Select a verification method.");
+      return;
+    }
+    setPreferredMethodSaving(true);
+    try {
+      await api.put("/profiles/me", {
+        data: { preferredVerificationMethod: profile.preferredVerificationMethod },
+      });
+      setPreferredMethodSuccess("Verification method updated.");
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to update verification method.";
+        setPreferredMethodError(String(msg));
+      } else {
+        setPreferredMethodError("Unable to update verification method.");
+      }
+    } finally {
+      setPreferredMethodSaving(false);
     }
   };
 
@@ -862,6 +1327,7 @@ export default function Me() {
     const attrs = normalize(entry);
     profileIdRef.current = entry?.documentId ?? entry?.id ?? null;
 
+    const basePayload = buildProfilePayloadFromAttrs(attrs);
     let payload: ProfilePayload | null = null;
     if (attrs.encryptedProfile && user?.id) {
       try {
@@ -870,8 +1336,10 @@ export default function Me() {
         payload = null;
       }
     }
-    if (!payload) {
-      payload = buildProfilePayloadFromAttrs(attrs);
+    if (payload) {
+      payload = { ...basePayload, ...payload };
+    } else {
+      payload = basePayload;
     }
     profilePayloadRef.current = payload;
     const explicitLocks = normalizeRegistrationLocks(attrs.registrationLocked) || {};
@@ -900,6 +1368,20 @@ export default function Me() {
         : typeof attrs.onboardingComplete === "boolean"
         ? attrs.onboardingComplete
         : true;
+    const profileVisibility = normalizeProfileVisibility(payload.profileVisibility);
+    const privacySettings = normalizePrivacySettings(payload.privacySettings);
+    const searchIndexingEnabled =
+      typeof payload.searchIndexingEnabled === "boolean"
+        ? payload.searchIndexingEnabled
+        : true;
+    const externalIndexingEnabled =
+      typeof payload.externalIndexingEnabled === "boolean"
+        ? payload.externalIndexingEnabled
+        : false;
+    const activityVisibility = normalizeVisibility(payload.activityVisibility, "public");
+    const notificationSettings = normalizeNotificationSettings(
+      payload.notificationSettings
+    );
     const nextProfile: Profile = {
       firstName: payload.firstName || "",
       lastName: payload.lastName || "",
@@ -918,6 +1400,12 @@ export default function Me() {
       phone: formatPhone(payload.phone || ""),
       preferredVerificationMethod,
       showPhoneOnProfile,
+      profileVisibility,
+      privacySettings,
+      searchIndexingEnabled,
+      externalIndexingEnabled,
+      activityVisibility,
+      notificationSettings,
       handle: attrs.handle || "",
       avatarUrl: pickMediaUrl(attrs.avatar),
       onboardingComplete,
@@ -1149,8 +1637,8 @@ export default function Me() {
     setProfile((prev) => ({ ...prev, hobbies: next.join(", ") }));
   };
 
-  const addHobby = () => {
-    const candidate = normalizeHobby(hobbyInput);
+  const addHobbyValue = (value: string) => {
+    const candidate = normalizeHobby(value);
     if (!candidate) return;
     const match = HOBBY_OPTIONS.find((hobby) => hobbyKey(hobby) === hobbyKey(candidate));
     if (!match) return;
@@ -1163,10 +1651,30 @@ export default function Me() {
     setHobbyInput("");
   };
 
+  const addHobby = () => {
+    addHobbyValue(hobbyInput);
+  };
+
   const removeHobby = (target: string) => {
     const key = hobbyKey(target);
     const next = hobbyList.filter((hobby) => hobbyKey(hobby) !== key);
     updateHobbies(next);
+  };
+
+  const openHobbyPicker = (target: "onboarding" | "profile") => {
+    if (hobbyBlurTimeoutRef.current) {
+      window.clearTimeout(hobbyBlurTimeoutRef.current);
+    }
+    setActiveHobbyPicker(target);
+  };
+
+  const closeHobbyPicker = () => {
+    if (hobbyBlurTimeoutRef.current) {
+      window.clearTimeout(hobbyBlurTimeoutRef.current);
+    }
+    hobbyBlurTimeoutRef.current = window.setTimeout(() => {
+      setActiveHobbyPicker(null);
+    }, 120);
   };
 
   const hobbySuggestions = useMemo(() => {
@@ -1176,17 +1684,92 @@ export default function Me() {
       if (selected.has(hobbyKey(hobby))) return false;
       return term ? hobby.toLowerCase().includes(term) : true;
     });
-    return matches.slice(0, 50);
+    return matches.slice(0, 12);
   }, [hobbyInput, hobbyList]);
 
+  const renderHobbyPicker = (target: "onboarding" | "profile") => (
+    <label className="profile-field">
+      <span className="profile-field-label">Hobbies</span>
+      <div className="hobby-picker">
+        <div className="hobby-input-row">
+          <div className="hobby-input-wrap">
+            <input
+              className="auth-input"
+              placeholder="Search hobbies"
+              value={hobbyInput}
+              onChange={(e) => setHobbyInput(e.target.value)}
+              onFocus={() => openHobbyPicker(target)}
+              onBlur={closeHobbyPicker}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addHobby();
+                }
+              }}
+            />
+            {activeHobbyPicker === target && (
+              <div className="hobby-dropdown">
+                {hobbySuggestions.length ? (
+                  hobbySuggestions.map((hobby) => (
+                    <button
+                      key={hobby}
+                      className="hobby-option"
+                      type="button"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        addHobbyValue(hobby);
+                        openHobbyPicker(target);
+                      }}
+                    >
+                      {hobby}
+                    </button>
+                  ))
+                ) : (
+                  <div className="hobby-option is-empty">No matches</div>
+                )}
+              </div>
+            )}
+          </div>
+          <button className="btn ghost" type="button" onClick={addHobby}>
+            Add
+          </button>
+        </div>
+        {hobbyList.length ? (
+          <ul className="profile-list">
+            {hobbyList.map((hobby) => (
+              <li key={hobby} style={{ marginBottom: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span>{hobby}</span>
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={() => removeHobby(hobby)}
+                    style={{ padding: "2px 10px", fontSize: 12 }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p style={{ margin: "8px 0 0", color: "#9ca3af" }}>
+            No hobbies added yet.
+          </p>
+        )}
+        <small style={{ color: "#9ca3af" }}>
+          Choose from the suggestions and add one hobby at a time.
+        </small>
+      </div>
+    </label>
+  );
+
   const onboardingSteps = ["Basics", "Beliefs & Interests", "Location", "About you"];
-  const hasPreferredMethod = Boolean(profile.preferredVerificationMethod);
   const hasBasics =
     profile.firstName.trim() &&
     profile.lastName.trim() &&
     profile.age &&
-    profile.gender &&
-    hasPreferredMethod;
+    profile.gender;
   const hasBeliefs = profile.religion.trim() && hobbyList.length > 0;
   const needsState = stateOptions.length > 0;
   const hasState = needsState ? Boolean(profile.state || profile.stateCode) : true;
@@ -1198,7 +1781,7 @@ export default function Me() {
     setOnboardingError(null);
     if (onboardingStep === 0 && !hasBasics) {
       setOnboardingError(
-        "Please add your name, age, gender, and preferred verification method to continue."
+        "Please add your name, age, and gender to continue."
       );
       return;
     }
@@ -1309,6 +1892,12 @@ export default function Me() {
             phone: "",
             preferredVerificationMethod: "email",
             showPhoneOnProfile: false,
+            profileVisibility: "public",
+            privacySettings: DEFAULT_PRIVACY_SETTINGS,
+            searchIndexingEnabled: true,
+            externalIndexingEnabled: false,
+            activityVisibility: "public",
+            notificationSettings: DEFAULT_NOTIFICATION_SETTINGS,
             handle: lockedUniqueHandle, // show the locked handle even if empty profile
             onboardingComplete: false,
           });
@@ -1336,6 +1925,17 @@ export default function Me() {
     if (!user) return;
     void loadTrustedDevices();
   }, [user?.id]);
+
+  useEffect(() => {
+    if (!user) return;
+    setUsernameDraft(user.username || "");
+    setEmailDraft(user.email || "");
+  }, [user?.id, user?.username, user?.email]);
+
+  useEffect(() => {
+    if (!user || !isSettingsView) return;
+    void loadAccountStatus();
+  }, [user?.id, isSettingsView]);
 
   useEffect(() => {
     const url = extractFirstUrl(postContent);
@@ -1498,6 +2098,26 @@ export default function Me() {
         mergedProfile.birthday || ""
       );
       const effectivePhone = resolveLockedValue(lockPhone, existingPhone, phoneClean || "");
+      const normalizedProfileVisibility = normalizeProfileVisibility(
+        mergedProfile.profileVisibility
+      );
+      const normalizedPrivacySettings = normalizePrivacySettings(
+        mergedProfile.privacySettings
+      );
+      const normalizedNotificationSettings = normalizeNotificationSettings(
+        mergedProfile.notificationSettings
+      );
+      const normalizedActivityVisibility = normalizeVisibility(
+        mergedProfile.activityVisibility,
+        "public"
+      );
+      const normalizedSearchIndexingEnabled =
+        typeof mergedProfile.searchIndexingEnabled === "boolean"
+          ? mergedProfile.searchIndexingEnabled
+          : true;
+      const normalizedExternalIndexingEnabled = Boolean(
+        mergedProfile.externalIndexingEnabled
+      );
 
       const nextPayload: ProfilePayload = {
         ...existingPayload,
@@ -1536,6 +2156,12 @@ export default function Me() {
         occupation: mergedProfile.occupation,
         bio: mergedProfile.bio,
         phone: effectivePhone,
+        profileVisibility: normalizedProfileVisibility,
+        privacySettings: normalizedPrivacySettings,
+        searchIndexingEnabled: normalizedSearchIndexingEnabled,
+        externalIndexingEnabled: normalizedExternalIndexingEnabled,
+        activityVisibility: normalizedActivityVisibility,
+        notificationSettings: normalizedNotificationSettings,
         onboardingComplete,
       };
 
@@ -1554,12 +2180,28 @@ export default function Me() {
           profileKeyVersion: 1,
           firstName: publicFirstName,
           lastName: publicLastName,
+          age: nextPayload.age,
+          religion: nextPayload.religion,
+          hobbies: nextPayload.hobbies,
+          occupation: nextPayload.occupation,
+          bio: nextPayload.bio,
+          country: nextPayload.country,
+          countryCode: nextPayload.countryCode,
+          state: nextPayload.state,
+          stateCode: nextPayload.stateCode,
+          city: nextPayload.city,
           handle: handleValue,
           locale: "en",
           user: user.id,
           registrationLocked: nextLocks,
           preferredVerificationMethod: mergedProfile.preferredVerificationMethod,
           showPhoneOnProfile: mergedProfile.showPhoneOnProfile,
+          profileVisibility: normalizedProfileVisibility,
+          privacySettings: normalizedPrivacySettings,
+          searchIndexingEnabled: normalizedSearchIndexingEnabled,
+          externalIndexingEnabled: normalizedExternalIndexingEnabled,
+          activityVisibility: normalizedActivityVisibility,
+          notificationSettings: normalizedNotificationSettings,
           ...PROFILE_PII_CLEAR_FIELDS,
         };
         if (avatarId) data.avatar = avatarId;
@@ -1698,6 +2340,68 @@ export default function Me() {
     .filter(Boolean)
     .join(", ");
   const birthdayDisplay = formatBirthday(profile.birthday);
+  const previewVisibility = normalizeProfileVisibility(profile.profileVisibility);
+  const previewPrivacy = normalizePrivacySettings(profile.privacySettings);
+  const previewAudienceLabel =
+    previewAudience === "me"
+      ? "You"
+      : previewAudience === "followers"
+      ? "Followers"
+      : "Public";
+  const previewAudienceScope: "public" | "followers" =
+    previewAudience === "followers" ? "followers" : "public";
+  const previewActivityVisibility = normalizeVisibility(
+    profile.activityVisibility,
+    "public"
+  );
+  const canPreviewField = (field: keyof PrivacySettings) => {
+    if (previewAudience === "me") return true;
+    if (previewVisibility === "private") return false;
+    const visibility =
+      field === "activity"
+        ? previewActivityVisibility
+        : resolveFieldVisibility(previewVisibility, previewPrivacy, field, "public");
+    return visibility === "public"
+      ? true
+      : visibility === "followers"
+      ? previewAudienceScope === "followers"
+      : false;
+  };
+  const previewBio = canPreviewField("bio")
+    ? profile.bio || "-"
+    : "Hidden";
+  const previewLocation = canPreviewField("location")
+    ? locationDisplay || "-"
+    : "Hidden";
+  const previewBirthday = canPreviewField("birthday")
+    ? birthdayDisplay || "-"
+    : "Hidden";
+  const previewLinks = canPreviewField("links") ? "Visible" : "Hidden";
+  const previewFollowers = canPreviewField("followers") ? "Visible" : "Hidden";
+  const previewFollowing = canPreviewField("following") ? "Visible" : "Hidden";
+  const previewActivity = canPreviewField("activity")
+    ? "Active now / last seen"
+    : "Hidden";
+  const usernameCooldownAt = accountStatus?.usernameChangeAvailableAt ?? null;
+  const emailCooldownAt = accountStatus?.emailChangeAvailableAt ?? null;
+  const usernameCooldownActive =
+    Boolean(usernameCooldownAt) && new Date(usernameCooldownAt as string).getTime() > Date.now();
+  const emailCooldownActive =
+    Boolean(emailCooldownAt) && new Date(emailCooldownAt as string).getTime() > Date.now();
+  const usernameAvailabilityLabel = usernameCooldownActive
+    ? `Available ${formatDateTime(usernameCooldownAt)}`
+    : "Available now";
+  const emailAvailabilityLabel = emailCooldownActive
+    ? `Available ${formatDateTime(emailCooldownAt)}`
+    : "Available now";
+  const deactivationEndsLabel = accountStatus?.deactivatedUntil
+    ? formatDateTime(accountStatus.deactivatedUntil)
+    : "Not scheduled";
+  const deactivationDays = accountStatus?.deactivationDays ?? 30;
+  const isCustomVisibility = profile.profileVisibility === "custom";
+  const isDeactivated =
+    Boolean(accountStatus?.deactivatedUntil) &&
+    new Date(accountStatus?.deactivatedUntil as string).getTime() > Date.now();
   const leftInfo = [
     ["First Name", profile.firstName],
     ["Last Name", profile.lastName],
@@ -1841,25 +2545,6 @@ export default function Me() {
                 <option value="Female">Female</option>
               </select>
             </label>
-            <label className="profile-field">
-              <span className="profile-field-label">Preferred verification method</span>
-              <select
-                className="auth-input"
-                value={profile.preferredVerificationMethod}
-                onChange={(e) =>
-                  setProfile({
-                    ...profile,
-                    preferredVerificationMethod: e.target.value as VerificationMethod,
-                  })
-                }
-              >
-                <option value="email">Email</option>
-                <option value="sms">SMS</option>
-              </select>
-              <small style={{ color: "#9aa5bb" }}>
-                Used for login codes. You can update this later in profile settings.
-              </small>
-            </label>
           </div>
         );
       case 1:
@@ -1880,58 +2565,7 @@ export default function Me() {
                 ))}
               </select>
             </label>
-            <label className="profile-field">
-              <span className="profile-field-label">Hobbies</span>
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <input
-                  className="auth-input"
-                  list="hobby-suggestions-onboarding"
-                  placeholder="Search hobbies"
-                  value={hobbyInput}
-                  onChange={(e) => setHobbyInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      addHobby();
-                    }
-                  }}
-                />
-                <button className="btn ghost" type="button" onClick={addHobby}>
-                  Add
-                </button>
-              </div>
-              <datalist id="hobby-suggestions-onboarding">
-                {hobbySuggestions.map((hobby) => (
-                  <option key={hobby} value={hobby} />
-                ))}
-              </datalist>
-              {hobbyList.length ? (
-                <ul className="profile-list">
-                  {hobbyList.map((hobby) => (
-                    <li key={hobby} style={{ marginBottom: 6 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <span>{hobby}</span>
-                        <button
-                          className="btn ghost"
-                          type="button"
-                          onClick={() => removeHobby(hobby)}
-                          style={{ padding: "2px 10px", fontSize: 12 }}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p style={{ margin: "8px 0 0", color: "#9ca3af" }}>
-                  No hobbies added yet.
-                </p>
-              )}
-              <small style={{ color: "#9ca3af" }}>
-                Choose from the suggestions and add one hobby at a time.
-              </small>
-            </label>
+            {renderHobbyPicker("onboarding")}
           </div>
         );
       case 2:
@@ -2057,28 +2691,10 @@ export default function Me() {
                 </small>
               )}
             </label>
-            <label className="profile-field">
-              <span className="profile-field-label">Show phone on profile</span>
-              <div className="profile-check">
-                <input
-                  type="checkbox"
-                  checked={profile.showPhoneOnProfile}
-                  onChange={(e) =>
-                    setProfile({ ...profile, showPhoneOnProfile: e.target.checked })
-                  }
-                />
-                <span>Visible to friends</span>
-              </div>
-              <small style={{ color: "#9aa5bb" }}>
-                Your phone stays private unless you enable this.
-              </small>
-            </label>
           </div>
         );
     }
   };
-
-  const isSettingsView = settingsView === "settings";
 
   return (
     <div className="dashboard-shell" style={getBackgroundStyle("profile")}>
@@ -2663,26 +3279,6 @@ export default function Me() {
                   </label>
 
                   <label className="profile-field">
-                    <span className="profile-field-label">Preferred verification method</span>
-                    <select
-                      className="auth-input"
-                      value={profile.preferredVerificationMethod}
-                      onChange={(e) =>
-                        setProfile({
-                          ...profile,
-                          preferredVerificationMethod: e.target.value as VerificationMethod,
-                        })
-                      }
-                    >
-                      <option value="email">Email</option>
-                      <option value="sms">SMS</option>
-                    </select>
-                    <small style={{ color: "#9aa5bb" }}>
-                      Login codes are sent using this method.
-                    </small>
-                  </label>
-
-                  <label className="profile-field">
                     <span className="profile-field-label">Phone</span>
                     <input
                       className="auth-input"
@@ -2698,23 +3294,6 @@ export default function Me() {
                         Set during registration. Use Login phone number settings to update.
                       </small>
                     )}
-                  </label>
-
-                  <label className="profile-field">
-                    <span className="profile-field-label">Show phone on profile</span>
-                    <div className="profile-check">
-                      <input
-                        type="checkbox"
-                        checked={profile.showPhoneOnProfile}
-                        onChange={(e) =>
-                          setProfile({ ...profile, showPhoneOnProfile: e.target.checked })
-                        }
-                      />
-                      <span>Visible to friends</span>
-                    </div>
-                    <small style={{ color: "#9aa5bb" }}>
-                      Your phone stays private unless you enable this.
-                    </small>
                   </label>
 
                   <label className="profile-field">
@@ -2799,56 +3378,7 @@ export default function Me() {
                     <p className="profile-location-error">{locationError}</p>
                   )}
 
-                  <label className="profile-field">
-                    <span className="profile-field-label">Hobbies</span>
-                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                      <input
-                        className="auth-input"
-                        list="hobby-suggestions"
-                        placeholder="Search hobbies"
-                        value={hobbyInput}
-                        onChange={(e) => setHobbyInput(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            addHobby();
-                          }
-                        }}
-                      />
-                      <button className="btn ghost" type="button" onClick={addHobby}>
-                        Add
-                      </button>
-                    </div>
-                    <datalist id="hobby-suggestions">
-                      {hobbySuggestions.map((hobby) => (
-                        <option key={hobby} value={hobby} />
-                      ))}
-                    </datalist>
-                    {hobbyList.length ? (
-                      <ul className="profile-list">
-                        {hobbyList.map((hobby) => (
-                          <li key={hobby} style={{ marginBottom: 6 }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                              <span>{hobby}</span>
-                              <button
-                                className="btn ghost"
-                                type="button"
-                                onClick={() => removeHobby(hobby)}
-                                style={{ padding: "2px 10px", fontSize: 12 }}
-                              >
-                                Remove
-                              </button>
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p style={{ margin: "8px 0 0", color: "#9ca3af" }}>No hobbies added yet.</p>
-                    )}
-                    <small style={{ color: "#9ca3af" }}>
-                      Choose from the suggestions and add one hobby at a time.
-                    </small>
-                  </label>
+                  {renderHobbyPicker("profile")}
 
                   <label className="profile-field">
                     <span className="profile-field-label">Occupation</span>
@@ -2957,6 +3487,45 @@ export default function Me() {
                 )}
                 {passwordResetSuccess && (
                   <p className="status status-success">{passwordResetSuccess}</p>
+                )}
+              </div>
+
+              <div className="security-card">
+                <h4>Preferred verification</h4>
+                <p className="security-muted">
+                  Choose how login codes are delivered.
+                </p>
+                <div className="security-row">
+                  <select
+                    className="auth-input"
+                    value={profile.preferredVerificationMethod}
+                    onChange={(e) => {
+                      setPreferredMethodError(null);
+                      setPreferredMethodSuccess(null);
+                      setProfile({
+                        ...profile,
+                        preferredVerificationMethod: e.target
+                          .value as VerificationMethod,
+                      });
+                    }}
+                  >
+                    <option value="email">Email</option>
+                    <option value="sms">SMS</option>
+                  </select>
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={handlePreferredMethodUpdate}
+                    disabled={preferredMethodSaving}
+                  >
+                    {preferredMethodSaving ? "Saving..." : "Save"}
+                  </button>
+                </div>
+                {preferredMethodError && (
+                  <p className="status status-error">{preferredMethodError}</p>
+                )}
+                {preferredMethodSuccess && (
+                  <p className="status status-success">{preferredMethodSuccess}</p>
                 )}
               </div>
 
@@ -3098,6 +3667,613 @@ export default function Me() {
                     <p className="security-muted">No trusted devices saved.</p>
                   )}
                 </div>
+              </div>
+            </div>
+          </section>
+        </div>
+        )}
+
+        {isSettingsView && (
+        <div className="panel-grid">
+          <section className="panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Privacy</p>
+                <h3>Visibility &amp; Discoverability</h3>
+                <p className="panel-sub">
+                  Control who can see your profile and how it appears in search.
+                </p>
+              </div>
+            </div>
+
+            <div className="security-grid">
+              <div className="security-card">
+                <h4>Profile visibility</h4>
+                <p className="security-muted">
+                  Choose an overall visibility or set custom rules below.
+                </p>
+                <select
+                  className="auth-input"
+                  value={profile.profileVisibility}
+                  onChange={(e) => {
+                    const nextVisibility = e.target.value as ProfileVisibility;
+                    setProfile((prev) => ({
+                      ...prev,
+                      profileVisibility: nextVisibility,
+                      externalIndexingEnabled:
+                        nextVisibility === "public" ? prev.externalIndexingEnabled : false,
+                    }));
+                  }}
+                >
+                  <option value="public">Public</option>
+                  <option value="followers">Followers</option>
+                  <option value="private">Private</option>
+                  <option value="custom">Custom</option>
+                </select>
+                <div className="profile-check">
+                  <input
+                    type="checkbox"
+                    checked={profile.searchIndexingEnabled}
+                    onChange={(e) => {
+                      const enabled = e.target.checked;
+                      setProfile((prev) => ({
+                        ...prev,
+                        searchIndexingEnabled: enabled,
+                        externalIndexingEnabled: enabled
+                          ? prev.externalIndexingEnabled
+                          : false,
+                      }));
+                    }}
+                  />
+                  <span>Allow my profile to appear in platform search</span>
+                </div>
+                <div className="profile-check">
+                  <input
+                    type="checkbox"
+                    checked={profile.externalIndexingEnabled}
+                    onChange={(e) =>
+                      setProfile((prev) => ({
+                        ...prev,
+                        externalIndexingEnabled: e.target.checked,
+                      }))
+                    }
+                    disabled={
+                      profile.profileVisibility !== "public" ||
+                      !profile.searchIndexingEnabled
+                    }
+                  />
+                  <span>Allow search engines to index my public profile</span>
+                </div>
+                {profile.profileVisibility !== "public" && (
+                  <p className="security-muted">
+                    External indexing is only available for public profiles.
+                  </p>
+                )}
+              </div>
+
+              <div className="security-card">
+                <h4>Who can see</h4>
+                <p className="security-muted">
+                  Fine-tune visibility for key profile sections.
+                </p>
+                <div className="privacy-grid">
+                  <label className="profile-field">
+                    <span className="profile-field-label">Bio</span>
+                    <select
+                      className="auth-input"
+                      value={profile.privacySettings.bio || "public"}
+                      onChange={(e) =>
+                        updatePrivacySetting(
+                          "bio",
+                          e.target.value as VisibilityLevel
+                        )
+                      }
+                      disabled={!isCustomVisibility}
+                    >
+                      <option value="public">Public</option>
+                      <option value="followers">Followers</option>
+                      <option value="private">Private</option>
+                    </select>
+                  </label>
+                  <label className="profile-field">
+                    <span className="profile-field-label">Links</span>
+                    <select
+                      className="auth-input"
+                      value={profile.privacySettings.links || "public"}
+                      onChange={(e) =>
+                        updatePrivacySetting(
+                          "links",
+                          e.target.value as VisibilityLevel
+                        )
+                      }
+                      disabled={!isCustomVisibility}
+                    >
+                      <option value="public">Public</option>
+                      <option value="followers">Followers</option>
+                      <option value="private">Private</option>
+                    </select>
+                  </label>
+                  <label className="profile-field">
+                    <span className="profile-field-label">Location</span>
+                    <select
+                      className="auth-input"
+                      value={profile.privacySettings.location || "public"}
+                      onChange={(e) =>
+                        updatePrivacySetting(
+                          "location",
+                          e.target.value as VisibilityLevel
+                        )
+                      }
+                      disabled={!isCustomVisibility}
+                    >
+                      <option value="public">Public</option>
+                      <option value="followers">Followers</option>
+                      <option value="private">Private</option>
+                    </select>
+                  </label>
+                  <label className="profile-field">
+                    <span className="profile-field-label">Birthday</span>
+                    <select
+                      className="auth-input"
+                      value={profile.privacySettings.birthday || "public"}
+                      onChange={(e) =>
+                        updatePrivacySetting(
+                          "birthday",
+                          e.target.value as VisibilityLevel
+                        )
+                      }
+                      disabled={!isCustomVisibility}
+                    >
+                      <option value="public">Public</option>
+                      <option value="followers">Followers</option>
+                      <option value="private">Private</option>
+                    </select>
+                  </label>
+                  <label className="profile-field">
+                    <span className="profile-field-label">Followers list</span>
+                    <select
+                      className="auth-input"
+                      value={profile.privacySettings.followers || "public"}
+                      onChange={(e) =>
+                        updatePrivacySetting(
+                          "followers",
+                          e.target.value as VisibilityLevel
+                        )
+                      }
+                      disabled={!isCustomVisibility}
+                    >
+                      <option value="public">Public</option>
+                      <option value="followers">Followers</option>
+                      <option value="private">Private</option>
+                    </select>
+                  </label>
+                  <label className="profile-field">
+                    <span className="profile-field-label">Following list</span>
+                    <select
+                      className="auth-input"
+                      value={profile.privacySettings.following || "public"}
+                      onChange={(e) =>
+                        updatePrivacySetting(
+                          "following",
+                          e.target.value as VisibilityLevel
+                        )
+                      }
+                      disabled={!isCustomVisibility}
+                    >
+                      <option value="public">Public</option>
+                      <option value="followers">Followers</option>
+                      <option value="private">Private</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="profile-check">
+                  <input
+                    type="checkbox"
+                    checked={profile.showPhoneOnProfile}
+                    onChange={(e) =>
+                      setProfile({ ...profile, showPhoneOnProfile: e.target.checked })
+                    }
+                  />
+                  <span>Show my phone number to friends</span>
+                </div>
+                <p className="security-muted">
+                  Your phone stays private unless you enable this.
+                </p>
+                {!isCustomVisibility && (
+                  <p className="security-muted">
+                    Switch profile visibility to Custom to edit field-by-field.
+                  </p>
+                )}
+              </div>
+
+              <div className="security-card">
+                <h4>Activity status</h4>
+                <p className="security-muted">
+                  Controls who can see “active now” or “last seen.”
+                </p>
+                <select
+                  className="auth-input"
+                  value={profile.activityVisibility}
+                  onChange={(e) =>
+                    setProfile({
+                      ...profile,
+                      activityVisibility: e.target.value as VisibilityLevel,
+                    })
+                  }
+                >
+                  <option value="public">Public</option>
+                  <option value="followers">Followers</option>
+                  <option value="private">Private</option>
+                </select>
+                {profile.profileVisibility === "private" && (
+                  <p className="security-muted">
+                    Activity status is hidden while your profile is private.
+                  </p>
+                )}
+              </div>
+
+              <div className="security-card security-card-wide">
+                <h4>Profile preview</h4>
+                <p className="security-muted">
+                  Preview what others see based on your current settings.
+                </p>
+                <div className="preview-toggle-group">
+                  {["me", "public", "followers"].map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      className={`preview-toggle${
+                        previewAudience === option ? " is-active" : ""
+                      }`}
+                      onClick={() =>
+                        setPreviewAudience(
+                          option as "me" | "public" | "followers"
+                        )
+                      }
+                    >
+                      {option === "me"
+                        ? "Me"
+                        : option === "followers"
+                        ? "Followers"
+                        : "Public"}
+                    </button>
+                  ))}
+                </div>
+                <div className="profile-preview-card">
+                  <p className="profile-preview-title">
+                    Previewing as {previewAudienceLabel}
+                  </p>
+                  <div className="profile-preview-row">
+                    <span className="profile-preview-label">Bio</span>
+                    <span className="profile-preview-value">{previewBio}</span>
+                  </div>
+                  <div className="profile-preview-row">
+                    <span className="profile-preview-label">Location</span>
+                    <span className="profile-preview-value">{previewLocation}</span>
+                  </div>
+                  <div className="profile-preview-row">
+                    <span className="profile-preview-label">Birthday</span>
+                    <span className="profile-preview-value">{previewBirthday}</span>
+                  </div>
+                  <div className="profile-preview-row">
+                    <span className="profile-preview-label">Links</span>
+                    <span className="profile-preview-value">{previewLinks}</span>
+                  </div>
+                  <div className="profile-preview-row">
+                    <span className="profile-preview-label">Followers list</span>
+                    <span className="profile-preview-value">{previewFollowers}</span>
+                  </div>
+                  <div className="profile-preview-row">
+                    <span className="profile-preview-label">Following list</span>
+                    <span className="profile-preview-value">{previewFollowing}</span>
+                  </div>
+                  <div className="profile-preview-row">
+                    <span className="profile-preview-label">Activity</span>
+                    <span className="profile-preview-value">{previewActivity}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="settings-actions">
+              <button
+                className="btn ghost"
+                type="button"
+                onClick={handleSavePrivacySettings}
+                disabled={privacySaving}
+              >
+                {privacySaving ? "Saving..." : "Save privacy settings"}
+              </button>
+            </div>
+            {privacyError && <p className="status status-error">{privacyError}</p>}
+            {privacySuccess && (
+              <p className="status status-success">{privacySuccess}</p>
+            )}
+          </section>
+        </div>
+        )}
+
+        {isSettingsView && (
+        <div className="panel-grid">
+          <section className="panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Notifications</p>
+                <h3>Sound, Vibration &amp; Quiet Hours</h3>
+                <p className="panel-sub">
+                  Configure alerts for messages and friend activity.
+                </p>
+              </div>
+            </div>
+
+            <div className="security-grid">
+              <div className="security-card">
+                <h4>Do Not Disturb</h4>
+                <p className="security-muted">
+                  Silence notifications during quiet hours or when DND is enabled.
+                </p>
+                <div className="profile-check">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(profile.notificationSettings.dndEnabled)}
+                    onChange={(e) =>
+                      setProfile({
+                        ...profile,
+                        notificationSettings: {
+                          ...profile.notificationSettings,
+                          dndEnabled: e.target.checked,
+                        },
+                      })
+                    }
+                  />
+                  <span>Enable Do Not Disturb</span>
+                </div>
+                <div className="privacy-grid">
+                  <label className="profile-field">
+                    <span className="profile-field-label">Quiet hours start</span>
+                    <input
+                      className="auth-input"
+                      type="time"
+                      value={profile.notificationSettings.quietHoursStart || ""}
+                      onChange={(e) =>
+                        setProfile({
+                          ...profile,
+                          notificationSettings: {
+                            ...profile.notificationSettings,
+                            quietHoursStart: e.target.value,
+                          },
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="profile-field">
+                    <span className="profile-field-label">Quiet hours end</span>
+                    <input
+                      className="auth-input"
+                      type="time"
+                      value={profile.notificationSettings.quietHoursEnd || ""}
+                      onChange={(e) =>
+                        setProfile({
+                          ...profile,
+                          notificationSettings: {
+                            ...profile.notificationSettings,
+                            quietHoursEnd: e.target.value,
+                          },
+                        })
+                      }
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div className="security-card">
+                <h4>Sound &amp; vibration</h4>
+                <p className="security-muted">
+                  Toggle audio cues and vibration feedback (mobile).
+                </p>
+                <div className="profile-check">
+                  <input
+                    type="checkbox"
+                    checked={profile.notificationSettings.soundEnabled !== false}
+                    onChange={(e) =>
+                      setProfile({
+                        ...profile,
+                        notificationSettings: {
+                          ...profile.notificationSettings,
+                          soundEnabled: e.target.checked,
+                        },
+                      })
+                    }
+                  />
+                  <span>Play notification sounds</span>
+                </div>
+                <div className="profile-check">
+                  <input
+                    type="checkbox"
+                    checked={profile.notificationSettings.vibrationEnabled !== false}
+                    onChange={(e) =>
+                      setProfile({
+                        ...profile,
+                        notificationSettings: {
+                          ...profile.notificationSettings,
+                          vibrationEnabled: e.target.checked,
+                        },
+                      })
+                    }
+                  />
+                  <span>Vibrate on alerts (mobile)</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="settings-actions">
+              <button
+                className="btn ghost"
+                type="button"
+                onClick={handleSaveNotificationSettings}
+                disabled={notificationSaving}
+              >
+                {notificationSaving ? "Saving..." : "Save notification settings"}
+              </button>
+            </div>
+            {notificationError && (
+              <p className="status status-error">{notificationError}</p>
+            )}
+            {notificationSuccess && (
+              <p className="status status-success">{notificationSuccess}</p>
+            )}
+          </section>
+        </div>
+        )}
+
+        {isSettingsView && (
+        <div className="panel-grid">
+          <section className="panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Account</p>
+                <h3>Changes &amp; Deactivation</h3>
+                <p className="panel-sub">
+                  Sensitive changes are rate-limited and logged for support review.
+                </p>
+              </div>
+            </div>
+
+            {accountStatusLoading && <p className="status">Loading account status…</p>}
+            {accountStatusError && (
+              <p className="status status-error">{accountStatusError}</p>
+            )}
+
+            <div className="security-grid">
+              <div className="security-card">
+                <h4>Username</h4>
+                <p className="security-muted">
+                  Cooldown: {accountStatus?.usernameCooldownDays ?? 30} days. {usernameAvailabilityLabel}
+                </p>
+                <div className="security-row">
+                  <input
+                    className="auth-input"
+                    value={usernameDraft}
+                    onChange={(e) => setUsernameDraft(e.target.value)}
+                    placeholder="New username"
+                  />
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={handleUsernameChange}
+                    disabled={usernameChangeLoading || usernameCooldownActive}
+                  >
+                    {usernameChangeLoading ? "Saving..." : "Update"}
+                  </button>
+                </div>
+                {usernameCooldownActive && (
+                  <p className="security-muted">
+                    Username change available {formatDateTime(usernameCooldownAt)}.
+                  </p>
+                )}
+                {usernameChangeError && (
+                  <p className="status status-error">{usernameChangeError}</p>
+                )}
+                {usernameChangeSuccess && (
+                  <p className="status status-success">{usernameChangeSuccess}</p>
+                )}
+              </div>
+
+              <div className="security-card">
+                <h4>Email address</h4>
+                <p className="security-muted">
+                  Cooldown: {accountStatus?.emailCooldownDays ?? 30} days. {emailAvailabilityLabel}
+                </p>
+                <div className="security-row">
+                  <input
+                    className="auth-input"
+                    type="email"
+                    value={emailDraft}
+                    onChange={(e) => setEmailDraft(e.target.value)}
+                    placeholder="New email"
+                  />
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={handleEmailChange}
+                    disabled={emailChangeLoading || emailCooldownActive}
+                  >
+                    {emailChangeLoading ? "Saving..." : "Update"}
+                  </button>
+                </div>
+                {emailCooldownActive && (
+                  <p className="security-muted">
+                    Email change available {formatDateTime(emailCooldownAt)}.
+                  </p>
+                )}
+                {emailChangeError && (
+                  <p className="status status-error">{emailChangeError}</p>
+                )}
+                {emailChangeSuccess && (
+                  <p className="status status-success">{emailChangeSuccess}</p>
+                )}
+              </div>
+
+              <div className="security-card security-card-wide">
+                <h4>Deactivate vs. delete</h4>
+                <p className="security-muted">
+                  Deactivation hides your profile and removes it from search for up to {deactivationDays} days.
+                  Deleting removes your account and data permanently.
+                </p>
+                <div className="privacy-grid">
+                  <label className="profile-field">
+                    <span className="profile-field-label">Reason (optional)</span>
+                    <input
+                      className="auth-input"
+                      value={deactivateReason}
+                      onChange={(e) => setDeactivateReason(e.target.value)}
+                      placeholder="Taking a break"
+                    />
+                  </label>
+                </div>
+                <div className="security-actions">
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={handleDeactivateAccount}
+                    disabled={deactivateLoading || isDeactivated}
+                  >
+                    {deactivateLoading ? "Deactivating..." : "Deactivate account"}
+                  </button>
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={handleReactivateAccount}
+                    disabled={reactivateLoading || !isDeactivated}
+                  >
+                    {reactivateLoading ? "Reactivating..." : "Reactivate"}
+                  </button>
+                  <button
+                    className="profile-delete-button"
+                    type="button"
+                    onClick={() => {
+                      setDeleteAccountError(null);
+                      setDeleteAccountOpen(true);
+                    }}
+                  >
+                    Delete account
+                  </button>
+                </div>
+                <p className="security-muted">
+                  Deactivation ends {deactivationEndsLabel}.
+                </p>
+                {deactivateError && (
+                  <p className="status status-error">{deactivateError}</p>
+                )}
+                {deactivateSuccess && (
+                  <p className="status status-success">{deactivateSuccess}</p>
+                )}
+                {reactivateError && (
+                  <p className="status status-error">{reactivateError}</p>
+                )}
+                {reactivateSuccess && (
+                  <p className="status status-success">{reactivateSuccess}</p>
+                )}
               </div>
             </div>
           </section>

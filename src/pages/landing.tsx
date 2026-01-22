@@ -96,7 +96,7 @@ const extractFirstUrl = (text: string) => {
 
 export default function Landing() {
   const navigate = useNavigate();
-  const { user, logout } = useAuth();
+  const { user, profile, logout } = useAuth();
   const rootRef = useRef<HTMLDivElement | null>(null);
   usePageMeta({
     title: "Your Social Place | Motivational social network without all the fluff",
@@ -125,7 +125,7 @@ export default function Landing() {
   const [suggestionStatus, setSuggestionStatus] = useState<string | null>(null);
   const [suggestionError, setSuggestionError] = useState<string | null>(null);
   const { counts, total, loading, refresh, markAllRead, previews, acceptFriendRequest } =
-    useNotifications(user?.id);
+    useNotifications(user?.id, profile?.notificationSettings);
   const [acceptingRequests, setAcceptingRequests] = useState<Record<string, boolean>>({});
 
   useEffect(() => {

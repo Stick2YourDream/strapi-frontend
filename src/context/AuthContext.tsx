@@ -6,7 +6,11 @@ import {
   encryptProfilePayload,
   ensureUserKeyOnServer,
   PROFILE_PII_CLEAR_FIELDS,
+  type NotificationSettings,
+  type PrivacySettings,
   type ProfilePayload,
+  type ProfileVisibility,
+  type VisibilityLevel,
 } from "../utils/profile-e2ee";
 import { getOrCreateProfileKey } from "../utils/crypto";
 import {
@@ -42,6 +46,13 @@ interface ProfileSummary {
   stateCode?: string;
   city?: string;
   backgrounds?: Record<string, { color?: string; image?: string }>;
+  profileVisibility?: ProfileVisibility;
+  privacySettings?: PrivacySettings;
+  searchIndexingEnabled?: boolean;
+  externalIndexingEnabled?: boolean;
+  activityVisibility?: VisibilityLevel;
+  notificationSettings?: NotificationSettings;
+  lastSeenAt?: string;
 }
 
 interface AuthContextType {
@@ -52,6 +63,7 @@ interface AuthContextType {
   keyBackupLoading: boolean;
   keyBackupError: string | null;
   login: (user: User, token: string) => void;
+  updateUser: (user: User) => void;
   logout: () => void;
   refreshProfile: () => Promise<void>;
   refreshKeyBackup: () => Promise<void>;
@@ -104,6 +116,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         return;
       }
 
+      const basePayload = buildProfilePayloadFromAttrs(attrs);
       let payload: ProfilePayload | null = null;
       if (attrs.encryptedProfile) {
         try {
@@ -113,8 +126,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         }
       }
 
-      if (!payload) {
-        payload = buildProfilePayloadFromAttrs(attrs);
+      if (payload) {
+        payload = { ...basePayload, ...payload };
+      } else {
+        payload = basePayload;
         if (Object.values(payload).some((value) => value)) {
           try {
             const encryptedProfile = await encryptProfilePayload(user.id, payload);
@@ -124,6 +139,16 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                 profileKeyVersion: 1,
                 firstName: payload.firstName || "",
                 lastName: payload.lastName || "",
+                age: payload.age || "",
+                religion: payload.religion || "",
+                hobbies: payload.hobbies || "",
+                occupation: payload.occupation || "",
+                bio: payload.bio || "",
+                country: payload.country || "",
+                countryCode: payload.countryCode || "",
+                state: payload.state || "",
+                stateCode: payload.stateCode || "",
+                city: payload.city || "",
                 ...PROFILE_PII_CLEAR_FIELDS,
               },
             });
@@ -149,6 +174,29 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           await api.put("/profiles/me", { data: nameUpdate });
         } catch (error) {
           console.warn("Unable to sync public name fields:", error);
+        }
+      }
+
+      const publicFields = {
+        age: payload?.age || "",
+        religion: payload?.religion || "",
+        hobbies: payload?.hobbies || "",
+        occupation: payload?.occupation || "",
+        bio: payload?.bio || "",
+        country: payload?.country || "",
+        countryCode: payload?.countryCode || "",
+        state: payload?.state || "",
+        stateCode: payload?.stateCode || "",
+        city: payload?.city || "",
+      };
+      const needsPublicUpdate = Object.entries(publicFields).some(
+        ([key, value]) => String(attrs?.[key] || "") !== String(value || "")
+      );
+      if (needsPublicUpdate) {
+        try {
+          await api.put("/profiles/me", { data: publicFields });
+        } catch (error) {
+          console.warn("Unable to sync public profile fields:", error);
         }
       }
 
@@ -281,6 +329,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     console.info("Auth: login success", { id: userData.id, username: userData.username });
   };
 
+  const updateUser = (userData: User) => {
+    setUser(userData);
+    localStorage.setItem("user", JSON.stringify(userData));
+  };
+
   const logout = () => {
     setUser(null);
     setProfile(null);
@@ -304,6 +357,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         keyBackupLoading,
         keyBackupError,
         login,
+        updateUser,
         logout,
         refreshProfile,
         refreshKeyBackup,
@@ -326,6 +380,7 @@ export const StaticAuthProvider = ({ children }: { children: React.ReactNode }) 
     keyBackupLoading: false,
     keyBackupError: null,
     login: () => undefined,
+    updateUser: () => undefined,
     logout: () => undefined,
     refreshProfile: async () => undefined,
     refreshKeyBackup: async () => undefined,

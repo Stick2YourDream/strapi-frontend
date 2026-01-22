@@ -30,21 +30,40 @@ export type ProfilePayload = {
   backgrounds?: Record<string, { color?: string; image?: string }>;
   intent?: string;
   onboardingComplete?: boolean;
+  profileVisibility?: ProfileVisibility;
+  privacySettings?: PrivacySettings;
+  searchIndexingEnabled?: boolean;
+  externalIndexingEnabled?: boolean;
+  activityVisibility?: VisibilityLevel;
+  notificationSettings?: NotificationSettings;
+  lastSeenAt?: string;
+};
+
+export type VisibilityLevel = "public" | "followers" | "private";
+
+export type ProfileVisibility = VisibilityLevel | "custom";
+
+export type PrivacySettings = {
+  bio?: VisibilityLevel;
+  links?: VisibilityLevel;
+  location?: VisibilityLevel;
+  birthday?: VisibilityLevel;
+  followers?: VisibilityLevel;
+  following?: VisibilityLevel;
+  activity?: VisibilityLevel;
+};
+
+export type NotificationSettings = {
+  dndEnabled?: boolean;
+  quietHoursStart?: string;
+  quietHoursEnd?: string;
+  soundEnabled?: boolean;
+  vibrationEnabled?: boolean;
 };
 
 export const PROFILE_PII_CLEAR_FIELDS = {
-  age: null,
   birthday: null,
   gender: null,
-  religion: null,
-  country: null,
-  countryCode: null,
-  state: null,
-  stateCode: null,
-  city: null,
-  hobbies: null,
-  occupation: null,
-  bio: null,
   phone: null,
   backgrounds: null,
   intent: null,
@@ -89,6 +108,19 @@ export const buildProfilePayloadFromAttrs = (attrs: any): ProfilePayload => ({
   intent: attrs?.intent || undefined,
   onboardingComplete:
     typeof attrs?.onboardingComplete === "boolean" ? attrs.onboardingComplete : undefined,
+  profileVisibility: attrs?.profileVisibility || undefined,
+  privacySettings: attrs?.privacySettings || undefined,
+  searchIndexingEnabled:
+    typeof attrs?.searchIndexingEnabled === "boolean"
+      ? attrs.searchIndexingEnabled
+      : undefined,
+  externalIndexingEnabled:
+    typeof attrs?.externalIndexingEnabled === "boolean"
+      ? attrs.externalIndexingEnabled
+      : undefined,
+  activityVisibility: attrs?.activityVisibility || undefined,
+  notificationSettings: attrs?.notificationSettings || undefined,
+  lastSeenAt: attrs?.lastSeenAt || undefined,
 });
 
 export const ensureUserKeyOnServer = async () => {

@@ -39,14 +39,14 @@ export default function Sidebar({
   onSettingsViewChange,
 }: SidebarProps) {
   const navigate = useNavigate();
-  const { user, logout } = useAuth();
+  const { user, profile, logout } = useAuth();
   const [showMoreProfile, setShowMoreProfile] = useState(false);
   const [profileSummary, setProfileSummary] = useState<ProfileSummary | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const { counts, total, loading, refresh, markAllRead, previews, acceptFriendRequest } =
-    useNotifications(user?.id);
+    useNotifications(user?.id, profile?.notificationSettings);
   const [acceptingRequests, setAcceptingRequests] = useState<Record<string, boolean>>({});
 
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};

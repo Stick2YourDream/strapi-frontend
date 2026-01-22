@@ -100,6 +100,58 @@
   color: #e9ecf5;
 }
 
+.hobby-picker {
+  display: grid;
+  gap: 8px;
+}
+
+.hobby-input-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.hobby-input-wrap {
+  position: relative;
+  flex: 1 1 220px;
+  min-width: 200px;
+}
+
+.hobby-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: #0b1220;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 12px;
+  box-shadow: 0 16px 28px rgba(0, 0, 0, 0.4);
+  max-height: 220px;
+  overflow-y: auto;
+  z-index: 5;
+}
+
+.hobby-option {
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  color: #e2e8f0;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.hobby-option:hover {
+  background: rgba(59, 130, 246, 0.15);
+}
+
+.hobby-option.is-empty {
+  cursor: default;
+  color: #94a3b8;
+}
+
 .profile-actions {
   display: flex;
   gap: 10px;
@@ -321,6 +373,81 @@
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.privacy-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.preview-toggle-group {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.preview-toggle {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  color: #e2e8f0;
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.preview-toggle:hover {
+  transform: translateY(-1px);
+  border-color: rgba(125, 211, 252, 0.5);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.25);
+}
+
+.preview-toggle.is-active {
+  border-color: rgba(92, 240, 199, 0.6);
+  background: rgba(92, 240, 199, 0.16);
+  color: #eafff8;
+}
+
+.profile-preview-card {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(10, 15, 24, 0.6);
+  border-radius: 16px;
+  padding: 14px;
+  display: grid;
+  gap: 8px;
+}
+
+.profile-preview-title {
+  margin: 0 0 6px;
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+.profile-preview-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.profile-preview-label {
+  color: #94a3b8;
+}
+
+.profile-preview-value {
+  color: #e2e8f0;
+  font-weight: 600;
+  text-align: right;
+  word-break: break-word;
 }
 
 .trusted-device-list {
