@@ -33,8 +33,6 @@ export type ProfilePayload = {
 };
 
 export const PROFILE_PII_CLEAR_FIELDS = {
-  firstName: null,
-  lastName: null,
   age: null,
   birthday: null,
   gender: null,

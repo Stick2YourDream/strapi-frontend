@@ -126,6 +126,11 @@
   color: #9aa5bb;
 }
 
+.friend-mini-name .friend-mini-tag {
+  margin-left: 6px;
+  font-weight: 500;
+}
+
 .friend-panel-header {
   display: flex;
   align-items: center;

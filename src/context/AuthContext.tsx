@@ -122,6 +122,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
               data: {
                 encryptedProfile,
                 profileKeyVersion: 1,
+                firstName: payload.firstName || "",
+                lastName: payload.lastName || "",
                 ...PROFILE_PII_CLEAR_FIELDS,
               },
             });

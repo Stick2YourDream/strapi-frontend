@@ -781,8 +781,12 @@ export default function Friends() {
                       >
                         {renderAvatar(friend, 32)}
                         <span className="friend-mini-meta">
-                          <span className="friend-mini-name">{displayName}</span>
-                          <span className="friend-mini-tag">@{handle}</span>
+                          <span className="friend-mini-name">
+                            {displayName}
+                            {name && handle ? (
+                              <span className="friend-mini-tag">@{handle}</span>
+                            ) : null}
+                          </span>
                         </span>
                       </button>
                     </li>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import api from "../api/strapi";
+import { ensureProfileKeyShares } from "../utils/profile-e2ee";
 
 type NotificationCounts = {
   messages: number;
@@ -427,6 +428,13 @@ export const useNotifications = (userId?: number | null) => {
         }
         if (!updated) throw new Error("Update failed");
 
+        if (request.requesterId && userId) {
+          try {
+            await ensureProfileKeyShares(Number(userId), [request.requesterId]);
+          } catch {
+            // ignore profile share errors
+          }
+        }
         await refresh();
         return true;
       } catch {

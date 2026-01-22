@@ -1361,27 +1361,31 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       pc.ontrack = (event) => {
         setupReceiverE2ee(event.receiver);
         const [stream] = event.streams;
-        const nextStream = stream ?? new MediaStream([event.track]);
-        const streamId = nextStream.id;
-        const shareOwner = screenShareOwnersRef.current.get(streamId);
         const existingCamera = remoteStreamsRef.current[socketId];
+        const existingScreen = remoteScreenStreamsRef.current[socketId];
         const trackLabel = event.track.label?.toLowerCase() || "";
         const looksLikeScreen = ["screen", "window", "display", "monitor"].some((token) =>
           trackLabel.includes(token)
         );
+        const streamId = stream?.id || "";
+        const shareOwner = streamId
+          ? screenShareOwnersRef.current.get(streamId)
+          : undefined;
+        const isVideoTrack = event.track.kind === "video";
         const shouldTreatAsScreen =
-          shareOwner === socketId ||
-          (event.track.kind === "video" &&
-            existingCamera &&
-            existingCamera.id !== streamId &&
-            !remoteScreenStreamsRef.current[socketId]) ||
-          (event.track.kind === "video" &&
-            looksLikeScreen &&
-            !remoteScreenStreamsRef.current[socketId]);
+          isVideoTrack &&
+          (shareOwner === socketId ||
+            looksLikeScreen ||
+            (existingScreen && streamId && existingScreen.id === streamId));
+        const nextStream =
+          stream ||
+          (shouldTreatAsScreen ? existingScreen : existingCamera) ||
+          new MediaStream([event.track]);
+        const resolvedStreamId = streamId || nextStream.id;
 
         if (shouldTreatAsScreen) {
-          screenShareOwnersRef.current.set(streamId, socketId);
-          screenShareByOwnerRef.current.set(socketId, streamId);
+          screenShareOwnersRef.current.set(resolvedStreamId, socketId);
+          screenShareByOwnerRef.current.set(socketId, resolvedStreamId);
           setRemoteScreenStreams((prev) => {
             const existing = prev[socketId];
             if (existing) {
@@ -1393,7 +1397,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
             return { ...prev, [socketId]: nextStream };
           });
           event.track.onended = () => {
-            screenShareOwnersRef.current.delete(streamId);
+            screenShareOwnersRef.current.delete(resolvedStreamId);
             screenShareByOwnerRef.current.delete(socketId);
             setRemoteScreenStreams((prev) => {
               const next = { ...prev };

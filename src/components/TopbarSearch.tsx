@@ -14,6 +14,7 @@ type DirectoryProfile = {
   handle?: string;
   firstName?: string;
   lastName?: string;
+  displayName?: string;
   username?: string;
   avatarUrl?: string;
   country?: string;
@@ -72,8 +73,13 @@ const pickMediaUrl = (mediaField: any): string | undefined => {
 };
 
 const normalizeText = (value: string) => value.trim().toLowerCase();
-const normalizeQuery = (value: string) =>
-  normalizeText(value).replace(/@+/g, "").replace(/\s+/g, " ").trim();
+const normalizeSearch = (value: string) =>
+  String(value || "")
+    .toLowerCase()
+    .replace(/@+/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 const normalizeLocation = (value?: string) => normalizeText(value || "");
 const matchByName = (list: LocationOption[], value: string) =>
   list.find((item) => normalizeLocation(item.name) === normalizeLocation(value));
@@ -179,14 +185,26 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
             }
             const fallbackPayload = buildProfilePayloadFromAttrs(attrs);
             const resolvedPayload = payload ?? fallbackPayload;
+            const userFirstName = userAttrs?.firstName || userAttrs?.firstname || "";
+            const userLastName = userAttrs?.lastName || userAttrs?.lastname || "";
+            const profileFirstName = resolvedPayload.firstName || userFirstName || "";
+            const profileLastName = resolvedPayload.lastName || userLastName || "";
+            const displayName =
+              `${profileFirstName} ${profileLastName}`.trim() ||
+              userAttrs?.displayName ||
+              userAttrs?.name ||
+              attrs.displayName ||
+              attrs.name ||
+              "";
             const hobbyTags = parseHobbyList(resolvedPayload.hobbies);
             return {
               id: p.id ?? attrs.documentId,
               userId: profileUserId,
               username: userAttrs?.username,
               handle: attrs.handle || userAttrs?.username || `user-${p.id ?? attrs.documentId}`,
-              firstName: resolvedPayload.firstName || "",
-              lastName: resolvedPayload.lastName || "",
+              firstName: profileFirstName,
+              lastName: profileLastName,
+              displayName,
               avatarUrl: pickMediaUrl(attrs.avatar),
               country: resolvedPayload.country || "",
               state: resolvedPayload.state || "",
@@ -390,7 +408,7 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
     }
   };
 
-  const activeQuery = normalizeQuery(rawQuery);
+  const activeQuery = normalizeSearch(rawQuery);
   const manualFiltersEnabled = !similarOnly;
   const normalizedCountry = manualFiltersEnabled ? normalizeLocation(countryFilter) : "";
   const normalizedState = manualFiltersEnabled ? normalizeLocation(stateFilter) : "";
@@ -426,17 +444,19 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
       .filter((p) => p.userId && p.userId !== user?.id)
       .filter((p) => {
         if (!activeQuery) return true;
-        const handle = normalizeQuery(p.handle || p.username || "");
-        const username = normalizeQuery(p.username || "");
-        const first = normalizeText(p.firstName || "");
-        const last = normalizeText(p.lastName || "");
-        const full = `${first} ${last}`.trim();
+        const handle = normalizeSearch(p.handle || p.username || "");
+        const username = normalizeSearch(p.username || "");
+        const first = normalizeSearch(p.firstName || "");
+        const last = normalizeSearch(p.lastName || "");
+        const full = normalizeSearch(`${p.firstName || ""} ${p.lastName || ""}`);
+        const displayName = normalizeSearch(p.displayName || "");
         return (
           handle.includes(activeQuery) ||
           username.includes(activeQuery) ||
           first.includes(activeQuery) ||
           last.includes(activeQuery) ||
-          full.includes(activeQuery)
+          full.includes(activeQuery) ||
+          displayName.includes(activeQuery)
         );
       })
       .filter((p) => {
@@ -633,7 +653,9 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
                 !error &&
                 results.map((profile) => {
                   const status = relationStatusFor(profile.userId);
-                  const fullName = `${profile.firstName || ""} ${profile.lastName || ""}`.trim();
+                  const fullName =
+                    profile.displayName ||
+                    `${profile.firstName || ""} ${profile.lastName || ""}`.trim();
                   const locationParts = [profile.city, profile.state, profile.country].filter(
                     Boolean
                   );

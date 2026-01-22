@@ -1090,6 +1090,8 @@ export default function Me() {
 
     try {
       const safeFirst = mergedProfile.firstName || user.username || user.email || "user";
+      const publicFirstName = mergedProfile.firstName.trim();
+      const publicLastName = mergedProfile.lastName.trim();
       const normalizedHandle = (mergedProfile.handle || "").trim();
       const baseHandle =
         normalizedHandle && normalizedHandle.toLowerCase() !== "user"
@@ -1172,6 +1174,8 @@ export default function Me() {
         const data: any = {
           encryptedProfile,
           profileKeyVersion: 1,
+          firstName: publicFirstName,
+          lastName: publicLastName,
           handle: handleValue,
           locale: "en",
           user: user.id,
