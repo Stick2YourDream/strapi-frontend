@@ -1706,9 +1706,12 @@ export default function Me() {
     ["Religion", profile.religion],
     ["Gender", profile.gender],
   ] as const;
+  const phoneInfo: Array<[string, string | undefined]> = profile.showPhoneOnProfile
+    ? [["Phone", profile.phone]]
+    : [];
   const rightInfo: Array<[string, string | undefined]> = [
     ["Handle", displayHandle],
-    ...(profile.showPhoneOnProfile ? [["Phone", profile.phone]] : []),
+    ...phoneInfo,
     ["Location", locationDisplay],
     ["Country", profile.country],
     [stateLabel, profile.state],

@@ -76,7 +76,7 @@ export default function Login() {
         return;
       }
 
-      if (res.data?.jwt) {
+      if ("jwt" in res.data && res.data.jwt) {
         login(res.data.user, res.data.jwt);
         navigate("/dashboard");
         return;
