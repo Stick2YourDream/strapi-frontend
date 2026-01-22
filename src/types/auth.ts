@@ -6,13 +6,26 @@ export type AuthUser = {
   confirmed: boolean;
 };
 
-// ✅ Login response from Strapi: /auth/local
+// ? Login response from Strapi: /auth/local or /auth/login/verify
 export type AuthResponse = {
   jwt: string;
   user: AuthUser;
 };
 
-// ✅ Your custom register response: /register (no jwt)
+export type LoginStartResponse =
+  | {
+      jwt: string;
+      user: AuthUser;
+      trustedDevice?: boolean;
+    }
+  | {
+      requiresVerification: true;
+      method: "sms" | "email";
+      challengeId: string;
+      deliveryHint?: string;
+    };
+
+// ? Your custom register response: /register (no jwt)
 export type RegisterResponse = {
   user: AuthUser;
   requiresConfirmation: boolean;

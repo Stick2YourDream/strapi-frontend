@@ -2,15 +2,26 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api/strapi";
-import type { AuthResponse } from "../types/auth";
+import type { AuthResponse, LoginStartResponse } from "../types/auth";
 import { useAuth } from "../context/AuthContext";
 import axios from "axios";
 import "../css/login.css";
 import { usePageMeta } from "../hooks/usePageMeta";
+import { getOrCreateDeviceId } from "../utils/device-id";
+
+type VerificationMethod = "sms" | "email";
 
 export default function Login() {
-  const [email, setEmail] = useState("");
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
+  const [rememberDevice, setRememberDevice] = useState(false);
+  const [challengeId, setChallengeId] = useState<string | null>(null);
+  const [challengeMethod, setChallengeMethod] = useState<VerificationMethod | null>(null);
+  const [verificationCode, setVerificationCode] = useState("");
+  const [deliveryHint, setDeliveryHint] = useState<string | null>(null);
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [verifying, setVerifying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   usePageMeta({
@@ -23,32 +34,55 @@ export default function Login() {
 
   const { login } = useAuth();
   const navigate = useNavigate();
+  const isVerificationStep = Boolean(challengeId);
+
+  const resetVerificationState = () => {
+    setChallengeId(null);
+    setChallengeMethod(null);
+    setVerificationCode("");
+    setDeliveryHint(null);
+    setResending(false);
+    setVerifying(false);
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setInfo(null);
+    resetVerificationState();
 
     try {
-      // ✅ clear any stale token before attempting login
+      setLoginLoading(true);
       localStorage.removeItem("token");
       localStorage.removeItem("user");
 
-      const res = await api.post<AuthResponse>("/auth/local", {
-        identifier: email.trim().toLowerCase(),
-        password, // don't trim passwords
+      const deviceId = getOrCreateDeviceId();
+      const res = await api.post<LoginStartResponse>("/auth/login", {
+        identifier: identifier.trim().toLowerCase(),
+        password,
+        rememberDevice,
+        deviceId,
       });
 
-      console.log("LOGIN STATUS:", res.status);
-      console.log("LOGIN DATA:", res.data);
-
-      if (!res.data?.jwt) {
-        setError("Login succeeded but no token was returned.");
+      if ("requiresVerification" in res.data && res.data.requiresVerification) {
+        setChallengeId(res.data.challengeId);
+        setChallengeMethod(res.data.method);
+        setDeliveryHint(res.data.deliveryHint ?? null);
+        setInfo(
+          res.data.deliveryHint
+            ? `We sent a code to ${res.data.deliveryHint}.`
+            : "We sent a verification code."
+        );
         return;
       }
 
-      login(res.data.user, res.data.jwt);
-      navigate("/dashboard");
+      if (res.data?.jwt) {
+        login(res.data.user, res.data.jwt);
+        navigate("/dashboard");
+        return;
+      }
+
+      setError("Login failed. Please try again.");
     } catch (err: unknown) {
       if (!axios.isAxiosError(err)) {
         setError("Login failed");
@@ -60,8 +94,6 @@ export default function Login() {
       const msg: string =
         data?.error?.message || data?.message || "Login failed";
 
-      console.log("Strapi login error:", status, data);
-
       const msgLower = msg.toLowerCase();
 
       if (msgLower.includes("not confirmed") || msgLower.includes("confirm your email")) {
@@ -70,13 +102,19 @@ export default function Login() {
         return;
       }
 
-      if (msgLower.includes("invalid identifier or password")) {
-        setError("Invalid email or password.");
+      if (msgLower.includes("invalid identifier") || msgLower.includes("invalid password")) {
+        setError("Invalid email, username, or password.");
+        return;
+      }
+
+      if (msgLower.includes("phone number required")) {
+        setError(
+          "Phone number required for SMS verification. Update your login phone number in profile settings."
+        );
         return;
       }
 
       if (status === 401) {
-        // often caused by sending a stale Authorization header or being blocked
         setError("Unauthorized. Please try again.");
         return;
       }
@@ -87,7 +125,97 @@ export default function Login() {
       }
 
       setError(msg);
+    } finally {
+      setLoginLoading(false);
     }
+  };
+
+  const handleVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setInfo(null);
+
+    if (!challengeId) {
+      setError("Verification expired. Please log in again.");
+      return;
+    }
+
+    if (!verificationCode.trim()) {
+      setError("Enter the verification code.");
+      return;
+    }
+
+    try {
+      setVerifying(true);
+      const res = await api.post<AuthResponse>("/auth/login/verify", {
+        challengeId,
+        code: verificationCode.trim(),
+      });
+
+      if (!res.data?.jwt) {
+        setError("Login failed. Please try again.");
+        return;
+      }
+
+      login(res.data.user, res.data.jwt);
+      navigate("/dashboard");
+    } catch (err: unknown) {
+      if (!axios.isAxiosError(err)) {
+        setError("Verification failed");
+        return;
+      }
+
+      const data: any = err.response?.data;
+      const msg: string =
+        data?.error?.message || data?.message || "Verification failed";
+      const msgLower = msg.toLowerCase();
+
+      if (msgLower.includes("expired")) {
+        resetVerificationState();
+        setError("Verification expired. Please log in again.");
+        return;
+      }
+
+      if (msgLower.includes("too many")) {
+        resetVerificationState();
+        setError("Too many attempts. Please log in again.");
+        return;
+      }
+
+      setError(msg);
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  const handleResend = async () => {
+    if (!challengeId) return;
+    setError(null);
+    setInfo(null);
+    try {
+      setResending(true);
+      await api.post("/auth/login/resend", { challengeId });
+      setInfo(
+        challengeMethod === "email"
+          ? "Code resent. Check your email."
+          : "Code resent. Check your phone."
+      );
+    } catch (err: unknown) {
+      if (!axios.isAxiosError(err)) {
+        setError("Unable to resend code.");
+        return;
+      }
+      const data: any = err.response?.data;
+      setError(data?.error?.message || data?.message || "Unable to resend code.");
+    } finally {
+      setResending(false);
+    }
+  };
+
+  const handleBack = () => {
+    resetVerificationState();
+    setError(null);
+    setInfo(null);
   };
 
   return (
@@ -109,47 +237,118 @@ export default function Login() {
         </p>
       </div>
 
-      <form onSubmit={handleLogin} className="auth-card">
-        <div className="field">
-          <label>Email</label>
-          <input
-            className="auth-input"
-            type="email"
-            placeholder="you@example.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            autoComplete="email"
-          />
-        </div>
+      <form onSubmit={isVerificationStep ? handleVerify : handleLogin} className="auth-card">
+        {!isVerificationStep ? (
+          <>
+            <div className="field">
+              <label>Email or username</label>
+              <input
+                className="auth-input"
+                type="text"
+                placeholder="you@example.com"
+                value={identifier}
+                onChange={(e) => setIdentifier(e.target.value)}
+                required
+                autoComplete="username"
+              />
+            </div>
 
-        <div className="field">
-          <label>Password</label>
-          <input
-            className="auth-input"
-            type="password"
-            placeholder="••••••••"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            autoComplete="current-password"
-          />
-        </div>
+            <div className="field">
+              <label>Password</label>
+              <input
+                className="auth-input"
+                type="password"
+                placeholder="Password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                autoComplete="current-password"
+              />
+            </div>
+
+            <p className="auth-hint">
+              We will send a verification code using your preferred method from profile settings.
+            </p>
+
+            <label className="auth-check">
+              <input
+                type="checkbox"
+                checked={rememberDevice}
+                onChange={(e) => setRememberDevice(e.target.checked)}
+              />
+              <span>Remember this device for 30 days</span>
+            </label>
+          </>
+        ) : (
+          <>
+            <div className="field">
+              <label>Verification code</label>
+              <input
+                className="auth-input"
+                type="text"
+                inputMode="numeric"
+                placeholder="Enter the code"
+                value={verificationCode}
+                onChange={(e) => setVerificationCode(e.target.value)}
+                autoComplete="one-time-code"
+                required
+              />
+              {deliveryHint && (
+                <small className="auth-hint">Sent to {deliveryHint}.</small>
+              )}
+            </div>
+
+            <div className="sms-actions">
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={handleResend}
+                disabled={resending}
+              >
+                {resending ? "Resending..." : "Resend code"}
+              </button>
+              <button type="button" className="btn ghost" onClick={handleBack}>
+                Back to login
+              </button>
+            </div>
+          </>
+        )}
 
         {error && <p className="auth-message error">{error}</p>}
         {info && <p className="auth-message info">{info}</p>}
 
         <div className="auth-actions">
-          <button type="submit" className="btn primary">
-            Login
-          </button>
           <button
-            type="button"
-            className="btn ghost"
-            onClick={() => navigate("/register")}
+            type="submit"
+            className="btn primary"
+            disabled={loginLoading || verifying}
           >
-            Register with Your Social Place
+            {isVerificationStep
+              ? verifying
+                ? "Verifying..."
+                : "Verify and login"
+              : loginLoading
+              ? "Logging in..."
+              : "Login"}
           </button>
+          {!isVerificationStep && (
+            <>
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={() => navigate("/register")}
+              >
+                Register with Your Social Place
+              </button>
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={() => navigate("/forgot-password")}
+              >
+                Forgot password?
+              </button>
+            </>
+          )}
         </div>
       </form>
     </div>

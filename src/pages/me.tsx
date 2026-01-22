@@ -20,6 +20,9 @@ import {
   PROFILE_PII_CLEAR_FIELDS,
   type ProfilePayload,
 } from "../utils/profile-e2ee";
+import { getOrCreateDeviceId } from "../utils/device-id";
+
+type VerificationMethod = "email" | "sms";
 
 type Profile = {
   firstName: string;
@@ -37,6 +40,8 @@ type Profile = {
   occupation: string;
   bio: string;
   phone?: string;
+  preferredVerificationMethod: VerificationMethod;
+  showPhoneOnProfile: boolean;
   handle?: string;
   avatarUrl?: string;
   onboardingComplete?: boolean;
@@ -61,6 +66,26 @@ type MediaPost = {
 type FriendOption = {
   id: number;
   label: string;
+};
+
+type TrustedDevice = {
+  tokenHash: string;
+  label: string;
+  createdAt: number;
+  lastUsedAt: number;
+  expiresAt: number;
+  isCurrent?: boolean;
+};
+
+type RegistrationLocks = {
+  firstName?: boolean;
+  lastName?: boolean;
+  age?: boolean;
+  birthday?: boolean;
+  phone?: boolean;
+  country?: boolean;
+  state?: boolean;
+  city?: boolean;
 };
 
 type LinkPreview = {
@@ -113,6 +138,20 @@ const formatPhone = (value?: string) => {
   return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
 };
 
+const normalizeRegistrationLocks = (value: any): RegistrationLocks | null => {
+  if (!value || typeof value !== "object") return null;
+  return {
+    firstName: Boolean(value.firstName),
+    lastName: Boolean(value.lastName),
+    age: Boolean(value.age),
+    birthday: Boolean(value.birthday),
+    phone: Boolean(value.phone),
+    country: Boolean(value.country),
+    state: Boolean(value.state),
+    city: Boolean(value.city),
+  };
+};
+
 const formatBirthday = (value?: string) => {
   if (!value) return "";
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
@@ -128,6 +167,18 @@ const formatBirthday = (value?: string) => {
     year: "numeric",
     timeZone: "UTC",
   }).format(utcDate);
+};
+
+const formatDeviceDate = (value?: number) => {
+  if (!value) return "Unknown";
+  try {
+    return new Intl.DateTimeFormat("en", {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date(value));
+  } catch {
+    return "Unknown";
+  }
 };
 
 const getTodayInput = () => {
@@ -253,11 +304,14 @@ export default function Me() {
     occupation: "",
     bio: "",
     phone: "",
+    preferredVerificationMethod: "email",
+    showPhoneOnProfile: false,
     handle: "",
   });
 
   const profileSnapshotRef = useRef<Profile | null>(null);
   const profilePayloadRef = useRef<ProfilePayload | null>(null);
+  const registrationLocksRef = useRef<RegistrationLocks>({});
   const hobbySnapshotRef = useRef<string[]>([]);
   const profileIdRef = useRef<string | number | null>(null);
   const handleFixAttemptedRef = useRef(false);
@@ -269,6 +323,7 @@ export default function Me() {
   const [success, setSuccess] = useState<string | null>(null);
   const [successModal, setSuccessModal] = useState<string | null>(null);
   const [editing, setEditing] = useState(true);
+  const [settingsView, setSettingsView] = useState<"profile" | "settings">("profile");
   const [hobbyInput, setHobbyInput] = useState("");
   const [hobbyList, setHobbyList] = useState<string[]>([]);
   const [postContent, setPostContent] = useState("");
@@ -297,6 +352,21 @@ export default function Me() {
   const [appearanceError, setAppearanceError] = useState<string | null>(null);
   const [appearanceUploading, setAppearanceUploading] = useState(false);
   const [appearanceCollapsed, setAppearanceCollapsed] = useState(true);
+  const [trustedDevices, setTrustedDevices] = useState<TrustedDevice[]>([]);
+  const [trustedLoading, setTrustedLoading] = useState(false);
+  const [trustedError, setTrustedError] = useState<string | null>(null);
+  const [trustedSuccess, setTrustedSuccess] = useState<string | null>(null);
+  const [loginPhone, setLoginPhone] = useState("");
+  const [phoneChangeChallengeId, setPhoneChangeChallengeId] = useState<string | null>(null);
+  const [phoneChangeCode, setPhoneChangeCode] = useState("");
+  const [phoneChangeHint, setPhoneChangeHint] = useState<string | null>(null);
+  const [phoneChangeSending, setPhoneChangeSending] = useState(false);
+  const [phoneChangeVerifying, setPhoneChangeVerifying] = useState(false);
+  const [phoneChangeError, setPhoneChangeError] = useState<string | null>(null);
+  const [phoneChangeSuccess, setPhoneChangeSuccess] = useState<string | null>(null);
+  const [passwordResetLoading, setPasswordResetLoading] = useState(false);
+  const [passwordResetError, setPasswordResetError] = useState<string | null>(null);
+  const [passwordResetSuccess, setPasswordResetSuccess] = useState<string | null>(null);
 
   const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
@@ -369,6 +439,203 @@ export default function Me() {
       minimizedHeight: 72,
       fontSize: 14,
     });
+  };
+
+  const loadTrustedDevices = async () => {
+    if (!user) return;
+    setTrustedLoading(true);
+    setTrustedError(null);
+    setTrustedSuccess(null);
+    try {
+      const deviceId = getOrCreateDeviceId();
+      const res = await api.get("/auth/trusted-devices", { params: { deviceId } });
+      setTrustedDevices(res.data?.devices ?? []);
+    } catch {
+      setTrustedError("Unable to load trusted devices.");
+    } finally {
+      setTrustedLoading(false);
+    }
+  };
+
+  const handleRevokeDevice = async (tokenHash: string) => {
+    setTrustedError(null);
+    setTrustedSuccess(null);
+    try {
+      await api.post("/auth/trusted-devices/revoke", { tokenHash });
+      setTrustedSuccess("Device removed.");
+      await loadTrustedDevices();
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to remove device.";
+        setTrustedError(String(msg));
+      } else {
+        setTrustedError("Unable to remove device.");
+      }
+    }
+  };
+
+  const handleRevokeOtherDevices = async () => {
+    setTrustedError(null);
+    setTrustedSuccess(null);
+    try {
+      const deviceId = getOrCreateDeviceId();
+      await api.post("/auth/trusted-devices/revoke-others", { deviceId });
+      setTrustedSuccess("Signed out of other devices.");
+      await loadTrustedDevices();
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to sign out other devices.";
+        setTrustedError(String(msg));
+      } else {
+        setTrustedError("Unable to sign out other devices.");
+      }
+    }
+  };
+
+  const resetPhoneChange = () => {
+    setPhoneChangeChallengeId(null);
+    setPhoneChangeCode("");
+    setPhoneChangeHint(null);
+    setPhoneChangeError(null);
+  };
+
+  const handleStartPhoneChange = async () => {
+    if (!loginPhone.trim()) {
+      setPhoneChangeError("Phone number is required.");
+      return;
+    }
+    setPhoneChangeError(null);
+    setPhoneChangeSuccess(null);
+    setPhoneChangeSending(true);
+    try {
+      const res = await api.post("/auth/phone/change/start", {
+        phoneNumber: loginPhone.trim(),
+      });
+      setPhoneChangeChallengeId(res.data?.challengeId || null);
+      setPhoneChangeHint(res.data?.phoneMasked || null);
+      setPhoneChangeSuccess("Code sent. Check your phone.");
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to send SMS code.";
+        setPhoneChangeError(String(msg));
+      } else {
+        setPhoneChangeError("Unable to send SMS code.");
+      }
+    } finally {
+      setPhoneChangeSending(false);
+    }
+  };
+
+  const handleVerifyPhoneChange = async () => {
+    if (!phoneChangeChallengeId) {
+      setPhoneChangeError("Verification expired. Try again.");
+      return;
+    }
+    if (!phoneChangeCode.trim()) {
+      setPhoneChangeError("Enter the verification code.");
+      return;
+    }
+    setPhoneChangeError(null);
+    setPhoneChangeSuccess(null);
+    setPhoneChangeVerifying(true);
+    try {
+      await api.post("/auth/phone/change/verify", {
+        challengeId: phoneChangeChallengeId,
+        code: phoneChangeCode.trim(),
+      });
+      const updatedPhone = phoneDigits(loginPhone);
+      if (updatedPhone && user?.id) {
+        try {
+          const current = await fetchMyProfileByUser();
+          if (current) {
+            const attrs = normalize(current);
+            let payload: ProfilePayload | null = null;
+            if (attrs.encryptedProfile) {
+              try {
+                payload = await decryptOwnProfilePayload(user.id, attrs.encryptedProfile);
+              } catch {
+                payload = null;
+              }
+            }
+            if (!payload) {
+              payload = buildProfilePayloadFromAttrs(attrs);
+            }
+            const nextPayload: ProfilePayload = {
+              ...payload,
+              phone: updatedPhone,
+            };
+            const encryptedProfile = await encryptProfilePayload(user.id, nextPayload);
+            const nextLocks: RegistrationLocks = {
+              ...registrationLocksRef.current,
+              phone: true,
+            };
+            await api.put("/profiles/me", {
+              data: {
+                encryptedProfile,
+                profileKeyVersion: 1,
+                registrationLocked: nextLocks,
+                ...PROFILE_PII_CLEAR_FIELDS,
+              },
+            });
+            profilePayloadRef.current = nextPayload;
+            registrationLocksRef.current = nextLocks;
+            setProfile((prev) => ({ ...prev, phone: formatPhone(updatedPhone) }));
+          }
+        } catch {
+          // ignore profile sync failures
+        }
+      }
+      resetPhoneChange();
+      setPhoneChangeSuccess("Phone number updated.");
+      setLoginPhone("");
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to verify phone number.";
+        setPhoneChangeError(String(msg));
+      } else {
+        setPhoneChangeError("Unable to verify phone number.");
+      }
+    } finally {
+      setPhoneChangeVerifying(false);
+    }
+  };
+
+  const handlePasswordReset = async () => {
+    if (!user?.email) {
+      setPasswordResetError("Email address not available.");
+      return;
+    }
+    setPasswordResetError(null);
+    setPasswordResetSuccess(null);
+    setPasswordResetLoading(true);
+    try {
+      await api.post("/auth/forgot-password", { email: user.email });
+      setPasswordResetSuccess("Reset email sent. Check your inbox.");
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to send reset email.";
+        setPasswordResetError(String(msg));
+      } else {
+        setPasswordResetError("Unable to send reset email.");
+      }
+    } finally {
+      setPasswordResetLoading(false);
+    }
   };
 
   const activeChatPreset = useMemo(() => {
@@ -607,8 +874,24 @@ export default function Me() {
       payload = buildProfilePayloadFromAttrs(attrs);
     }
     profilePayloadRef.current = payload;
+    const explicitLocks = normalizeRegistrationLocks(attrs.registrationLocked) || {};
+    const derivedLocks: RegistrationLocks = {
+      firstName: Boolean(String(payload.firstName || "").trim()),
+      lastName: Boolean(String(payload.lastName || "").trim()),
+      age: Boolean(String(payload.age || "").trim()),
+      birthday: Boolean(String(payload.birthday || "").trim()),
+      phone: Boolean(String(payload.phone || "").trim()),
+    };
+    registrationLocksRef.current = { ...derivedLocks, ...explicitLocks };
 
     const parsedHobbies = parseHobbies(payload.hobbies || "");
+    const preferredRaw = String(attrs.preferredVerificationMethod || "")
+      .trim()
+      .toLowerCase();
+    const preferredVerificationMethod: VerificationMethod =
+      preferredRaw === "sms" ? "sms" : "email";
+    const showPhoneOnProfile =
+      typeof attrs.showPhoneOnProfile === "boolean" ? attrs.showPhoneOnProfile : false;
     setHobbyList(parsedHobbies);
 
     const onboardingComplete =
@@ -633,6 +916,8 @@ export default function Me() {
       occupation: payload.occupation || "",
       bio: payload.bio || "",
       phone: formatPhone(payload.phone || ""),
+      preferredVerificationMethod,
+      showPhoneOnProfile,
       handle: attrs.handle || "",
       avatarUrl: pickMediaUrl(attrs.avatar),
       onboardingComplete,
@@ -895,11 +1180,13 @@ export default function Me() {
   }, [hobbyInput, hobbyList]);
 
   const onboardingSteps = ["Basics", "Beliefs & Interests", "Location", "About you"];
+  const hasPreferredMethod = Boolean(profile.preferredVerificationMethod);
   const hasBasics =
     profile.firstName.trim() &&
     profile.lastName.trim() &&
     profile.age &&
-    profile.gender;
+    profile.gender &&
+    hasPreferredMethod;
   const hasBeliefs = profile.religion.trim() && hobbyList.length > 0;
   const needsState = stateOptions.length > 0;
   const hasState = needsState ? Boolean(profile.state || profile.stateCode) : true;
@@ -910,7 +1197,9 @@ export default function Me() {
   const handleOnboardingNext = async () => {
     setOnboardingError(null);
     if (onboardingStep === 0 && !hasBasics) {
-      setOnboardingError("Please add your name, age, and gender to continue.");
+      setOnboardingError(
+        "Please add your name, age, gender, and preferred verification method to continue."
+      );
       return;
     }
     if (onboardingStep === 1 && !hasBeliefs) {
@@ -934,6 +1223,17 @@ export default function Me() {
 
     await saveProfile({ onboardingComplete: true });
   };
+
+  const registrationLocks = registrationLocksRef.current;
+  const isFirstNameLocked = Boolean(registrationLocks.firstName);
+  const isLastNameLocked = Boolean(registrationLocks.lastName);
+  const isAgeLocked = Boolean(registrationLocks.age);
+  const isBirthdayLocked = Boolean(registrationLocks.birthday);
+  const isPhoneLocked = Boolean(registrationLocks.phone);
+  const isCountryLocked = Boolean(registrationLocks.country);
+  const isStateLocked = Boolean(registrationLocks.state);
+  const isCityLocked = Boolean(registrationLocks.city);
+  const isLocationLocked = isCountryLocked || isStateLocked || isCityLocked;
 
   useEffect(() => {
     let active = true;
@@ -1007,6 +1307,8 @@ export default function Me() {
             occupation: "",
             bio: "",
             phone: "",
+            preferredVerificationMethod: "email",
+            showPhoneOnProfile: false,
             handle: lockedUniqueHandle, // show the locked handle even if empty profile
             onboardingComplete: false,
           });
@@ -1029,6 +1331,11 @@ export default function Me() {
 
     load();
   }, [user?.id, lockedUniqueHandle]);
+
+  useEffect(() => {
+    if (!user) return;
+    void loadTrustedDevices();
+  }, [user?.id]);
 
   useEffect(() => {
     const url = extractFirstUrl(postContent);
@@ -1089,14 +1396,14 @@ export default function Me() {
     setSuccessModal(null);
 
     try {
-      const safeFirst = mergedProfile.firstName || user.username || user.email || "user";
-      const publicFirstName = mergedProfile.firstName.trim();
-      const publicLastName = mergedProfile.lastName.trim();
+      const rawFirstName = mergedProfile.firstName.trim();
+      const rawLastName = mergedProfile.lastName.trim();
+      const rawAge = String(mergedProfile.age || "").trim();
       const normalizedHandle = (mergedProfile.handle || "").trim();
       const baseHandle =
         normalizedHandle && normalizedHandle.toLowerCase() !== "user"
           ? normalizedHandle
-          : lockedUniqueHandle;
+        : lockedUniqueHandle;
       const buildUniqueHandle = () =>
         `${baseHandle}-${user.id}-${Math.floor(1000 + Math.random() * 9000)}`;
 
@@ -1148,25 +1455,96 @@ export default function Me() {
         existingPayload = profilePayloadRef.current || {};
       }
 
+      const registrationLocks = registrationLocksRef.current;
+      const resolveLockedValue = (
+        locked: boolean | undefined,
+        existing: string | undefined,
+        fallback: string
+      ) => {
+        if (!locked) return fallback;
+        const existingValue = String(existing || "").trim();
+        return existingValue ? existingValue : fallback;
+      };
+      const lockFirstName = Boolean(registrationLocks.firstName);
+      const lockLastName = Boolean(registrationLocks.lastName);
+      const lockAge = Boolean(registrationLocks.age);
+      const lockBirthday = Boolean(registrationLocks.birthday);
+      const lockPhone = Boolean(registrationLocks.phone);
+      const lockCountry = Boolean(registrationLocks.country);
+      const lockState = Boolean(registrationLocks.state || registrationLocks.country);
+      const lockCity = Boolean(
+        registrationLocks.city || registrationLocks.state || registrationLocks.country
+      );
+      const existingFirstName = String(existingPayload.firstName || "");
+      const existingLastName = String(existingPayload.lastName || "");
+      const existingAge = String(existingPayload.age || "");
+      const existingCountry = String(existingPayload.country || "");
+      const existingCountryCode = String(existingPayload.countryCode || "");
+      const existingState = String(existingPayload.state || "");
+      const existingStateCode = String(existingPayload.stateCode || "");
+      const existingCity = String(existingPayload.city || "");
+      const existingBirthday = String(existingPayload.birthday || "");
+      const existingPhone = String(existingPayload.phone || "");
+
+      const effectiveFirstName = lockFirstName ? existingFirstName : rawFirstName;
+      const effectiveLastName = lockLastName ? existingLastName : rawLastName;
+      const safeFirst = effectiveFirstName;
+      const publicFirstName = effectiveFirstName;
+      const publicLastName = effectiveLastName;
+      const effectiveAge = resolveLockedValue(lockAge, existingAge, rawAge);
+      const effectiveBirthday = resolveLockedValue(
+        lockBirthday,
+        existingBirthday,
+        mergedProfile.birthday || ""
+      );
+      const effectivePhone = resolveLockedValue(lockPhone, existingPhone, phoneClean || "");
+
       const nextPayload: ProfilePayload = {
         ...existingPayload,
         firstName: safeFirst,
-        lastName: mergedProfile.lastName,
-        age: mergedProfile.age,
-        birthday: mergedProfile.birthday || "",
+        lastName: effectiveLastName,
+        age: effectiveAge,
+        birthday: effectiveBirthday,
         gender: mergedProfile.gender,
         religion: mergedProfile.religion,
-        country: mergedProfile.country,
-        countryCode: mergedProfile.countryCode,
-        state: mergedProfile.state,
-        stateCode: mergedProfile.stateCode,
-        city: mergedProfile.city,
+        country: resolveLockedValue(
+          lockCountry,
+          existingCountry,
+          mergedProfile.country
+        ),
+        countryCode: resolveLockedValue(
+          lockCountry,
+          existingCountryCode,
+          mergedProfile.countryCode
+        ),
+        state: resolveLockedValue(
+          lockState,
+          existingState,
+          mergedProfile.state
+        ),
+        stateCode: resolveLockedValue(
+          lockState,
+          existingStateCode,
+          mergedProfile.stateCode
+        ),
+        city: resolveLockedValue(
+          lockCity,
+          existingCity,
+          mergedProfile.city
+        ),
         hobbies: mergedProfile.hobbies,
         occupation: mergedProfile.occupation,
         bio: mergedProfile.bio,
-        phone: phoneClean || "",
+        phone: effectivePhone,
         onboardingComplete,
       };
+
+      const nextLocks: RegistrationLocks = { ...registrationLocks };
+      if (!nextLocks.firstName && rawFirstName) nextLocks.firstName = true;
+      if (!nextLocks.lastName && rawLastName) nextLocks.lastName = true;
+      if (!nextLocks.age && rawAge) nextLocks.age = true;
+      if (!nextLocks.birthday && mergedProfile.birthday.trim()) nextLocks.birthday = true;
+      if (!nextLocks.phone && phoneClean) nextLocks.phone = true;
 
       const encryptedProfile = await encryptProfilePayload(user.id, nextPayload);
 
@@ -1179,6 +1557,9 @@ export default function Me() {
           handle: handleValue,
           locale: "en",
           user: user.id,
+          registrationLocked: nextLocks,
+          preferredVerificationMethod: mergedProfile.preferredVerificationMethod,
+          showPhoneOnProfile: mergedProfile.showPhoneOnProfile,
           ...PROFILE_PII_CLEAR_FIELDS,
         };
         if (avatarId) data.avatar = avatarId;
@@ -1227,6 +1608,7 @@ export default function Me() {
         await setProfileFromEntry(mine);
       }
 
+      registrationLocksRef.current = nextLocks;
       void refreshProfile();
       if (friendOptions.length) {
         void ensureProfileKeyShares(
@@ -1326,7 +1708,7 @@ export default function Me() {
   ] as const;
   const rightInfo: Array<[string, string | undefined]> = [
     ["Handle", displayHandle],
-    ["Phone", profile.phone],
+    ...(profile.showPhoneOnProfile ? [["Phone", profile.phone]] : []),
     ["Location", locationDisplay],
     ["Country", profile.country],
     [stateLabel, profile.state],
@@ -1384,7 +1766,13 @@ export default function Me() {
                 maxLength={64}
                 value={profile.firstName}
                 onChange={(e) => setProfile({ ...profile, firstName: e.target.value })}
+                disabled={isFirstNameLocked}
               />
+              {isFirstNameLocked && (
+                <small className="profile-lock-note">
+                  Locked after setup. Contact support to update.
+                </small>
+              )}
             </label>
             <label className="profile-field">
               <span className="profile-field-label">Last Name</span>
@@ -1393,7 +1781,13 @@ export default function Me() {
                 maxLength={64}
                 value={profile.lastName}
                 onChange={(e) => setProfile({ ...profile, lastName: e.target.value })}
+                disabled={isLastNameLocked}
               />
+              {isLastNameLocked && (
+                <small className="profile-lock-note">
+                  Locked after setup. Contact support to update.
+                </small>
+              )}
             </label>
             <label className="profile-field">
               <span className="profile-field-label">Age</span>
@@ -1401,6 +1795,7 @@ export default function Me() {
                 className="auth-input"
                 value={profile.age}
                 onChange={(e) => setProfile({ ...profile, age: e.target.value })}
+                disabled={isAgeLocked}
               >
                 <option value="">Select age</option>
                 {AGE_OPTIONS.map((age) => (
@@ -1409,6 +1804,11 @@ export default function Me() {
                   </option>
                 ))}
               </select>
+              {isAgeLocked && (
+                <small className="profile-lock-note">
+                  Locked after setup. Contact support to update.
+                </small>
+              )}
             </label>
             <label className="profile-field">
               <span className="profile-field-label">Birthday</span>
@@ -1418,7 +1818,13 @@ export default function Me() {
                 max={todayInput}
                 value={profile.birthday}
                 onChange={(e) => setProfile({ ...profile, birthday: e.target.value })}
+                disabled={isBirthdayLocked}
               />
+              {isBirthdayLocked && (
+                <small className="profile-lock-note">
+                  Set during registration. Contact support to update.
+                </small>
+              )}
             </label>
             <label className="profile-field">
               <span className="profile-field-label">Gender</span>
@@ -1431,6 +1837,25 @@ export default function Me() {
                 <option value="Male">Male</option>
                 <option value="Female">Female</option>
               </select>
+            </label>
+            <label className="profile-field">
+              <span className="profile-field-label">Preferred verification method</span>
+              <select
+                className="auth-input"
+                value={profile.preferredVerificationMethod}
+                onChange={(e) =>
+                  setProfile({
+                    ...profile,
+                    preferredVerificationMethod: e.target.value as VerificationMethod,
+                  })
+                }
+              >
+                <option value="email">Email</option>
+                <option value="sms">SMS</option>
+              </select>
+              <small style={{ color: "#9aa5bb" }}>
+                Used for login codes. You can update this later in profile settings.
+              </small>
             </label>
           </div>
         );
@@ -1515,6 +1940,7 @@ export default function Me() {
                 className="auth-input"
                 value={profile.country}
                 onChange={(e) => handleCountryChange(e.target.value)}
+                disabled={isCountryLocked}
               >
                 <option value="">Select country</option>
                 {countryOptions.map((country) => (
@@ -1530,7 +1956,12 @@ export default function Me() {
                 className="auth-input"
                 value={profile.state}
                 onChange={(e) => handleStateChange(e.target.value)}
-                disabled={!profile.countryCode || !stateOptions.length}
+                disabled={
+                  isStateLocked ||
+                  isCountryLocked ||
+                  !profile.countryCode ||
+                  !stateOptions.length
+                }
               >
                 <option value="">
                   {!profile.countryCode
@@ -1552,7 +1983,12 @@ export default function Me() {
                 className="auth-input"
                 value={profile.city}
                 onChange={(e) => handleCityChange(e.target.value)}
-                disabled={!profile.countryCode || (stateOptions.length > 0 && !profile.stateCode)}
+                disabled={
+                  isCityLocked ||
+                  isCountryLocked ||
+                  !profile.countryCode ||
+                  (stateOptions.length > 0 && !profile.stateCode)
+                }
               >
                 <option value="">
                   {!profile.countryCode
@@ -1568,6 +2004,11 @@ export default function Me() {
                 ))}
               </select>
             </label>
+            {isLocationLocked && (
+              <p className="profile-lock-note">
+                Location set during registration is locked. Contact support to update.
+              </p>
+            )}
             {locationError && <p className="profile-location-error">{locationError}</p>}
           </div>
         );
@@ -1605,12 +2046,36 @@ export default function Me() {
                 placeholder="(555) 123-4567"
                 value={profile.phone || ""}
                 onChange={(e) => setProfile({ ...profile, phone: formatPhone(e.target.value) })}
+                disabled={isPhoneLocked}
               />
+              {isPhoneLocked && (
+                <small className="profile-lock-note">
+                  Set during registration. Use Login phone number settings to update.
+                </small>
+              )}
+            </label>
+            <label className="profile-field">
+              <span className="profile-field-label">Show phone on profile</span>
+              <div className="profile-check">
+                <input
+                  type="checkbox"
+                  checked={profile.showPhoneOnProfile}
+                  onChange={(e) =>
+                    setProfile({ ...profile, showPhoneOnProfile: e.target.checked })
+                  }
+                />
+                <span>Visible to friends</span>
+              </div>
+              <small style={{ color: "#9aa5bb" }}>
+                Your phone stays private unless you enable this.
+              </small>
             </label>
           </div>
         );
     }
   };
+
+  const isSettingsView = settingsView === "settings";
 
   return (
     <div className="dashboard-shell" style={getBackgroundStyle("profile")}>
@@ -1845,10 +2310,15 @@ export default function Me() {
         </div>
       )}
 
-      <Sidebar active="me" />
+      <Sidebar
+        active="me"
+        settingsView={settingsView}
+        onSettingsViewChange={setSettingsView}
+      />
 
         <div className="main-content profile-content">
           <TopbarSearch />
+          {isSettingsView && (
           <div className="panel-grid profile-appearance-row">
           <section className="panel profile-appearance-panel">
             <div className="profile-appearance-header">
@@ -1977,6 +2447,7 @@ export default function Me() {
             )}
           </section>
         </div>
+          )}
         {/* <div className="dash-hero">
           <div className="dash-hero__text">
             <p className="eyebrow">Profile</p>
@@ -1988,6 +2459,7 @@ export default function Me() {
         {error && <p className="status status-error">{error}</p>}
         {success && <p className="status status-success">{success}</p>}
 
+        {!isSettingsView && (
         <div className="panel-grid" style={{ marginBottom: "16px" }}>
           <section
             className="panel"
@@ -2054,7 +2526,9 @@ export default function Me() {
             </div>
           </section>
         </div>
+        )}
 
+        {!isSettingsView && (
         <div className="panel-grid">
           <section className="panel">
             <div className="panel-header">
@@ -2075,7 +2549,13 @@ export default function Me() {
                       maxLength={64}
                       value={profile.firstName}
                       onChange={(e) => setProfile({ ...profile, firstName: e.target.value })}
+                      disabled={isFirstNameLocked}
                     />
+                    {isFirstNameLocked && (
+                      <small className="profile-lock-note">
+                        Locked after setup. Contact support to update.
+                      </small>
+                    )}
                   </label>
 
                   <label className="profile-field">
@@ -2085,7 +2565,13 @@ export default function Me() {
                       maxLength={64}
                       value={profile.lastName}
                       onChange={(e) => setProfile({ ...profile, lastName: e.target.value })}
+                      disabled={isLastNameLocked}
                     />
+                    {isLastNameLocked && (
+                      <small className="profile-lock-note">
+                        Locked after setup. Contact support to update.
+                      </small>
+                    )}
                   </label>
 
                   <label className="profile-field">
@@ -2094,6 +2580,7 @@ export default function Me() {
                       className="auth-input"
                       value={profile.age}
                       onChange={(e) => setProfile({ ...profile, age: e.target.value })}
+                      disabled={isAgeLocked}
                     >
                       <option value="">Select age</option>
                       {AGE_OPTIONS.map((age) => (
@@ -2102,6 +2589,11 @@ export default function Me() {
                         </option>
                       ))}
                     </select>
+                    {isAgeLocked && (
+                      <small className="profile-lock-note">
+                        Locked after setup. Contact support to update.
+                      </small>
+                    )}
                   </label>
                   <label className="profile-field">
                     <span className="profile-field-label">Birthday</span>
@@ -2111,7 +2603,13 @@ export default function Me() {
                       max={todayInput}
                       value={profile.birthday}
                       onChange={(e) => setProfile({ ...profile, birthday: e.target.value })}
+                      disabled={isBirthdayLocked}
                     />
+                    {isBirthdayLocked && (
+                      <small className="profile-lock-note">
+                        Set during registration. Contact support to update.
+                      </small>
+                    )}
                   </label>
 
                   <label className="profile-field">
@@ -2162,6 +2660,26 @@ export default function Me() {
                   </label>
 
                   <label className="profile-field">
+                    <span className="profile-field-label">Preferred verification method</span>
+                    <select
+                      className="auth-input"
+                      value={profile.preferredVerificationMethod}
+                      onChange={(e) =>
+                        setProfile({
+                          ...profile,
+                          preferredVerificationMethod: e.target.value as VerificationMethod,
+                        })
+                      }
+                    >
+                      <option value="email">Email</option>
+                      <option value="sms">SMS</option>
+                    </select>
+                    <small style={{ color: "#9aa5bb" }}>
+                      Login codes are sent using this method.
+                    </small>
+                  </label>
+
+                  <label className="profile-field">
                     <span className="profile-field-label">Phone</span>
                     <input
                       className="auth-input"
@@ -2170,7 +2688,30 @@ export default function Me() {
                       placeholder="(555) 123-4567"
                       value={profile.phone || ""}
                       onChange={(e) => setProfile({ ...profile, phone: formatPhone(e.target.value) })}
+                      disabled={isPhoneLocked}
                     />
+                    {isPhoneLocked && (
+                      <small className="profile-lock-note">
+                        Set during registration. Use Login phone number settings to update.
+                      </small>
+                    )}
+                  </label>
+
+                  <label className="profile-field">
+                    <span className="profile-field-label">Show phone on profile</span>
+                    <div className="profile-check">
+                      <input
+                        type="checkbox"
+                        checked={profile.showPhoneOnProfile}
+                        onChange={(e) =>
+                          setProfile({ ...profile, showPhoneOnProfile: e.target.checked })
+                        }
+                      />
+                      <span>Visible to friends</span>
+                    </div>
+                    <small style={{ color: "#9aa5bb" }}>
+                      Your phone stays private unless you enable this.
+                    </small>
                   </label>
 
                   <label className="profile-field">
@@ -2179,6 +2720,7 @@ export default function Me() {
                       className="auth-input"
                       value={profile.country}
                       onChange={(e) => handleCountryChange(e.target.value)}
+                      disabled={isCountryLocked}
                     >
                       <option value="">Select country</option>
                       {countryOptions.map((country) => (
@@ -2195,7 +2737,12 @@ export default function Me() {
                       className="auth-input"
                       value={profile.state}
                       onChange={(e) => handleStateChange(e.target.value)}
-                      disabled={!profile.countryCode || !stateOptions.length}
+                      disabled={
+                        isStateLocked ||
+                        isCountryLocked ||
+                        !profile.countryCode ||
+                        !stateOptions.length
+                      }
                     >
                       <option value="">
                         {!profile.countryCode
@@ -2218,7 +2765,12 @@ export default function Me() {
                       className="auth-input"
                       value={profile.city}
                       onChange={(e) => handleCityChange(e.target.value)}
-                      disabled={!profile.countryCode || (stateOptions.length > 0 && !profile.stateCode)}
+                      disabled={
+                        isCityLocked ||
+                        isCountryLocked ||
+                        !profile.countryCode ||
+                        (stateOptions.length > 0 && !profile.stateCode)
+                      }
                     >
                       <option value="">
                         {!profile.countryCode
@@ -2235,6 +2787,11 @@ export default function Me() {
                     </select>
                   </label>
 
+                  {isLocationLocked && (
+                    <p className="profile-lock-note">
+                      Location set during registration is locked. Contact support to update.
+                    </p>
+                  )}
                   {locationError && (
                     <p className="profile-location-error">{locationError}</p>
                   )}
@@ -2363,7 +2920,188 @@ export default function Me() {
             )}
           </section>
         </div>
+        )}
 
+        {isSettingsView && (
+        <div className="panel-grid">
+          <section className="panel security-panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Security</p>
+                <h3>Account Security</h3>
+                <p className="panel-sub">
+                  Choose how you verify and manage trusted devices.
+                </p>
+              </div>
+            </div>
+
+            <div className="security-grid">
+              <div className="security-card">
+                <h4>Password reset</h4>
+                <p className="security-muted">
+                  We will email a reset link to {user.email}.
+                </p>
+                <button
+                  className="btn ghost"
+                  type="button"
+                  onClick={handlePasswordReset}
+                  disabled={passwordResetLoading}
+                >
+                  {passwordResetLoading ? "Sending..." : "Send reset email"}
+                </button>
+                {passwordResetError && (
+                  <p className="status status-error">{passwordResetError}</p>
+                )}
+                {passwordResetSuccess && (
+                  <p className="status status-success">{passwordResetSuccess}</p>
+                )}
+              </div>
+
+              <div className="security-card">
+                <h4>Login phone number</h4>
+                <p className="security-muted">
+                  Update the number used for SMS verification.
+                </p>
+                {!phoneChangeChallengeId ? (
+                  <>
+                    <div className="security-row">
+                      <input
+                        className="auth-input"
+                        type="tel"
+                        placeholder="+1 555 555 1234"
+                        value={loginPhone}
+                        onChange={(e) => setLoginPhone(e.target.value)}
+                      />
+                      <button
+                        className="btn ghost"
+                        type="button"
+                        onClick={handleStartPhoneChange}
+                        disabled={phoneChangeSending}
+                      >
+                        {phoneChangeSending ? "Sending..." : "Send code"}
+                      </button>
+                    </div>
+                    <p className="security-muted">
+                      Include your country code (for example, +1).
+                    </p>
+                    {phoneChangeHint && (
+                      <p className="security-muted">Sent to {phoneChangeHint}.</p>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="security-row">
+                      <input
+                        className="auth-input"
+                        type="text"
+                        inputMode="numeric"
+                        placeholder="Enter code"
+                        value={phoneChangeCode}
+                        onChange={(e) => setPhoneChangeCode(e.target.value)}
+                      />
+                      <button
+                        className="btn primary"
+                        type="button"
+                        onClick={handleVerifyPhoneChange}
+                        disabled={phoneChangeVerifying}
+                      >
+                        {phoneChangeVerifying ? "Verifying..." : "Verify"}
+                      </button>
+                      <button
+                        className="btn ghost"
+                        type="button"
+                        onClick={() => {
+                          resetPhoneChange();
+                          setPhoneChangeSuccess(null);
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                    {phoneChangeHint && (
+                      <p className="security-muted">Sent to {phoneChangeHint}.</p>
+                    )}
+                  </>
+                )}
+                {phoneChangeError && (
+                  <p className="status status-error">{phoneChangeError}</p>
+                )}
+                {phoneChangeSuccess && (
+                  <p className="status status-success">{phoneChangeSuccess}</p>
+                )}
+              </div>
+
+              <div className="security-card security-card-wide">
+                <h4>Trusted devices</h4>
+                <p className="security-muted">
+                  Devices remembered for up to 30 days.
+                </p>
+                <div className="security-actions">
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={loadTrustedDevices}
+                    disabled={trustedLoading}
+                  >
+                    {trustedLoading ? "Refreshing..." : "Refresh list"}
+                  </button>
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={handleRevokeOtherDevices}
+                    disabled={trustedLoading || !trustedDevices.length}
+                  >
+                    Sign out other devices
+                  </button>
+                </div>
+                {trustedError && <p className="status status-error">{trustedError}</p>}
+                {trustedSuccess && (
+                  <p className="status status-success">{trustedSuccess}</p>
+                )}
+                <div className="trusted-device-list">
+                  {trustedDevices.length ? (
+                    trustedDevices.map((device) => (
+                      <div
+                        className={`trusted-device-card${
+                          device.isCurrent ? " is-current" : ""
+                        }`}
+                        key={device.tokenHash}
+                      >
+                        <div>
+                          <p className="trusted-device-label">
+                            {device.label || "Unknown device"}
+                          </p>
+                          <p className="trusted-device-meta">
+                            Last used {formatDeviceDate(device.lastUsedAt || device.createdAt)} |{" "}
+                            Expires {formatDeviceDate(device.expiresAt)}
+                          </p>
+                        </div>
+                        <div className="trusted-device-actions">
+                          {device.isCurrent ? (
+                            <span className="trusted-device-pill">Current</span>
+                          ) : (
+                            <button
+                              className="btn ghost"
+                              type="button"
+                              onClick={() => handleRevokeDevice(device.tokenHash)}
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="security-muted">No trusted devices saved.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+        )}
+
+        {!isSettingsView && (
         <div className="panel-grid">
           <section className="panel post-composer">
             <div className="panel-header">
@@ -2509,7 +3247,9 @@ export default function Me() {
             {postError && <p className="status status-error">{postError}</p>}
           </section>
         </div>
+        )}
 
+        {!isSettingsView && (
         <div className="posts-grid">
           {posts.map((p) => {
             const postUrl = extractFirstUrl(p.text);
@@ -2568,6 +3308,7 @@ export default function Me() {
             );
           })}
         </div>
+        )}
       </div>
     </div>
   );

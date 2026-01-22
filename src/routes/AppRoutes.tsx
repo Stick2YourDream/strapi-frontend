@@ -3,6 +3,8 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import Login from "../pages/login";
 import Register from "../pages/register";
+import ForgotPassword from "../pages/forgot-password";
+import ResetPassword from "../pages/reset-password";
 import Dashboard from "../pages/dashboard";
 import ProtectedRoute from "../components/ProtectedRoute";
 import Friends from "../pages/friends";
@@ -31,6 +33,8 @@ export default function AppRoutes(): JSX.Element {
 
       {/* Login and Register pages */}
       <Route path="/login" element={<Login />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
       <Route path="/register" element={<Register />} />
       <Route path="/terms" element={<Terms />} />
       <Route path="/privacy" element={<Privacy />} />

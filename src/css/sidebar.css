@@ -280,6 +280,40 @@
   width: 100%;
 }
 
+.sidebar-settings-button {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: #dbe2f2;
+}
+
+.sidebar-settings-button:hover {
+  border-color: rgba(125, 211, 252, 0.35);
+  background: rgba(59, 130, 246, 0.16);
+}
+
+.sidebar-settings-button.is-active {
+  border-color: rgba(92, 240, 199, 0.45);
+  background: rgba(92, 240, 199, 0.12);
+  color: #d9fbe7;
+}
+
+.sidebar-settings-icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar-settings-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
 .sidebar-profile-slot {
   position: relative;
   width: 100%;

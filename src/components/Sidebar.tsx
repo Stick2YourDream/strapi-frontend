@@ -21,6 +21,8 @@ type ProfileSummary = {
 
 type SidebarProps = {
   active: "dashboard" | "friends" | "me" | "groups";
+  settingsView?: "profile" | "settings";
+  onSettingsViewChange?: (view: "profile" | "settings") => void;
 };
 
 const trimPreviewText = (value?: string, max = 72) => {
@@ -31,7 +33,11 @@ const trimPreviewText = (value?: string, max = 72) => {
   return `${text.slice(0, max - 3)}...`;
 };
 
-export default function Sidebar({ active }: SidebarProps) {
+export default function Sidebar({
+  active,
+  settingsView = "profile",
+  onSettingsViewChange,
+}: SidebarProps) {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
   const [showMoreProfile, setShowMoreProfile] = useState(false);
@@ -150,6 +156,15 @@ export default function Sidebar({ active }: SidebarProps) {
   // prefer handle if loaded, else username/email
   const secondaryLine = profileCard?.handle || "Profile";
   const fallbackInitial = nameForDisplay.charAt(0).toUpperCase();
+  const canToggleSettings = active === "me" && typeof onSettingsViewChange === "function";
+  const isSettingsView = settingsView === "settings";
+
+  const handleSettingsToggle = () => {
+    if (!onSettingsViewChange) return;
+    setShowProfileMenu(false);
+    setShowNotifications(false);
+    onSettingsViewChange(isSettingsView ? "profile" : "settings");
+  };
 
   const messagePreviewText = useMemo(() => {
     if (counts.messages <= 0) return "";
@@ -408,6 +423,15 @@ export default function Sidebar({ active }: SidebarProps) {
               >
                 My Profile
               </button>
+              {canToggleSettings && (
+                <button
+                  className="mobile-profile-item"
+                  type="button"
+                  onClick={handleSettingsToggle}
+                >
+                  {isSettingsView ? "Back to Profile" : "Settings"}
+                </button>
+              )}
               <button
                 className="mobile-profile-item"
                 type="button"
@@ -629,6 +653,43 @@ export default function Sidebar({ active }: SidebarProps) {
                 </div>
               )}
             </div>
+          )}
+          {canToggleSettings && (
+            <button
+              type="button"
+              className={`btn ghost sidebar-settings-button${
+                isSettingsView ? " is-active" : ""
+              }`}
+              onClick={handleSettingsToggle}
+              aria-pressed={isSettingsView}
+            >
+              <span className="sidebar-settings-icon" aria-hidden="true">
+                {isSettingsView ? (
+                  <svg viewBox="0 0 24 24">
+                    <path
+                      d="M15 6l-6 6 6 6"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24">
+                    <path
+                      d="M19.4 13a7.6 7.6 0 0 0 .05-2l2.1-1.64-2-3.46-2.46 1a7.56 7.56 0 0 0-1.72-1l-.38-2.6h-4l-.38 2.6a7.56 7.56 0 0 0-1.72 1l-2.46-1-2 3.46L4.55 11a7.6 7.6 0 0 0 0 2l-2.1 1.64 2 3.46 2.46-1c.54.42 1.12.76 1.72 1l.38 2.6h4l.38-2.6c.6-.24 1.18-.58 1.72-1l2.46 1 2-3.46L19.4 13zM12 15.2a3.2 3.2 0 1 1 0-6.4 3.2 3.2 0 0 1 0 6.4z"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                )}
+              </span>
+              <span>{isSettingsView ? "Back to Profile" : "Settings"}</span>
+            </button>
           )}
         </div>
         {user && (

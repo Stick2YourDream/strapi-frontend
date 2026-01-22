@@ -439,6 +439,7 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
   const needsState = stateOptions.length > 0;
   const results = useMemo(() => {
     if (!activeQuery && !filtersActive) return [];
+    const queryTokens = activeQuery ? activeQuery.split(" ").filter(Boolean) : [];
     const userHobbySet = new Set(userHobbyKeys);
     return profiles
       .filter((p) => p.userId && p.userId !== user?.id)
@@ -450,14 +451,9 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
         const last = normalizeSearch(p.lastName || "");
         const full = normalizeSearch(`${p.firstName || ""} ${p.lastName || ""}`);
         const displayName = normalizeSearch(p.displayName || "");
-        return (
-          handle.includes(activeQuery) ||
-          username.includes(activeQuery) ||
-          first.includes(activeQuery) ||
-          last.includes(activeQuery) ||
-          full.includes(activeQuery) ||
-          displayName.includes(activeQuery)
-        );
+        const haystack = [handle, username, first, last, full, displayName];
+        if (!queryTokens.length) return false;
+        return queryTokens.every((token) => haystack.some((field) => field.includes(token)));
       })
       .filter((p) => {
         if (normalizedCountry && !normalizeLocation(p.country).includes(normalizedCountry)) {

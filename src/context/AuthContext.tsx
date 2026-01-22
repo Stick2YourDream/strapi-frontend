@@ -133,6 +133,25 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         }
       }
 
+      const publicFirstName = String(attrs.firstName || "").trim();
+      const publicLastName = String(attrs.lastName || "").trim();
+      const payloadFirstName = String(payload?.firstName || "").trim();
+      const payloadLastName = String(payload?.lastName || "").trim();
+      const nameUpdate: Record<string, string> = {};
+      if (payloadFirstName && payloadFirstName !== publicFirstName) {
+        nameUpdate.firstName = payloadFirstName;
+      }
+      if (payloadLastName && payloadLastName !== publicLastName) {
+        nameUpdate.lastName = payloadLastName;
+      }
+      if (Object.keys(nameUpdate).length > 0) {
+        try {
+          await api.put("/profiles/me", { data: nameUpdate });
+        } catch (error) {
+          console.warn("Unable to sync public name fields:", error);
+        }
+      }
+
       const onboardingComplete =
         typeof payload?.onboardingComplete === "boolean"
           ? payload.onboardingComplete

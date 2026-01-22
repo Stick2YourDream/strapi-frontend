@@ -131,12 +131,15 @@ type LocationOption = {
 const normalizeLocation = (value: string) => value.trim().toLowerCase();
 const matchByName = (list: LocationOption[], value: string) =>
   list.find((item) => normalizeLocation(item.name) === normalizeLocation(value));
+const phoneDigits = (value: string) => String(value || "").replace(/\D/g, "").slice(-10);
 
 export default function Register() {
   const [form, setForm] = useState({
     username: "",
     email: "",
     confirmEmail: "",
+    phoneNumber: "",
+    smsCode: "",
     birthday: "",
     password: "",
     confirmPassword: "",
@@ -157,6 +160,9 @@ export default function Register() {
   const [stateOptions, setStateOptions] = useState<LocationOption[]>([]);
   const [cityOptions, setCityOptions] = useState<LocationOption[]>([]);
   const [locationError, setLocationError] = useState<string | null>(null);
+  const [smsSending, setSmsSending] = useState(false);
+  const [smsSent, setSmsSent] = useState(false);
+  const [smsError, setSmsError] = useState<string | null>(null);
   const formStartRef = useRef(Date.now());
   const [searchParams] = useSearchParams();
   const intentParam = searchParams.get("intent");
@@ -178,7 +184,12 @@ export default function Register() {
   const needsState = stateOptions.length > 0;
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
+    const { name, value } = e.target;
+    setForm((prev) => ({ ...prev, [name]: value }));
+    if (name === "phoneNumber") {
+      setSmsSent(false);
+      setSmsError(null);
+    }
   };
 
   const updateLocation = (changes: Partial<typeof form>) => {
@@ -210,6 +221,32 @@ export default function Register() {
 
   const handleCityChange = (value: string) => {
     updateLocation({ city: value });
+  };
+
+  const handleSendSms = async () => {
+    const phoneValue = form.phoneNumber.trim();
+    if (!phoneValue) {
+      setSmsError("Phone number is required to send a code.");
+      return;
+    }
+    setSmsError(null);
+    setSmsSending(true);
+    try {
+      await api.post("/auth/sms/send", { phoneNumber: phoneValue, purpose: "register" });
+      setSmsSent(true);
+    } catch (err: unknown) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          (err.response?.data as any)?.error?.message ||
+          (err.response?.data as any)?.message ||
+          "Unable to send SMS code.";
+        setSmsError(msg);
+      } else {
+        setSmsError("Unable to send SMS code.");
+      }
+    } finally {
+      setSmsSending(false);
+    }
   };
 
   useEffect(() => {
@@ -324,6 +361,14 @@ export default function Register() {
       return;
     }
 
+    const hasPhone = Boolean(form.phoneNumber.trim());
+    if (!hasPhone) {
+      setError("Phone number is required.");
+      return;
+    }
+    const hasSmsCode = Boolean(form.smsCode.trim());
+    const registrationPhone = phoneDigits(form.phoneNumber);
+
     if (!termsAccepted) {
       setError("Please read and accept the Terms and Conditions.");
       return;
@@ -360,12 +405,19 @@ export default function Register() {
       const res = await api.post<RegisterResponse>("/register", {
         username: form.username,
         email: normalizedEmail,
+        phoneNumber: form.phoneNumber.trim(),
+        smsCode: hasSmsCode ? form.smsCode.trim() : undefined,
         birthday: form.birthday,
         password: form.password,
         formStart: formStartRef.current,
         botField: form.botField,
         termsAccepted,
         intent: intentKey || undefined,
+        country: form.country.trim() || undefined,
+        countryCode: form.countryCode || undefined,
+        state: form.state.trim() || undefined,
+        stateCode: form.stateCode || undefined,
+        city: form.city.trim() || undefined,
       });
 
       // Best-effort: create a minimal profile shell; encrypted profile fields are set after login.
@@ -384,12 +436,31 @@ export default function Register() {
         if (form.city) {
           profileLocation.city = form.city.trim();
         }
+        if (form.birthday) {
+          profileLocation.birthday = form.birthday;
+        }
+        if (age !== null) {
+          profileLocation.age = String(age);
+        }
+        if (registrationPhone) {
+          profileLocation.phone = registrationPhone;
+        }
+        const registrationLocked: Record<string, boolean> = {};
+        if (form.birthday) registrationLocked.birthday = true;
+        if (age !== null) registrationLocked.age = true;
+        if (registrationPhone) registrationLocked.phone = true;
+        if (form.country.trim()) registrationLocked.country = true;
+        if (form.state.trim()) registrationLocked.state = true;
+        if (form.city.trim()) registrationLocked.city = true;
         await api.post("/profiles", {
           data: {
             handle: lockedHandle,
             user: res.data.user.id,
             locale: "en",
             ...profileLocation,
+            ...(Object.keys(registrationLocked).length
+              ? { registrationLocked }
+              : {}),
           },
         });
       } catch {
@@ -518,6 +589,51 @@ export default function Register() {
             onChange={handleChange}
             value={form.confirmEmail}
             required
+          />
+        </div>
+
+        <div className="field">
+          <label>Phone number (required)</label>
+          <div className="field-row">
+            <input
+              className="auth-input"
+              name="phoneNumber"
+              type="tel"
+              placeholder="+1 555 555 1234"
+              onChange={handleChange}
+              value={form.phoneNumber}
+              autoComplete="tel"
+              required
+            />
+            <button
+              type="button"
+              className="btn ghost sms-send"
+              onClick={handleSendSms}
+              disabled={smsSending || !form.phoneNumber.trim()}
+            >
+              {smsSending ? "Sending..." : smsSent ? "Resend code" : "Send code"}
+            </button>
+          </div>
+          <small className="auth-hint">
+            Required for verification. Include your country code (for example, +1).
+          </small>
+        </div>
+        {smsError && <p className="auth-message error">{smsError}</p>}
+        {smsSent && !smsError && (
+          <p className="auth-message info">SMS code sent. Check your phone.</p>
+        )}
+
+        <div className="field">
+          <label>SMS code (optional)</label>
+          <input
+            className="auth-input"
+            name="smsCode"
+            type="text"
+            inputMode="numeric"
+            placeholder="Enter the code"
+            onChange={handleChange}
+            value={form.smsCode}
+            autoComplete="one-time-code"
           />
         </div>
 

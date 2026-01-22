@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import api from "../api/strapi";
 import { ensureProfileKeyShares } from "../utils/profile-e2ee";
+import notificationSoundUrl from "../assets/notificationsoundeffect.mp3";
 
 type NotificationCounts = {
   messages: number;
@@ -142,6 +143,49 @@ export const useNotifications = (userId?: number | null) => {
   const lastSeenRef = useRef<string | null>(null);
   const likeSnapshotRef = useRef<Record<string, number> | null>(null);
   const latestLikeSnapshotRef = useRef<Record<string, number>>({});
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const initialLoadRef = useRef(true);
+  const lastCountsRef = useRef<NotificationCounts | null>(null);
+
+  useEffect(() => {
+    if (typeof Audio === "undefined") return;
+    audioRef.current = new Audio(notificationSoundUrl);
+    audioRef.current.preload = "auto";
+    return () => {
+      audioRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    initialLoadRef.current = true;
+    lastCountsRef.current = null;
+  }, [userId]);
+
+  useEffect(() => {
+    if (!audioRef.current) return;
+    if (initialLoadRef.current) {
+      initialLoadRef.current = false;
+      lastCountsRef.current = { ...counts };
+      return;
+    }
+    const previous = lastCountsRef.current;
+    const hasIncrease =
+      previous !== null &&
+      (counts.messages > previous.messages ||
+        counts.requests > previous.requests ||
+        counts.friendPosts > previous.friendPosts ||
+        counts.comments > previous.comments ||
+        counts.likes > previous.likes ||
+        counts.groupUpdates > previous.groupUpdates);
+    if (hasIncrease) {
+      audioRef.current.currentTime = 0;
+      const playPromise = audioRef.current.play();
+      if (playPromise) {
+        playPromise.catch(() => undefined);
+      }
+    }
+    lastCountsRef.current = { ...counts };
+  }, [counts]);
 
   const refresh = useCallback(async () => {
     if (!userId || !Number.isFinite(Number(userId))) {
