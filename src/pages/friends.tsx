@@ -106,7 +106,7 @@ const isYoutubeUrl = (value: string) => {
 const normalizeFriendSearch = (value: string) =>
   value.trim().replace(/@+/g, "").replace(/\s+/g, " ").toLowerCase();
 
-const DEFAULT_PRIVACY_SETTINGS: PrivacySettings = {
+const DEFAULT_PRIVACY_SETTINGS: Required<PrivacySettings> = {
   bio: "public",
   links: "public",
   location: "public",
@@ -135,7 +135,9 @@ const normalizeProfileVisibility = (value: any): ProfileVisibility => {
   return "public";
 };
 
-const normalizePrivacySettings = (settings?: PrivacySettings | null) => ({
+const normalizePrivacySettings = (
+  settings?: PrivacySettings | null
+): Required<PrivacySettings> => ({
   bio: normalizeVisibility(settings?.bio, DEFAULT_PRIVACY_SETTINGS.bio),
   links: normalizeVisibility(settings?.links, DEFAULT_PRIVACY_SETTINGS.links),
   location: normalizeVisibility(settings?.location, DEFAULT_PRIVACY_SETTINGS.location),
