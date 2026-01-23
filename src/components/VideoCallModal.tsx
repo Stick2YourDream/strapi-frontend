@@ -511,8 +511,13 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
         map.set(invitee.userId, invitee.displayName);
       }
     });
+    friends.forEach((friend) => {
+      if (friend.userId && friend.displayName) {
+        map.set(friend.userId, friend.displayName);
+      }
+    });
     return map;
-  }, [remoteParticipants, selectedInvitees]);
+  }, [friends, remoteParticipants, selectedInvitees]);
   const resolveMessageName = useCallback(
     (message: VideoCallMessage) => {
       const fromId = message.from.userId;
@@ -527,6 +532,15 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     },
     [participantNameById]
   );
+  const incomingHostName = useMemo(() => {
+    if (!incomingCall) return "Friend";
+    const known = participantNameById.get(incomingCall.hostId);
+    const candidate = known || incomingCall.hostName || incomingCall.hostHandle || "Friend";
+    const trimmed = candidate.trim();
+    if (trimmed && !trimmed.includes("@")) return trimmed;
+    if (incomingCall.hostHandle) return incomingCall.hostHandle;
+    return "Friend";
+  }, [incomingCall, participantNameById]);
   const hasRemoteMedia = useMemo(() => {
     if (remoteList.length > 0) return true;
     if (Object.keys(remoteStreams).length > 0) return true;
@@ -1116,7 +1130,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
               </p>
               <h3 className="video-call-title">
                 {status === "incoming"
-                  ? incomingCall?.hostName || "Friend"
+                  ? incomingHostName
                   : status === "setup"
                   ? "Start a video call"
                   : "Live video call"}
@@ -1334,7 +1348,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
             <div className="video-call-incoming">
               <div className="video-incoming-card">
                 <p className="eyebrow">Incoming call</p>
-                <h3>{incomingCall?.hostName || "Friend"}</h3>
+                <h3>{incomingHostName}</h3>
                 <p className="subhead">
                   {incomingCall?.hostHandle ? `@${incomingCall.hostHandle}` : "Tap accept to join."}
                 </p>

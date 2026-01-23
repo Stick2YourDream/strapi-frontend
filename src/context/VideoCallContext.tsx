@@ -1541,19 +1541,55 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     [requestVideoKeyFrame, setupSenderE2ee]
   );
 
-  const attachLocalTracks = useCallback((pc: RTCPeerConnection) => {
-    const stream = localStreamRef.current;
-    if (!stream) return;
-    stream.getTracks().forEach((track) => {
-      const sender = pc.getSenders().find((candidate) => candidate.track?.id === track.id);
-      if (sender) {
-        setupSenderE2ee(sender);
-        return;
-      }
-      const newSender = pc.addTrack(track, stream);
-      setupSenderE2ee(newSender);
-    });
-  }, [setupSenderE2ee]);
+  const attachLocalTracks = useCallback(
+    (pc: RTCPeerConnection) => {
+      const stream = localStreamRef.current;
+      if (!stream) return;
+      const screenTrackIds = new Set(
+        localScreenStreamRef.current?.getVideoTracks().map((track) => track.id) ?? []
+      );
+      stream.getTracks().forEach((track) => {
+        const senderByTrack = pc
+          .getSenders()
+          .find((candidate) => candidate.track?.id === track.id);
+        if (senderByTrack) {
+          setupSenderE2ee(senderByTrack);
+          if (track.kind === "video") {
+            requestVideoKeyFrame(senderByTrack);
+          }
+          return;
+        }
+        const senderByKind = pc
+          .getSenders()
+          .find(
+            (candidate) =>
+              candidate.track?.kind === track.kind &&
+              !screenTrackIds.has(candidate.track?.id || "")
+          );
+        if (senderByKind) {
+          try {
+            void senderByKind.replaceTrack(track).catch(() => undefined);
+          } catch {
+            // ignore replace failures
+          }
+          setupSenderE2ee(senderByKind);
+          if (track.kind === "video") {
+            requestVideoKeyFrame(senderByKind);
+          }
+          return;
+        }
+        if (pc.getSenders().some((candidate) => candidate.track?.id === track.id)) {
+          return;
+        }
+        const newSender = pc.addTrack(track, stream);
+        setupSenderE2ee(newSender);
+        if (track.kind === "video") {
+          requestVideoKeyFrame(newSender);
+        }
+      });
+    },
+    [requestVideoKeyFrame, setupSenderE2ee]
+  );
 
   const closePeer = useCallback((socketId: string) => {
     const disconnectTimer = disconnectTimersRef.current.get(socketId);
