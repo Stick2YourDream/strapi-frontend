@@ -15,6 +15,7 @@ import {
 } from "../utils/profile-e2ee";
 import { sanitizePostText } from "../utils/emoji";
 import VideoCallModal from "./VideoCallModal";
+import SuggestionWidget from "./SuggestionWidget";
 
 type LinkMeta = {
   title?: string;
@@ -597,6 +598,7 @@ export default function ChatDock() {
               >
                 Video call
               </button>
+              <SuggestionWidget variant="inline" />
               <div className="chat-font-control">
                 <span className="chat-font-label">A</span>
                 <input

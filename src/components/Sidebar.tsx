@@ -8,7 +8,6 @@ import {
   decryptOwnProfilePayload,
   type ProfilePayload,
 } from "../utils/profile-e2ee";
-import SuggestionWidget from "./SuggestionWidget";
 import "../css/sidebar.css";
 
 type ProfileSummary = {
@@ -94,7 +93,27 @@ export default function Sidebar({
 
   useEffect(() => {
     const load = async () => {
-      if (!user) return;
+      if (!user) {
+        setProfileSummary(null);
+        return;
+      }
+
+      if (profile) {
+        const displayName =
+          profile.firstName || profile.lastName
+            ? `${profile.firstName || ""} ${profile.lastName || ""}`.trim()
+            : profile.handle || user.email;
+        setProfileSummary({
+          displayName,
+          handle: profile.handle || user.email,
+          avatarUrl: profile.avatarUrl,
+          age: profile.age || "",
+          hobbies: profile.hobbies || "",
+          bio: profile.bio || "",
+        });
+        return;
+      }
+
       try {
         const res = await api.get("/profiles/me?populate=avatar");
         const entry = res.data?.data;
@@ -127,8 +146,8 @@ export default function Sidebar({
         // ignore sidebar profile errors
       }
     };
-    load();
-  }, [user]);
+    void load();
+  }, [profile, user]);
 
   useEffect(() => {
     setShowProfileMenu(false);
@@ -860,7 +879,6 @@ export default function Sidebar({
       </aside>
 
       {menuOpen && <button className="sidebar-overlay" type="button" onClick={() => setMenuOpen(false)} aria-label="Close menu overlay" />}
-      <SuggestionWidget />
     </div>
   );
 }

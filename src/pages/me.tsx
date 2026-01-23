@@ -26,6 +26,7 @@ import {
 } from "../utils/profile-e2ee";
 import { getOrCreateDeviceId } from "../utils/device-id";
 import { syncPushSubscription, type PushSyncStatus } from "../utils/push-notifications";
+import { formatPostUpdateLabel } from "../utils/time";
 
 type VerificationMethod = "email" | "sms";
 type TwoFactorMethod = "email" | "sms" | "totp";
@@ -76,6 +77,7 @@ type MediaPost = {
   documentId?: number | string;
   text: string;
   media?: string;
+  createdAt?: string;
   feedbackAudience?: string;
   feedbackTargetId?: number;
   feedbackTargetName?: string;
@@ -1620,6 +1622,7 @@ export default function Me() {
         documentId: p?.documentId ?? attrs?.documentId,
         text: attrs.Users_Content || "",
         media: pic,
+        createdAt: attrs.createdAt || attrs.created_at,
         feedbackAudience: attrs.feedbackAudience || undefined,
         feedbackTargetId,
         feedbackTargetName,
@@ -2382,12 +2385,13 @@ export default function Me() {
         setProfile((prev) => ({ ...prev, avatarUrl: uploadedAvatarUrl }));
       }
 
-      if (saved) {
+      const refreshed = await fetchMyProfileByUser();
+      if (refreshed) {
+        await setProfileFromEntry(refreshed);
+      } else if (saved) {
         await setProfileFromEntry(saved);
       } else {
-        const mine = await fetchMyProfileByUser();
-        if (!mine) throw new Error("Save succeeded but no profile found");
-        await setProfileFromEntry(mine);
+        throw new Error("Save succeeded but no profile found");
       }
 
       registrationLocksRef.current = nextLocks;
@@ -4639,7 +4643,9 @@ export default function Me() {
               <article key={String(p.id)} className="post-card">
                 <div className="post-meta-bar">
                   <span className="post-meta-name">{displayName}</span>
-                  <span className="post-meta-text">just posted an update</span>
+                  <span className="post-meta-text">
+                    {formatPostUpdateLabel(p.createdAt)}
+                  </span>
                   {descriptor && <span className="post-meta-tag">{descriptor}</span>}
                   {feedbackLabel && <span className="post-feedback-tag">{feedbackLabel}</span>}
                   {canDelete && (

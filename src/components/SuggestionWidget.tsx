@@ -3,7 +3,11 @@ import api from "../api/strapi";
 import { useAuth } from "../context/AuthContext";
 import "../css/suggestion-widget.css";
 
-export default function SuggestionWidget() {
+type SuggestionWidgetProps = {
+  variant?: "fab" | "inline";
+};
+
+export default function SuggestionWidget({ variant = "fab" }: SuggestionWidgetProps) {
   const { user, profile } = useAuth();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -67,10 +71,13 @@ export default function SuggestionWidget() {
 
   if (!user) return null;
 
+  const buttonClassName =
+    variant === "inline" ? "suggestion-inline" : "suggestion-fab";
+
   return (
     <>
       {!open && (
-        <button type="button" className="suggestion-fab" onClick={openWidget}>
+        <button type="button" className={buttonClassName} onClick={openWidget}>
           Make a suggestion
         </button>
       )}

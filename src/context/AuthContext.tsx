@@ -25,6 +25,25 @@ interface User {
   email: string;
 }
 
+const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
+const normalizeMediaEntry = (entry: any) => entry?.attributes ?? entry ?? {};
+const pickMediaUrl = (mediaField: any): string | undefined => {
+  if (!mediaField) return undefined;
+  const candidate =
+    (Array.isArray(mediaField?.data) ? mediaField.data[0] : mediaField?.data) ??
+    (Array.isArray(mediaField) ? mediaField[0] : mediaField);
+  if (!candidate) return undefined;
+  const attrs = normalizeMediaEntry(candidate);
+  let url =
+    attrs.url ||
+    attrs.formats?.large?.url ||
+    attrs.formats?.medium?.url ||
+    attrs.formats?.small?.url ||
+    attrs.formats?.thumbnail?.url;
+  if (!url) return undefined;
+  return url.startsWith("/") ? `${apiBase}${url}` : url;
+};
+
 interface ProfileSummary {
   id?: number | string;
   onboardingComplete?: boolean;
@@ -44,6 +63,8 @@ interface ProfileSummary {
   state?: string;
   stateCode?: string;
   city?: string;
+  handle?: string;
+  avatarUrl?: string;
   backgrounds?: Record<string, { color?: string; image?: string }>;
   profileVisibility?: ProfileVisibility;
   privacySettings?: PrivacySettings;
@@ -107,7 +128,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     }
     setProfileLoading(true);
     try {
-      const res = await api.get("/profiles/me");
+      const res = await api.get("/profiles/me?populate=avatar");
       const data = res.data?.data;
       const attrs = data?.attributes ?? data ?? null;
       if (!attrs) {
@@ -206,7 +227,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           ? attrs.onboardingComplete
           : true;
 
-      setProfile({ ...payload, onboardingComplete });
+      const avatarUrl = pickMediaUrl(attrs.avatar);
+      const handle = attrs.handle || undefined;
+      setProfile({ ...payload, onboardingComplete, avatarUrl, handle });
     } catch {
       setProfile(null);
     } finally {

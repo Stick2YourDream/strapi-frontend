@@ -11,6 +11,7 @@ import { usePageMeta } from "../hooks/usePageMeta";
 import { useUserPreferences } from "../context/UserPreferencesContext";
 import type { SignalTag } from "../constants/signalTags";
 import { sanitizePostText } from "../utils/emoji";
+import { formatPostUpdateLabel } from "../utils/time";
 
 type CommentItem = {
   id: string | number;
@@ -1491,7 +1492,9 @@ export default function Dashboard() {
                 <article key={post.id} className="post-card">
                   <div className="post-meta-bar">
                     <span className="post-meta-name">{authorLabel}</span>
-                    <span className="post-meta-text">just posted an update</span>
+                    <span className="post-meta-text">
+                      {formatPostUpdateLabel(post.createdAt)}
+                    </span>
                     {descriptor && <span className="post-meta-tag">{descriptor}</span>}
                   </div>
 

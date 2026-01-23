@@ -382,6 +382,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const localScreenStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamsRef = useRef<Record<string, MediaStream>>({});
   const remoteScreenStreamsRef = useRef<Record<string, MediaStream>>({});
+  const remoteParticipantsRef = useRef<Record<string, VideoCallParticipant>>({});
   const rawStreamRef = useRef<MediaStream | null>(null);
   const screenShareSendersRef = useRef<
     Map<string, { video?: RTCRtpSender; audio?: RTCRtpSender }>
@@ -1238,7 +1239,6 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       const withMirror = (
         context: CanvasRenderingContext2D,
         width: number,
-        height: number,
         mirror: boolean,
         draw: () => void
       ) => {
@@ -1266,7 +1266,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         const sh = height / scale;
         const sx = Math.max(0, (vw - sw) / 2);
         const sy = Math.max(0, (vh - sh) / 2);
-        withMirror(context, width, height, mirror, () => {
+        withMirror(context, width, mirror, () => {
           context.drawImage(video, sx, sy, sw, sh, 0, 0, width, height);
         });
       };
@@ -1392,7 +1392,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
 
         const drawBackdropFrame = (mode: VideoCallEffects["background"]) => {
           let drew = false;
-          withMirror(ctx, width, height, mirror, () => {
+          withMirror(ctx, width, mirror, () => {
             drew = drawBackdrop(ctx, width, height, mode);
           });
           return drew;
@@ -1413,7 +1413,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           ctx.filter = "none";
         }
 
-        withMirror(ctx, width, height, mirror, () => {
+        withMirror(ctx, width, mirror, () => {
           ctx.drawImage(foregroundCanvas, 0, 0, width, height);
         });
 
@@ -2001,6 +2001,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   useEffect(() => {
     remoteScreenStreamsRef.current = remoteScreenStreams;
   }, [remoteScreenStreams]);
+
+  useEffect(() => {
+    remoteParticipantsRef.current = remoteParticipants;
+  }, [remoteParticipants]);
 
   useEffect(() => {
     selectedInviteesRef.current = selectedInvitees;

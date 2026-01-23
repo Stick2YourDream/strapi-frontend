@@ -8,6 +8,7 @@ import TopbarSearch from "../components/TopbarSearch";
 import { useAuth } from "../context/AuthContext";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { sanitizePostText } from "../utils/emoji";
+import { formatPostUpdateLabel } from "../utils/time";
 
 type GroupDetail = {
   id: number | string;
@@ -129,13 +130,6 @@ const buildGroupStyle = (group: GroupDetail) => {
     };
   }
   return { backgroundImage: gradient };
-};
-
-const formatTime = (value?: string) => {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString();
 };
 
 const isVideoUrl = (value?: string) => !!value && /\.(mp4|webm|mov)$/i.test(value);
@@ -922,7 +916,7 @@ export default function GroupDetail() {
                           <div>
                             <strong>{post.ownerName}</strong>
                             <span className="group-post-time">
-                              {formatTime(post.createdAt)}
+                              {formatPostUpdateLabel(post.createdAt)}
                             </span>
                           </div>
                           {(isAdmin || post.ownerId === user?.id) && (
