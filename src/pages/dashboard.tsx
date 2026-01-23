@@ -39,6 +39,7 @@ type NormalizedPost = {
   feedbackAudience?: string;
   feedbackTargetId?: number;
   feedbackTargetName?: string;
+  visibility?: string;
 };
 
 type LinkPreview = {
@@ -203,24 +204,8 @@ const feedbackLabelFor = (post: NormalizedPost) => {
   }
   return "";
 };
-const sortByCreatedAtDesc = (
-  items: NormalizedPost[],
-  favoriteOwnerIds: Set<number> = new Set()
-) =>
+const sortByCreatedAtDesc = (items: NormalizedPost[]) =>
   [...items].sort((a, b) => {
-    const aPriority =
-      a.source === "admin"
-        ? 0
-        : a.source === "user" && a.ownerId && favoriteOwnerIds.has(a.ownerId)
-        ? 1
-        : 2;
-    const bPriority =
-      b.source === "admin"
-        ? 0
-        : b.source === "user" && b.ownerId && favoriteOwnerIds.has(b.ownerId)
-        ? 1
-        : 2;
-    if (aPriority !== bPriority) return aPriority - bPriority;
     const aParsed = a.createdAt ? Date.parse(a.createdAt) : 0;
     const bParsed = b.createdAt ? Date.parse(b.createdAt) : 0;
     const aTime = Number.isNaN(aParsed) ? 0 : aParsed;
@@ -923,6 +908,7 @@ export default function Dashboard() {
         feedbackTarget?: unknown;
         likes?: number;
         shares?: number;
+        visibility?: string;
       };
       const title = getString(attributes.Title) ?? getString(attributes.title) ?? "Untitled";
       const content =
@@ -979,6 +965,7 @@ export default function Dashboard() {
       const ownerAttrs = normalize(ownerData) as { email?: string };
       const ownerId = getEntityId(ownerData);
       const ownerName = resolveOwnerName(ownerId, getString(ownerAttrs.email) ?? "User");
+      const visibility = getString(attributes.visibility);
       const feedbackTargetData = getEntity(attributes.feedbackTarget);
       const feedbackTargetAttrs = normalize(feedbackTargetData) as {
         email?: string;
@@ -1007,6 +994,7 @@ export default function Dashboard() {
         likes,
         shares,
         comments: matchedComments,
+        visibility,
         signalTag: attributes.signalTag || "check-in",
         feedbackAudience: getString(attributes.feedbackAudience),
         feedbackTargetId,
@@ -1184,9 +1172,35 @@ export default function Dashboard() {
     const groupPosts = posts.group.map((post) => normalizeGroupPost(post));
     const adminPosts = posts.admin.map((post) => normalizeAdminPost(post));
     const favoriteSet = new Set(favoriteFriendIds);
+    const friendSet = new Set(friendIds);
+    const currentUserId = typeof userId === "number" ? userId : undefined;
+    const favoriteFriendPosts: NormalizedPost[] = [];
+    const friendPosts: NormalizedPost[] = [];
+    const publicPosts: NormalizedPost[] = [];
 
-    return sortByCreatedAtDesc([...adminPosts, ...userPosts, ...groupPosts], favoriteSet);
-  }, [favoriteFriendIds, posts, profileNameMap]);
+    userPosts.forEach((post) => {
+      const ownerId = post.ownerId;
+      if (ownerId && favoriteSet.has(ownerId)) {
+        favoriteFriendPosts.push(post);
+        return;
+      }
+      if ((ownerId && friendSet.has(ownerId)) || (currentUserId && ownerId === currentUserId)) {
+        friendPosts.push(post);
+        return;
+      }
+      if (post.visibility === "public") {
+        publicPosts.push(post);
+      }
+    });
+
+    return [
+      ...sortByCreatedAtDesc(adminPosts),
+      ...sortByCreatedAtDesc(favoriteFriendPosts),
+      ...sortByCreatedAtDesc(friendPosts),
+      ...sortByCreatedAtDesc(groupPosts),
+      ...sortByCreatedAtDesc(publicPosts),
+    ];
+  }, [favoriteFriendIds, friendIds, posts, profileNameMap, userId]);
 
   useEffect(() => {
     const url = extractFirstUrl(formContent);

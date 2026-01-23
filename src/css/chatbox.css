@@ -671,6 +671,12 @@
   overflow: auto;
 }
 
+.video-call-grid.is-split {
+  grid-template-columns: minmax(0, 2.1fr) minmax(0, 1fr);
+  grid-auto-rows: minmax(200px, 1fr);
+  align-content: start;
+}
+
 .video-call-grid.is-screen-only {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -1088,8 +1094,13 @@
 }
 
 .video-call-grid.is-split .video-tile.is-screen {
-  grid-column: span 2;
-  min-height: 240px;
+  grid-column: 1;
+  min-height: clamp(220px, 32vh, 380px);
+}
+
+.video-call-grid.is-split .video-tile:not(.is-screen) {
+  grid-column: 2;
+  min-height: clamp(180px, 26vh, 320px);
 }
 
 .video-call-grid.is-screen-only .video-tile.is-screen {
