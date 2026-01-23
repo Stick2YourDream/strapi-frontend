@@ -50,9 +50,8 @@ export default function DeleteData() {
       if (displayName) setName(displayName);
     }
     if (!email) setEmail(user.email || "");
-    if (!handle) setHandle(profile?.handle || "");
     if (!userId) setUserId(String(user.id || ""));
-  }, [user, profile, name, email, handle, userId]);
+  }, [user, profile, name, email, userId]);
 
   const canSubmit =
     email.trim().length > 0 &&

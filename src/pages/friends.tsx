@@ -434,7 +434,6 @@ export default function Friends() {
         const mappedProfiles = await Promise.all(
           (profilesRes.data?.data ?? []).map(async (p: any) => {
             const attrs = normalize(p);
-            const userAttrs = getEntityAttrs(attrs.user);
             const friendUserId = getEntityId(attrs.user);
             if (!friendUserId) return null;
             let payload: ProfilePayload | null = null;
