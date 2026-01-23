@@ -94,6 +94,7 @@ type ScreenControlEvent = {
 
 type VideoCallEffects = {
   blur: boolean;
+  mirror: boolean;
   background:
     | "none"
     | "backdrop1"
@@ -370,6 +371,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const [screenControlCursor, setScreenControlCursor] = useState<ScreenControlCursor | null>(null);
   const [videoEffects, setVideoEffectsState] = useState<VideoCallEffects>({
     blur: false,
+    mirror: false,
     background: "none",
     filter: "none",
   });
@@ -391,6 +393,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const iceServersLoadingRef = useRef<Promise<void> | null>(null);
   const audioInputDeviceRef = useRef<string | null>(null);
   const videoInputDeviceRef = useRef<string | null>(null);
+  const selectedInviteesRef = useRef<VideoCallInvitee[]>([]);
   const peerNegotiationRef = useRef<Map<string, { makingOffer: boolean; isPolite: boolean }>>(
     new Map()
   );
@@ -1216,7 +1219,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
               segmenter = new SelfieSegmentationCtor({
                 locateFile: (file) => `${mediapipeBase}/${file}`,
               });
-              segmenter.setOptions({ modelSelection: 1, selfieMode: true });
+              segmenter.setOptions({ modelSelection: 1, selfieMode: false });
               segmenter.onResults((results) => {
                 maskSource = results?.segmentationMask || null;
               });
@@ -1232,7 +1235,30 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           });
       };
 
-      const drawCover = (context: CanvasRenderingContext2D, width: number, height: number) => {
+      const withMirror = (
+        context: CanvasRenderingContext2D,
+        width: number,
+        height: number,
+        mirror: boolean,
+        draw: () => void
+      ) => {
+        if (!mirror) {
+          draw();
+          return;
+        }
+        context.save();
+        context.translate(width, 0);
+        context.scale(-1, 1);
+        draw();
+        context.restore();
+      };
+
+      const drawCover = (
+        context: CanvasRenderingContext2D,
+        width: number,
+        height: number,
+        mirror: boolean
+      ) => {
         const vw = video.videoWidth || width;
         const vh = video.videoHeight || height;
         const scale = Math.max(width / vw, height / vh);
@@ -1240,7 +1266,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         const sh = height / scale;
         const sx = Math.max(0, (vw - sw) / 2);
         const sy = Math.max(0, (vh - sh) / 2);
-        context.drawImage(video, sx, sy, sw, sh, 0, 0, width, height);
+        withMirror(context, width, height, mirror, () => {
+          context.drawImage(video, sx, sy, sw, sh, 0, 0, width, height);
+        });
       };
 
       const maybeSegment = (shouldSegment: boolean) => {
@@ -1293,6 +1321,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           maskSource = null;
         }
         const cameraFilter = getCameraFilter(effects.filter);
+        const mirror = effects.mirror;
         const shouldBlur = effects.blur && effects.background === "none";
         const filterParts = [];
         if (cameraFilter !== "none") {
@@ -1306,7 +1335,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         if (!needsSegmentation) {
           ctx.clearRect(0, 0, width, height);
           ctx.filter = cameraFilter;
-          drawCover(ctx, width, height);
+          drawCover(ctx, width, height, mirror);
           ctx.filter = "none";
           rafId = window.requestAnimationFrame(drawFrame);
           return;
@@ -1317,7 +1346,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         if (!maskSource || !foregroundCtx) {
           ctx.clearRect(0, 0, width, height);
           ctx.filter = baseFilter;
-          drawCover(ctx, width, height);
+          drawCover(ctx, width, height, mirror);
           ctx.filter = "none";
           rafId = window.requestAnimationFrame(drawFrame);
           return;
@@ -1337,6 +1366,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
               shrinkX,
               shrinkY,
               width - shrinkX * 2,
+              height - shrinkY * 2,
+              shrinkX,
+              shrinkY,
+              width - shrinkX * 2,
               height - shrinkY * 2
             );
             maskCtx.globalCompositeOperation = "source-over";
@@ -1345,7 +1378,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
 
         foregroundCtx.clearRect(0, 0, width, height);
         foregroundCtx.filter = cameraFilter;
-        drawCover(foregroundCtx, width, height);
+        drawCover(foregroundCtx, width, height, false);
         foregroundCtx.filter = "none";
         foregroundCtx.globalCompositeOperation = "destination-in";
         if (maskCtx) {
@@ -1357,22 +1390,32 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         }
         foregroundCtx.globalCompositeOperation = "source-over";
 
+        const drawBackdropFrame = (mode: VideoCallEffects["background"]) => {
+          let drew = false;
+          withMirror(ctx, width, height, mirror, () => {
+            drew = drawBackdrop(ctx, width, height, mode);
+          });
+          return drew;
+        };
+
         if (effects.background !== "none") {
-          const drewBackdrop = drawBackdrop(ctx, width, height, effects.background);
+          const drewBackdrop = drawBackdropFrame(effects.background);
           if (!drewBackdrop) {
             ctx.clearRect(0, 0, width, height);
             ctx.filter = baseFilter;
-            drawCover(ctx, width, height);
+            drawCover(ctx, width, height, mirror);
             ctx.filter = "none";
           }
         } else {
           ctx.clearRect(0, 0, width, height);
           ctx.filter = baseFilter;
-          drawCover(ctx, width, height);
+          drawCover(ctx, width, height, mirror);
           ctx.filter = "none";
         }
 
-        ctx.drawImage(foregroundCanvas, 0, 0, width, height);
+        withMirror(ctx, width, height, mirror, () => {
+          ctx.drawImage(foregroundCanvas, 0, 0, width, height);
+        });
 
         rafId = window.requestAnimationFrame(drawFrame);
       };
@@ -1415,7 +1458,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
 
     const effects = videoEffectsRef.current;
     const needsProcessing =
-      effects.blur || effects.background !== "none" || effects.filter !== "none";
+      effects.blur ||
+      effects.background !== "none" ||
+      effects.filter !== "none" ||
+      effects.mirror;
     if (!needsProcessing) {
       stopVideoProcessing();
       return rawTrack;
@@ -1424,7 +1470,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     const current = videoProcessingRef.current;
     if (current.track && current.sourceId === rawTrack.id) {
       current.track.enabled = rawTrack.enabled;
-      current.effectsKey = `${effects.blur ? "1" : "0"}-${effects.background}-${effects.filter}`;
+      current.effectsKey = `${effects.blur ? "1" : "0"}-${effects.background}-${
+        effects.filter
+      }-${effects.mirror ? "1" : "0"}`;
       return current.track;
     }
 
@@ -1438,7 +1486,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         track,
         cleanup,
         sourceId: rawTrack.id,
-        effectsKey: `${effects.blur ? "1" : "0"}-${effects.background}-${effects.filter}`,
+        effectsKey: `${effects.blur ? "1" : "0"}-${effects.background}-${
+          effects.filter
+        }-${effects.mirror ? "1" : "0"}`,
       };
       return track;
     } catch {
@@ -1953,6 +2003,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   }, [remoteScreenStreams]);
 
   useEffect(() => {
+    selectedInviteesRef.current = selectedInvitees;
+  }, [selectedInvitees]);
+
+  useEffect(() => {
     activeScreenControllerRef.current = activeScreenController;
   }, [activeScreenController]);
 
@@ -2465,17 +2519,35 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
 
     socket.on("call:declined", (payload: { roomId: string; from: VideoCallInvitee }) => {
       if (payload?.roomId !== activeRoomRef.current) return;
+      const from = payload.from;
+      const fromId = from?.userId;
+      const inviteeMatch = fromId
+        ? selectedInviteesRef.current.find((entry) => entry.userId === fromId)
+        : undefined;
+      const participantMatch = fromId
+        ? Object.values(remoteParticipantsRef.current).find(
+            (entry) => entry.userId === fromId
+          )
+        : undefined;
+      const candidate =
+        inviteeMatch?.displayName ||
+        participantMatch?.displayName ||
+        from?.displayName ||
+        from?.handle ||
+        "Someone";
+      const normalized =
+        candidate && !candidate.includes("@") ? candidate : from?.handle || "Someone";
       setMessages((prev) => [
         ...prev,
         {
           id: createMessageId(),
-          body: `${payload.from.displayName || "Someone"} declined the call.`,
+          body: `${normalized} declined the call.`,
           kind: "text",
           from: {
-            userId: payload.from.userId,
-            displayName: payload.from.displayName || "Guest",
-            handle: payload.from.handle,
-            avatarUrl: payload.from.avatarUrl,
+            userId: from.userId,
+            displayName: normalized,
+            handle: from.handle,
+            avatarUrl: from.avatarUrl,
           },
           at: new Date().toISOString(),
         },

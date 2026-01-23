@@ -1742,6 +1742,18 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                         {videoEffects.blur ? "On" : "Off"}
                       </button>
                     </div>
+                    <div className="video-preview-group">
+                      <span className="video-preview-label">Mirror</span>
+                      <button
+                        type="button"
+                        className={`video-preview-toggle${
+                          videoEffects.mirror ? " is-active" : ""
+                        }`}
+                        onClick={() => setVideoEffects({ mirror: !videoEffects.mirror })}
+                      >
+                        {videoEffects.mirror ? "On" : "Off"}
+                      </button>
+                    </div>
                   </div>
                   <div className="video-preview-row">
                     <div className="video-preview-group is-wide">
