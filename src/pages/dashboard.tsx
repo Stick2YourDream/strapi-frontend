@@ -618,6 +618,8 @@ export default function Dashboard() {
               const attrs = normalize(entry) as {
                 firstName?: string;
                 lastName?: string;
+                firstname?: string;
+                lastname?: string;
                 handle?: string;
                 user?: unknown;
               };

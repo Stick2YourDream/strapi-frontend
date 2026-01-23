@@ -21,6 +21,11 @@ type VideoCallModalProps = {
   friends: VideoCallInvitee[];
 };
 
+type PanOffset = {
+  x: number;
+  y: number;
+};
+
 const EMOJIS = [
   "\u{1F44D}",
   "\u{1F44E}",
@@ -197,6 +202,9 @@ const getInitials = (value: string) => {
   return `${parts[0].charAt(0)}${parts[parts.length - 1].charAt(0)}`.toUpperCase();
 };
 
+const clampValue = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value));
+
 const VideoTile = ({
   stream,
   label,
@@ -363,6 +371,8 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const [isPipDragging, setIsPipDragging] = useState(false);
   const [isMobileLayout, setIsMobileLayout] = useState(false);
   const [screenZoomLevels, setScreenZoomLevels] = useState<Record<string, number>>({});
+  const [screenPanOffsets, setScreenPanOffsets] = useState<Record<string, PanOffset>>({});
+  const [activePanTarget, setActivePanTarget] = useState<string | null>(null);
   const [popoutContainer, setPopoutContainer] = useState<HTMLDivElement | null>(null);
   const ringtoneRef = useRef<{ audio: HTMLAudioElement | null }>({
     audio: null,
@@ -376,6 +386,18 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const gridRef = useRef<HTMLDivElement | null>(null);
   const popoutWindowRef = useRef<Window | null>(null);
   const prevHasScreenSharesRef = useRef(false);
+  const screenPanOffsetsRef = useRef<Record<string, PanOffset>>({});
+  const screenPanDragRef = useRef<{
+    targetId: string;
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+  } | null>(null);
   const pipDragRef = useRef({ active: false, offsetX: 0, offsetY: 0 });
 
   const showModal = isOpen || status === "incoming";
@@ -389,6 +411,10 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   }${isRenderingInPopout ? " is-popout" : ""}${
     mobilePanel === "chat" ? " is-mobile-chat" : " is-mobile-video"
   }`;
+
+  useEffect(() => {
+    screenPanOffsetsRef.current = screenPanOffsets;
+  }, [screenPanOffsets]);
 
   useEffect(() => {
     if (!showCallUi) {
@@ -685,7 +711,77 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const updateScreenZoom = useCallback((targetId: string, nextZoom: number) => {
     const clamped = Math.min(3, Math.max(1, nextZoom));
     setScreenZoomLevels((prev) => ({ ...prev, [targetId]: clamped }));
+    setScreenPanOffsets((prev) => ({ ...prev, [targetId]: { x: 0, y: 0 } }));
+    setActivePanTarget((prev) => (prev === targetId ? null : prev));
   }, []);
+
+  const getScreenPan = useCallback(
+    (targetId: string) => screenPanOffsets[targetId] ?? { x: 0, y: 0 },
+    [screenPanOffsets]
+  );
+
+  const beginScreenPan = useCallback(
+    (event: PointerEvent<HTMLDivElement>, targetId: string, zoom: number) => {
+      if (zoom <= 1) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest(".screen-share-actions")) return;
+      const rect = event.currentTarget.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const extraX = Math.max(0, rect.width * zoom - rect.width);
+      const extraY = Math.max(0, rect.height * zoom - rect.height);
+      if (!extraX && !extraY) return;
+      const current = screenPanOffsetsRef.current[targetId] ?? { x: 0, y: 0 };
+      screenPanDragRef.current = {
+        targetId,
+        startX: event.clientX,
+        startY: event.clientY,
+        originX: current.x,
+        originY: current.y,
+        minX: -extraX / 2,
+        maxX: extraX / 2,
+        minY: -extraY / 2,
+        maxY: extraY / 2,
+      };
+      setActivePanTarget(targetId);
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    },
+    []
+  );
+
+  const updateScreenPan = useCallback(
+    (event: PointerEvent<HTMLDivElement>, targetId: string) => {
+      const dragState = screenPanDragRef.current;
+      if (!dragState || dragState.targetId !== targetId) return;
+      const deltaX = event.clientX - dragState.startX;
+      const deltaY = event.clientY - dragState.startY;
+      const nextX = clampValue(
+        dragState.originX + deltaX,
+        dragState.minX,
+        dragState.maxX
+      );
+      const nextY = clampValue(
+        dragState.originY + deltaY,
+        dragState.minY,
+        dragState.maxY
+      );
+      setScreenPanOffsets((prev) => ({
+        ...prev,
+        [targetId]: { x: nextX, y: nextY },
+      }));
+    },
+    []
+  );
+
+  const endScreenPan = useCallback(
+    (event: PointerEvent<HTMLDivElement>, targetId: string) => {
+      const dragState = screenPanDragRef.current;
+      if (!dragState || dragState.targetId !== targetId) return;
+      screenPanDragRef.current = null;
+      setActivePanTarget((prev) => (prev === targetId ? null : prev));
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+    },
+    []
+  );
 
   const sendControlPointer = (
     event: PointerEvent<HTMLDivElement>,
@@ -694,10 +790,11 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   ) => {
     if (screenControlTarget !== targetSocketId) return;
     const zoom = getScreenZoom(targetSocketId);
+    const pan = getScreenPan(targetSocketId);
     const rect = event.currentTarget.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
-    const rawX = event.clientX - rect.left;
-    const rawY = event.clientY - rect.top;
+    const rawX = event.clientX - rect.left - pan.x;
+    const rawY = event.clientY - rect.top - pan.y;
     const centerX = rect.width / 2;
     const centerY = rect.height / 2;
     const scaledX = (rawX - centerX) / zoom + centerX;
@@ -1156,10 +1253,14 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                       ? "local"
                       : entry.socketId || entry.id || "";
                     const screenZoom = getScreenZoom(zoomKey);
+                    const screenPan = getScreenPan(zoomKey);
+                    const isPanning = activePanTarget === zoomKey;
+                    const isPannable =
+                      screenZoom > 1 && !(entry.isLocal && activeScreenController);
                     const zoomStyle: CSSProperties = {
-                      transform: `scale(${screenZoom})`,
+                      transform: `translate(${screenPan.x}px, ${screenPan.y}px) scale(${screenZoom})`,
                       transformOrigin: "center center",
-                      transition: "transform 0.2s ease",
+                      transition: isPanning ? "none" : "transform 0.2s ease",
                     };
                     const zoomLabel = `${Math.round(screenZoom * 100)}%`;
                     if (entry.isLocal) {
@@ -1170,10 +1271,28 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                           label={entry.label}
                           muted
                           badge="Screen"
-                          className={`is-screen is-local${isPrimary ? " is-primary" : ""}`}
+                          className={`is-screen is-local${
+                            isPrimary ? " is-primary" : ""
+                          }${isPannable ? " is-pannable" : ""}${
+                            isPanning ? " is-panning" : ""
+                          }`}
                           rootRef={registerScreenTile(tileId)}
                           dataScreenId={tileId}
                           mediaStyle={zoomStyle}
+                          onPointerDown={
+                            isPannable
+                              ? (event) => beginScreenPan(event, zoomKey, screenZoom)
+                              : undefined
+                          }
+                          onPointerMove={
+                            isPannable ? (event) => updateScreenPan(event, zoomKey) : undefined
+                          }
+                          onPointerUp={
+                            isPannable ? (event) => endScreenPan(event, zoomKey) : undefined
+                          }
+                          onPointerLeave={
+                            isPannable ? (event) => endScreenPan(event, zoomKey) : undefined
+                          }
                         >
                           <div className="screen-share-actions">
                             {activeScreenController && (
@@ -1258,10 +1377,13 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                     const isPending = pendingScreenControlTargets.includes(targetId);
                     const targetZoomKey = targetId || "remote";
                     const targetZoom = getScreenZoom(targetZoomKey);
+                    const targetPan = getScreenPan(targetZoomKey);
+                    const isTargetPanning = activePanTarget === targetZoomKey;
+                    const isTargetPannable = targetZoom > 1 && !isControlling;
                     const targetZoomStyle: CSSProperties = {
-                      transform: `scale(${targetZoom})`,
+                      transform: `translate(${targetPan.x}px, ${targetPan.y}px) scale(${targetZoom})`,
                       transformOrigin: "center center",
-                      transition: "transform 0.2s ease",
+                      transition: isTargetPanning ? "none" : "transform 0.2s ease",
                     };
                     const targetZoomLabel = `${Math.round(targetZoom * 100)}%`;
 
@@ -1273,26 +1395,36 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                         badge="Screen"
                         className={`is-screen${isControlling ? " is-controlling" : ""}${
                           isPrimary ? " is-primary" : ""
+                        }${isTargetPannable ? " is-pannable" : ""}${
+                          isTargetPanning ? " is-panning" : ""
                         }`}
                         mediaStyle={targetZoomStyle}
                         onPointerMove={
                           isControlling
                             ? (event) => sendControlPointer(event, targetId, "move")
+                            : isTargetPannable
+                            ? (event) => updateScreenPan(event, targetZoomKey)
                             : undefined
                         }
                         onPointerDown={
                           isControlling
                             ? (event) => handleControlPointerDown(event, targetId)
+                            : isTargetPannable
+                            ? (event) => beginScreenPan(event, targetZoomKey, targetZoom)
                             : undefined
                         }
                         onPointerUp={
                           isControlling
                             ? (event) => handleControlPointerUp(event, targetId)
+                            : isTargetPannable
+                            ? (event) => endScreenPan(event, targetZoomKey)
                             : undefined
                         }
                         onPointerLeave={
                           isControlling
                             ? (event) => sendControlPointer(event, targetId, "move")
+                            : isTargetPannable
+                            ? (event) => endScreenPan(event, targetZoomKey)
                             : undefined
                         }
                         tabIndex={isControlling ? 0 : undefined}

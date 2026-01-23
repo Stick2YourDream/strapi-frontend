@@ -1084,6 +1084,15 @@
   cursor: crosshair;
 }
 
+.video-tile.is-pannable {
+  cursor: grab;
+  touch-action: none;
+}
+
+.video-tile.is-pannable.is-panning {
+  cursor: grabbing;
+}
+
 .screen-share-actions {
   position: absolute;
   right: 10px;
