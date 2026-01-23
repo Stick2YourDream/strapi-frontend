@@ -86,6 +86,14 @@ const getUserLabel = (entry: any) => {
   const fullName = `${firstName} ${lastName}`.trim();
   return fullName || attrs?.handle || attrs?.email || "User";
 };
+const getProfileLabel = (entry: any) => {
+  const attrs = normalize(entry);
+  const firstName = String(attrs?.firstName || attrs?.firstname || "").trim();
+  const lastName = String(attrs?.lastName || attrs?.lastname || "").trim();
+  const fullName = `${firstName} ${lastName}`.trim();
+  const userAttrs = normalize(getEntity(attrs.user));
+  return fullName || attrs?.handle || userAttrs?.email || "User";
+};
 
 const safeParseJson = (value: string | null) => {
   if (!value) return null;
@@ -180,6 +188,7 @@ export const useNotifications = (
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const initialLoadRef = useRef(true);
   const lastCountsRef = useRef<NotificationCounts | null>(null);
+  const profileNameCacheRef = useRef<Record<number, string>>({});
 
   useEffect(() => {
     if (!userId || !settings?.pushEnabled) {
@@ -422,10 +431,33 @@ export const useNotifications = (
           });
           const first = sorted[0];
           const attrs = normalize(first);
+          const ownerId = getEntityId(attrs.owner);
+          let ownerName = getUserLabel(attrs.owner);
+          if (ownerId) {
+            const cachedName = profileNameCacheRef.current[ownerId];
+            if (cachedName) {
+              ownerName = cachedName;
+            } else {
+              const profileRes = await api
+                .get(
+                  `/profiles?filters[user][id][$eq]=${ownerId}` +
+                    `&populate=user&pagination[pageSize]=1`
+                )
+                .catch(() => null);
+              const profileEntry = profileRes?.data?.data?.[0];
+              if (profileEntry) {
+                const label = getProfileLabel(profileEntry);
+                if (label) {
+                  profileNameCacheRef.current[ownerId] = label;
+                  ownerName = label;
+                }
+              }
+            }
+          }
           friendPostPreview = {
             id: first.id ?? attrs.documentId ?? attrs.id ?? "post",
-            ownerId: getEntityId(attrs.owner),
-            ownerName: getUserLabel(attrs.owner),
+            ownerId,
+            ownerName,
             title: attrs.Title || attrs.title,
             content: attrs.Users_Content || attrs.content,
             createdAt: attrs.createdAt,

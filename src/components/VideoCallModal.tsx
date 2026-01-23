@@ -5,6 +5,8 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type MouseEvent,
+  type MouseEventHandler,
   type PointerEvent,
   type PointerEventHandler,
   type Ref,
@@ -218,6 +220,7 @@ const VideoTile = ({
   onPointerUp,
   onPointerDown,
   onPointerLeave,
+  onContextMenu,
   tabIndex,
   rootRef,
   dataScreenId,
@@ -237,6 +240,7 @@ const VideoTile = ({
   onPointerUp?: PointerEventHandler<HTMLDivElement>;
   onPointerDown?: PointerEventHandler<HTMLDivElement>;
   onPointerLeave?: PointerEventHandler<HTMLDivElement>;
+  onContextMenu?: MouseEventHandler<HTMLDivElement>;
   tabIndex?: number;
   rootRef?: Ref<HTMLDivElement>;
   dataScreenId?: string;
@@ -270,6 +274,7 @@ const VideoTile = ({
       onPointerUp={onPointerUp}
       onPointerDown={onPointerDown}
       onPointerLeave={onPointerLeave}
+      onContextMenu={onContextMenu}
       tabIndex={tabIndex}
     >
       {stream && (
@@ -784,9 +789,10 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   );
 
   const sendControlPointer = (
-    event: PointerEvent<HTMLDivElement>,
+    event: PointerEvent<HTMLDivElement> | MouseEvent<HTMLDivElement>,
     targetSocketId: string,
-    type: "move" | "click"
+    type: "move" | "click",
+    button?: "left" | "right"
   ) => {
     if (screenControlTarget !== targetSocketId) return;
     const zoom = getScreenZoom(targetSocketId);
@@ -805,7 +811,12 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     const now = performance.now();
     if (type === "move" && now - controlThrottleRef.current < 50) return;
     controlThrottleRef.current = now;
-    sendScreenControlEvent(targetSocketId, { type, x, y });
+    sendScreenControlEvent(targetSocketId, {
+      type,
+      x,
+      y,
+      ...(button ? { button } : {}),
+    });
   };
 
   const handleControlPointerDown = (
@@ -822,8 +833,17 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     targetSocketId: string
   ) => {
     if (screenControlTarget !== targetSocketId) return;
-    sendControlPointer(event, targetSocketId, "click");
+    const button = event.button === 2 ? "right" : "left";
+    sendControlPointer(event, targetSocketId, "click", button);
     event.currentTarget.releasePointerCapture?.(event.pointerId);
+  };
+
+  const handleControlContextMenu = (
+    event: MouseEvent<HTMLDivElement>,
+    targetSocketId: string
+  ) => {
+    if (screenControlTarget !== targetSocketId) return;
+    event.preventDefault();
   };
 
   const playEndCallTone = async () => {
@@ -1361,6 +1381,8 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                             <span
                               className={`screen-control-cursor${
                                 screenControlCursor.kind === "click" ? " is-click" : ""
+                              }${
+                                screenControlCursor.button === "right" ? " is-right" : ""
                               }`}
                               style={{
                                 left: `${screenControlCursor.x * 100}%`,
@@ -1425,6 +1447,11 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                             ? (event) => sendControlPointer(event, targetId, "move")
                             : isTargetPannable
                             ? (event) => endScreenPan(event, targetZoomKey)
+                            : undefined
+                        }
+                        onContextMenu={
+                          isControlling
+                            ? (event) => handleControlContextMenu(event, targetId)
                             : undefined
                         }
                         tabIndex={isControlling ? 0 : undefined}

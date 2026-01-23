@@ -1163,6 +1163,12 @@
   animation: screen-click-pulse 0.4s ease-out;
 }
 
+.screen-control-cursor.is-right {
+  border-color: #facc15;
+  background: rgba(250, 204, 21, 0.35);
+  box-shadow: 0 0 0 6px rgba(250, 204, 21, 0.18);
+}
+
 @keyframes screen-click-pulse {
   0% {
     box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.35);

@@ -80,12 +80,14 @@ type ScreenControlCursor = {
   from: string;
   at: number;
   kind: "move" | "click";
+  button?: "left" | "right";
 };
 
 type ScreenControlEvent = {
   type: "move" | "click";
   x: number;
   y: number;
+  button?: "left" | "right";
 };
 
 type VideoCallEffects = {
@@ -1967,12 +1969,19 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         const y = Math.min(1, Math.max(0, Number(payload.event.y)));
         if (!Number.isFinite(x) || !Number.isFinite(y)) return;
         const kind = payload.event.type === "click" ? "click" : "move";
+        const button =
+          payload.event.button === "right"
+            ? "right"
+            : kind === "click"
+            ? "left"
+            : undefined;
         setScreenControlCursor({
           x,
           y,
           from: payload.from,
           at: Date.now(),
           kind,
+          button,
         });
       }
     );
