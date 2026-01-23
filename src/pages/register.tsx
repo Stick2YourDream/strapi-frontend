@@ -20,7 +20,7 @@ const slugifyHandle = (value: string) =>
     .replace(/^-+|-+$/g, "");
 
 const getPasswordError = (password: string) => {
-  const minLength = 12;
+  const minLength = 8;
   if (!password || password.length < minLength) {
     return `Password must be at least ${minLength} characters long.`;
   }
@@ -551,7 +551,7 @@ export default function Register() {
             required
           />
           <small className="auth-hint">
-            At least 12 characters with upper/lowercase, a number, and a symbol (spaces allowed).
+            At least 8 characters with upper/lowercase, a number, and a symbol (spaces allowed).
           </small>
         </div>
 

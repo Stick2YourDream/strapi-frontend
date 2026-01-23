@@ -9,6 +9,7 @@ import api from "../api/strapi";
 import axios from "axios";
 import Sidebar from "../components/Sidebar";
 import TopbarSearch from "../components/TopbarSearch";
+import ReactionPicker from "../components/ReactionPicker";
 import { HOBBY_OPTIONS } from "./me_hobbies";
 import { RELIGION_OPTIONS } from "./me_religions";
 import { usePageMeta } from "../hooks/usePageMeta";
@@ -24,6 +25,7 @@ import {
   type ProfilePayload,
   type VisibilityLevel,
 } from "../utils/profile-e2ee";
+import { sanitizePostText } from "../utils/emoji";
 import { getOrCreateDeviceId } from "../utils/device-id";
 import { syncPushSubscription, type PushSyncStatus } from "../utils/push-notifications";
 import { formatPostUpdateLabel } from "../utils/time";
@@ -81,6 +83,15 @@ type MediaPost = {
   feedbackAudience?: string;
   feedbackTargetId?: number;
   feedbackTargetName?: string;
+  likes?: number;
+  shares?: number;
+};
+
+type CommentItem = {
+  id: number | string;
+  body: string;
+  owner?: string;
+  ownerId?: number | string;
 };
 
 type FriendOption = {
@@ -443,6 +454,12 @@ export default function Me() {
   const handleFixAttemptedRef = useRef(false);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [posts, setPosts] = useState<MediaPost[]>([]);
+  const [postComments, setPostComments] = useState<Record<string, CommentItem[]>>({});
+  const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
+  const [openCommentsFor, setOpenCommentsFor] = useState<Record<string, boolean>>({});
+  const [reactionPickerFor, setReactionPickerFor] = useState<string | null>(null);
+  const [shareMenuFor, setShareMenuFor] = useState<string | null>(null);
+  const [shareNotice, setShareNotice] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [errorModal, setErrorModal] = useState<string | null>(null);
@@ -571,8 +588,166 @@ export default function Me() {
   };
   const getEntityLabel = (entry: any, fallback: string) => {
     const attrs = normalize(getEntity(entry));
-    return attrs?.email || fallback;
+    const firstName = String(attrs?.firstName || attrs?.firstname || "").trim();
+    const lastName = String(attrs?.lastName || attrs?.lastname || "").trim();
+    const fullName = `${firstName} ${lastName}`.trim();
+    const handle = String(attrs?.handle || attrs?.username || "").trim();
+    return fullName || handle || attrs?.email || fallback;
   };
+  const mapComments = (rows: any[]): Record<string, CommentItem[]> => {
+    const next: Record<string, CommentItem[]> = {};
+    rows.forEach((entry) => {
+      const attrs = normalize(entry);
+      const targetId = attrs.target_id ?? entry?.target_id;
+      if (targetId === undefined || targetId === null) return;
+      const key = String(targetId);
+      const ownerEntry = getEntity(attrs.owner ?? entry?.owner);
+      const ownerId = getEntityId(ownerEntry);
+      const ownerLabel = getEntityLabel(ownerEntry, "User");
+      const commentId = entry?.id ?? attrs?.documentId ?? attrs?.id ?? String(targetId);
+      const body = String(attrs.body ?? entry?.body ?? "").trim();
+      if (!body) return;
+      (next[key] = next[key] || []).push({
+        id: commentId,
+        body,
+        owner: ownerLabel,
+        ownerId,
+      });
+    });
+    return next;
+  };
+  const fetchCommentsForPostIds = async (postIds: Array<string | number>) => {
+    if (!postIds.length) return {};
+    const idFilter = postIds
+      .map(
+        (id, index) => `filters[target_id][$in][${index}]=${encodeURIComponent(String(id))}`
+      )
+      .join("&");
+    const typeFilter =
+      "filters[target_type][$in][0]=user&filters[target_type][$in][1]=users-post";
+    const res = await api.get(
+      `/comments?${typeFilter}&${idFilter}&populate=owner&pagination[pageSize]=200`
+    );
+    return mapComments(res.data?.data ?? []);
+  };
+  const updatePostMetric = (postKey: string, field: "likes" | "shares", value: number) => {
+    setPosts((prev) =>
+      prev.map((post) =>
+        String(post.id) === postKey ? { ...post, [field]: value } : post
+      )
+    );
+  };
+  const buildShareUrl = (postKey: string) => {
+    if (typeof window === "undefined") return "";
+    return `${window.location.origin}${window.location.pathname}#post-${postKey}`;
+  };
+  const pushShareNotice = (postKey: string, message: string) => {
+    setShareNotice((prev) => ({ ...prev, [postKey]: message }));
+    window.setTimeout(() => {
+      setShareNotice((prev) => {
+        if (!prev[postKey]) return prev;
+        const next = { ...prev };
+        delete next[postKey];
+        return next;
+      });
+    }, 2400);
+  };
+  const trackShare = async (post: MediaPost, postKey: string) => {
+    try {
+      const res = await api.post(`/users-posts/${post.id}/share`);
+      const nextShares = Number(res.data?.data?.shares) || Number(post.shares ?? 0) + 1;
+      updatePostMetric(postKey, "shares", nextShares);
+    } catch (err) {
+      console.error("Share tracking failed", err);
+      pushShareNotice(postKey, "Unable to update share count.");
+    }
+  };
+  const handleCopyShare = async (post: MediaPost, postKey: string, shareUrl: string) => {
+    if (!shareUrl) {
+      pushShareNotice(postKey, "Unable to copy link.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      pushShareNotice(postKey, "Link copied.");
+      await trackShare(post, postKey);
+    } catch (err) {
+      console.error("Copy link failed", err);
+      pushShareNotice(postKey, "Unable to copy link.");
+    }
+  };
+  const handleNativeShare = async (
+    post: MediaPost,
+    postKey: string,
+    shareUrl: string,
+    shareText: string
+  ) => {
+    if (!navigator.share) {
+      pushShareNotice(postKey, "Sharing is not available here.");
+      return;
+    }
+    try {
+      await navigator.share({ url: shareUrl, text: shareText });
+      pushShareNotice(postKey, "Shared.");
+      await trackShare(post, postKey);
+    } catch (err) {
+      if ((err as Error)?.name === "AbortError") return;
+      console.error("Share failed", err);
+      pushShareNotice(postKey, "Unable to share.");
+    }
+  };
+  const handleReaction = async (post: MediaPost, postKey: string, emoji: string) => {
+    try {
+      const res = await api.post(`/users-posts/${post.id}/react`, { emoji });
+      const payload = res.data?.data;
+      const nextLikes = Number(payload?.likes) || Number(post.likes ?? 0) + 1;
+      updatePostMetric(postKey, "likes", nextLikes);
+      if (payload?.alreadyReacted) {
+        pushShareNotice(
+          postKey,
+          payload?.updated ? `Reaction updated ${emoji}` : "You already reacted."
+        );
+      } else {
+        pushShareNotice(postKey, `You reacted ${emoji}`);
+      }
+    } catch (err) {
+      console.error("Reaction failed", err);
+      pushShareNotice(postKey, "Unable to react right now.");
+    }
+  };
+  const refreshCommentsForPost = async (postId: string | number) => {
+    try {
+      const updates = await fetchCommentsForPostIds([postId]);
+      setPostComments((prev) => ({ ...prev, ...updates }));
+    } catch (err) {
+      console.error("Failed to refresh comments", err);
+    }
+  };
+  const toggleComments = (postKey: string) => {
+    setOpenCommentsFor((prev) => ({ ...prev, [postKey]: !prev[postKey] }));
+    setReactionPickerFor(null);
+    setShareMenuFor(null);
+  };
+  const toggleReactionPicker = (postKey: string) => {
+    setReactionPickerFor((prev) => (prev === postKey ? null : postKey));
+    setShareMenuFor(null);
+  };
+  const toggleShareMenu = (postKey: string) => {
+    setShareMenuFor((prev) => (prev === postKey ? null : postKey));
+    setReactionPickerFor(null);
+  };
+
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest(".post-action-group")) return;
+      setReactionPickerFor(null);
+      setShareMenuFor(null);
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, []);
   const currentBackground = preferences.backgrounds.dashboard;
   const appearanceColor = currentBackground.color || "#0b0d14";
 
@@ -1626,10 +1801,25 @@ export default function Me() {
         feedbackAudience: attrs.feedbackAudience || undefined,
         feedbackTargetId,
         feedbackTargetName,
+        likes: Number(attrs.likes ?? 0),
+        shares: Number(attrs.shares ?? 0),
       };
     });
 
     setPosts(mappedPosts);
+    if (mappedPosts.length) {
+      try {
+        const commentsMap = await fetchCommentsForPostIds(
+          mappedPosts.map((post) => post.id)
+        );
+        setPostComments(commentsMap);
+      } catch (err) {
+        console.error("Failed to load post comments", err);
+        setPostComments({});
+      }
+    } else {
+      setPostComments({});
+    }
     return mappedPosts;
   };
 
@@ -4638,9 +4828,29 @@ export default function Me() {
             const descriptor = mediaDescriptor(p.media, hasLink);
             const canDelete = Boolean(p.id ?? p.documentId);
             const feedbackLabel = feedbackLabelFor(p);
+            const postKey = String(p.id);
+            const comments = postComments[postKey] ?? [];
+            const isCommentsOpen = Boolean(openCommentsFor[postKey]);
+            const showReactionPicker = reactionPickerFor === postKey;
+            const showShareMenu = shareMenuFor === postKey;
+            const shareUrl = buildShareUrl(postKey);
+            const shareText = p.text
+              ? `${displayName}: ${p.text.slice(0, 80)}`
+              : `${displayName} posted an update.`;
+            const encodedUrl = encodeURIComponent(shareUrl);
+            const encodedText = encodeURIComponent(shareText);
+            const likesCount = Number(p.likes ?? 0);
+            const sharesCount = Number(p.shares ?? 0);
+            const commentsCount = comments.length;
 
             return (
-              <article key={String(p.id)} className="post-card">
+              <article
+                key={String(p.id)}
+                id={`post-${postKey}`}
+                className={`post-card${
+                  showReactionPicker || showShareMenu ? " is-popover-open" : ""
+                }`}
+              >
                 <div className="post-meta-bar">
                   <span className="post-meta-name">{displayName}</span>
                   <span className="post-meta-text">
@@ -4684,6 +4894,236 @@ export default function Me() {
                   <p>{p.text}</p>
                   {preview && !p.media && (
                     <LinkPreviewCard preview={preview} url={preview.url || postUrl} compact />
+                  )}
+                  <div className="post-actions">
+                    <div className="post-action-counts">
+                      <span className="post-action-count">
+                        <span className="post-action-count-icon" aria-hidden="true">
+                          👍
+                        </span>
+                        {likesCount}
+                      </span>
+                      <span className="post-action-count">
+                        <span className="post-action-count-icon" aria-hidden="true">
+                          💬
+                        </span>
+                        {commentsCount}
+                      </span>
+                      <span className="post-action-count">
+                        <span className="post-action-count-icon" aria-hidden="true">
+                          ↗
+                        </span>
+                        {sharesCount}
+                      </span>
+                    </div>
+                    <div className="post-action-bar">
+                    <div className="post-action-group">
+                      <button
+                        className="post-action-btn"
+                        type="button"
+                        aria-pressed={showReactionPicker}
+                        onClick={() => toggleReactionPicker(postKey)}
+                      >
+                        <span className="post-action-icon" aria-hidden="true">
+                          <svg viewBox="0 0 24 24">
+                            <path d="M2 10.5A1.5 1.5 0 0 1 3.5 9h1A1.5 1.5 0 0 1 6 10.5v9A1.5 1.5 0 0 1 4.5 21h-1A1.5 1.5 0 0 1 2 19.5v-9Z" />
+                            <path d="M6 10.333V5a3 3 0 0 1 3-3h.5a.5.5 0 0 1 .5.5V8h4.65a2.5 2.5 0 0 1 2.453 2.98l-1.2 6A2.5 2.5 0 0 1 13.452 19H8a2 2 0 0 1-2-2v-6.667Z" />
+                          </svg>
+                        </span>
+                        <span>Like</span>
+                      </button>
+                      {showReactionPicker && (
+                        <div className="post-action-popover">
+                          <ReactionPicker
+                            onPick={(emoji) => {
+                              setReactionPickerFor(null);
+                              void handleReaction(p, postKey, emoji);
+                            }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                    <div className="post-action-group">
+                      <button
+                        className="post-action-btn"
+                        type="button"
+                        aria-pressed={isCommentsOpen}
+                        onClick={() => toggleComments(postKey)}
+                      >
+                        <span className="post-action-icon" aria-hidden="true">
+                          <svg viewBox="0 0 24 24">
+                            <path d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H8l-4 4V6a2 2 0 0 1 2-2Z" />
+                          </svg>
+                        </span>
+                        <span>Comment</span>
+                      </button>
+                    </div>
+                    <div className="post-action-group">
+                      <button
+                        className="post-action-btn"
+                        type="button"
+                        aria-pressed={showShareMenu}
+                        onClick={() => toggleShareMenu(postKey)}
+                      >
+                        <span className="post-action-icon" aria-hidden="true">
+                          <svg viewBox="0 0 24 24">
+                            <path d="M14 3 21 10 14 17v-4h-4a4 4 0 0 0-4 4v4H4v-4a6 6 0 0 1 6-6h4V3Z" />
+                          </svg>
+                        </span>
+                        <span>Share</span>
+                      </button>
+                      {showShareMenu && (
+                        <div className="post-action-popover is-wide">
+                          <div className="post-share-grid">
+                            <button
+                              className="post-share-btn"
+                              type="button"
+                              onClick={() => handleCopyShare(p, postKey, shareUrl)}
+                            >
+                              Copy link
+                            </button>
+                            {typeof navigator !== "undefined" &&
+                              typeof navigator.share === "function" && (
+                                <button
+                                  className="post-share-btn"
+                                  type="button"
+                                  onClick={() =>
+                                    handleNativeShare(p, postKey, shareUrl, shareText)
+                                  }
+                                >
+                                  Share...
+                                </button>
+                              )}
+                            <a
+                              className="post-share-link"
+                              href={`https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`}
+                              onClick={() => void trackShare(p, postKey)}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Facebook
+                            </a>
+                            <a
+                              className="post-share-link"
+                              href={`https://twitter.com/intent/tweet?url=${encodedUrl}&text=${encodedText}`}
+                              onClick={() => void trackShare(p, postKey)}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              X
+                            </a>
+                            <a
+                              className="post-share-link"
+                              href={`https://www.linkedin.com/shareArticle?mini=true&url=${encodedUrl}&title=${encodedText}`}
+                              onClick={() => void trackShare(p, postKey)}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              LinkedIn
+                            </a>
+                            <a
+                              className="post-share-link"
+                              href={`https://www.reddit.com/submit?url=${encodedUrl}&title=${encodedText}`}
+                              onClick={() => void trackShare(p, postKey)}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Reddit
+                            </a>
+                            <a
+                              className="post-share-link"
+                              href={`https://wa.me/?text=${encodedText}%20${encodedUrl}`}
+                              onClick={() => void trackShare(p, postKey)}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              WhatsApp
+                            </a>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  </div>
+                  {shareNotice[postKey] && (
+                    <p className="post-action-notice">{shareNotice[postKey]}</p>
+                  )}
+                  {isCommentsOpen && (
+                    <div className="comments">
+                      <p className="eyebrow">Comments</p>
+                      {comments.length > 0 ? (
+                        <ul className="comment-list">
+                          {comments.map((c) => (
+                            <li key={c.id} className="comment-item">
+                              <div className="comment-author">{c.owner || "User"}</div>
+                              <div className="comment-body">{c.body}</div>
+                              {user?.id === c.ownerId && (
+                                <button
+                                  className="btn ghost comment-delete"
+                                  type="button"
+                                  onClick={async () => {
+                                    try {
+                                      await api.delete(`/comments/${c.id}`);
+                                      setPostComments((prev) => ({
+                                        ...prev,
+                                        [postKey]: (prev[postKey] || []).filter(
+                                          (comment) => comment.id !== c.id
+                                        ),
+                                      }));
+                                    } catch (err) {
+                                      console.error("Delete comment failed", err);
+                                      setPostError("Failed to delete comment.");
+                                    }
+                                  }}
+                                >
+                                  Delete
+                                </button>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="status">No comments yet.</p>
+                      )}
+                      <div className="comment-form">
+                        <input
+                          className="auth-input"
+                          placeholder="Add a comment..."
+                          value={commentInputs[postKey] || ""}
+                          onChange={(e) =>
+                            setCommentInputs((prev) => ({
+                              ...prev,
+                              [postKey]: sanitizePostText(e.target.value),
+                            }))
+                          }
+                        />
+                        <button
+                          className="btn primary"
+                          type="button"
+                          disabled={!commentInputs[postKey]?.trim()}
+                          onClick={async () => {
+                            const body = (commentInputs[postKey] || "").trim();
+                            if (!body) return;
+                            try {
+                              await api.post("/comments", {
+                                data: {
+                                  body,
+                                  target_type: "user",
+                                  target_id: p.id,
+                                },
+                              });
+                              await refreshCommentsForPost(p.id);
+                              setCommentInputs((prev) => ({ ...prev, [postKey]: "" }));
+                            } catch (err) {
+                              console.error("Add comment failed", err);
+                              setPostError("Failed to add comment.");
+                            }
+                          }}
+                        >
+                          Comment
+                        </button>
+                      </div>
+                    </div>
                   )}
                 </div>
               </article>

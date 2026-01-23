@@ -1,6 +1,7 @@
 // src/routes/AppRoutes.tsx
 // import React from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
 import Login from "../pages/login";
 import Register from "../pages/register";
 import ForgotPassword from "../pages/forgot-password";
@@ -24,12 +25,16 @@ import ShareTarget from "../pages/share";
 import ProtocolHandler from "../pages/protocol";
 import NewNote from "../pages/notes-new";
 import WhatMakesUsDifferent from "../pages/what-makes-us-different";
+import Moderation from "../pages/moderation";
 
 export default function AppRoutes(): JSX.Element {
+  const { user } = useAuth();
+  const landingElement = user ? <Navigate to="/dashboard" replace /> : <Landing />;
+
   return (
     <Routes>
       {/* Public landing / home page */}
-      <Route path="/" element={<Landing />} />
+      <Route path="/" element={landingElement} />
       <Route path="/home" element={<Navigate to="/" replace />} />
 
       {/* Login and Register pages */}
@@ -89,9 +94,17 @@ export default function AppRoutes(): JSX.Element {
           </ProtectedRoute>
         }
       />
+      <Route
+        path="/moderation"
+        element={
+          <ProtectedRoute>
+            <Moderation />
+          </ProtectedRoute>
+        }
+      />
 
       {/* Optional additional routes */}
-      <Route path="/landing" element={<Navigate to="/" replace />} />
+      <Route path="/landing" element={<Landing />} />
     </Routes>
   );
 }

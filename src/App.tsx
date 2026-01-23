@@ -4,6 +4,7 @@ import AppRoutes from "./routes/AppRoutes";
 import ChatDock from "./components/ChatDock";
 import ConsentBanner from "./components/ConsentBanner";
 import KeyBackupModal from "./components/KeyBackupModal";
+import ReleaseNotesModal from "./components/ReleaseNotesModal";
 
 export default function App() {
   return (
@@ -12,6 +13,7 @@ export default function App() {
       <ChatDock />
       <ConsentBanner />
       <KeyBackupModal />
+      <ReleaseNotesModal />
     </BrowserRouter>
   );
 }

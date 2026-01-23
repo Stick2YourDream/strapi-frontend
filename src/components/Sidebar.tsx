@@ -35,7 +35,7 @@ const SETTINGS_SECTIONS: { id: SettingsSection; label: string }[] = [
 ];
 
 type SidebarProps = {
-  active: "dashboard" | "friends" | "me" | "groups";
+  active: "dashboard" | "friends" | "me" | "groups" | "moderation";
   settingsView?: "profile" | "settings";
   onSettingsViewChange?: (view: "profile" | "settings") => void;
   settingsSection?: SettingsSection;
@@ -207,6 +207,7 @@ export default function Sidebar({
   const canToggleGroupSettings =
     active === "groups" && typeof onGroupViewChange === "function";
   const isGroupSettingsView = groupView === "settings";
+  const isStaff = user?.appRole === "admin" || user?.appRole === "moderator";
 
   const handleSettingsToggle = () => {
     if (!onSettingsViewChange) return;
@@ -527,6 +528,15 @@ export default function Sidebar({
               >
                 My Groups
               </button>
+              {isStaff && (
+                <button
+                  className="mobile-profile-item"
+                  type="button"
+                  onClick={() => handleProfileAction("/moderation")}
+                >
+                  Moderation
+                </button>
+              )}
               {canToggleGroupSettings && (
                 <button
                   className="mobile-profile-item"
@@ -541,7 +551,7 @@ export default function Sidebar({
               <button
                 className="mobile-profile-item"
                 type="button"
-                onClick={() => handleProfileAction("/")}
+                onClick={() => handleProfileAction("/landing")}
               >
                 Return Home
               </button>
@@ -595,6 +605,8 @@ export default function Sidebar({
                     setShowProfileMenu((v) => !v);
                     setShowNotifications(false);
                   }}
+                  aria-expanded={showProfileMenu}
+                  aria-controls="sidebar-profile-menu"
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -672,7 +684,6 @@ export default function Sidebar({
                   )}
                 </button>
               </div>
-
               {showNotifications && (
                 <div className="sidebar-notification-panel">
                   <div className="sidebar-notification-header">
@@ -692,6 +703,7 @@ export default function Sidebar({
 
               {showProfileMenu && (
                 <div
+                  id="sidebar-profile-menu"
                   style={{
                     position: "absolute",
                     top: "110%",
@@ -709,39 +721,7 @@ export default function Sidebar({
                     className="btn ghost nav-btn"
                     type="button"
                     style={{ width: "100%", border: "none", borderRadius: 0, justifyContent: "flex-start" }}
-                    onClick={() => handleProfileAction("/dashboard")}
-                  >
-                    My Dashboard
-                  </button>
-                  <button
-                    className="btn ghost nav-btn"
-                    type="button"
-                    style={{ width: "100%", border: "none", borderRadius: 0, justifyContent: "flex-start" }}
-                    onClick={() => handleProfileAction("/me")}
-                >
-                  My Profile
-                </button>
-                  <button
-                    className="btn ghost nav-btn"
-                    type="button"
-                    style={{ width: "100%", border: "none", borderRadius: 0, justifyContent: "flex-start" }}
-                    onClick={() => handleProfileAction("/friends")}
-                  >
-                    My Friends
-                  </button>
-                  <button
-                    className="btn ghost nav-btn"
-                    type="button"
-                    style={{ width: "100%", border: "none", borderRadius: 0, justifyContent: "flex-start" }}
-                    onClick={() => handleProfileAction("/groups")}
-                  >
-                    My Groups
-                  </button>
-                  <button
-                    className="btn ghost nav-btn"
-                    type="button"
-                    style={{ width: "100%", border: "none", borderRadius: 0, justifyContent: "flex-start" }}
-                    onClick={() => handleProfileAction("/")}
+                    onClick={() => handleProfileAction("/landing")}
                   >
                     Return Home
                   </button>
@@ -758,6 +738,57 @@ export default function Sidebar({
                     Logout
                   </button>
                 </div>
+              )}
+            </div>
+          )}
+          {profileCard && (
+            <div className="sidebar-nav-links">
+              <button
+                type="button"
+                className={`btn ghost sidebar-nav-link${
+                  active === "dashboard" ? " is-active" : ""
+                }`}
+                onClick={() => handleProfileAction("/dashboard")}
+              >
+                My Dashboard
+              </button>
+              <button
+                type="button"
+                className={`btn ghost sidebar-nav-link${
+                  active === "me" ? " is-active" : ""
+                }`}
+                onClick={() => handleProfileAction("/me")}
+              >
+                My Profile
+              </button>
+              <button
+                type="button"
+                className={`btn ghost sidebar-nav-link${
+                  active === "friends" ? " is-active" : ""
+                }`}
+                onClick={() => handleProfileAction("/friends")}
+              >
+                My Friends
+              </button>
+              <button
+                type="button"
+                className={`btn ghost sidebar-nav-link${
+                  active === "groups" ? " is-active" : ""
+                }`}
+                onClick={() => handleProfileAction("/groups")}
+              >
+                My Groups
+              </button>
+              {isStaff && (
+                <button
+                  type="button"
+                  className={`btn ghost sidebar-nav-link${
+                    active === "moderation" ? " is-active" : ""
+                  }`}
+                  onClick={() => handleProfileAction("/moderation")}
+                >
+                  Moderation
+                </button>
               )}
             </div>
           )}

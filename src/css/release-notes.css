@@ -1,0 +1,128 @@
+.release-notes-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 8, 14, 0.75);
+  display: grid;
+  place-items: center;
+  z-index: 999;
+  padding: 24px;
+  backdrop-filter: blur(8px);
+}
+
+.release-notes-modal {
+  width: min(720px, 100%);
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: linear-gradient(160deg, rgba(18, 24, 40, 0.98), rgba(8, 12, 22, 0.98));
+  color: #e9ecf5;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+  padding: 22px 24px 20px;
+}
+
+.release-notes-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 12px;
+}
+
+.release-notes-eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  font-size: 11px;
+  color: #8fb5ff;
+  margin: 0 0 6px;
+}
+
+.release-notes-header h3 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.release-notes-version {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #9aa5bb;
+}
+
+.release-notes-close {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #e9ecf5;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.release-notes-body {
+  padding: 16px 4px 6px;
+}
+
+.release-notes-body ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 10px;
+}
+
+.release-notes-body li {
+  color: #c7cede;
+  line-height: 1.5;
+  font-size: 14px;
+}
+
+.release-notes-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 14px;
+}
+
+.release-notes-btn {
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: transform 0.15s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.release-notes-btn.primary {
+  background: linear-gradient(135deg, #5f8bff, #44d2ff);
+  color: #0b0d14;
+  box-shadow: 0 12px 30px rgba(68, 210, 255, 0.35);
+}
+
+.release-notes-btn.ghost {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e9ecf5;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.release-notes-btn:hover {
+  transform: translateY(-1px);
+}
+
+@media (max-width: 600px) {
+  .release-notes-modal {
+    padding: 18px 16px 16px;
+  }
+
+  .release-notes-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .release-notes-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .release-notes-btn {
+    width: 100%;
+  }
+}

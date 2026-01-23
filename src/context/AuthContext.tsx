@@ -23,6 +23,7 @@ import {
 interface User {
   id: number;
   email: string;
+  appRole?: "user" | "moderator" | "admin";
 }
 
 const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");

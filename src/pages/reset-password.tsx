@@ -7,7 +7,7 @@ import "../css/login.css";
 import { usePageMeta } from "../hooks/usePageMeta";
 
 const getPasswordError = (password: string) => {
-  const minLength = 12;
+  const minLength = 8;
   if (!password || password.length < minLength) {
     return `Password must be at least ${minLength} characters long.`;
   }
@@ -131,7 +131,7 @@ export default function ResetPassword() {
             autoComplete="new-password"
           />
           <small className="auth-hint">
-            At least 12 characters with upper/lowercase, a number, and a symbol.
+            At least 8 characters with upper/lowercase, a number, and a symbol.
           </small>
         </div>
 

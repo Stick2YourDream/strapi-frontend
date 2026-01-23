@@ -3,6 +3,7 @@ export type AuthUser = {
   id: number;
   email: string;
   confirmed: boolean;
+  appRole?: "user" | "moderator" | "admin";
 };
 
 // ? Login response from Strapi: /auth/local or /auth/login/verify

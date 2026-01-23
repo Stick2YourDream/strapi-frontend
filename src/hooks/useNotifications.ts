@@ -387,19 +387,42 @@ export const useNotifications = (
           .catch(() => null);
         const comments = commentsRes?.data?.data ?? [];
         commentCount = comments.length ?? 0;
-        commentPreview = comments.length
-          ? (() => {
-              const first = comments[0];
-              const attrs = normalize(first);
-              return {
-                id: first.id ?? attrs.documentId ?? attrs.id ?? "comment",
-                ownerId: getEntityId(attrs.owner),
-                ownerName: getUserLabel(attrs.owner),
-                body: attrs.body,
-                createdAt: attrs.createdAt,
-              };
-            })()
-          : null;
+        if (comments.length) {
+          const first = comments[0];
+          const attrs = normalize(first);
+          const ownerId = getEntityId(attrs.owner);
+          let ownerName = getUserLabel(attrs.owner);
+          if (ownerId) {
+            const cachedName = profileNameCacheRef.current[ownerId];
+            if (cachedName) {
+              ownerName = cachedName;
+            } else {
+              const profileRes = await api
+                .get(
+                  `/profiles?filters[user][id][$eq]=${ownerId}` +
+                    `&populate=user&pagination[pageSize]=1`
+                )
+                .catch(() => null);
+              const profileEntry = profileRes?.data?.data?.[0];
+              if (profileEntry) {
+                const label = getProfileLabel(profileEntry);
+                if (label) {
+                  profileNameCacheRef.current[ownerId] = label;
+                  ownerName = label;
+                }
+              }
+            }
+          }
+          commentPreview = {
+            id: first.id ?? attrs.documentId ?? attrs.id ?? "comment",
+            ownerId,
+            ownerName,
+            body: attrs.body,
+            createdAt: attrs.createdAt,
+          };
+        } else {
+          commentPreview = null;
+        }
       }
 
       let friendPostCount = 0;

@@ -487,6 +487,11 @@
   transition: transform 0.2s ease, box-shadow 0.25s ease;
 }
 
+.post-card.is-popover-open {
+  overflow: visible;
+  z-index: 12;
+}
+
 .post-meta-bar {
   display: flex;
   align-items: center;
@@ -522,6 +527,7 @@
   aspect-ratio: 16 / 9;
   overflow: hidden;
   background: radial-gradient(circle at 20% 20%, rgba(95, 139, 255, 0.25), rgba(68, 210, 255, 0.18), rgba(255, 255, 255, 0.05));
+  border-radius: 18px 18px 0 0;
 }
 
 .post-media img {
@@ -557,8 +563,15 @@
 }
 
 .post-card:hover {
-  transform: translateY(-6px) translateZ(40px) rotateX(-1deg) rotateY(1deg);
-  box-shadow: 0 28px 60px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transform: translateY(-2px) translateZ(10px);
+  box-shadow: 0 22px 46px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+@media (hover: none), (pointer: coarse) {
+  .post-card:hover {
+    transform: translateZ(0);
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
 }
 
 .post-body {
@@ -566,12 +579,181 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex: 1;
 }
 
 .comments {
   margin-top: 14px;
   padding-top: 10px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.post-actions ~ .comments {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 8px;
+}
+
+.post-actions {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.post-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  order: 1;
+}
+
+.post-action-group {
+  position: relative;
+  display: inline-flex;
+}
+
+.post-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(9, 13, 24, 0.65);
+  color: #e5edff;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+
+.post-action-btn:hover {
+  background: rgba(12, 18, 32, 0.85);
+  border-color: rgba(95, 139, 255, 0.45);
+  transform: translateY(-1px);
+}
+
+.post-action-btn[aria-pressed="true"] {
+  border-color: rgba(95, 139, 255, 0.75);
+  box-shadow: 0 0 0 1px rgba(95, 139, 255, 0.35);
+}
+
+.post-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+}
+
+.post-action-icon svg {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+}
+
+.post-action-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 40;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(10, 14, 24, 0.95);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+  min-width: 200px;
+  max-width: 320px;
+}
+
+.post-action-popover.is-wide {
+  min-width: 240px;
+}
+
+.post-reaction-picker {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.post-reaction-emoji {
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  padding: 10px 0;
+  font-size: 19px;
+  min-height: 36px;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.post-reaction-emoji:hover {
+  transform: translateY(-1px);
+}
+
+.post-action-counts {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 16px;
+  font-size: 14px;
+  color: #c7cede;
+  margin: 0;
+  align-self: flex-end;
+  text-align: right;
+  width: 100%;
+  order: 2;
+}
+
+.post-action-counts span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.post-action-count-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.post-share-grid {
+  display: grid;
+  gap: 6px;
+}
+
+.post-share-btn,
+.post-share-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: #e5edff;
+  font-size: 13px;
+  text-decoration: none;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.post-share-btn:hover,
+.post-share-link:hover {
+  background: rgba(95, 139, 255, 0.18);
+  border-color: rgba(95, 139, 255, 0.4);
+}
+
+.post-action-notice {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #9fb5ff;
 }
 
 .comment-list {
