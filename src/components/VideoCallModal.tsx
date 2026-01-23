@@ -10,6 +10,8 @@ import {
   type PointerEvent,
   type PointerEventHandler,
   type Ref,
+  type WheelEvent,
+  type WheelEventHandler,
 } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -17,6 +19,7 @@ import {
   type VideoCallInvitee,
   type VideoCallMessage,
 } from "../context/VideoCallContext";
+import { sanitizePostText } from "../utils/emoji";
 import callRingtoneUrl from "../assets/call.mp3";
 
 type VideoCallModalProps = {
@@ -169,16 +172,16 @@ const GIFS = [
 
 const BACKGROUND_OPTIONS = [
   { id: "none", label: "None" },
-  { id: "backdrop1", label: "Backdrop 1" },
-  { id: "backdrop2", label: "Backdrop 2" },
-  { id: "backdrop3", label: "Backdrop 3" },
-  { id: "backdrop4", label: "Backdrop 4" },
-  { id: "backdrop5", label: "Backdrop 5" },
-  { id: "backdrop6", label: "Backdrop 6" },
-  { id: "backdrop7", label: "Backdrop 7" },
-  { id: "backdrop8", label: "Backdrop 8" },
-  { id: "backdrop9", label: "Backdrop 9" },
-  { id: "backdrop10", label: "Backdrop 10" },
+  { id: "backdrop1", label: "Valley" },
+  { id: "backdrop2", label: "Autumn Forest" },
+  { id: "backdrop3", label: "River Valley" },
+  { id: "backdrop4", label: "Mountain Lake" },
+  { id: "backdrop5", label: "Grass Meadow" },
+  { id: "backdrop6", label: "Lavender Lake" },
+  { id: "backdrop7", label: "Misty River" },
+  { id: "backdrop8", label: "Stormy Sea" },
+  { id: "backdrop9", label: "Floral Essence" },
+  { id: "backdrop10", label: "Overlooking Valley" },
 ];
 
 const FILTER_OPTIONS = [
@@ -221,6 +224,7 @@ const VideoTile = ({
   onPointerDown,
   onPointerLeave,
   onContextMenu,
+  onWheel,
   tabIndex,
   rootRef,
   dataScreenId,
@@ -241,6 +245,7 @@ const VideoTile = ({
   onPointerDown?: PointerEventHandler<HTMLDivElement>;
   onPointerLeave?: PointerEventHandler<HTMLDivElement>;
   onContextMenu?: MouseEventHandler<HTMLDivElement>;
+  onWheel?: WheelEventHandler<HTMLDivElement>;
   tabIndex?: number;
   rootRef?: Ref<HTMLDivElement>;
   dataScreenId?: string;
@@ -277,6 +282,7 @@ const VideoTile = ({
       onPointerDown={onPointerDown}
       onPointerLeave={onPointerLeave}
       onContextMenu={onContextMenu}
+      onWheel={onWheel}
       tabIndex={tabIndex}
     >
       {stream && (
@@ -335,6 +341,8 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     maxParticipants,
     isVideoEnabled,
     isAudioEnabled,
+    selectedAudioInputId,
+    selectedVideoInputId,
     isScreenSharing,
     onlineUserIds,
     videoEffects,
@@ -348,6 +356,8 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     endCall,
     toggleVideo,
     toggleAudio,
+    setAudioInputDevice,
+    setVideoInputDevice,
     startScreenShare,
     stopScreenShare,
     screenControlRequests,
@@ -380,6 +390,10 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const [screenZoomLevels, setScreenZoomLevels] = useState<Record<string, number>>({});
   const [screenPanOffsets, setScreenPanOffsets] = useState<Record<string, PanOffset>>({});
   const [activePanTarget, setActivePanTarget] = useState<string | null>(null);
+  const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
+  const [audioInputError, setAudioInputError] = useState<string | null>(null);
+  const [videoInputs, setVideoInputs] = useState<MediaDeviceInfo[]>([]);
+  const [videoInputError, setVideoInputError] = useState<string | null>(null);
   const [popoutContainer, setPopoutContainer] = useState<HTMLDivElement | null>(null);
   const ringtoneRef = useRef<{ audio: HTMLAudioElement | null }>({
     audio: null,
@@ -485,6 +499,34 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     () => Object.values(remoteParticipants),
     [remoteParticipants]
   );
+  const participantNameById = useMemo(() => {
+    const map = new Map<number, string>();
+    Object.values(remoteParticipants).forEach((participant) => {
+      if (participant.userId && participant.displayName) {
+        map.set(participant.userId, participant.displayName);
+      }
+    });
+    selectedInvitees.forEach((invitee) => {
+      if (invitee.userId && invitee.displayName) {
+        map.set(invitee.userId, invitee.displayName);
+      }
+    });
+    return map;
+  }, [remoteParticipants, selectedInvitees]);
+  const resolveMessageName = useCallback(
+    (message: VideoCallMessage) => {
+      const fromId = message.from.userId;
+      const candidate =
+        (fromId ? participantNameById.get(fromId) : undefined) ||
+        message.from.displayName ||
+        "Friend";
+      const trimmed = candidate.trim();
+      if (trimmed && !trimmed.includes("@")) return trimmed;
+      if (message.from.handle) return message.from.handle;
+      return "Friend";
+    },
+    [participantNameById]
+  );
   const hasRemoteMedia = useMemo(() => {
     if (remoteList.length > 0) return true;
     if (Object.keys(remoteStreams).length > 0) return true;
@@ -561,6 +603,38 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     media.addListener(handleChange);
     return () => media.removeListener(handleChange);
   }, []);
+
+  useEffect(() => {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    let active = true;
+    const loadDevices = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const inputs = devices.filter((device) => device.kind === "audioinput");
+        const cameras = devices.filter((device) => device.kind === "videoinput");
+        if (active) {
+          setAudioInputs(inputs);
+          setVideoInputs(cameras);
+          setAudioInputError(null);
+          setVideoInputError(null);
+        }
+      } catch {
+        if (active) {
+          setAudioInputError("Unable to load microphones.");
+          setVideoInputError("Unable to load cameras.");
+        }
+      }
+    };
+    void loadDevices();
+    const handleChange = () => {
+      void loadDevices();
+    };
+    navigator.mediaDevices.addEventListener?.("devicechange", handleChange);
+    return () => {
+      active = false;
+      navigator.mediaDevices.removeEventListener?.("devicechange", handleChange);
+    };
+  }, [showCallUi]);
 
   useEffect(() => {
     if (!showCallUi || !isMobileLayout || isLocalPrimary) {
@@ -672,6 +746,10 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   }, [videoEffects.background]);
 
   const previewStatus = !localStream ? "Camera off" : isVideoEnabled ? "" : "Camera off";
+  const micSelectionValue = selectedAudioInputId || "default";
+  const showMicSelector = audioInputs.length > 1;
+  const cameraSelectionValue = selectedVideoInputId || "default";
+  const showCameraSelector = videoInputs.length > 1;
 
   const totalParticipants = 1 + remoteList.length;
   const maxInvitees = maxParticipants - 1;
@@ -692,8 +770,9 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   };
 
   const handleSend = () => {
-    if (!chatInput.trim()) return;
-    sendMessage(chatInput.trim(), "text");
+    const sanitized = sanitizePostText(chatInput).trim();
+    if (!sanitized) return;
+    sendMessage(sanitized, "text");
     setChatInput("");
   };
 
@@ -795,6 +874,29 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     []
   );
 
+  const getControlPoint = useCallback(
+    (
+      clientX: number,
+      clientY: number,
+      targetSocketId: string,
+      rect: DOMRect
+    ) => {
+      const zoom = getScreenZoom(targetSocketId);
+      const pan = getScreenPan(targetSocketId);
+      const rawX = clientX - rect.left - pan.x;
+      const rawY = clientY - rect.top - pan.y;
+      const centerX = rect.width / 2;
+      const centerY = rect.height / 2;
+      const scaledX = (rawX - centerX) / zoom + centerX;
+      const scaledY = (rawY - centerY) / zoom + centerY;
+      const x = Math.min(1, Math.max(0, scaledX / rect.width));
+      const y = Math.min(1, Math.max(0, scaledY / rect.height));
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+      return { x, y };
+    },
+    [getScreenPan, getScreenZoom]
+  );
+
   const sendControlPointer = (
     event: PointerEvent<HTMLDivElement> | MouseEvent<HTMLDivElement>,
     targetSocketId: string,
@@ -802,27 +904,39 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     button?: "left" | "right"
   ) => {
     if (screenControlTarget !== targetSocketId) return;
-    const zoom = getScreenZoom(targetSocketId);
-    const pan = getScreenPan(targetSocketId);
     const rect = event.currentTarget.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
-    const rawX = event.clientX - rect.left - pan.x;
-    const rawY = event.clientY - rect.top - pan.y;
-    const centerX = rect.width / 2;
-    const centerY = rect.height / 2;
-    const scaledX = (rawX - centerX) / zoom + centerX;
-    const scaledY = (rawY - centerY) / zoom + centerY;
-    const x = Math.min(1, Math.max(0, scaledX / rect.width));
-    const y = Math.min(1, Math.max(0, scaledY / rect.height));
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    const point = getControlPoint(event.clientX, event.clientY, targetSocketId, rect);
+    if (!point) return;
     const now = performance.now();
     if (type === "move" && now - controlThrottleRef.current < 50) return;
     controlThrottleRef.current = now;
     sendScreenControlEvent(targetSocketId, {
       type,
-      x,
-      y,
+      x: point.x,
+      y: point.y,
       ...(button ? { button } : {}),
+    });
+  };
+
+  const sendControlScroll = (
+    event: WheelEvent<HTMLDivElement>,
+    targetSocketId: string
+  ) => {
+    if (screenControlTarget !== targetSocketId) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest(".screen-share-actions")) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const point = getControlPoint(event.clientX, event.clientY, targetSocketId, rect);
+    if (!point) return;
+    event.preventDefault();
+    sendScreenControlEvent(targetSocketId, {
+      type: "scroll",
+      x: point.x,
+      y: point.y,
+      deltaX: event.deltaX,
+      deltaY: event.deltaY,
     });
   };
 
@@ -1461,6 +1575,11 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                             ? (event) => handleControlContextMenu(event, targetId)
                             : undefined
                         }
+                        onWheel={
+                          isControlling
+                            ? (event) => sendControlScroll(event, targetId)
+                            : undefined
+                        }
                         tabIndex={isControlling ? 0 : undefined}
                         rootRef={registerScreenTile(tileId)}
                         dataScreenId={tileId}
@@ -1612,48 +1731,46 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   </div>
                   <div className="video-preview-row">
                     <div className="video-preview-group is-wide">
-                      <span className="video-preview-label">Camera</span>
-                      <div className="video-preview-backgrounds">
-                        {FILTER_OPTIONS.map((option) => (
-                          <button
-                            key={option.id}
-                            type="button"
-                            className={`video-preview-bg${
-                              videoEffects.filter === option.id ? " is-active" : ""
-                            }`}
-                            onClick={() =>
-                              setVideoEffects({
-                                filter: option.id as typeof videoEffects.filter,
-                              })
-                            }
-                          >
-                            {option.label}
-                          </button>
-                        ))}
-                      </div>
+                      <span className="video-preview-label">Camera filter</span>
+                      <label className="video-preview-select">
+                        <span className="sr-only">Camera filter</span>
+                        <select
+                          value={videoEffects.filter}
+                          onChange={(event) =>
+                            setVideoEffects({
+                              filter: event.target.value as typeof videoEffects.filter,
+                            })
+                          }
+                        >
+                          {FILTER_OPTIONS.map((option) => (
+                            <option key={option.id} value={option.id}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
                     </div>
                   </div>
                   <div className="video-preview-row">
                     <div className="video-preview-group is-wide">
                       <span className="video-preview-label">Background</span>
-                      <div className="video-preview-backgrounds">
-                        {BACKGROUND_OPTIONS.map((option) => (
-                          <button
-                            key={option.id}
-                            type="button"
-                            className={`video-preview-bg${
-                              videoEffects.background === option.id ? " is-active" : ""
-                            }`}
-                            onClick={() =>
-                              setVideoEffects({
-                                background: option.id as typeof videoEffects.background,
-                              })
-                            }
-                          >
-                            {option.label}
-                          </button>
-                        ))}
-                      </div>
+                      <label className="video-preview-select">
+                        <span className="sr-only">Background</span>
+                        <select
+                          value={videoEffects.background}
+                          onChange={(event) =>
+                            setVideoEffects({
+                              background: event.target.value as typeof videoEffects.background,
+                            })
+                          }
+                        >
+                          {BACKGROUND_OPTIONS.map((option) => (
+                            <option key={option.id} value={option.id}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
                     </div>
                   </div>
                 </div>
@@ -1666,6 +1783,22 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                 >
                   {isAudioEnabled ? "Mic on" : "Mic off"}
                 </button>
+                {showMicSelector && (
+                  <label className="video-control-select">
+                    <span className="sr-only">Microphone</span>
+                    <select
+                      value={micSelectionValue}
+                      onChange={(e) => void setAudioInputDevice(e.target.value)}
+                    >
+                      <option value="default">Default mic</option>
+                      {audioInputs.map((device, index) => (
+                        <option key={device.deviceId || String(index)} value={device.deviceId}>
+                          {device.label || `Microphone ${index + 1}`}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <button
                   type="button"
                   className={`video-control${isVideoEnabled ? "" : " is-off"}`}
@@ -1673,6 +1806,22 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                 >
                   {isVideoEnabled ? "Cam on" : "Cam off"}
                 </button>
+                {showCameraSelector && (
+                  <label className="video-control-select">
+                    <span className="sr-only">Camera</span>
+                    <select
+                      value={cameraSelectionValue}
+                      onChange={(e) => void setVideoInputDevice(e.target.value)}
+                    >
+                      <option value="default">Default camera</option>
+                      {videoInputs.map((device, index) => (
+                        <option key={device.deviceId || String(index)} value={device.deviceId}>
+                          {device.label || `Camera ${index + 1}`}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 <button
                   type="button"
                   className={`video-control${isScreenSharing ? " is-active" : ""}`}
@@ -1706,6 +1855,11 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   </button>
                 )}
               </div>
+              {(audioInputError || videoInputError) && (
+                <div className="video-control-status">
+                  {audioInputError || videoInputError}
+                </div>
+              )}
             </>
           )}
         </div>
@@ -1745,7 +1899,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   }`}
                 >
                   <div className="video-chat-meta">
-                    <span>{message.from.displayName || "Friend"}</span>
+                    <span>{resolveMessageName(message)}</span>
                     <span>
                       {new Date(message.at).toLocaleTimeString([], {
                         hour: "2-digit",
@@ -1839,7 +1993,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
               <textarea
                 className="video-chat-textarea"
                 value={chatInput}
-                onChange={(event) => setChatInput(event.target.value)}
+                onChange={(event) => setChatInput(sanitizePostText(event.target.value))}
                 placeholder="Type a message"
                 rows={2}
                 disabled={!showCallUi}

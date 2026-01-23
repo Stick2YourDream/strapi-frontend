@@ -84,10 +84,12 @@ type ScreenControlCursor = {
 };
 
 type ScreenControlEvent = {
-  type: "move" | "click";
+  type: "move" | "click" | "scroll";
   x: number;
   y: number;
   button?: "left" | "right";
+  deltaX?: number;
+  deltaY?: number;
 };
 
 type VideoCallEffects = {
@@ -152,6 +154,8 @@ type VideoCallContextValue = {
   maxParticipants: number;
   isVideoEnabled: boolean;
   isAudioEnabled: boolean;
+  selectedAudioInputId: string;
+  selectedVideoInputId: string;
   isScreenSharing: boolean;
   videoEffects: VideoCallEffects;
   setVideoEffects: (effects: Partial<VideoCallEffects>) => void;
@@ -167,6 +171,8 @@ type VideoCallContextValue = {
   endCall: () => void;
   toggleVideo: () => void;
   toggleAudio: () => void;
+  setAudioInputDevice: (deviceId: string) => Promise<void>;
+  setVideoInputDevice: (deviceId: string) => Promise<void>;
   startScreenShare: () => Promise<void>;
   stopScreenShare: () => void;
   screenControlRequests: ScreenControlRequest[];
@@ -191,6 +197,7 @@ const CALL_KEY_GRACE_MS = 2000;
 const CALL_E2EE_ENABLED = ["1", "true", "on", "yes"].includes(
   String(import.meta.env.VITE_CALL_E2EE || "").toLowerCase()
 );
+const AUDIO_SYNC_DELAY_SEC = 0.14;
 
 const isChromeOrEdge = () => {
   if (typeof navigator === "undefined") return false;
@@ -353,6 +360,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const [e2eeDebug, setE2eeDebug] = useState<string | null>(null);
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
   const [isAudioEnabled, setIsAudioEnabled] = useState(true);
+  const [selectedAudioInputId, setSelectedAudioInputId] = useState<string>("default");
+  const [selectedVideoInputId, setSelectedVideoInputId] = useState<string>("default");
   const [screenControlRequests, setScreenControlRequests] = useState<ScreenControlRequest[]>([]);
   const [pendingScreenControlTargets, setPendingScreenControlTargets] = useState<string[]>([]);
   const [activeScreenController, setActiveScreenController] =
@@ -380,6 +389,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const disconnectTimersRef = useRef<Map<string, number>>(new Map());
   const rtcConfigRef = useRef<RTCConfiguration>(RTC_CONFIG);
   const iceServersLoadingRef = useRef<Promise<void> | null>(null);
+  const audioInputDeviceRef = useRef<string | null>(null);
+  const videoInputDeviceRef = useRef<string | null>(null);
   const peerNegotiationRef = useRef<Map<string, { makingOffer: boolean; isPolite: boolean }>>(
     new Map()
   );
@@ -393,6 +404,12 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     sourceId: string | null;
     effectsKey: string;
   }>({ track: null, cleanup: null, sourceId: null, effectsKey: "" });
+  const audioProcessingRef = useRef<{
+    track: MediaStreamTrack | null;
+    cleanup: (() => void) | null;
+    sourceId: string | null;
+    delaySec: number;
+  }>({ track: null, cleanup: null, sourceId: null, delaySec: 0 });
   const cleanupCallRef = useRef<() => void>(() => {});
   const profileRef = useRef<VideoCallInvitee | null>(null);
   const statusRef = useRef<VideoCallStatus>(status);
@@ -782,6 +799,174 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     };
   }, []);
 
+  const stopAudioProcessing = useCallback(() => {
+    const current = audioProcessingRef.current;
+    if (current.cleanup) {
+      current.cleanup();
+    }
+    if (current.track) {
+      current.track.stop();
+    }
+    audioProcessingRef.current = {
+      track: null,
+      cleanup: null,
+      sourceId: null,
+      delaySec: 0,
+    };
+  }, []);
+
+  const createDelayedAudioTrack = useCallback(
+    (rawTrack: MediaStreamTrack, delaySec: number) => {
+      const AudioCtor =
+        typeof window !== "undefined"
+          ? window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+          : undefined;
+      if (!AudioCtor) {
+        throw new Error("AudioContext unavailable");
+      }
+      const ctx = new AudioCtor({ latencyHint: "interactive" });
+      const source = ctx.createMediaStreamSource(new MediaStream([rawTrack]));
+      const delayNode = ctx.createDelay(1);
+      delayNode.delayTime.value = delaySec;
+      const destination = ctx.createMediaStreamDestination();
+      source.connect(delayNode);
+      delayNode.connect(destination);
+      if (ctx.state === "suspended") {
+        ctx.resume().catch(() => undefined);
+      }
+      const [track] = destination.stream.getAudioTracks();
+      if (track) {
+        track.enabled = rawTrack.enabled;
+      }
+      const cleanup = () => {
+        source.disconnect();
+        delayNode.disconnect();
+        track?.stop();
+        ctx.close().catch(() => undefined);
+      };
+      return { track, cleanup };
+    },
+    []
+  );
+
+  const applyScreenControlEvent = useCallback((event: ScreenControlEvent) => {
+    if (typeof document === "undefined" || typeof window === "undefined") return;
+    if (!localScreenStreamRef.current) return;
+
+    const docEl = document.documentElement;
+    const viewportWidth = docEl?.clientWidth || window.innerWidth;
+    const viewportHeight = docEl?.clientHeight || window.innerHeight;
+    if (!viewportWidth || !viewportHeight) return;
+
+    const normX = Math.min(1, Math.max(0, Number(event.x)));
+    const normY = Math.min(1, Math.max(0, Number(event.y)));
+    const clientX = Math.min(viewportWidth - 1, Math.max(0, normX * viewportWidth));
+    const clientY = Math.min(
+      viewportHeight - 1,
+      Math.max(0, normY * viewportHeight)
+    );
+
+    const target =
+      (document.elementFromPoint(clientX, clientY) as HTMLElement | null) ||
+      document.body;
+    if (!target) return;
+
+    const buttonValue = event.button === "right" ? 2 : 0;
+    const buttonsValue =
+      event.type === "click" ? (buttonValue === 2 ? 2 : 1) : 0;
+    const baseMouse: MouseEventInit = {
+      bubbles: true,
+      cancelable: true,
+      clientX,
+      clientY,
+      screenX: clientX,
+      screenY: clientY,
+      button: buttonValue,
+      buttons: buttonsValue,
+    };
+    const basePointer: PointerEventInit = {
+      ...baseMouse,
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
+    };
+
+    const dispatchMouse = (type: string, init: MouseEventInit) => {
+      target.dispatchEvent(new MouseEvent(type, init));
+    };
+    const dispatchPointer = (type: string, init: PointerEventInit) => {
+      if (typeof PointerEvent !== "function") return;
+      target.dispatchEvent(new PointerEvent(type, init));
+    };
+    const focusTarget = () => {
+      if (typeof (target as HTMLElement).focus !== "function") return;
+      try {
+        (target as HTMLElement).focus({ preventScroll: true });
+      } catch {
+        (target as HTMLElement).focus();
+      }
+    };
+    const findScrollableTarget = (start: HTMLElement | null) => {
+      let node: HTMLElement | null = start;
+      while (node) {
+        const style = window.getComputedStyle(node);
+        const overflowY = style.overflowY;
+        const overflowX = style.overflowX;
+        const canScrollY =
+          (overflowY === "auto" || overflowY === "scroll") &&
+          node.scrollHeight > node.clientHeight;
+        const canScrollX =
+          (overflowX === "auto" || overflowX === "scroll") &&
+          node.scrollWidth > node.clientWidth;
+        if (canScrollX || canScrollY) return node;
+        if (!node.parentElement) break;
+        node = node.parentElement;
+      }
+      return document.scrollingElement as HTMLElement | null;
+    };
+
+    if (event.type === "move") {
+      dispatchPointer("pointermove", { ...basePointer, buttons: 0 });
+      dispatchMouse("mousemove", { ...baseMouse, buttons: 0 });
+      return;
+    }
+
+    if (event.type === "click") {
+      focusTarget();
+      dispatchPointer("pointerdown", basePointer);
+      dispatchMouse("mousedown", baseMouse);
+      dispatchPointer("pointerup", { ...basePointer, buttons: 0 });
+      dispatchMouse("mouseup", { ...baseMouse, buttons: 0 });
+      if (buttonValue === 2) {
+        dispatchMouse("contextmenu", { ...baseMouse, buttons: 0 });
+      } else {
+        dispatchMouse("click", { ...baseMouse, buttons: 0 });
+      }
+      return;
+    }
+
+    if (event.type === "scroll") {
+      const deltaX = Number(event.deltaX) || 0;
+      const deltaY = Number(event.deltaY) || 0;
+      if (typeof WheelEvent === "function") {
+        target.dispatchEvent(
+          new WheelEvent("wheel", {
+            ...baseMouse,
+            deltaX,
+            deltaY,
+            deltaMode: 0,
+          })
+        );
+      }
+      const scrollTarget = findScrollableTarget(target);
+      if (scrollTarget) {
+        scrollTarget.scrollBy({ left: deltaX, top: deltaY, behavior: "auto" });
+      } else {
+        window.scrollBy({ left: deltaX, top: deltaY, behavior: "auto" });
+      }
+    }
+  }, []);
+
   const attachScreenShareTrack = useCallback(
     (pc: RTCPeerConnection, socketId: string) => {
       const screenStream = localScreenStreamRef.current;
@@ -941,25 +1126,13 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       height: number,
       mode: VideoCallEffects["background"]
     ) => {
-      if (mode === "none") {
-        ctx.fillStyle = "#0b0d14";
-        ctx.fillRect(0, 0, width, height);
-        return;
-      }
+      if (mode === "none") return false;
 
       const src = BACKDROP_ASSETS[mode as keyof typeof BACKDROP_ASSETS];
-      if (!src) {
-        ctx.fillStyle = "#0b0d14";
-        ctx.fillRect(0, 0, width, height);
-        return;
-      }
+      if (!src) return false;
 
       const image = getBackdropImage(src);
-      if (!image || !image.complete || !image.naturalWidth) {
-        ctx.fillStyle = "#0b0d14";
-        ctx.fillRect(0, 0, width, height);
-        return;
-      }
+      if (!image || !image.complete || !image.naturalWidth) return false;
 
       const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight);
       const sw = width / scale;
@@ -967,6 +1140,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       const sx = (image.naturalWidth - sw) / 2;
       const sy = (image.naturalHeight - sh) / 2;
       ctx.drawImage(image, sx, sy, sw, sh, 0, 0, width, height);
+      return true;
     },
     []
   );
@@ -1015,14 +1189,17 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       const ctx = canvas.getContext("2d");
       const foregroundCanvas = document.createElement("canvas");
       const foregroundCtx = foregroundCanvas.getContext("2d");
+      const maskCanvas = document.createElement("canvas");
+      const maskCtx = maskCanvas.getContext("2d");
       let rafId = 0;
       let maskSource: CanvasImageSource | null = null;
       let lastSegmentationTs = 0;
       let segmenting = false;
       let segmentationFailed = false;
       let segmentationLoading = false;
-      const segmentationIntervalMs = 1000 / 24;
+      const segmentationIntervalMs = 1000 / 30;
       const maskBlurPx = 6;
+      const maskShrinkPx = 2;
       let segmenter: SelfieSegmentationInstance | null = null;
       let closed = false;
 
@@ -1100,6 +1277,13 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           foregroundCanvas.width = width;
           foregroundCanvas.height = height;
         }
+        if (maskCanvas.width !== width || maskCanvas.height !== height) {
+          maskCanvas.width = width;
+          maskCanvas.height = height;
+          if (maskCtx) {
+            maskCtx.imageSmoothingEnabled = true;
+          }
+        }
 
         const effects = effectsRef.current;
         const needsSegmentation = effects.blur || effects.background !== "none";
@@ -1139,18 +1323,48 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           return;
         }
 
+        if (maskCtx) {
+          maskCtx.clearRect(0, 0, width, height);
+          maskCtx.filter = `blur(${maskBlurPx}px)`;
+          maskCtx.drawImage(maskSource, 0, 0, width, height);
+          maskCtx.filter = "none";
+          if (maskShrinkPx > 0) {
+            const shrinkX = Math.min(maskShrinkPx, width / 2);
+            const shrinkY = Math.min(maskShrinkPx, height / 2);
+            maskCtx.globalCompositeOperation = "destination-in";
+            maskCtx.drawImage(
+              maskSource,
+              shrinkX,
+              shrinkY,
+              width - shrinkX * 2,
+              height - shrinkY * 2
+            );
+            maskCtx.globalCompositeOperation = "source-over";
+          }
+        }
+
         foregroundCtx.clearRect(0, 0, width, height);
         foregroundCtx.filter = cameraFilter;
         drawCover(foregroundCtx, width, height);
         foregroundCtx.filter = "none";
         foregroundCtx.globalCompositeOperation = "destination-in";
-        foregroundCtx.filter = `blur(${maskBlurPx}px)`;
-        foregroundCtx.drawImage(maskSource, 0, 0, width, height);
-        foregroundCtx.filter = "none";
+        if (maskCtx) {
+          foregroundCtx.drawImage(maskCanvas, 0, 0, width, height);
+        } else {
+          foregroundCtx.filter = `blur(${maskBlurPx}px)`;
+          foregroundCtx.drawImage(maskSource, 0, 0, width, height);
+          foregroundCtx.filter = "none";
+        }
         foregroundCtx.globalCompositeOperation = "source-over";
 
         if (effects.background !== "none") {
-          drawBackdrop(ctx, width, height, effects.background);
+          const drewBackdrop = drawBackdrop(ctx, width, height, effects.background);
+          if (!drewBackdrop) {
+            ctx.clearRect(0, 0, width, height);
+            ctx.filter = baseFilter;
+            drawCover(ctx, width, height);
+            ctx.filter = "none";
+          }
         } else {
           ctx.clearRect(0, 0, width, height);
           ctx.filter = baseFilter;
@@ -1233,10 +1447,45 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     }
   }, [createProcessedVideoTrack, status, stopVideoProcessing]);
 
+  const getOutgoingAudioTrack = useCallback(() => {
+    const rawTrack = rawStreamRef.current?.getAudioTracks()[0] || null;
+    if (!rawTrack) {
+      stopAudioProcessing();
+      return null;
+    }
+    const effects = videoEffectsRef.current;
+    const needsProcessing =
+      effects.blur || effects.background !== "none" || effects.filter !== "none";
+    if (!needsProcessing || AUDIO_SYNC_DELAY_SEC <= 0) {
+      stopAudioProcessing();
+      return rawTrack;
+    }
+    const current = audioProcessingRef.current;
+    if (current.track && current.sourceId === rawTrack.id && current.delaySec === AUDIO_SYNC_DELAY_SEC) {
+      current.track.enabled = rawTrack.enabled;
+      return current.track;
+    }
+    stopAudioProcessing();
+    try {
+      const { track, cleanup } = createDelayedAudioTrack(rawTrack, AUDIO_SYNC_DELAY_SEC);
+      if (!track) return rawTrack;
+      audioProcessingRef.current = {
+        track,
+        cleanup,
+        sourceId: rawTrack.id,
+        delaySec: AUDIO_SYNC_DELAY_SEC,
+      };
+      return track;
+    } catch {
+      stopAudioProcessing();
+      return rawTrack;
+    }
+  }, [createDelayedAudioTrack, stopAudioProcessing]);
+
   const syncLocalStream = useCallback(
     (videoTrack: MediaStreamTrack | null) => {
-      const rawStream = rawStreamRef.current;
-      const audioTracks = rawStream ? rawStream.getAudioTracks() : [];
+      const outgoingAudioTrack = getOutgoingAudioTrack();
+      const audioTracks = outgoingAudioTrack ? [outgoingAudioTrack] : [];
       const tracks = [...audioTracks, ...(videoTrack ? [videoTrack] : [])];
       const stream = new MediaStream(tracks);
 
@@ -1376,6 +1625,106 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     iceServersLoadingRef.current = load;
     return load;
   }, []);
+
+  const replaceAudioTrack = useCallback(
+    (nextTrack: MediaStreamTrack) => {
+      const rawStream = rawStreamRef.current ?? new MediaStream();
+      rawStream.getAudioTracks().forEach((track) => {
+        if (track.id !== nextTrack.id) {
+          rawStream.removeTrack(track);
+          track.stop();
+        }
+      });
+      if (!rawStream.getAudioTracks().some((track) => track.id === nextTrack.id)) {
+        rawStream.addTrack(nextTrack);
+      }
+      rawStreamRef.current = rawStream;
+      setIsAudioEnabled(nextTrack.enabled);
+      const videoTrack = applyVideoEffects();
+      if (videoTrack) {
+        setIsVideoEnabled(videoTrack.enabled);
+      }
+      syncLocalStream(videoTrack);
+    },
+    [applyVideoEffects, syncLocalStream]
+  );
+
+  const replaceVideoTrack = useCallback(
+    (nextTrack: MediaStreamTrack) => {
+      const rawStream = rawStreamRef.current ?? new MediaStream();
+      rawStream.getVideoTracks().forEach((track) => {
+        if (track.id !== nextTrack.id) {
+          rawStream.removeTrack(track);
+          track.stop();
+        }
+      });
+      if (!rawStream.getVideoTracks().some((track) => track.id === nextTrack.id)) {
+        rawStream.addTrack(nextTrack);
+      }
+      rawStreamRef.current = rawStream;
+      setIsVideoEnabled(nextTrack.enabled);
+      const videoTrack = applyVideoEffects();
+      if (videoTrack) {
+        setIsVideoEnabled(videoTrack.enabled);
+      }
+      syncLocalStream(videoTrack);
+    },
+    [applyVideoEffects, syncLocalStream]
+  );
+
+  const setAudioInputDevice = useCallback(
+    async (deviceId: string) => {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setError("Media devices are not supported in this browser.");
+        return;
+      }
+      const normalized = deviceId && deviceId !== "default" ? deviceId : "default";
+      audioInputDeviceRef.current = normalized === "default" ? null : normalized;
+      setSelectedAudioInputId(normalized);
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio:
+            normalized === "default"
+              ? true
+              : { deviceId: { exact: normalized } },
+          video: false,
+        });
+        const [track] = stream.getAudioTracks();
+        if (!track) return;
+        replaceAudioTrack(track);
+      } catch {
+        setError("Unable to switch microphone.");
+      }
+    },
+    [replaceAudioTrack]
+  );
+
+  const setVideoInputDevice = useCallback(
+    async (deviceId: string) => {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setError("Media devices are not supported in this browser.");
+        return;
+      }
+      const normalized = deviceId && deviceId !== "default" ? deviceId : "default";
+      videoInputDeviceRef.current = normalized === "default" ? null : normalized;
+      setSelectedVideoInputId(normalized);
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video:
+            normalized === "default"
+              ? true
+              : { deviceId: { exact: normalized } },
+          audio: false,
+        });
+        const [track] = stream.getVideoTracks();
+        if (!track) return;
+        replaceVideoTrack(track);
+      } catch {
+        setError("Unable to switch camera.");
+      }
+    },
+    [replaceVideoTrack]
+  );
 
   const createPeerConnection = useCallback(
     (socketId: string) => {
@@ -2058,9 +2407,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         const x = Math.min(1, Math.max(0, Number(payload.event.x)));
         const y = Math.min(1, Math.max(0, Number(payload.event.y)));
         if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-        const kind = payload.event.type === "click" ? "click" : "move";
+        const normalizedEvent = { ...payload.event, x, y };
+        const kind = normalizedEvent.type === "click" ? "click" : "move";
         const button =
-          payload.event.button === "right"
+          normalizedEvent.button === "right"
             ? "right"
             : kind === "click"
             ? "left"
@@ -2073,6 +2423,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           kind,
           button,
         });
+        applyScreenControlEvent(normalizedEvent);
       }
     );
 
@@ -2112,6 +2463,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       setOnlineUserIds(new Set());
     };
   }, [
+    applyScreenControlEvent,
     closePeer,
     createPeerConnection,
     e2eeSupported,
@@ -2172,9 +2524,20 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         throw new Error("media not supported");
       }
 
+      const audioDeviceId = audioInputDeviceRef.current;
+      const audioConstraint =
+        needsAudio && audioDeviceId && audioDeviceId !== "default"
+          ? { deviceId: { exact: audioDeviceId } }
+          : needsAudio;
+
+      const videoDeviceId = videoInputDeviceRef.current;
+      const videoConstraint =
+        needsVideo && videoDeviceId && videoDeviceId !== "default"
+          ? { deviceId: { exact: videoDeviceId } }
+          : needsVideo;
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: needsAudio,
-        video: needsVideo,
+        audio: audioConstraint,
+        video: videoConstraint,
       });
       stream.getTracks().forEach((track) => {
         if (!existingRaw.getTracks().some((t) => t.id === track.id)) {
@@ -2293,12 +2656,20 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     screenShareByOwnerRef.current.clear();
     screenShareSendersRef.current.clear();
     peerNegotiationRef.current.clear();
+    stopAudioProcessing();
     stopVideoProcessing();
     setLocalStream(null);
     localStreamRef.current = null;
     resetE2eeState();
     resetCallState();
-  }, [closePeer, resetCallState, resetE2eeState, stopScreenShare, stopVideoProcessing]);
+  }, [
+    closePeer,
+    resetCallState,
+    resetE2eeState,
+    stopAudioProcessing,
+    stopScreenShare,
+    stopVideoProcessing,
+  ]);
 
   cleanupCallRef.current = cleanupCall;
 
@@ -2486,6 +2857,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     tracks.forEach((track) => {
       track.enabled = nextEnabled;
     });
+    const processedTrack = audioProcessingRef.current.track;
+    if (processedTrack) {
+      processedTrack.enabled = nextEnabled;
+    }
     setIsAudioEnabled(nextEnabled);
   }, [ensureMedia]);
 
@@ -2605,6 +2980,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       maxParticipants: MAX_VIDEO_PARTICIPANTS,
       isVideoEnabled,
       isAudioEnabled,
+      selectedAudioInputId,
+      selectedVideoInputId,
       isScreenSharing: Boolean(localScreenStream),
       videoEffects,
       setVideoEffects,
@@ -2620,6 +2997,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       endCall,
       toggleVideo,
       toggleAudio,
+      setAudioInputDevice,
+      setVideoInputDevice,
       startScreenShare,
       stopScreenShare,
       screenControlRequests,
@@ -2644,9 +3023,13 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       incomingCall,
       isCallHost,
       isAudioEnabled,
+      selectedAudioInputId,
+      selectedVideoInputId,
       isOpen,
       isVideoEnabled,
       localScreenStream,
+      setAudioInputDevice,
+      setVideoInputDevice,
       setVideoEffects,
       onlineUserIds,
       leaveCall,
