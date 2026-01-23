@@ -221,11 +221,37 @@ const supportsCallE2ee = () => {
   return isChromeOrEdge() && hasInsertable && Boolean(window.crypto?.subtle);
 };
 
+const TURN_URLS = String(
+  import.meta.env.VITE_TURN_URLS || import.meta.env.VITE_TURN_URL || ""
+)
+  .split(/[,\\s]+/)
+  .map((value) => value.trim())
+  .filter(Boolean);
+const TURN_USERNAME = String(import.meta.env.VITE_TURN_USERNAME || "").trim();
+const TURN_CREDENTIAL = String(import.meta.env.VITE_TURN_CREDENTIAL || "").trim();
+const ICE_POLICY = String(import.meta.env.VITE_ICE_TRANSPORT_POLICY || "")
+  .trim()
+  .toLowerCase();
+
+const ICE_SERVERS: RTCIceServer[] = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:global.stun.twilio.com:3478" },
+];
+
+if (TURN_URLS.length) {
+  const turnServer: RTCIceServer = { urls: TURN_URLS };
+  if (TURN_USERNAME && TURN_CREDENTIAL) {
+    turnServer.username = TURN_USERNAME;
+    turnServer.credential = TURN_CREDENTIAL;
+  }
+  ICE_SERVERS.push(turnServer);
+}
+
 const RTC_CONFIG: RTCConfiguration = {
-  iceServers: [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:global.stun.twilio.com:3478" },
-  ],
+  iceServers: ICE_SERVERS,
+  ...(ICE_POLICY === "relay" || ICE_POLICY === "all"
+    ? { iceTransportPolicy: ICE_POLICY as RTCIceTransportPolicy }
+    : {}),
 };
 
 const createRoomId = () => {
@@ -351,6 +377,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   >(new Map());
   const screenShareOwnersRef = useRef<Map<string, string>>(new Map());
   const screenShareByOwnerRef = useRef<Map<string, string>>(new Map());
+  const disconnectTimersRef = useRef<Map<string, number>>(new Map());
+  const rtcConfigRef = useRef<RTCConfiguration>(RTC_CONFIG);
+  const iceServersLoadingRef = useRef<Promise<void> | null>(null);
   const peerNegotiationRef = useRef<Map<string, { makingOffer: boolean; isPolite: boolean }>>(
     new Map()
   );
@@ -1278,6 +1307,11 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   }, [setupSenderE2ee]);
 
   const closePeer = useCallback((socketId: string) => {
+    const disconnectTimer = disconnectTimersRef.current.get(socketId);
+    if (disconnectTimer) {
+      window.clearTimeout(disconnectTimer);
+      disconnectTimersRef.current.delete(socketId);
+    }
     const pc = peersRef.current.get(socketId);
     if (pc) {
       pc.ontrack = null;
@@ -1320,14 +1354,38 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     }
   }, []);
 
+  const ensureIceServers = useCallback(async () => {
+    if (iceServersLoadingRef.current) {
+      return iceServersLoadingRef.current;
+    }
+    const load = (async () => {
+      try {
+        const res = await api.get("/webrtc/ice");
+        const servers = res.data?.iceServers ?? res.data?.ice_servers ?? [];
+        if (Array.isArray(servers) && servers.length > 0) {
+          rtcConfigRef.current = { ...RTC_CONFIG, iceServers: servers };
+        } else {
+          rtcConfigRef.current = RTC_CONFIG;
+        }
+      } catch {
+        rtcConfigRef.current = RTC_CONFIG;
+      } finally {
+        iceServersLoadingRef.current = null;
+      }
+    })();
+    iceServersLoadingRef.current = load;
+    return load;
+  }, []);
+
   const createPeerConnection = useCallback(
     (socketId: string) => {
       const existing = peersRef.current.get(socketId);
       if (existing) return existing;
       const useInsertableStreams = e2eeSupported && callEncryptionEnabledRef.current;
+      const baseConfig = rtcConfigRef.current || RTC_CONFIG;
       const rtcConfig = useInsertableStreams
-        ? ({ ...RTC_CONFIG, encodedInsertableStreams: true } as RTCConfiguration)
-        : RTC_CONFIG;
+        ? ({ ...baseConfig, encodedInsertableStreams: true } as RTCConfiguration)
+        : baseConfig;
       const pc = new RTCPeerConnection(rtcConfig);
       peersRef.current.set(socketId, pc);
       const negotiationState = getPeerNegotiationState(socketId);
@@ -1387,6 +1445,13 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           setRemoteScreenStreams((prev) => {
             const existing = prev[socketId];
             if (existing) {
+              if (isVideoTrack) {
+                existing.getVideoTracks().forEach((track) => {
+                  if (track.id !== event.track.id) {
+                    existing.removeTrack(track);
+                  }
+                });
+              }
               if (!existing.getTracks().some((track) => track.id === event.track.id)) {
                 existing.addTrack(event.track);
               }
@@ -1415,6 +1480,13 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         setRemoteStreams((prev) => {
           const existing = prev[socketId];
           if (existing) {
+            if (isVideoTrack) {
+              existing.getVideoTracks().forEach((track) => {
+                if (track.id !== event.track.id) {
+                  existing.removeTrack(track);
+                }
+              });
+            }
             if (!existing.getTracks().some((track) => track.id === event.track.id)) {
               existing.addTrack(event.track);
             }
@@ -1424,7 +1496,25 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         });
       };
       pc.onconnectionstatechange = () => {
-        if (["failed", "closed", "disconnected"].includes(pc.connectionState)) {
+        const timers = disconnectTimersRef.current;
+        if (pc.connectionState === "disconnected") {
+          if (!timers.has(socketId)) {
+            const timer = window.setTimeout(() => {
+              timers.delete(socketId);
+              if (pc.connectionState === "disconnected") {
+                closePeer(socketId);
+              }
+            }, 12000);
+            timers.set(socketId, timer);
+          }
+          return;
+        }
+        const existingTimer = timers.get(socketId);
+        if (existingTimer) {
+          window.clearTimeout(existingTimer);
+          timers.delete(socketId);
+        }
+        if (pc.connectionState === "failed" || pc.connectionState === "closed") {
           closePeer(socketId);
         }
       };
@@ -2273,6 +2363,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       setStatus("setup");
       return;
     }
+    await ensureIceServers();
     socketRef.current.emit("call:join", { roomId });
     socketRef.current.emit("call:invite", {
       roomId,
@@ -2282,6 +2373,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   }, [
     e2eeSupported,
     ensureCallMedia,
+    ensureIceServers,
     resetE2eeState,
     selectedInvitees,
     setCallEncryptionMode,
@@ -2330,11 +2422,13 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       setIsOpen(false);
       return;
     }
+    await ensureIceServers();
     socketRef.current.emit("call:join", { roomId: incomingCall.roomId });
     setIncomingCall(null);
   }, [
     e2eeSupported,
     ensureCallMedia,
+    ensureIceServers,
     incomingCall,
     resetE2eeState,
     setCallEncryptionMode,

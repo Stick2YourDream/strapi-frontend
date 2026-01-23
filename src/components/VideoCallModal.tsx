@@ -249,7 +249,9 @@ const VideoTile = ({
   mediaClassName?: string;
 }) => {
   const ref = useRef<HTMLVideoElement | null>(null);
-  const hasVideo = Boolean(stream?.getVideoTracks().some((track) => track.enabled));
+  const hasVideo = Boolean(
+    stream?.getVideoTracks().some((track) => track.enabled && track.readyState === "live")
+  );
   const mediaClasses = `video-tile__media${hasVideo ? "" : " is-hidden"}${
     mediaClassName ? ` ${mediaClassName}` : ""
   }`;
@@ -483,6 +485,11 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     () => Object.values(remoteParticipants),
     [remoteParticipants]
   );
+  const hasRemoteMedia = useMemo(() => {
+    if (remoteList.length > 0) return true;
+    if (Object.keys(remoteStreams).length > 0) return true;
+    return Object.keys(remoteScreenStreams).length > 0;
+  }, [remoteList.length, remoteScreenStreams, remoteStreams]);
 
   const screenShareEntries = useMemo(() => {
     const entries: Array<{
@@ -919,7 +926,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
       }
     };
 
-    if (status !== "connecting") {
+    if (status !== "connecting" || hasRemoteMedia) {
       stopRingback();
       return;
     }
@@ -980,7 +987,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     void startRingback();
 
     return () => stopRingback();
-  }, [status]);
+  }, [hasRemoteMedia, status]);
 
   if (!showModal) return null;
 

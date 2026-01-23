@@ -13,6 +13,7 @@ import {
   ensureProfileKeyShares,
   type ProfilePayload,
 } from "../utils/profile-e2ee";
+import { sanitizePostText } from "../utils/emoji";
 import VideoCallModal from "./VideoCallModal";
 
 type LinkMeta = {
@@ -411,7 +412,7 @@ export default function ChatDock() {
 
   const handleSend = async () => {
     if (!friendId) return;
-    const body = messageDraft.trim();
+    const body = sanitizePostText(messageDraft).trim();
     if (!body) return;
     const sendError = await sendMessage(friendId, body);
     setError(sendError);
@@ -770,7 +771,7 @@ export default function ChatDock() {
               value={messageDraft}
               onChange={(e) => {
                 if (friendId) {
-                  setDraft(friendId, e.target.value);
+                  setDraft(friendId, sanitizePostText(e.target.value));
                 }
               }}
               disabled={!friendId}
