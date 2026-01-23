@@ -185,7 +185,7 @@ export default function Groups() {
           if (!groupEntry) return null;
           const inviterAttrs = normalize(inviterEntry);
           const inviterName =
-            inviterAttrs.username || inviterAttrs.email || "Someone";
+            inviterAttrs.email || "Someone";
           return {
             id: invite.id ?? attrs.documentId,
             group: toGroupSummary(groupEntry),
@@ -214,7 +214,7 @@ export default function Groups() {
             id: entry.id ?? attrs.documentId,
             message: attrs.message || "",
             group: groupEntry ? toGroupSummary(groupEntry) : undefined,
-            actor: normalize(actorEntry)?.username || normalize(actorEntry)?.email,
+            actor: normalize(actorEntry)?.email,
             createdAt: attrs.createdAt,
           };
         })

@@ -1509,11 +1509,11 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         if (!payload) {
           payload = buildProfilePayloadFromAttrs(attrs);
         }
-        const displayName =
-          payload.firstName || payload.lastName
-            ? `${payload.firstName || ""} ${payload.lastName || ""}`.trim()
-            : user.username || user.email;
-        const handle = attrs.handle || user.username || "";
+        const nameFromPayload = `${payload.firstName || ""} ${
+          payload.lastName || ""
+        }`.trim();
+        const displayName = nameFromPayload || attrs.handle || user.email;
+        const handle = attrs.handle || "";
         const avatarUrl = pickMediaUrl(attrs.avatar);
         if (active) {
           profileRef.current = {
@@ -1527,7 +1527,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         if (active) {
           profileRef.current = {
             userId: user.id,
-            displayName: user.username || user.email,
+            displayName: user.email,
           };
         }
       }
@@ -1536,7 +1536,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     return () => {
       active = false;
     };
-  }, [user?.email, user?.id, user?.username]);
+  }, [user?.email, user?.id]);
 
   useEffect(() => {
     if (user?.id) return;
@@ -1583,7 +1583,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       auth: {
         token,
         userId: user.id,
-        displayName: profile?.displayName || user.username || user.email,
+        displayName: profile?.displayName || user.email,
         handle: profile?.handle || "",
         avatarUrl: profile?.avatarUrl || "",
       },
@@ -2028,7 +2028,6 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     shareCallKeyWithPublicKey,
     user?.email,
     user?.id,
-    user?.username,
   ]);
 
   useEffect(() => {

@@ -22,7 +22,7 @@ const getErrorMessage = (err: unknown) => {
 
 export default function DeleteData() {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [handle, setHandle] = useState("");
@@ -42,11 +42,17 @@ export default function DeleteData() {
 
   useEffect(() => {
     if (!user) return;
-    if (!name) setName(user.username || "");
+    if (!name) {
+      const displayName =
+        profile?.firstName || profile?.lastName
+          ? `${profile?.firstName || ""} ${profile?.lastName || ""}`.trim()
+          : "";
+      if (displayName) setName(displayName);
+    }
     if (!email) setEmail(user.email || "");
-    if (!handle) setHandle(user.username || "");
+    if (!handle) setHandle(profile?.handle || "");
     if (!userId) setUserId(String(user.id || ""));
-  }, [user]);
+  }, [user, profile, name, email, handle, userId]);
 
   const canSubmit =
     email.trim().length > 0 &&
@@ -135,13 +141,13 @@ export default function DeleteData() {
 
             <div className="terms-grid">
               <div className="terms-field">
-                <label htmlFor="delete-data-handle">Username or handle (optional)</label>
+                <label htmlFor="delete-data-handle">Handle (optional)</label>
                 <input
                   id="delete-data-handle"
                   className="terms-input"
                   value={handle}
                   onChange={(event) => setHandle(event.target.value)}
-                  placeholder="@yourname"
+                  placeholder="@yourhandle"
                 />
               </div>
               <div className="terms-field">

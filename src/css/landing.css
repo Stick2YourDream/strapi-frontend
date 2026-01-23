@@ -153,10 +153,14 @@
 }
 
 .landing-beta {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  top: -6px;
+  position: relative;
+  left: auto;
+  transform: none;
+  top: auto;
+  flex-basis: 100%;
+  order: 3;
+  text-align: center;
+  margin: 10px 0 0;
   font-size: clamp(18px, 3vw, 28px);
   letter-spacing: 0.3em;
   font-weight: 700;
@@ -1338,7 +1342,7 @@
     min-width: 0;
   }
   .landing-beta {
-    top: -14px;
+    margin-top: 6px;
     font-size: 18px;
   }
   .landing-footer {

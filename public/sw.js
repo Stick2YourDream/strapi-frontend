@@ -13,6 +13,11 @@ const PRECACHE_URLS = [
 ];
 
 const resolveUrl = (url) => new URL(url || "/", self.location.origin).href;
+const isCacheableResponse = (response) =>
+  response &&
+  response.ok &&
+  response.status !== 206 &&
+  !response.headers.has("Content-Range");
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -49,8 +54,10 @@ const cacheFirst = async (request) => {
     return cached;
   }
   const response = await fetch(request);
-  const cache = await caches.open(RUNTIME_CACHE);
-  cache.put(request, response.clone());
+  if (isCacheableResponse(response)) {
+    const cache = await caches.open(RUNTIME_CACHE);
+    cache.put(request, response.clone());
+  }
   return response;
 };
 
@@ -58,7 +65,9 @@ const networkFirst = async (request) => {
   const cache = await caches.open(RUNTIME_CACHE);
   try {
     const response = await fetch(request);
-    cache.put(request, response.clone());
+    if (isCacheableResponse(response)) {
+      cache.put(request, response.clone());
+    }
     return response;
   } catch (error) {
     const cached = await caches.match(request);
@@ -75,7 +84,9 @@ const staleWhileRevalidate = async (request) => {
   const cached = await cache.match(request);
   const fetchPromise = fetch(request)
     .then((response) => {
-      cache.put(request, response.clone());
+      if (isCacheableResponse(response)) {
+        cache.put(request, response.clone());
+      }
       return response;
     })
     .catch(() => undefined);
@@ -91,6 +102,10 @@ self.addEventListener("fetch", (event) => {
 
   const requestUrl = new URL(request.url);
   if (requestUrl.origin !== self.location.origin) {
+    return;
+  }
+
+  if (request.headers.has("range")) {
     return;
   }
 

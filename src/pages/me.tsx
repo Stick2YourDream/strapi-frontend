@@ -25,8 +25,16 @@ import {
   type VisibilityLevel,
 } from "../utils/profile-e2ee";
 import { getOrCreateDeviceId } from "../utils/device-id";
+import { syncPushSubscription, type PushSyncStatus } from "../utils/push-notifications";
 
 type VerificationMethod = "email" | "sms";
+type TwoFactorMethod = "email" | "sms" | "totp";
+type SettingsSection =
+  | "appearance"
+  | "security"
+  | "privacy"
+  | "notifications"
+  | "changes";
 
 type Profile = {
   firstName: string;
@@ -101,9 +109,7 @@ type RegistrationLocks = {
 type AccountStatus = {
   deactivatedAt?: string | null;
   deactivatedUntil?: string | null;
-  usernameChangeAvailableAt?: string | null;
   emailChangeAvailableAt?: string | null;
-  usernameCooldownDays?: number;
   emailCooldownDays?: number;
   deactivationDays?: number;
 };
@@ -128,6 +134,16 @@ const slug = (s: string) =>
     .replace(/^-+|-+$/g, "");
 
 const AGE_OPTIONS = Array.from({ length: 103 }, (_, index) => String(18 + index));
+const TIME_OPTIONS = Array.from({ length: 48 }, (_, index) => {
+  const hours = Math.floor(index / 2);
+  const minutes = index % 2 === 0 ? 0 : 30;
+  const value = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+  const label = new Intl.DateTimeFormat("en", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(1970, 0, 1, hours, minutes));
+  return { value, label };
+});
 
 const normalizeHobby = (value: string) => value.trim().replace(/\s+/g, " ");
 const hobbyKey = (value: string) => normalizeHobby(value).toLowerCase();
@@ -310,6 +326,7 @@ const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   quietHoursEnd: "",
   soundEnabled: true,
   vibrationEnabled: true,
+  pushEnabled: false,
 };
 
 const normalizeVisibility = (value: any, fallback: VisibilityLevel): VisibilityLevel => {
@@ -349,6 +366,7 @@ const normalizeNotificationSettings = (settings?: NotificationSettings | null) =
   quietHoursEnd: settings?.quietHoursEnd || "",
   soundEnabled: settings?.soundEnabled !== false,
   vibrationEnabled: settings?.vibrationEnabled !== false,
+  pushEnabled: Boolean(settings?.pushEnabled),
 });
 
 const resolveFieldVisibility = (
@@ -430,6 +448,7 @@ export default function Me() {
   const [successModal, setSuccessModal] = useState<string | null>(null);
   const [editing, setEditing] = useState(true);
   const [settingsView, setSettingsView] = useState<"profile" | "settings">("profile");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
   const [hobbyInput, setHobbyInput] = useState("");
   const [hobbyList, setHobbyList] = useState<string[]>([]);
   const [activeHobbyPicker, setActiveHobbyPicker] = useState<
@@ -476,9 +495,21 @@ export default function Me() {
   const [passwordResetLoading, setPasswordResetLoading] = useState(false);
   const [passwordResetError, setPasswordResetError] = useState<string | null>(null);
   const [passwordResetSuccess, setPasswordResetSuccess] = useState<string | null>(null);
-  const [preferredMethodSaving, setPreferredMethodSaving] = useState(false);
-  const [preferredMethodError, setPreferredMethodError] = useState<string | null>(null);
-  const [preferredMethodSuccess, setPreferredMethodSuccess] = useState<string | null>(null);
+  const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
+  const [twoFactorMethod, setTwoFactorMethod] = useState<TwoFactorMethod>("email");
+  const [twoFactorHasAuthenticator, setTwoFactorHasAuthenticator] = useState(false);
+  const [twoFactorLoading, setTwoFactorLoading] = useState(false);
+  const [twoFactorError, setTwoFactorError] = useState<string | null>(null);
+  const [twoFactorSuccess, setTwoFactorSuccess] = useState<string | null>(null);
+  const [totpSetup, setTotpSetup] = useState<{
+    otpauthUrl: string;
+    qrCodeDataUrl: string;
+  } | null>(null);
+  const [totpCode, setTotpCode] = useState("");
+  const [totpSetupLoading, setTotpSetupLoading] = useState(false);
+  const [totpVerifyLoading, setTotpVerifyLoading] = useState(false);
+  const [pushStatus, setPushStatus] = useState<PushSyncStatus | null>(null);
+  const [pushError, setPushError] = useState<string | null>(null);
   const [privacySaving, setPrivacySaving] = useState(false);
   const [privacyError, setPrivacyError] = useState<string | null>(null);
   const [privacySuccess, setPrivacySuccess] = useState<string | null>(null);
@@ -488,11 +519,7 @@ export default function Me() {
   const [accountStatus, setAccountStatus] = useState<AccountStatus | null>(null);
   const [accountStatusLoading, setAccountStatusLoading] = useState(false);
   const [accountStatusError, setAccountStatusError] = useState<string | null>(null);
-  const [usernameDraft, setUsernameDraft] = useState("");
   const [emailDraft, setEmailDraft] = useState("");
-  const [usernameChangeLoading, setUsernameChangeLoading] = useState(false);
-  const [usernameChangeError, setUsernameChangeError] = useState<string | null>(null);
-  const [usernameChangeSuccess, setUsernameChangeSuccess] = useState<string | null>(null);
   const [emailChangeLoading, setEmailChangeLoading] = useState(false);
   const [emailChangeError, setEmailChangeError] = useState<string | null>(null);
   const [emailChangeSuccess, setEmailChangeSuccess] = useState<string | null>(null);
@@ -507,6 +534,24 @@ export default function Me() {
     "me" | "public" | "followers"
   >("me");
   const isSettingsView = settingsView === "settings";
+  const pushStatusLabel = useMemo(() => {
+    if (!profile.notificationSettings.pushEnabled) {
+      return "Push notifications are off.";
+    }
+    if (pushStatus === "enabled") {
+      return "Push notifications are enabled.";
+    }
+    if (pushStatus === "prompt") {
+      return "Allow notifications in your browser to finish enabling.";
+    }
+    if (pushStatus === "denied") {
+      return "Push notifications are blocked in your browser settings.";
+    }
+    if (pushStatus === "unsupported") {
+      return "Push notifications are not supported on this device.";
+    }
+    return null;
+  }, [profile.notificationSettings.pushEnabled, pushStatus]);
 
   const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
@@ -524,7 +569,7 @@ export default function Me() {
   };
   const getEntityLabel = (entry: any, fallback: string) => {
     const attrs = normalize(getEntity(entry));
-    return attrs?.username || attrs?.email || fallback;
+    return attrs?.email || fallback;
   };
   const currentBackground = preferences.backgrounds.dashboard;
   const appearanceColor = currentBackground.color || "#0b0d14";
@@ -648,9 +693,7 @@ export default function Me() {
       const status: AccountStatus = {
         deactivatedAt: data.deactivatedAt ?? null,
         deactivatedUntil: data.deactivatedUntil ?? null,
-        usernameChangeAvailableAt: data.usernameChangeAvailableAt ?? null,
         emailChangeAvailableAt: data.emailChangeAvailableAt ?? null,
-        usernameCooldownDays: data.usernameCooldownDays ?? undefined,
         emailCooldownDays: data.emailCooldownDays ?? undefined,
         deactivationDays: data.deactivationDays ?? data.accountDeactivationDays ?? undefined,
       };
@@ -771,9 +814,24 @@ export default function Me() {
   const handleSaveNotificationSettings = async () => {
     setNotificationError(null);
     setNotificationSuccess(null);
+    setPushError(null);
     setNotificationSaving(true);
     try {
       await persistProfileSettings(profile);
+      const pushResult = await syncPushSubscription({
+        enable: Boolean(profile.notificationSettings.pushEnabled),
+        requestPermission: true,
+      });
+      setPushStatus(pushResult.status);
+      if (pushResult.status === "error") {
+        setPushError(pushResult.error || "Unable to enable push notifications.");
+      }
+      if (pushResult.status === "denied") {
+        setPushError("Push notifications are blocked in your browser.");
+      }
+      if (pushResult.status === "unsupported") {
+        setPushError("Push notifications are not supported on this device.");
+      }
       setNotificationSuccess("Notification settings saved.");
     } catch (err) {
       if (axios.isAxiosError(err)) {
@@ -798,41 +856,6 @@ export default function Me() {
         [field]: value,
       },
     }));
-  };
-
-  const handleUsernameChange = async () => {
-    const nextUsername = usernameDraft.trim();
-    if (!nextUsername) {
-      setUsernameChangeError("Username is required.");
-      return;
-    }
-    setUsernameChangeError(null);
-    setUsernameChangeSuccess(null);
-    setUsernameChangeLoading(true);
-    try {
-      const res = await api.post("/account/change/username", {
-        username: nextUsername,
-      });
-      const data = res.data ?? {};
-      if (data.user?.id) {
-        updateUser(data.user);
-        setUsernameDraft(data.user.username || nextUsername);
-      }
-      setUsernameChangeSuccess("Username updated.");
-      void loadAccountStatus();
-    } catch (err) {
-      if (axios.isAxiosError(err)) {
-        const msg =
-          err.response?.data?.error?.message ||
-          err.response?.data?.message ||
-          "Unable to update username.";
-        setUsernameChangeError(String(msg));
-      } else {
-        setUsernameChangeError("Unable to update username.");
-      }
-    } finally {
-      setUsernameChangeLoading(false);
-    }
   };
 
   const handleEmailChange = async () => {
@@ -1074,32 +1097,143 @@ export default function Me() {
     }
   };
 
-  const handlePreferredMethodUpdate = async () => {
+  const loadTwoFactorStatus = async () => {
     if (!user?.id) return;
-    setPreferredMethodError(null);
-    setPreferredMethodSuccess(null);
-    if (!profile.preferredVerificationMethod) {
-      setPreferredMethodError("Select a verification method.");
-      return;
-    }
-    setPreferredMethodSaving(true);
+    setTwoFactorLoading(true);
+    setTwoFactorError(null);
     try {
-      await api.put("/profiles/me", {
-        data: { preferredVerificationMethod: profile.preferredVerificationMethod },
-      });
-      setPreferredMethodSuccess("Verification method updated.");
+      const res = await api.get("/auth/2fa/status");
+      const data = res.data ?? {};
+      const method =
+        data.method === "sms" || data.method === "email" || data.method === "totp"
+          ? data.method
+          : "email";
+      setTwoFactorEnabled(Boolean(data.enabled));
+      setTwoFactorMethod(method);
+      setTwoFactorHasAuthenticator(Boolean(data.hasAuthenticator));
     } catch (err) {
       if (axios.isAxiosError(err)) {
         const msg =
           err.response?.data?.error?.message ||
           err.response?.data?.message ||
-          "Unable to update verification method.";
-        setPreferredMethodError(String(msg));
+          "Unable to load two-factor status.";
+        setTwoFactorError(String(msg));
       } else {
-        setPreferredMethodError("Unable to update verification method.");
+        setTwoFactorError("Unable to load two-factor status.");
       }
     } finally {
-      setPreferredMethodSaving(false);
+      setTwoFactorLoading(false);
+    }
+  };
+
+  const handleTwoFactorSave = async () => {
+    if (!user?.id) return;
+    setTwoFactorError(null);
+    setTwoFactorSuccess(null);
+    setTwoFactorLoading(true);
+    try {
+      if (!twoFactorEnabled) {
+        await api.post("/auth/2fa/disable");
+        if (twoFactorMethod === "sms" || twoFactorMethod === "email") {
+          setProfile((prev) => ({
+            ...prev,
+            preferredVerificationMethod: twoFactorMethod,
+          }));
+          await api.put("/profiles/me", {
+            data: { preferredVerificationMethod: twoFactorMethod },
+          });
+        }
+        setTwoFactorSuccess("Two-factor authentication disabled.");
+        return;
+      }
+      if (twoFactorMethod === "totp" && !twoFactorHasAuthenticator) {
+        setTwoFactorError("Set up your authenticator app first.");
+        return;
+      }
+      await api.post("/auth/2fa/enable", { method: twoFactorMethod });
+      if (twoFactorMethod === "sms" || twoFactorMethod === "email") {
+        setProfile((prev) => ({
+          ...prev,
+          preferredVerificationMethod: twoFactorMethod,
+        }));
+        await api.put("/profiles/me", {
+          data: { preferredVerificationMethod: twoFactorMethod },
+        });
+      }
+      setTwoFactorSuccess("Two-factor authentication updated.");
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to update two-factor settings.";
+        setTwoFactorError(String(msg));
+      } else {
+        setTwoFactorError("Unable to update two-factor settings.");
+      }
+    } finally {
+      setTwoFactorLoading(false);
+    }
+  };
+
+  const handleTotpSetup = async () => {
+    setTwoFactorError(null);
+    setTwoFactorSuccess(null);
+    setTotpSetupLoading(true);
+    try {
+      const res = await api.post("/auth/2fa/totp/setup");
+      const data = res.data ?? {};
+      if (!data.qrCodeDataUrl || !data.otpauthUrl) {
+        setTwoFactorError("Unable to start authenticator setup.");
+        return;
+      }
+      setTotpSetup({
+        qrCodeDataUrl: data.qrCodeDataUrl,
+        otpauthUrl: data.otpauthUrl,
+      });
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to start authenticator setup.";
+        setTwoFactorError(String(msg));
+      } else {
+        setTwoFactorError("Unable to start authenticator setup.");
+      }
+    } finally {
+      setTotpSetupLoading(false);
+    }
+  };
+
+  const handleTotpVerify = async () => {
+    if (!totpCode.trim()) {
+      setTwoFactorError("Enter the verification code.");
+      return;
+    }
+    setTwoFactorError(null);
+    setTwoFactorSuccess(null);
+    setTotpVerifyLoading(true);
+    try {
+      await api.post("/auth/2fa/totp/verify", { code: totpCode.trim() });
+      setTwoFactorEnabled(true);
+      setTwoFactorMethod("totp");
+      setTwoFactorHasAuthenticator(true);
+      setTotpSetup(null);
+      setTotpCode("");
+      setTwoFactorSuccess("Authenticator app linked. Two-factor is enabled.");
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to verify authenticator code.";
+        setTwoFactorError(String(msg));
+      } else {
+        setTwoFactorError("Unable to verify authenticator code.");
+      }
+    } finally {
+      setTotpVerifyLoading(false);
     }
   };
 
@@ -1111,12 +1245,14 @@ export default function Me() {
     );
   }, [preferences.chat.height, preferences.chat.width]);
 
-  // ✅ stable unique handle: username/email + numeric user id
+  // Stable unique handle: name/email + numeric user id.
   const lockedUniqueHandle = useMemo(() => {
     if (!user) return "";
-    const base = slug(user.username || user.email || "user");
+    const base =
+      slug(`${profile.firstName} ${profile.lastName}`) ||
+      slug(user.email || "user");
     return `${base || "user"}-${user.id}`;
-  }, [user]);
+  }, [profile.firstName, profile.lastName, user]);
 
   useEffect(() => {
     if (feedbackAudience !== "specific") {
@@ -1928,13 +2064,17 @@ export default function Me() {
 
   useEffect(() => {
     if (!user) return;
-    setUsernameDraft(user.username || "");
     setEmailDraft(user.email || "");
-  }, [user?.id, user?.username, user?.email]);
+  }, [user?.id, user?.email]);
 
   useEffect(() => {
     if (!user || !isSettingsView) return;
     void loadAccountStatus();
+  }, [user?.id, isSettingsView]);
+
+  useEffect(() => {
+    if (!user || !isSettingsView) return;
+    void loadTwoFactorStatus();
   }, [user?.id, isSettingsView]);
 
   useEffect(() => {
@@ -2318,7 +2458,7 @@ export default function Me() {
   const displayName =
     (profile.firstName || profile.lastName
       ? `${profile.firstName || ""} ${profile.lastName || ""}`.trim()
-      : user.username) || user.email;
+      : user.email) || "Member";
   const displayHandle =
     profile.handle && profile.handle.toLowerCase() !== "user"
       ? profile.handle
@@ -2382,18 +2522,12 @@ export default function Me() {
   const previewActivity = canPreviewField("activity")
     ? "Active now / last seen"
     : "Hidden";
-  const usernameCooldownAt = accountStatus?.usernameChangeAvailableAt ?? null;
   const emailCooldownAt = accountStatus?.emailChangeAvailableAt ?? null;
-  const usernameCooldownActive =
-    Boolean(usernameCooldownAt) && new Date(usernameCooldownAt as string).getTime() > Date.now();
   const emailCooldownActive =
     Boolean(emailCooldownAt) && new Date(emailCooldownAt as string).getTime() > Date.now();
-  const usernameAvailabilityLabel = usernameCooldownActive
-    ? `Available ${formatDateTime(usernameCooldownAt)}`
-    : "Available now";
   const emailAvailabilityLabel = emailCooldownActive
-    ? `Available ${formatDateTime(emailCooldownAt)}`
-    : "Available now";
+    ? formatDateTime(emailCooldownAt)
+    : "now";
   const deactivationEndsLabel = accountStatus?.deactivatedUntil
     ? formatDateTime(accountStatus.deactivatedUntil)
     : "Not scheduled";
@@ -2933,11 +3067,13 @@ export default function Me() {
         active="me"
         settingsView={settingsView}
         onSettingsViewChange={setSettingsView}
+        settingsSection={settingsSection}
+        onSettingsSectionChange={setSettingsSection}
       />
 
         <div className="main-content profile-content">
           <TopbarSearch />
-          {isSettingsView && (
+          {isSettingsView && settingsSection === "appearance" && (
           <div className="panel-grid profile-appearance-row">
           <section className="panel profile-appearance-panel">
             <div className="profile-appearance-header">
@@ -3274,7 +3410,7 @@ export default function Me() {
                       style={{ pointerEvents: "none", userSelect: "none", opacity: 0.7 }}
                     />
                     <small style={{ color: "#9ca3af" }}>
-                      Locked + unique (username/email + user id).
+                      Locked + unique (name/email + user id).
                     </small>
                   </label>
 
@@ -3455,7 +3591,7 @@ export default function Me() {
         </div>
         )}
 
-        {isSettingsView && (
+        {isSettingsView && settingsSection === "security" && (
         <div className="panel-grid">
           <section className="panel security-panel">
             <div className="panel-header">
@@ -3491,41 +3627,98 @@ export default function Me() {
               </div>
 
               <div className="security-card">
-                <h4>Preferred verification</h4>
+                <h4>Two-factor authentication</h4>
                 <p className="security-muted">
-                  Choose how login codes are delivered.
+                  Add a second step at login. Trusted devices can skip verification.
                 </p>
+                <div className="security-row">
+                  <label className="profile-check">
+                    <input
+                      type="checkbox"
+                      checked={twoFactorEnabled}
+                      onChange={(e) => setTwoFactorEnabled(e.target.checked)}
+                    />
+                    <span>Enable 2FA</span>
+                  </label>
+                </div>
                 <div className="security-row">
                   <select
                     className="auth-input"
-                    value={profile.preferredVerificationMethod}
-                    onChange={(e) => {
-                      setPreferredMethodError(null);
-                      setPreferredMethodSuccess(null);
-                      setProfile({
-                        ...profile,
-                        preferredVerificationMethod: e.target
-                          .value as VerificationMethod,
-                      });
-                    }}
+                    value={twoFactorMethod}
+                    onChange={(e) =>
+                      setTwoFactorMethod(e.target.value as TwoFactorMethod)
+                    }
                   >
                     <option value="email">Email</option>
                     <option value="sms">SMS</option>
+                    <option value="totp">Authenticator app</option>
                   </select>
                   <button
                     className="btn ghost"
                     type="button"
-                    onClick={handlePreferredMethodUpdate}
-                    disabled={preferredMethodSaving}
+                    onClick={handleTwoFactorSave}
+                    disabled={twoFactorLoading}
                   >
-                    {preferredMethodSaving ? "Saving..." : "Save"}
+                    {twoFactorLoading ? "Saving..." : "Save"}
                   </button>
                 </div>
-                {preferredMethodError && (
-                  <p className="status status-error">{preferredMethodError}</p>
+                {twoFactorMethod === "totp" && (
+                  <div className="totp-setup">
+                    {!twoFactorHasAuthenticator && !totpSetup && (
+                      <button
+                        className="btn ghost"
+                        type="button"
+                        onClick={handleTotpSetup}
+                        disabled={totpSetupLoading}
+                      >
+                        {totpSetupLoading ? "Starting..." : "Set up authenticator"}
+                      </button>
+                    )}
+                    {twoFactorHasAuthenticator && !totpSetup && (
+                      <p className="security-muted">
+                        Authenticator app linked. You can re-scan to rotate the QR if needed.
+                      </p>
+                    )}
+                    {totpSetup && (
+                      <div className="totp-panel">
+                        <img
+                          src={totpSetup.qrCodeDataUrl}
+                          alt="Authenticator QR code"
+                          className="totp-qr"
+                        />
+                        <div className="totp-entry">
+                          <label className="profile-field">
+                            <span className="profile-field-label">Verification code</span>
+                            <input
+                              className="auth-input"
+                              type="text"
+                              inputMode="numeric"
+                              placeholder="123456"
+                              value={totpCode}
+                              onChange={(e) => setTotpCode(e.target.value)}
+                            />
+                          </label>
+                          <button
+                            className="btn primary"
+                            type="button"
+                            onClick={handleTotpVerify}
+                            disabled={totpVerifyLoading}
+                          >
+                            {totpVerifyLoading ? "Verifying..." : "Verify code"}
+                          </button>
+                        </div>
+                        <p className="security-muted">
+                          If you can’t scan, open your authenticator and use the setup link above.
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 )}
-                {preferredMethodSuccess && (
-                  <p className="status status-success">{preferredMethodSuccess}</p>
+                {twoFactorError && (
+                  <p className="status status-error">{twoFactorError}</p>
+                )}
+                {twoFactorSuccess && (
+                  <p className="status status-success">{twoFactorSuccess}</p>
                 )}
               </div>
 
@@ -3673,7 +3866,7 @@ export default function Me() {
         </div>
         )}
 
-        {isSettingsView && (
+        {isSettingsView && settingsSection === "privacy" && (
         <div className="panel-grid">
           <section className="panel">
             <div className="panel-header">
@@ -3693,7 +3886,7 @@ export default function Me() {
                   Choose an overall visibility or set custom rules below.
                 </p>
                 <select
-                  className="auth-input"
+                  className="auth-input compact-select compact-select-inline"
                   value={profile.profileVisibility}
                   onChange={(e) => {
                     const nextVisibility = e.target.value as ProfileVisibility;
@@ -3757,10 +3950,10 @@ export default function Me() {
                   Fine-tune visibility for key profile sections.
                 </p>
                 <div className="privacy-grid">
-                  <label className="profile-field">
+                  <label className="profile-field compact-field">
                     <span className="profile-field-label">Bio</span>
                     <select
-                      className="auth-input"
+                      className="auth-input compact-select"
                       value={profile.privacySettings.bio || "public"}
                       onChange={(e) =>
                         updatePrivacySetting(
@@ -3775,10 +3968,10 @@ export default function Me() {
                       <option value="private">Private</option>
                     </select>
                   </label>
-                  <label className="profile-field">
+                  <label className="profile-field compact-field">
                     <span className="profile-field-label">Links</span>
                     <select
-                      className="auth-input"
+                      className="auth-input compact-select"
                       value={profile.privacySettings.links || "public"}
                       onChange={(e) =>
                         updatePrivacySetting(
@@ -3793,10 +3986,10 @@ export default function Me() {
                       <option value="private">Private</option>
                     </select>
                   </label>
-                  <label className="profile-field">
+                  <label className="profile-field compact-field">
                     <span className="profile-field-label">Location</span>
                     <select
-                      className="auth-input"
+                      className="auth-input compact-select"
                       value={profile.privacySettings.location || "public"}
                       onChange={(e) =>
                         updatePrivacySetting(
@@ -3811,10 +4004,10 @@ export default function Me() {
                       <option value="private">Private</option>
                     </select>
                   </label>
-                  <label className="profile-field">
+                  <label className="profile-field compact-field">
                     <span className="profile-field-label">Birthday</span>
                     <select
-                      className="auth-input"
+                      className="auth-input compact-select"
                       value={profile.privacySettings.birthday || "public"}
                       onChange={(e) =>
                         updatePrivacySetting(
@@ -3829,10 +4022,10 @@ export default function Me() {
                       <option value="private">Private</option>
                     </select>
                   </label>
-                  <label className="profile-field">
+                  <label className="profile-field compact-field">
                     <span className="profile-field-label">Followers list</span>
                     <select
-                      className="auth-input"
+                      className="auth-input compact-select"
                       value={profile.privacySettings.followers || "public"}
                       onChange={(e) =>
                         updatePrivacySetting(
@@ -3847,10 +4040,10 @@ export default function Me() {
                       <option value="private">Private</option>
                     </select>
                   </label>
-                  <label className="profile-field">
+                  <label className="profile-field compact-field">
                     <span className="profile-field-label">Following list</span>
                     <select
-                      className="auth-input"
+                      className="auth-input compact-select"
                       value={profile.privacySettings.following || "public"}
                       onChange={(e) =>
                         updatePrivacySetting(
@@ -3892,7 +4085,7 @@ export default function Me() {
                   Controls who can see “active now” or “last seen.”
                 </p>
                 <select
-                  className="auth-input"
+                  className="auth-input compact-select compact-select-inline"
                   value={profile.activityVisibility}
                   onChange={(e) =>
                     setProfile({
@@ -3993,7 +4186,7 @@ export default function Me() {
         </div>
         )}
 
-        {isSettingsView && (
+        {isSettingsView && settingsSection === "notifications" && (
         <div className="panel-grid">
           <section className="panel">
             <div className="panel-header">
@@ -4031,9 +4224,8 @@ export default function Me() {
                 <div className="privacy-grid">
                   <label className="profile-field">
                     <span className="profile-field-label">Quiet hours start</span>
-                    <input
+                    <select
                       className="auth-input"
-                      type="time"
                       value={profile.notificationSettings.quietHoursStart || ""}
                       onChange={(e) =>
                         setProfile({
@@ -4044,13 +4236,19 @@ export default function Me() {
                           },
                         })
                       }
-                    />
+                    >
+                      <option value="">No quiet hours</option>
+                      {TIME_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
                   </label>
                   <label className="profile-field">
                     <span className="profile-field-label">Quiet hours end</span>
-                    <input
+                    <select
                       className="auth-input"
-                      type="time"
                       value={profile.notificationSettings.quietHoursEnd || ""}
                       onChange={(e) =>
                         setProfile({
@@ -4061,7 +4259,14 @@ export default function Me() {
                           },
                         })
                       }
-                    />
+                    >
+                      <option value="">No quiet hours</option>
+                      {TIME_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
                   </label>
                 </div>
               </div>
@@ -4104,6 +4309,31 @@ export default function Me() {
                   <span>Vibrate on alerts (mobile)</span>
                 </div>
               </div>
+
+              <div className="security-card">
+                <h4>Push notifications</h4>
+                <p className="security-muted">
+                  Receive native alerts even when the app is closed.
+                </p>
+                <div className="profile-check">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(profile.notificationSettings.pushEnabled)}
+                    onChange={(e) =>
+                      setProfile({
+                        ...profile,
+                        notificationSettings: {
+                          ...profile.notificationSettings,
+                          pushEnabled: e.target.checked,
+                        },
+                      })
+                    }
+                  />
+                  <span>Enable push notifications</span>
+                </div>
+                {pushStatusLabel && <p className="security-muted">{pushStatusLabel}</p>}
+                {pushError && <p className="status status-error">{pushError}</p>}
+              </div>
             </div>
 
             <div className="settings-actions">
@@ -4126,7 +4356,7 @@ export default function Me() {
         </div>
         )}
 
-        {isSettingsView && (
+        {isSettingsView && settingsSection === "changes" && (
         <div className="panel-grid">
           <section className="panel">
             <div className="panel-header">
@@ -4146,43 +4376,10 @@ export default function Me() {
 
             <div className="security-grid">
               <div className="security-card">
-                <h4>Username</h4>
-                <p className="security-muted">
-                  Cooldown: {accountStatus?.usernameCooldownDays ?? 30} days. {usernameAvailabilityLabel}
-                </p>
-                <div className="security-row">
-                  <input
-                    className="auth-input"
-                    value={usernameDraft}
-                    onChange={(e) => setUsernameDraft(e.target.value)}
-                    placeholder="New username"
-                  />
-                  <button
-                    className="btn ghost"
-                    type="button"
-                    onClick={handleUsernameChange}
-                    disabled={usernameChangeLoading || usernameCooldownActive}
-                  >
-                    {usernameChangeLoading ? "Saving..." : "Update"}
-                  </button>
-                </div>
-                {usernameCooldownActive && (
-                  <p className="security-muted">
-                    Username change available {formatDateTime(usernameCooldownAt)}.
-                  </p>
-                )}
-                {usernameChangeError && (
-                  <p className="status status-error">{usernameChangeError}</p>
-                )}
-                {usernameChangeSuccess && (
-                  <p className="status status-success">{usernameChangeSuccess}</p>
-                )}
-              </div>
-
-              <div className="security-card">
                 <h4>Email address</h4>
                 <p className="security-muted">
-                  Cooldown: {accountStatus?.emailCooldownDays ?? 30} days. {emailAvailabilityLabel}
+                  You can change this every {accountStatus?.emailCooldownDays ?? 30} days.
+                  Next change: {emailAvailabilityLabel}.
                 </p>
                 <div className="security-row">
                   <input
@@ -4477,7 +4674,7 @@ export default function Me() {
                 ) : null}
 
                 <div className="post-body">
-                  <h3>{user.username}</h3>
+                  <h3>{displayName}</h3>
                   <p>{p.text}</p>
                   {preview && !p.media && (
                     <LinkPreviewCard preview={preview} url={preview.url || postUrl} compact />

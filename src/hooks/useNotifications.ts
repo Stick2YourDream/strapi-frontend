@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import api from "../api/strapi";
 import { ensureProfileKeyShares, type NotificationSettings } from "../utils/profile-e2ee";
 import notificationSoundUrl from "../assets/notificationsoundeffect.mp3";
+import { syncPushSubscription } from "../utils/push-notifications";
 
 type NotificationCounts = {
   messages: number;
@@ -66,6 +67,8 @@ const NOTIF_LAST_SEEN_KEY = "notifications_last_seen_v1";
 const NOTIF_LIKE_SNAPSHOT_KEY = "notifications_like_snapshot_v1";
 const REFRESH_MS = 60000;
 const MAX_PREVIEW_ITEMS = 3;
+let lastPushUserId: number | null = null;
+let lastPushEnabled = false;
 
 const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
 const getEntity = (entry: any) => entry?.data ?? entry ?? null;
@@ -78,7 +81,10 @@ const getEntityId = (entry: any) => {
 const getUserLabel = (entry: any) => {
   const data = getEntity(entry);
   const attrs = normalize(data);
-  return attrs?.username || attrs?.email || attrs?.handle || "User";
+  const firstName = String(attrs?.firstName || attrs?.firstname || "").trim();
+  const lastName = String(attrs?.lastName || attrs?.lastname || "").trim();
+  const fullName = `${firstName} ${lastName}`.trim();
+  return fullName || attrs?.handle || attrs?.email || "User";
 };
 
 const safeParseJson = (value: string | null) => {
@@ -174,6 +180,18 @@ export const useNotifications = (
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const initialLoadRef = useRef(true);
   const lastCountsRef = useRef<NotificationCounts | null>(null);
+
+  useEffect(() => {
+    if (!userId || !settings?.pushEnabled) {
+      if (!settings?.pushEnabled) lastPushEnabled = false;
+      if (!userId) lastPushUserId = null;
+      return;
+    }
+    if (lastPushUserId === userId && lastPushEnabled) return;
+    lastPushUserId = userId;
+    lastPushEnabled = true;
+    void syncPushSubscription({ enable: true, requestPermission: false });
+  }, [userId, settings?.pushEnabled]);
 
   useEffect(() => {
     if (typeof Audio === "undefined") return;
@@ -272,6 +290,8 @@ export const useNotifications = (
           targetId: getEntityId(attrs.target),
           requesterName: getUserLabel(attrs.requester),
           targetName: getUserLabel(attrs.target),
+          requesterFavorite: Boolean(attrs.requesterFavorite),
+          targetFavorite: Boolean(attrs.targetFavorite),
           createdAt: attrs.createdAt,
         };
       });
@@ -295,6 +315,16 @@ export const useNotifications = (
         .filter((f: any) => f.status === "accepted")
         .map((f: any) => (f.requesterId === currentUserId ? f.targetId : f.requesterId))
         .filter(Boolean);
+      const favoriteFriendIds = relations
+        .filter(
+          (f: any) =>
+            f.status === "accepted" &&
+            ((f.requesterId === currentUserId && f.requesterFavorite) ||
+              (f.targetId === currentUserId && f.targetFavorite))
+        )
+        .map((f: any) => (f.requesterId === currentUserId ? f.targetId : f.requesterId))
+        .filter(Boolean);
+      const favoriteSet = new Set(favoriteFriendIds as number[]);
 
       const messagesRes = await api
         .get(
@@ -377,20 +407,30 @@ export const useNotifications = (
           .catch(() => null);
         const posts = postsRes?.data?.data ?? [];
         friendPostCount = posts.length ?? 0;
-        friendPostPreview = posts.length
-          ? (() => {
-              const first = posts[0];
-              const attrs = normalize(first);
-              return {
-                id: first.id ?? attrs.documentId ?? attrs.id ?? "post",
-                ownerId: getEntityId(attrs.owner),
-                ownerName: getUserLabel(attrs.owner),
-                title: attrs.Title || attrs.title,
-                content: attrs.Users_Content || attrs.content,
-                createdAt: attrs.createdAt,
-              };
-            })()
-          : null;
+        if (posts.length) {
+          const sorted = [...posts].sort((a: any, b: any) => {
+            const aAttrs = normalize(a);
+            const bAttrs = normalize(b);
+            const aOwner = getEntityId(aAttrs.owner);
+            const bOwner = getEntityId(bAttrs.owner);
+            const aFav = Boolean(aOwner && favoriteSet.has(aOwner));
+            const bFav = Boolean(bOwner && favoriteSet.has(bOwner));
+            if (aFav !== bFav) return aFav ? -1 : 1;
+            const aTime = aAttrs.createdAt ? new Date(aAttrs.createdAt).getTime() : 0;
+            const bTime = bAttrs.createdAt ? new Date(bAttrs.createdAt).getTime() : 0;
+            return bTime - aTime;
+          });
+          const first = sorted[0];
+          const attrs = normalize(first);
+          friendPostPreview = {
+            id: first.id ?? attrs.documentId ?? attrs.id ?? "post",
+            ownerId: getEntityId(attrs.owner),
+            ownerName: getUserLabel(attrs.owner),
+            title: attrs.Title || attrs.title,
+            content: attrs.Users_Content || attrs.content,
+            createdAt: attrs.createdAt,
+          };
+        }
       }
 
       const groupUpdatesRes = await api

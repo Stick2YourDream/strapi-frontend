@@ -104,14 +104,9 @@ const getEntityId = (entry: unknown) => {
 };
 const getOwnerName = (owner: unknown, fallback: string) => {
   const ownerAttrs = normalize(getEntity(owner)) as {
-    username?: string;
     email?: string;
   };
-  return (
-    getString(ownerAttrs.username) ??
-    getString(ownerAttrs.email) ??
-    (typeof owner === "string" ? owner : fallback)
-  );
+  return getString(ownerAttrs.email) ?? (typeof owner === "string" ? owner : fallback);
 };
 const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
 const pickMediaUrl = (mediaField: unknown): string | undefined => {
@@ -171,10 +166,24 @@ const feedbackLabelFor = (post: NormalizedPost) => {
   }
   return "";
 };
-const sortByCreatedAtDesc = (items: NormalizedPost[]) =>
+const sortByCreatedAtDesc = (
+  items: NormalizedPost[],
+  favoriteOwnerIds: Set<number> = new Set()
+) =>
   [...items].sort((a, b) => {
-    if (a.source === "admin" && b.source !== "admin") return -1;
-    if (a.source !== "admin" && b.source === "admin") return 1;
+    const aPriority =
+      a.source === "admin"
+        ? 0
+        : a.source === "user" && a.ownerId && favoriteOwnerIds.has(a.ownerId)
+        ? 1
+        : 2;
+    const bPriority =
+      b.source === "admin"
+        ? 0
+        : b.source === "user" && b.ownerId && favoriteOwnerIds.has(b.ownerId)
+        ? 1
+        : 2;
+    if (aPriority !== bPriority) return aPriority - bPriority;
     const aParsed = a.createdAt ? Date.parse(a.createdAt) : 0;
     const bParsed = b.createdAt ? Date.parse(b.createdAt) : 0;
     const aTime = Number.isNaN(aParsed) ? 0 : aParsed;
@@ -344,6 +353,7 @@ export default function Dashboard() {
   const [feedbackTargetId, setFeedbackTargetId] = useState<number | null>(null);
   const [friendOptions, setFriendOptions] = useState<FriendOption[]>([]);
   const [, setFriendIds] = useState<number[]>([]);
+  const [favoriteFriendIds, setFavoriteFriendIds] = useState<number[]>([]);
   const [, setGroupIds] = useState<number[]>([]);
   const [commentInputs, setCommentInputs] = useState<Record<string | number, string>>({});
   const [linkPreview, setLinkPreview] = useState<LinkPreview | null>(null);
@@ -353,7 +363,7 @@ export default function Dashboard() {
   const [profileAvatarUrl, setProfileAvatarUrl] = useState<string | null>(null);
 
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const { getBackgroundStyle } = useUserPreferences();
   usePageMeta({
     title: "Dashboard | Your Social Place",
@@ -362,7 +372,8 @@ export default function Dashboard() {
     type: "website",
     robots: "noindex, nofollow",
   });
-  const userLabel = user?.username || user?.email || "Guest";
+  const nameFromProfile = `${profile?.firstName || ""} ${profile?.lastName || ""}`.trim();
+  const userLabel = nameFromProfile || user?.email || "Friend";
   const userInitial = userLabel.charAt(0).toUpperCase();
   const userId = user?.id;
 
@@ -432,12 +443,15 @@ export default function Dashboard() {
         );
 
         const acceptedIds = new Set<number>();
+        const favoriteIds = new Set<number>();
         const friendOptionMap = new Map<number, FriendOption>();
         (friendsRes.data?.data ?? []).forEach((entry: unknown) => {
           const attrs = normalize(entry) as {
             status?: string;
             requester?: unknown;
             target?: unknown;
+            requesterFavorite?: boolean;
+            targetFavorite?: boolean;
           };
           const status = getString(attrs.status) ?? "pending";
           if (status !== "accepted") return;
@@ -447,6 +461,13 @@ export default function Dashboard() {
           const otherUser = requesterId === userId ? attrs.target : attrs.requester;
           if (otherId) {
             acceptedIds.add(otherId);
+            const isRequester = requesterId === userId;
+            const isFavorite = isRequester
+              ? Boolean(attrs.requesterFavorite)
+              : Boolean(attrs.targetFavorite);
+            if (isFavorite) {
+              favoriteIds.add(otherId);
+            }
             friendOptionMap.set(otherId, {
               id: otherId,
               label: getOwnerName(otherUser, `User ${otherId}`),
@@ -455,6 +476,7 @@ export default function Dashboard() {
         });
         const nextFriendIds = Array.from(acceptedIds);
         setFriendIds(nextFriendIds);
+        setFavoriteFriendIds(Array.from(favoriteIds));
         const nextFriendOptions = Array.from(friendOptionMap.values()).sort((a, b) =>
           a.label.localeCompare(b.label)
         );
@@ -651,20 +673,16 @@ export default function Dashboard() {
         });
 
       const ownerData = getEntity(attributes.owner);
-      const ownerAttrs = normalize(ownerData) as { username?: string; email?: string };
+      const ownerAttrs = normalize(ownerData) as { email?: string };
       const ownerId = getEntityId(ownerData);
-      const ownerName =
-        getString(ownerAttrs.username) ?? getString(ownerAttrs.email) ?? "User";
+      const ownerName = getString(ownerAttrs.email) ?? "User";
       const feedbackTargetData = getEntity(attributes.feedbackTarget);
       const feedbackTargetAttrs = normalize(feedbackTargetData) as {
-        username?: string;
         email?: string;
       };
       const feedbackTargetId = getEntityId(feedbackTargetData);
       const feedbackTargetName = feedbackTargetId
-        ? getString(feedbackTargetAttrs.username) ??
-          getString(feedbackTargetAttrs.email) ??
-          `User ${feedbackTargetId}`
+        ? getString(feedbackTargetAttrs.email) ?? `User ${feedbackTargetId}`
         : undefined;
       const postId =
         typeof rawPostId === "string" || typeof rawPostId === "number" ? rawPostId : title;
@@ -716,10 +734,9 @@ export default function Dashboard() {
       }
 
       const ownerData = getEntity(attributes.owner);
-      const ownerAttrs = normalize(ownerData) as { username?: string; email?: string };
+      const ownerAttrs = normalize(ownerData) as { email?: string };
       const ownerId = getEntityId(ownerData);
-      const ownerName =
-        getString(ownerAttrs.username) ?? getString(ownerAttrs.email) ?? "Member";
+      const ownerName = getString(ownerAttrs.email) ?? "Member";
       const groupData = getEntity(attributes.group);
       const groupAttrs = normalize(groupData) as { name?: string };
       const groupName = getString(groupAttrs.name) ?? "Group";
@@ -815,9 +832,10 @@ export default function Dashboard() {
     const userPosts = posts.user.map((post) => normalizeUserPost(post));
     const groupPosts = posts.group.map((post) => normalizeGroupPost(post));
     const adminPosts = posts.admin.map((post) => normalizeAdminPost(post));
+    const favoriteSet = new Set(favoriteFriendIds);
 
-    return sortByCreatedAtDesc([...adminPosts, ...userPosts, ...groupPosts]);
-  }, [posts]);
+    return sortByCreatedAtDesc([...adminPosts, ...userPosts, ...groupPosts], favoriteSet);
+  }, [favoriteFriendIds, posts]);
 
   useEffect(() => {
     const url = extractFirstUrl(formContent);
@@ -885,6 +903,7 @@ export default function Dashboard() {
     if (hour < 18) return "Good Afternoon";
     return "Good Evening";
   }, []);
+  const greetingLine = user ? `${greeting}, ${userLabel}` : greeting;
 
   const motivation = useMemo(() => {
     const index = Math.floor(Math.random() * MOTIVATIONAL_PHRASES.length);
@@ -992,9 +1011,7 @@ export default function Dashboard() {
       <div className="main-content">
         {user && (
           <div className="topbar-greeting">
-            <span className="topbar-greeting-title">
-              {greeting} {userLabel}
-            </span>
+            <span className="topbar-greeting-title">{greetingLine}</span>
             <span className="topbar-greeting-sub">{motivation}</span>
           </div>
         )}

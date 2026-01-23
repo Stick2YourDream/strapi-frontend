@@ -1,5 +1,5 @@
 export const TERMS_TITLE = "Your Social Place Terms and Conditions";
-export const TERMS_UPDATED = "Last updated: Dec 27, 2025";
+export const TERMS_UPDATED = "Last updated: Feb 20, 2026";
 
 export const TERMS_SECTIONS = [
   {
@@ -14,6 +14,7 @@ export const TERMS_SECTIONS = [
     body: [
       "You must be at least 18 years old to use the Service. You are responsible for the accuracy of the information you provide and for safeguarding your account credentials.",
       "You agree to keep your account information current and to notify us promptly of any unauthorized use of your account.",
+      "You must provide a valid phone number or email for verification. We may send verification codes by email or SMS and offer optional two-factor authentication.",
     ],
   },
   {
@@ -49,6 +50,7 @@ export const TERMS_SECTIONS = [
     body: [
       "We respect your privacy and handle data according to our policies. You control what you share with others.",
       "By using the Service, you acknowledge that we process your information to provide and improve the Service.",
+      "You can manage profile visibility, search discoverability, and notification preferences in your account settings.",
     ],
   },
   {

@@ -8,6 +8,7 @@ import {
   decryptOwnProfilePayload,
   type ProfilePayload,
 } from "../utils/profile-e2ee";
+import SuggestionWidget from "./SuggestionWidget";
 import "../css/sidebar.css";
 
 type ProfileSummary = {
@@ -19,10 +20,27 @@ type ProfileSummary = {
   bio?: string;
 };
 
+type SettingsSection =
+  | "appearance"
+  | "security"
+  | "privacy"
+  | "notifications"
+  | "changes";
+
+const SETTINGS_SECTIONS: { id: SettingsSection; label: string }[] = [
+  { id: "appearance", label: "Background & Chat" },
+  { id: "security", label: "Account & Security" },
+  { id: "privacy", label: "Visibility & Discoverability" },
+  { id: "notifications", label: "Sound, Vibration & Quiet Hours" },
+  { id: "changes", label: "Changes & Deactivation" },
+];
+
 type SidebarProps = {
   active: "dashboard" | "friends" | "me" | "groups";
   settingsView?: "profile" | "settings";
   onSettingsViewChange?: (view: "profile" | "settings") => void;
+  settingsSection?: SettingsSection;
+  onSettingsSectionChange?: (section: SettingsSection) => void;
 };
 
 const trimPreviewText = (value?: string, max = 72) => {
@@ -37,6 +55,8 @@ export default function Sidebar({
   active,
   settingsView = "profile",
   onSettingsViewChange,
+  settingsSection = "appearance",
+  onSettingsSectionChange,
 }: SidebarProps) {
   const navigate = useNavigate();
   const { user, profile, logout } = useAuth();
@@ -90,10 +110,10 @@ export default function Sidebar({
         const displayName =
           payload.firstName || payload.lastName
             ? `${payload.firstName || ""} ${payload.lastName || ""}`.trim()
-            : attrs.handle || user.username;
+            : attrs.handle || user.email;
         setProfileSummary({
           displayName,
-          handle: attrs.handle || user.username,
+          handle: attrs.handle || user.email,
           avatarUrl: pickMediaUrl(attrs.avatar),
           age: payload.age || "",
           hobbies: payload.hobbies || "",
@@ -121,9 +141,8 @@ export default function Sidebar({
   const profileCard = useMemo(() => {
     if (!user) return null;
     return {
-      displayName:
-        profileSummary?.displayName || user.username || user.email || "Me",
-      handle: profileSummary?.handle || user.username || user.email || "Profile",
+      displayName: profileSummary?.displayName || user.email || "Me",
+      handle: profileSummary?.handle || user.email || "Profile",
       avatarUrl: profileSummary?.avatarUrl,
     };
   }, [profileSummary, user]);
@@ -153,17 +172,29 @@ export default function Sidebar({
     setShowNotifications(false);
   };
 
-  // prefer handle if loaded, else username/email
+  // prefer handle if loaded, else email
   const secondaryLine = profileCard?.handle || "Profile";
   const fallbackInitial = nameForDisplay.charAt(0).toUpperCase();
   const canToggleSettings = active === "me" && typeof onSettingsViewChange === "function";
   const isSettingsView = settingsView === "settings";
+  const canSelectSettingsSection =
+    canToggleSettings &&
+    isSettingsView &&
+    typeof onSettingsSectionChange === "function";
 
   const handleSettingsToggle = () => {
     if (!onSettingsViewChange) return;
     setShowProfileMenu(false);
     setShowNotifications(false);
     onSettingsViewChange(isSettingsView ? "profile" : "settings");
+  };
+
+  const handleSettingsSectionChange = (section: SettingsSection) => {
+    if (!onSettingsSectionChange) return;
+    setShowProfileMenu(false);
+    setShowNotifications(false);
+    setMenuOpen(false);
+    onSettingsSectionChange(section);
   };
 
   const messagePreviewText = useMemo(() => {
@@ -361,7 +392,7 @@ export default function Sidebar({
       <div className="sidebar-topbar">
         <button className="brand" type="button" onClick={handleLogoClick} style={{ cursor: "pointer" }}>
           <span className="brand-mark" aria-hidden="true">
-            <img src="/logo.png" alt="" />
+            <img src="/logo2.png" alt="Your Social Place Logo" />
           </span>
           <span className="brand-text">Your Social Place</span>
         </button>
@@ -432,6 +463,22 @@ export default function Sidebar({
                   {isSettingsView ? "Back to Profile" : "Settings"}
                 </button>
               )}
+              {canSelectSettingsSection && (
+                <div className="mobile-settings-links">
+                  {SETTINGS_SECTIONS.map((section) => (
+                    <button
+                      key={section.id}
+                      className={`mobile-profile-item${
+                        settingsSection === section.id ? " is-active" : ""
+                      }`}
+                      type="button"
+                      onClick={() => handleSettingsSectionChange(section.id)}
+                    >
+                      {section.label}
+                    </button>
+                  ))}
+                </div>
+              )}
               <button
                 className="mobile-profile-item"
                 type="button"
@@ -481,7 +528,7 @@ export default function Sidebar({
       <aside className="dash-nav">
         <button className="brand" type="button" onClick={handleLogoClick} style={{ cursor: "pointer" }}>
           <span className="brand-mark" aria-hidden="true">
-            <img src="/logo.png" alt="" />
+            <img src="/logo2.png" alt="" />
           </span>
           <span className="brand-text">Your Social Place</span>
         </button>
@@ -691,6 +738,22 @@ export default function Sidebar({
               <span>{isSettingsView ? "Back to Profile" : "Settings"}</span>
             </button>
           )}
+          {canSelectSettingsSection && (
+            <div className="sidebar-settings-nav" role="navigation" aria-label="Settings sections">
+              {SETTINGS_SECTIONS.map((section) => (
+                <button
+                  key={section.id}
+                  type="button"
+                  className={`sidebar-settings-link${
+                    settingsSection === section.id ? " is-active" : ""
+                  }`}
+                  onClick={() => handleSettingsSectionChange(section.id)}
+                >
+                  {section.label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         {user && (
           <div style={{ marginTop: "12px", width: "100%" }}>
@@ -715,6 +778,7 @@ export default function Sidebar({
       </aside>
 
       {menuOpen && <button className="sidebar-overlay" type="button" onClick={() => setMenuOpen(false)} aria-label="Close menu overlay" />}
+      <SuggestionWidget />
     </div>
   );
 }

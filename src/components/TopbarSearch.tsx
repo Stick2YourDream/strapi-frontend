@@ -19,7 +19,6 @@ type DirectoryProfile = {
   firstName?: string;
   lastName?: string;
   displayName?: string;
-  username?: string;
   avatarUrl?: string;
   country?: string;
   state?: string;
@@ -295,8 +294,7 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
             return {
               id: p.id ?? attrs.documentId,
               userId: profileUserId,
-              username: userAttrs?.username,
-              handle: attrs.handle || userAttrs?.username || `user-${p.id ?? attrs.documentId}`,
+              handle: attrs.handle || `user-${p.id ?? attrs.documentId}`,
               firstName: profileFirstName,
               lastName: profileLastName,
               displayName,
@@ -614,13 +612,12 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
       .filter((p) => p.userId && p.userId !== user?.id)
       .filter((p) => {
         if (!activeQuery) return true;
-        const handle = normalizeSearch(p.handle || p.username || "");
-        const username = normalizeSearch(p.username || "");
+        const handle = normalizeSearch(p.handle || "");
         const first = normalizeSearch(p.firstName || "");
         const last = normalizeSearch(p.lastName || "");
         const full = normalizeSearch(`${p.firstName || ""} ${p.lastName || ""}`);
         const displayName = normalizeSearch(p.displayName || "");
-        const haystack = [handle, username, first, last, full, displayName];
+        const haystack = [handle, first, last, full, displayName];
         if (!queryTokens.length) return false;
         return queryTokens.every((token) => haystack.some((field) => field.includes(token)));
       })
@@ -892,18 +889,18 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
                       {profile.avatarUrl ? (
                         <img
                           src={profile.avatarUrl}
-                          alt={profile.handle || profile.username || "Profile"}
+                          alt={profile.handle || "Profile"}
                           className="topbar-avatar"
                           loading="lazy"
                         />
                       ) : (
                         <div className="topbar-avatar fallback" aria-hidden="true">
-                          {(profile.handle || profile.username || "U").charAt(0).toUpperCase()}
+                          {(profile.handle || "U").charAt(0).toUpperCase()}
                         </div>
                       )}
                       <div className="topbar-result-meta">
-                        <strong>{fullName || profile.handle || profile.username || "User"}</strong>
-                        <span>@{profile.handle || profile.username || "user"}</span>
+                        <strong>{fullName || profile.handle || "User"}</strong>
+                        <span>@{profile.handle || "user"}</span>
                         {locationLabel && (
                           <span className="topbar-result-location">{locationLabel}</span>
                         )}

@@ -310,20 +310,9 @@ select.auth-input option {
   margin-top: 6px;
 }
 
-.terms-open {
-  align-self: flex-start;
-  padding: 8px 12px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  background: rgba(255, 255, 255, 0.05);
-  color: #e9ecf5;
-  font-weight: 600;
-  cursor: pointer;
-}
-
 .terms-checkbox {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   padding: 10px 12px;
   border-radius: 14px;
@@ -333,12 +322,38 @@ select.auth-input option {
   cursor: pointer;
   text-align: left;
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
+  position: relative;
 }
 
 .terms-checkbox:hover {
   transform: translateY(-1px);
   border-color: rgba(255, 255, 255, 0.32);
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
+}
+
+.terms-checkbox input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.terms-copy {
+  line-height: 1.4;
+  font-size: 14px;
+}
+
+.terms-link {
+  color: #7fa8ff;
+  text-decoration: none;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.terms-link:hover {
+  text-decoration: underline;
 }
 
 .terms-checkbox.checked {
@@ -510,12 +525,6 @@ select.auth-input option {
   gap: 10px;
   padding: 14px 18px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.terms-link {
-  color: #8fb5ff;
-  text-decoration: none;
-  font-weight: 600;
 }
 
 .btn {

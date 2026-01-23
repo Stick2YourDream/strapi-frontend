@@ -179,7 +179,7 @@ export default function GroupDetail() {
       gradientStart: attrs.gradientStart || "",
       gradientEnd: attrs.gradientEnd || "",
       gradientAngle: Number(attrs.gradientAngle ?? 135),
-      ownerName: ownerAttrs.username || ownerAttrs.email || "",
+      ownerName: ownerAttrs.email || "",
       ownerId: ownerEntry?.id ?? ownerAttrs.id,
     };
   }, []);
@@ -252,7 +252,7 @@ export default function GroupDetail() {
           return {
             id: entry.id ?? attrs.documentId,
             userId: userEntry?.id ?? userAttrs.id,
-            name: userAttrs.username || userAttrs.email || "Member",
+            name: userAttrs.email || "Member",
             role: attrs.role === "admin" ? "admin" : "member",
           };
         })
@@ -269,7 +269,7 @@ export default function GroupDetail() {
             body: attrs.body || "",
             mediaUrls: pickMediaUrls(attrs.media),
             createdAt: attrs.createdAt,
-            ownerName: ownerAttrs.username || ownerAttrs.email || "Member",
+            ownerName: ownerAttrs.email || "Member",
             ownerId: ownerEntry?.id ?? ownerAttrs.id,
           };
         })
@@ -286,7 +286,7 @@ export default function GroupDetail() {
           const inviteeAttrs = normalize(inviteeEntry);
           return {
             id: entry.id ?? attrs.documentId,
-            inviteeName: inviteeAttrs.username || inviteeAttrs.email || "Invitee",
+            inviteeName: inviteeAttrs.email || "Invitee",
           };
         })
         .filter((entry: GroupInvite) => entry.inviteeName);
@@ -356,7 +356,7 @@ export default function GroupDetail() {
 
   const handleInviteMember = async () => {
     if (!group || !inviteIdentifier.trim()) {
-      setInviteStatus("Enter a username or email.");
+      setInviteStatus("Enter a handle or email.");
       return;
     }
     setInviting(true);
@@ -713,7 +713,7 @@ export default function GroupDetail() {
               <div className="panel-header">
                 <p className="eyebrow">Invite</p>
                 <h3>Add members</h3>
-                <p className="panel-sub">Invite by username or email.</p>
+                <p className="panel-sub">Invite by handle or email.</p>
               </div>
               <div className="form-grid">
                 <input
@@ -721,7 +721,7 @@ export default function GroupDetail() {
                   type="text"
                   value={inviteIdentifier}
                   onChange={(e) => setInviteIdentifier(e.target.value)}
-                  placeholder="username or email"
+                  placeholder="handle or email"
                 />
                 {inviteStatus && <div className="status">{inviteStatus}</div>}
                 <button

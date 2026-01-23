@@ -302,7 +302,7 @@ export default function ChatDock() {
             }
             return {
               userId: friendUserId,
-              handle: attrs.handle || userAttrs?.username || "",
+              handle: attrs.handle || userAttrs?.email || "",
               firstName: payload.firstName || "",
               lastName: payload.lastName || "",
               avatarUrl: pickMediaUrl(attrs.avatar),

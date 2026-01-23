@@ -91,6 +91,37 @@
   background-size: 12px 8px;
 }
 
+.compact-select {
+  padding: 6px 36px 6px 12px;
+  font-size: 14px;
+  line-height: 1.2;
+  min-height: 0;
+  height: auto;
+}
+
+.compact-select-inline {
+  width: min(220px, 100%);
+  justify-self: start;
+}
+
+.security-card select.auth-input.compact-select,
+.profile-field select.auth-input.compact-select {
+  padding: 6px 32px 6px 10px;
+  font-size: 13px;
+  line-height: 1.2;
+  min-height: 32px;
+  background-position: right 10px center;
+}
+
+.profile-field.compact-field {
+  padding: 8px 10px;
+  gap: 6px;
+}
+
+.profile-field.compact-field .profile-field-label {
+  font-size: 13px;
+}
+
 .profile-field select.auth-input:disabled {
   cursor: not-allowed;
 }
@@ -499,6 +530,34 @@
   font-weight: 600;
 }
 
+.totp-setup {
+  display: grid;
+  gap: 12px;
+}
+
+.totp-panel {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(10, 16, 28, 0.7);
+}
+
+.totp-qr {
+  width: 180px;
+  height: 180px;
+  border-radius: 12px;
+  background: #0b0d14;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  object-fit: contain;
+}
+
+.totp-entry {
+  display: grid;
+  gap: 10px;
+}
+
 .status-success {
   color: #8ff1c2;
 }
@@ -521,6 +580,12 @@
   .trusted-device-card {
     flex-direction: column;
     align-items: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .compact-select-inline {
+    width: 100%;
   }
 }
 

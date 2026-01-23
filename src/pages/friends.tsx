@@ -38,7 +38,6 @@ type FriendProfile = {
   handle: string;
   bio?: string;
   userId?: number;
-  username?: string;
   firstName?: string;
   lastName?: string;
   religion?: string;
@@ -51,6 +50,12 @@ type FriendProfile = {
   privacySettings?: PrivacySettings;
   activityVisibility?: VisibilityLevel;
   lastSeenAt?: string;
+  favorite?: boolean;
+  relationId?: string | number;
+  relationDocId?: string;
+  relationIdNumber?: number;
+  relationRequesterId?: number;
+  relationTargetId?: number;
 };
 
 type FriendRelation = {
@@ -60,6 +65,8 @@ type FriendRelation = {
   requesterId?: number;
   targetId?: number;
   status: "pending" | "accepted" | "blocked" | string;
+  requesterFavorite?: boolean;
+  targetFavorite?: boolean;
 };
 
 type LinkPreview = {
@@ -392,15 +399,21 @@ export default function Friends() {
             requesterId: getEntityId(attrs.requester),
             targetId: getEntityId(attrs.target),
             status: attrs.status || "pending",
+            requesterFavorite: Boolean(attrs.requesterFavorite),
+            targetFavorite: Boolean(attrs.targetFavorite),
           };
         });
 
         const acceptedIds = new Set<number>();
+        const relationByUserId = new Map<number, FriendRelation>();
         mappedFriends.forEach((relation) => {
           if (relation.status !== "accepted") return;
           const otherId =
             relation.requesterId === user.id ? relation.targetId : relation.requesterId;
-          if (otherId) acceptedIds.add(otherId);
+          if (otherId) {
+            acceptedIds.add(otherId);
+            relationByUserId.set(otherId, relation);
+          }
         });
 
         const friendIds = Array.from(acceptedIds);
@@ -450,19 +463,29 @@ export default function Friends() {
               payload.activityVisibility,
               "public"
             );
+            const relation = relationByUserId.get(friendUserId);
+            const isFavorite =
+              relation?.requesterId === user.id
+                ? Boolean(relation?.requesterFavorite)
+                : Boolean(relation?.targetFavorite);
             return {
               id: p.id ?? attrs.documentId,
               userId: friendUserId,
-              username: userAttrs?.username,
               firstName: payload.firstName || "",
               lastName: payload.lastName || "",
-              handle: attrs.handle || userAttrs?.username || `user-${p.id ?? attrs.documentId}`,
+              handle: attrs.handle || `user-${p.id ?? attrs.documentId}`,
               bio: payload.bio || "",
               avatarUrl: pickMediaUrl(attrs.avatar),
               profileVisibility,
               privacySettings,
               activityVisibility,
               lastSeenAt: payload.lastSeenAt,
+              favorite: isFavorite,
+              relationId: relation?.id,
+              relationDocId: relation?.docId,
+              relationIdNumber: relation?.idNumber,
+              relationRequesterId: relation?.requesterId,
+              relationTargetId: relation?.targetId,
             } as FriendProfile;
           })
         );
@@ -485,9 +508,7 @@ export default function Friends() {
           const feedbackTargetId = getEntityId(attrs.feedbackTarget);
           const feedbackTargetAttrs = getEntityAttrs(attrs.feedbackTarget);
           const feedbackTargetName = feedbackTargetId
-            ? feedbackTargetAttrs?.username ||
-              feedbackTargetAttrs?.email ||
-              `User ${feedbackTargetId}`
+            ? feedbackTargetAttrs?.email || `User ${feedbackTargetId}`
             : undefined;
           const linkUrl = extractFirstUrl(content);
           if (linkUrl) linkUrls.add(linkUrl);
@@ -541,20 +562,35 @@ export default function Friends() {
 
   const filteredFriends = useMemo(() => {
     const q = normalizeFriendSearch(friendQuery);
-    if (!q) return profiles;
-    return profiles.filter((friend) => {
-      const handle = normalizeFriendSearch(friend.handle || friend.username || "");
-      const first = normalizeFriendSearch(friend.firstName || "");
-      const last = normalizeFriendSearch(friend.lastName || "");
-      const full = normalizeFriendSearch(
-        `${friend.firstName || ""} ${friend.lastName || ""}`
-      );
-      return (
-        handle.includes(q) ||
-        first.includes(q) ||
-        last.includes(q) ||
-        full.includes(q)
-      );
+    const base = q
+      ? profiles.filter((friend) => {
+          const handle = normalizeFriendSearch(friend.handle || "");
+          const first = normalizeFriendSearch(friend.firstName || "");
+          const last = normalizeFriendSearch(friend.lastName || "");
+          const full = normalizeFriendSearch(
+            `${friend.firstName || ""} ${friend.lastName || ""}`
+          );
+          return (
+            handle.includes(q) ||
+            first.includes(q) ||
+            last.includes(q) ||
+            full.includes(q)
+          );
+        })
+      : profiles;
+    return [...base].sort((a, b) => {
+      const aFav = Boolean(a.favorite);
+      const bFav = Boolean(b.favorite);
+      if (aFav !== bFav) return aFav ? -1 : 1;
+      const aName =
+        `${a.firstName || ""} ${a.lastName || ""}`.trim() ||
+        a.handle ||
+        "";
+      const bName =
+        `${b.firstName || ""} ${b.lastName || ""}`.trim() ||
+        b.handle ||
+        "";
+      return aName.localeCompare(bName);
     });
   }, [profiles, friendQuery]);
 
@@ -581,7 +617,7 @@ export default function Friends() {
   }, [profiles, selectedFriendId]);
   const selectedFriendLabel = selectedFriend
     ? `${selectedFriend.firstName || ""} ${selectedFriend.lastName || ""}`.trim() ||
-      `@${selectedFriend.handle || selectedFriend.username || "friend"}`
+      `@${selectedFriend.handle || "friend"}`
     : "this user";
   const selectedVisibility = normalizeProfileVisibility(
     selectedFriend?.profileVisibility
@@ -631,7 +667,7 @@ export default function Friends() {
   }, [isBlocked, isMuted, selectedFriendId]);
 
   const renderAvatar = (profile?: FriendProfile, size = 44) => {
-    const handle = profile?.handle || profile?.username || "User";
+    const handle = profile?.handle || "User";
     const isOnline = profile?.userId ? onlineUserIds.has(profile.userId) : false;
     const profileVisibility = normalizeProfileVisibility(profile?.profileVisibility);
     const activityVisibility = normalizeVisibility(profile?.activityVisibility, "public");
@@ -671,7 +707,7 @@ export default function Friends() {
 
   const toInvitee = (profile: FriendProfile): VideoCallInvitee => {
     const name = `${profile.firstName || ""} ${profile.lastName || ""}`.trim();
-    const handle = profile.handle || profile.username || "friend";
+    const handle = profile.handle || "friend";
     return {
       userId: profile.userId || 0,
       displayName: name || handle,
@@ -711,6 +747,50 @@ export default function Friends() {
       return;
     }
     openCallComposer([toInvitee(profile)]);
+  };
+
+  const handleToggleFavorite = async (profile: FriendProfile) => {
+    if (!profile.userId || !user) return;
+    const isRequester = profile.relationRequesterId === user.id;
+    const isTarget = profile.relationTargetId === user.id;
+    if (!isRequester && !isTarget) return;
+    const nextFavorite = !profile.favorite;
+    const payload = {
+      data: {
+        ...(isRequester ? { requesterFavorite: nextFavorite } : {}),
+        ...(isTarget ? { targetFavorite: nextFavorite } : {}),
+      },
+    };
+    const attempts: string[] = [];
+    if (profile.relationIdNumber) attempts.push(`/friends/${profile.relationIdNumber}`);
+    if (profile.relationDocId) attempts.push(`/friends/${profile.relationDocId}?locale=en`);
+    if (!attempts.length && profile.relationId) attempts.push(`/friends/${profile.relationId}`);
+    if (!attempts.length) return;
+    setActionError(null);
+    setActionNotice(null);
+    try {
+      let updated = false;
+      for (const path of attempts) {
+        try {
+          await api.put(path, payload);
+          updated = true;
+          break;
+        } catch (err: any) {
+          if (err?.response?.status !== 404) throw err;
+        }
+      }
+      if (!updated) throw new Error("Update failed");
+      setProfiles((prev) =>
+        prev.map((entry) =>
+          entry.userId === profile.userId
+            ? { ...entry, favorite: nextFavorite }
+            : entry
+        )
+      );
+      setActionNotice(nextFavorite ? "Favorite added." : "Favorite removed.");
+    } catch {
+      setActionError("Unable to update favorite.");
+    }
   };
 
   const handleShowAllPosts = () => {
@@ -897,26 +977,45 @@ export default function Friends() {
               <ul className="friend-mini-list">
                 {filteredFriends.map((friend) => {
                   const name = `${friend.firstName || ""} ${friend.lastName || ""}`.trim();
-                  const handle = friend.handle || friend.username || "friend";
+                  const handle = friend.handle || "friend";
                   const displayName = name || handle;
                   const isActive = friend.userId === selectedFriendId;
                   return (
                     <li key={friend.id} className="friend-mini-item">
-                      <button
-                        className={`friend-mini-button${isActive ? " is-active" : ""}`}
-                        type="button"
-                        onClick={() => handleSelectFriend(friend)}
-                      >
-                        {renderAvatar(friend, 32)}
-                        <span className="friend-mini-meta">
-                          <span className="friend-mini-name">
-                            {displayName}
-                            {name && handle ? (
-                              <span className="friend-mini-tag">@{handle}</span>
-                            ) : null}
+                      <div className="friend-mini-row">
+                        <button
+                          className={`friend-mini-button${isActive ? " is-active" : ""}`}
+                          type="button"
+                          onClick={() => handleSelectFriend(friend)}
+                        >
+                          {renderAvatar(friend, 32)}
+                          <span className="friend-mini-meta">
+                            <span className="friend-mini-name">
+                              {displayName}
+                              {name && handle ? (
+                                <span className="friend-mini-tag">@{handle}</span>
+                              ) : null}
+                            </span>
                           </span>
-                        </span>
-                      </button>
+                        </button>
+                        <button
+                          className={`friend-favorite-toggle${
+                            friend.favorite ? " is-active" : ""
+                          }`}
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleToggleFavorite(friend);
+                          }}
+                          aria-label={
+                            friend.favorite ? "Remove favorite" : "Mark as favorite"
+                          }
+                        >
+                          <span aria-hidden="true">
+                            {friend.favorite ? "★" : "☆"}
+                          </span>
+                        </button>
+                      </div>
                     </li>
                   );
                 })}
@@ -939,10 +1038,10 @@ export default function Friends() {
                   <div className="friend-header-meta">
                     <strong>
                       {`${selectedFriend.firstName || ""} ${selectedFriend.lastName || ""}`.trim() ||
-                        `@${selectedFriend.handle || selectedFriend.username || "friend"}`}
+                        `@${selectedFriend.handle || "friend"}`}
                     </strong>
                     <span className="friend-name">
-                      @{selectedFriend.handle || selectedFriend.username || "friend"}
+                      @{selectedFriend.handle || "friend"}
                     </span>
                     {canShowSelectedActivity && (
                       <span className="friend-activity">{selectedActivityLabel}</span>
@@ -976,6 +1075,16 @@ export default function Friends() {
                     disabled={isBlocked}
                   >
                     Video call
+                  </button>
+                  <button
+                    className={`btn ghost friend-favorite-action${
+                      selectedFriend.favorite ? " is-active" : ""
+                    }`}
+                    type="button"
+                    onClick={() => handleToggleFavorite(selectedFriend)}
+                    disabled={isBlocked}
+                  >
+                    {selectedFriend.favorite ? "Favorite" : "Add favorite"}
                   </button>
                   <button
                     className="btn ghost"

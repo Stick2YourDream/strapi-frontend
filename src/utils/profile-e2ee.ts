@@ -59,6 +59,7 @@ export type NotificationSettings = {
   quietHoursEnd?: string;
   soundEnabled?: boolean;
   vibrationEnabled?: boolean;
+  pushEnabled?: boolean;
 };
 
 export const PROFILE_PII_CLEAR_FIELDS = {

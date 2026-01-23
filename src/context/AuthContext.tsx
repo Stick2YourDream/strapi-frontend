@@ -22,7 +22,6 @@ import {
 
 interface User {
   id: number;
-  username: string;
   email: string;
 }
 
@@ -326,7 +325,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     // 24-hour session window
     const expiresAt = new Date().getTime() + 24 * 60 * 60 * 1000;
     localStorage.setItem("expiresAt", expiresAt.toString());
-    console.info("Auth: login success", { id: userData.id, username: userData.username });
+    console.info("Auth: login success", { id: userData.id, email: userData.email });
   };
 
   const updateUser = (userData: User) => {

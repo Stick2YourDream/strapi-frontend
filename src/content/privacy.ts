@@ -1,5 +1,5 @@
 export const PRIVACY_TITLE = "Your Social Place Privacy Policy";
-export const PRIVACY_UPDATED = "Last updated: Jan 4, 2026";
+export const PRIVACY_UPDATED = "Last updated: Feb 20, 2026";
 
 export const PRIVACY_SECTIONS = [
   {
@@ -13,9 +13,11 @@ export const PRIVACY_SECTIONS = [
     id: "information-we-collect",
     title: "2. Information we collect",
     body: [
-      "Account data: name, email, username, and login credentials.",
-      "Profile data: photos, bio, interests, location details you choose to provide.",
+      "Account data: name, email, phone number, login credentials, and verification preferences.",
+      "Profile data: photos, bio, interests, and optional location details you choose to provide.",
       "Content and activity: posts, messages, comments, and engagement signals.",
+      "Security data: trusted device identifiers and verification metadata.",
+      "Push notifications: subscription tokens if you enable web push.",
       "Technical data: device type, browser, IP address, and basic usage analytics.",
     ],
   },
@@ -24,6 +26,8 @@ export const PRIVACY_SECTIONS = [
     title: "3. How we use information",
     body: [
       "Provide and improve the Service, including features like messaging, groups, and personalization.",
+      "Verify accounts, send security codes, and honor trusted device settings.",
+      "Deliver notifications you opt into, including push alerts.",
       "Moderate content, enforce rules, and protect the safety of the community.",
       "Send important service updates and respond to support requests.",
     ],
@@ -58,6 +62,8 @@ export const PRIVACY_SECTIONS = [
     title: "7. Your choices",
     body: [
       "Access, update, or delete your profile through your account settings.",
+      "Control profile visibility, search indexing, and notification preferences.",
+      "Enable or disable two-factor authentication and manage trusted devices.",
       "Use the Delete account or Delete data pages to submit requests.",
     ],
   },

@@ -1,6 +1,6 @@
 // src/pages/Register.tsx
 import { CheckCircle2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import api from "../api/strapi";
 import type { RegisterResponse } from "../types/auth";
@@ -122,32 +122,45 @@ const normalizeIntent = (value?: string | null): IntentKey | null => {
   return aliases[cleaned] ?? null;
 };
 
-type LocationOption = {
-  name: string;
-  code: string;
-  countryCode?: string;
+type ContactType = "email" | "phone";
+
+const phoneDigits = (value: string) => String(value || "").replace(/\D/g, "").slice(-10);
+const normalizePhone = (value: string) => {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return null;
+  if (digits.length < 10 || digits.length > 15) return null;
+  return `+${digits}`;
 };
 
-const normalizeLocation = (value: string) => value.trim().toLowerCase();
-const matchByName = (list: LocationOption[], value: string) =>
-  list.find((item) => normalizeLocation(item.name) === normalizeLocation(value));
-const phoneDigits = (value: string) => String(value || "").replace(/\D/g, "").slice(-10);
+const isValidEmail = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (!trimmed.includes("@")) return false;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed);
+};
+
+const parseContact = (value: string) => {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return null;
+  if (isValidEmail(trimmed)) {
+    return { type: "email" as const, email: trimmed.toLowerCase() };
+  }
+  const normalizedPhone = normalizePhone(trimmed);
+  if (normalizedPhone) {
+    return { type: "phone" as const, phone: normalizedPhone };
+  }
+  return null;
+};
 
 export default function Register() {
   const [form, setForm] = useState({
-    username: "",
-    email: "",
-    confirmEmail: "",
-    phoneNumber: "",
+    firstName: "",
+    lastName: "",
+    contact: "",
     smsCode: "",
     birthday: "",
     password: "",
     confirmPassword: "",
-    country: "",
-    countryCode: "",
-    state: "",
-    stateCode: "",
-    city: "",
     botField: "",
   });
   const [termsOpen, setTermsOpen] = useState(false);
@@ -156,13 +169,10 @@ export default function Register() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
-  const [countryOptions, setCountryOptions] = useState<LocationOption[]>([]);
-  const [stateOptions, setStateOptions] = useState<LocationOption[]>([]);
-  const [cityOptions, setCityOptions] = useState<LocationOption[]>([]);
-  const [locationError, setLocationError] = useState<string | null>(null);
   const [smsSending, setSmsSending] = useState(false);
   const [smsSent, setSmsSent] = useState(false);
   const [smsError, setSmsError] = useState<string | null>(null);
+  const [registeredMethod, setRegisteredMethod] = useState<ContactType | null>(null);
   const formStartRef = useRef(Date.now());
   const [searchParams] = useSearchParams();
   const intentParam = searchParams.get("intent");
@@ -178,61 +188,40 @@ export default function Register() {
 
   const navigate = useNavigate();
   const maxBirthdate = useMemo(() => getMaxBirthdate(), []);
-  const successMessage =
-    "Thank you for registering with Your Social Place. We are excited to have you on board with us. Please check your email for a confirmation link to login.";
-  const stateLabel = form.countryCode === "US" ? "State" : "Province/Region";
-  const needsState = stateOptions.length > 0;
+  const contactDetails = useMemo(() => parseContact(form.contact), [form.contact]);
+  const successMessage = useMemo(() => {
+    const method = registeredMethod ?? contactDetails?.type;
+    if (method === "phone") {
+      return "Thanks for registering! You can now log in with your phone number and password.";
+    }
+    return "Thank you for registering with Your Social Place. Please check your email for a confirmation link to log in.";
+  }, [registeredMethod, contactDetails?.type]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
-    setForm((prev) => ({ ...prev, [name]: value }));
-    if (name === "phoneNumber") {
+    setForm((prev) => ({
+      ...prev,
+      [name]: value,
+      ...(name === "contact" && parseContact(value)?.type !== "phone"
+        ? { smsCode: "" }
+        : {}),
+    }));
+    if (name === "contact") {
       setSmsSent(false);
       setSmsError(null);
     }
   };
 
-  const updateLocation = (changes: Partial<typeof form>) => {
-    setForm((prev) => ({ ...prev, ...changes }));
-  };
-
-  const handleCountryChange = (value: string) => {
-    const match = value ? matchByName(countryOptions, value) : undefined;
-    updateLocation({
-      country: value,
-      countryCode: match?.code || "",
-      state: "",
-      stateCode: "",
-      city: "",
-    });
-    setStateOptions([]);
-    setCityOptions([]);
-  };
-
-  const handleStateChange = (value: string) => {
-    const match = value ? matchByName(stateOptions, value) : undefined;
-    updateLocation({
-      state: value,
-      stateCode: match?.code || "",
-      city: "",
-    });
-    setCityOptions([]);
-  };
-
-  const handleCityChange = (value: string) => {
-    updateLocation({ city: value });
-  };
-
   const handleSendSms = async () => {
-    const phoneValue = form.phoneNumber.trim();
-    if (!phoneValue) {
-      setSmsError("Phone number is required to send a code.");
+    const contact = parseContact(form.contact);
+    if (!contact || contact.type !== "phone" || !contact.phone) {
+      setSmsError("Enter a valid phone number to send a code.");
       return;
     }
     setSmsError(null);
     setSmsSending(true);
     try {
-      await api.post("/auth/sms/send", { phoneNumber: phoneValue, purpose: "register" });
+      await api.post("/auth/sms/send", { phoneNumber: contact.phone, purpose: "register" });
       setSmsSent(true);
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
@@ -249,96 +238,6 @@ export default function Register() {
     }
   };
 
-  useEffect(() => {
-    let active = true;
-    const loadCountries = async () => {
-      try {
-        const res = await api.get("/locations/countries");
-        const list = (res.data?.data ?? []).map((country: any) => ({
-          name: country.name,
-          code: country.code || country.isoCode || "",
-        }));
-        if (active) {
-          setCountryOptions(list);
-          setLocationError(null);
-        }
-      } catch {
-        if (active) setLocationError("Unable to load country list.");
-      }
-    };
-    loadCountries();
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!form.countryCode) {
-      setStateOptions([]);
-      setCityOptions([]);
-      return;
-    }
-    let active = true;
-    const loadStates = async () => {
-      try {
-        const res = await api.get("/locations/states", {
-          params: { country: form.countryCode },
-        });
-        const list = (res.data?.data ?? []).map((state: any) => ({
-          name: state.name,
-          code: state.code || state.isoCode || "",
-          countryCode: state.countryCode,
-        }));
-        if (active) {
-          setStateOptions(list);
-          setLocationError(null);
-        }
-      } catch {
-        if (active) setLocationError("Unable to load states or regions.");
-      }
-    };
-    loadStates();
-    return () => {
-      active = false;
-    };
-  }, [form.countryCode]);
-
-  useEffect(() => {
-    if (!form.countryCode) {
-      setCityOptions([]);
-      return;
-    }
-    if (needsState && !form.stateCode) {
-      setCityOptions([]);
-      return;
-    }
-    let active = true;
-    const loadCities = async () => {
-      try {
-        const res = await api.get("/locations/cities", {
-          params: {
-            country: form.countryCode,
-            state: form.stateCode || undefined,
-          },
-        });
-        const list = (res.data?.data ?? []).map((city: any) => ({
-          name: city.name,
-          code: city.name,
-        }));
-        if (active) {
-          setCityOptions(list);
-          setLocationError(null);
-        }
-      } catch {
-        if (active) setLocationError("Unable to load cities.");
-      }
-    };
-    loadCities();
-    return () => {
-      active = false;
-    };
-  }, [form.countryCode, form.stateCode, needsState]);
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -354,23 +253,18 @@ export default function Register() {
       return;
     }
 
-    const normalizedEmail = form.email.trim().toLowerCase();
-    const normalizedConfirm = form.confirmEmail.trim().toLowerCase();
-    if (normalizedEmail !== normalizedConfirm) {
-      setError("Email addresses do not match.");
-      return;
-    }
-
-    const hasPhone = Boolean(form.phoneNumber.trim());
-    if (!hasPhone) {
-      setError("Phone number is required.");
+    const contact = parseContact(form.contact);
+    if (!contact) {
+      setError("Please enter a valid phone number or email.");
       return;
     }
     const hasSmsCode = Boolean(form.smsCode.trim());
-    const registrationPhone = phoneDigits(form.phoneNumber);
+    const registrationPhone =
+      contact.type === "phone" ? phoneDigits(contact.phone) : "";
+    const normalizedEmail = contact.type === "email" ? contact.email : "";
 
     if (!termsAccepted) {
-      setError("Please read and accept the Terms and Conditions.");
+      setError("Please accept the Terms and Conditions and Privacy Policy.");
       return;
     }
 
@@ -403,60 +297,46 @@ export default function Register() {
     try {
       // ✅ custom route POST /api/register
       const res = await api.post<RegisterResponse>("/register", {
-        username: form.username,
-        email: normalizedEmail,
-        phoneNumber: form.phoneNumber.trim(),
-        smsCode: hasSmsCode ? form.smsCode.trim() : undefined,
+        contact: form.contact.trim(),
+        contactType: contact.type,
+        firstName: form.firstName.trim(),
+        lastName: form.lastName.trim(),
+        email: contact.type === "email" ? normalizedEmail : undefined,
+        phoneNumber: contact.type === "phone" ? contact.phone : undefined,
+        smsCode:
+          contact.type === "phone" && hasSmsCode ? form.smsCode.trim() : undefined,
         birthday: form.birthday,
         password: form.password,
         formStart: formStartRef.current,
         botField: form.botField,
         termsAccepted,
         intent: intentKey || undefined,
-        country: form.country.trim() || undefined,
-        countryCode: form.countryCode || undefined,
-        state: form.state.trim() || undefined,
-        stateCode: form.stateCode || undefined,
-        city: form.city.trim() || undefined,
       });
 
       // Best-effort: create a minimal profile shell; encrypted profile fields are set after login.
       const lockedHandle =
-        slugifyHandle(form.username || form.email) || `user-${res.data.user.id}`;
+        slugifyHandle(`${form.firstName} ${form.lastName}`) ||
+        slugifyHandle(form.contact) ||
+        `user-${res.data.user.id}`;
       try {
         const profileLocation: Record<string, string> = {};
-        if (form.countryCode) {
-          profileLocation.country = form.country.trim();
-          profileLocation.countryCode = form.countryCode;
-        }
-        if (form.state || form.stateCode) {
-          profileLocation.state = form.state.trim();
-          profileLocation.stateCode = form.stateCode;
-        }
-        if (form.city) {
-          profileLocation.city = form.city.trim();
-        }
-        if (form.birthday) {
-          profileLocation.birthday = form.birthday;
-        }
-        if (age !== null) {
-          profileLocation.age = String(age);
-        }
-        if (registrationPhone) {
-          profileLocation.phone = registrationPhone;
-        }
+        if (form.firstName.trim()) profileLocation.firstName = form.firstName.trim();
+        if (form.lastName.trim()) profileLocation.lastName = form.lastName.trim();
+        if (form.birthday) profileLocation.birthday = form.birthday;
+        if (age !== null) profileLocation.age = String(age);
+        if (registrationPhone) profileLocation.phone = registrationPhone;
         const registrationLocked: Record<string, boolean> = {};
+        if (form.firstName.trim()) registrationLocked.firstName = true;
+        if (form.lastName.trim()) registrationLocked.lastName = true;
         if (form.birthday) registrationLocked.birthday = true;
         if (age !== null) registrationLocked.age = true;
         if (registrationPhone) registrationLocked.phone = true;
-        if (form.country.trim()) registrationLocked.country = true;
-        if (form.state.trim()) registrationLocked.state = true;
-        if (form.city.trim()) registrationLocked.city = true;
         await api.post("/profiles", {
           data: {
             handle: lockedHandle,
             user: res.data.user.id,
             locale: "en",
+            preferredVerificationMethod: contact.type === "phone" ? "sms" : "email",
             ...profileLocation,
             ...(Object.keys(registrationLocked).length
               ? { registrationLocked }
@@ -467,7 +347,12 @@ export default function Register() {
         // ignore if profile already exists or creation fails (created on first edit instead)
       }
 
-      setInfo(successMessage);
+      const nextMessage =
+        contact.type === "phone"
+          ? "Thanks for registering! You can now log in with your phone number and password."
+          : "Thank you for registering with Your Social Place. Please check your email for a confirmation link to log in.";
+      setRegisteredMethod(contact.type);
+      setInfo(nextMessage);
       setShowSuccessModal(true);
     } catch (err) {
       if (axios.isAxiosError(err)) {
@@ -555,87 +440,89 @@ export default function Register() {
           />
         </div>
         <div className="field">
-          <label>Username</label>
-          <input
-            className="auth-input"
-            name="username"
-            placeholder="Pick a handle"
-            onChange={handleChange}
-            value={form.username}
-            required
-          />
-        </div>
-
-        <div className="field">
-          <label>Email</label>
-          <input
-            className="auth-input"
-            name="email"
-            type="email"
-            placeholder="you@example.com"
-            onChange={handleChange}
-            value={form.email}
-            required
-          />
-        </div>
-
-        <div className="field">
-          <label>Confirm Email</label>
-          <input
-            className="auth-input"
-            name="confirmEmail"
-            type="email"
-            placeholder="Re-enter your email"
-            onChange={handleChange}
-            value={form.confirmEmail}
-            required
-          />
-        </div>
-
-        <div className="field">
-          <label>Phone number (required)</label>
+          <label>Name</label>
           <div className="field-row">
             <input
               className="auth-input"
-              name="phoneNumber"
-              type="tel"
-              placeholder="+1 555 555 1234"
+              name="firstName"
+              placeholder="First name"
               onChange={handleChange}
-              value={form.phoneNumber}
-              autoComplete="tel"
+              value={form.firstName}
               required
+              autoComplete="given-name"
             />
-            <button
-              type="button"
-              className="btn ghost sms-send"
-              onClick={handleSendSms}
-              disabled={smsSending || !form.phoneNumber.trim()}
-            >
-              {smsSending ? "Sending..." : smsSent ? "Resend code" : "Send code"}
-            </button>
+            <input
+              className="auth-input"
+              name="lastName"
+              placeholder="Last name"
+              onChange={handleChange}
+              value={form.lastName}
+              required
+              autoComplete="family-name"
+            />
           </div>
-          <small className="auth-hint">
-            Required for verification. Include your country code (for example, +1).
-          </small>
         </div>
-        {smsError && <p className="auth-message error">{smsError}</p>}
-        {smsSent && !smsError && (
-          <p className="auth-message info">SMS code sent. Check your phone.</p>
-        )}
 
         <div className="field">
-          <label>SMS code (optional)</label>
-          <input
-            className="auth-input"
-            name="smsCode"
-            type="text"
-            inputMode="numeric"
-            placeholder="Enter the code"
-            onChange={handleChange}
-            value={form.smsCode}
-            autoComplete="one-time-code"
-          />
+          <label>Phone number or email</label>
+          <div className="field-row">
+            <input
+              className="auth-input"
+              name="contact"
+              type="text"
+              placeholder="you@example.com or +1 555 555 1234"
+              onChange={handleChange}
+              value={form.contact}
+              autoComplete="username"
+              required
+            />
+            {contactDetails?.type === "phone" && (
+              <button
+                type="button"
+                className="btn ghost sms-send"
+                onClick={handleSendSms}
+                disabled={smsSending || !form.contact.trim()}
+              >
+                {smsSending ? "Sending..." : smsSent ? "Resend code" : "Send code"}
+              </button>
+            )}
+          </div>
+          <small className="auth-hint">
+            Enter a valid phone number or email. This becomes your default verification method.
+          </small>
+          {contactDetails?.type === "email" && (
+            <small className="auth-hint">
+              We will email a confirmation link after sign up.
+            </small>
+          )}
+          {contactDetails?.type === "phone" && (
+            <small className="auth-hint">
+              Optional: request a text code to verify now.
+            </small>
+          )}
         </div>
+        {contactDetails?.type === "phone" && (
+          <>
+            {smsError && <p className="auth-message error">{smsError}</p>}
+            {smsSent && !smsError && (
+              <p className="auth-message info">SMS code sent. Check your phone.</p>
+            )}
+
+            <div className="field">
+              <label>SMS code (optional)</label>
+              <input
+                className="auth-input"
+                name="smsCode"
+                type="text"
+                inputMode="numeric"
+                placeholder="Enter the code"
+                onChange={handleChange}
+                value={form.smsCode}
+                autoComplete="one-time-code"
+              />
+            </div>
+          </>
+        )}
 
         <div className="field">
           <label>Birthday</label>
@@ -651,71 +538,6 @@ export default function Register() {
           />
           <small className="auth-hint">You must be 18 or older to sign up.</small>
         </div>
-
-        <div className="field">
-          <label>Country</label>
-          <select
-            className="auth-input"
-            value={form.country}
-            onChange={(e) => handleCountryChange(e.target.value)}
-          >
-            <option value="">Select country</option>
-            {countryOptions.map((country) => (
-              <option key={country.code || country.name} value={country.name}>
-                {country.name}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="field">
-          <label>{stateLabel}</label>
-          <select
-            className="auth-input"
-            value={form.state}
-            onChange={(e) => handleStateChange(e.target.value)}
-            disabled={!form.countryCode || !stateOptions.length}
-          >
-            <option value="">
-              {!form.countryCode
-                ? "Select country first"
-                : needsState
-                ? `Select ${stateLabel.toLowerCase()}`
-                : "No regions"}
-            </option>
-            {stateOptions.map((state) => (
-              <option key={state.code || state.name} value={state.name}>
-                {state.name}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="field">
-          <label>City</label>
-          <select
-            className="auth-input"
-            value={form.city}
-            onChange={(e) => handleCityChange(e.target.value)}
-            disabled={!form.countryCode || (needsState && !form.stateCode)}
-          >
-            <option value="">
-              {!form.countryCode
-                ? "Select country first"
-                : needsState && !form.stateCode
-                ? `Select ${stateLabel.toLowerCase()} first`
-                : "Select city"}
-            </option>
-            {cityOptions.map((city) => (
-              <option key={city.code || city.name} value={city.name}>
-                {city.name}
-              </option>
-            ))}
-          </select>
-          <small className="auth-hint">Optional. Helps suggest nearby friends.</small>
-        </div>
-
-        {locationError && <p className="auth-message error">{locationError}</p>}
 
         <div className="field">
           <label>Password</label>
@@ -747,32 +569,36 @@ export default function Register() {
         </div>
 
         <div className="terms-consent">
-          <button
-            type="button"
-            className="terms-open"
-            onClick={() => {
-              setTermsOpen(true);
-              setTermsRead(false);
-            }}
-          >
-            Read Terms
-          </button>
-          <button
-            type="button"
-            className={`terms-checkbox ${termsAccepted ? "checked" : ""}`}
-            onClick={() => {
-              if (termsAccepted) {
-                setTermsAccepted(false);
-                return;
-              }
-              setTermsOpen(true);
-              setTermsRead(false);
-            }}
-            aria-pressed={termsAccepted}
-          >
+          <label className={`terms-checkbox ${termsAccepted ? "checked" : ""}`}>
+            <input
+              type="checkbox"
+              checked={termsAccepted}
+              onChange={(e) => setTermsAccepted(e.target.checked)}
+            />
             <span className="terms-checkmark" aria-hidden="true" />
-            <span>I agree to the Terms and Conditions</span>
-          </button>
+            <span className="terms-copy">
+              I agree to the{" "}
+              <button
+                type="button"
+                className="terms-link"
+                onClick={() => {
+                  setTermsOpen(true);
+                  setTermsRead(false);
+                }}
+              >
+                Terms and Conditions
+              </button>
+              ,{" "}
+              <a className="terms-link" href="/privacy" target="_blank" rel="noreferrer">
+                Privacy Policy
+              </a>
+              , and{" "}
+              <a className="terms-link" href="/cookies" target="_blank" rel="noreferrer">
+                Cookie Policy
+              </a>
+              .
+            </span>
+          </label>
         </div>
 
         {error && <p className="auth-message error">{error}</p>}
@@ -815,6 +641,13 @@ export default function Register() {
                 onClick={() => setShowSuccessModal(false)}
               >
                 Got it
+              </button>
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={() => navigate("/what-makes-us-different")}
+              >
+                What makes us different
               </button>
               <button
                 type="button"

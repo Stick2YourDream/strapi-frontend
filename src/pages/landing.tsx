@@ -1,5 +1,4 @@
 import "../css/landing.css";
-import { CheckCircle2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { gsap } from "gsap";
@@ -98,6 +97,7 @@ export default function Landing() {
   const navigate = useNavigate();
   const { user, profile, logout } = useAuth();
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const intentRef = useRef<HTMLDivElement | null>(null);
   usePageMeta({
     title: "Your Social Place | Motivational social network without all the fluff",
     description:
@@ -117,13 +117,7 @@ export default function Landing() {
   const [focusLoading, setFocusLoading] = useState(true);
   const [focusPreviews, setFocusPreviews] = useState<Record<string, LinkPreview | null>>({});
   const [selectedIntent, setSelectedIntent] = useState("");
-  const [suggestionOpen, setSuggestionOpen] = useState(false);
-  const [suggestionName, setSuggestionName] = useState("");
-  const [suggestionEmail, setSuggestionEmail] = useState("");
-  const [suggestionMessage, setSuggestionMessage] = useState("");
-  const [suggestionSending, setSuggestionSending] = useState(false);
-  const [suggestionStatus, setSuggestionStatus] = useState<string | null>(null);
-  const [suggestionError, setSuggestionError] = useState<string | null>(null);
+  const [intentOpen, setIntentOpen] = useState(false);
   const { counts, total, loading, refresh, markAllRead, previews, acceptFriendRequest } =
     useNotifications(user?.id, profile?.notificationSettings);
   const [acceptingRequests, setAcceptingRequests] = useState<Record<string, boolean>>({});
@@ -184,7 +178,7 @@ export default function Landing() {
     const ownerData = source === "featured" ? normalize(attrs.owner?.data ?? attrs.owner) : null;
     const author =
       source === "featured"
-        ? ownerData?.username || ownerData?.email || "Community"
+        ? ownerData?.email || "Community"
         : "Your Social Place";
 
     const title =
@@ -311,16 +305,16 @@ export default function Landing() {
         const displayName =
           payload.firstName || payload.lastName
             ? `${payload.firstName || ""} ${payload.lastName || ""}`.trim()
-            : attrs.handle || attrs.username || user.username;
+            : attrs.handle || user.email;
         setProfileSummary({
           displayName,
-          handle: attrs.handle || user.username,
+          handle: attrs.handle || user.email,
           avatarUrl: pickMediaUrl(attrs.avatar),
         });
       } catch {
         setProfileSummary({
-          displayName: user.username,
-          handle: user.username,
+          displayName: user.email || "Account",
+          handle: user.email || "account",
         });
       }
     };
@@ -329,23 +323,18 @@ export default function Landing() {
   }, [user]);
 
   useEffect(() => {
-    if (!user) return;
-    if (!suggestionName) {
-      setSuggestionName(profileSummary?.displayName || user.username || "");
-    }
-    if (!suggestionEmail && user.email) {
-      setSuggestionEmail(user.email);
-    }
-  }, [profileSummary?.displayName, suggestionEmail, suggestionName, user]);
-
-  useEffect(() => {
     setProfileMenuOpen(false);
     setShowNotifications(false);
   }, [user]);
 
+  useEffect(() => {
+    if (!intentOpen) return;
+    intentRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [intentOpen]);
+
   const nameForDisplay = useMemo(
-    () => profileSummary?.displayName || user?.username || "Account",
-    [profileSummary?.displayName, user?.username]
+    () => profileSummary?.displayName || user?.email || "Account",
+    [profileSummary?.displayName, user?.email]
   );
 
   const messagePreviewText = useMemo(() => {
@@ -556,32 +545,13 @@ export default function Landing() {
   );
   const profileInitial = nameForDisplay.charAt(0).toUpperCase();
 
-  const handleSuggestionSubmit = async () => {
-    const message = suggestionMessage.trim();
-    if (!message) {
-      setSuggestionError("Please share a suggestion before sending.");
-      return;
-    }
+  const openIntentPicker = () => {
+    setIntentOpen(true);
+  };
 
-    setSuggestionSending(true);
-    setSuggestionError(null);
-    setSuggestionStatus(null);
-    try {
-      await api.post("/suggestions", {
-        message,
-        name: suggestionName.trim(),
-        email: suggestionEmail.trim(),
-        pageUrl: window.location.href,
-        userId: user?.id,
-        handle: profileSummary?.handle || user?.username,
-      });
-      setSuggestionStatus("Thank you! Your suggestion was sent.");
-      setSuggestionMessage("");
-    } catch {
-      setSuggestionError("Unable to send suggestion right now.");
-    } finally {
-      setSuggestionSending(false);
-    }
+  const handleIntentSelect = (intentId: string) => {
+    setSelectedIntent(intentId);
+    navigate(`/register?intent=${encodeURIComponent(intentId)}`);
   };
 
   const renderFocusItem = (post: FocusPost, fallbackLabel: string, keyPrefix: string) => {
@@ -646,6 +616,7 @@ export default function Landing() {
           </button>
           <div className="landing-beta">BETA</div>
           <div className="landing-links">
+            <a href="/what-makes-us-different">What makes us different</a>
             <a href="/guidelines">Guidelines</a>
             <a href="/safety">Safety</a>
             <a href="/report">Report</a>
@@ -759,12 +730,12 @@ export default function Landing() {
               </div>
             ) : (
               <>
+                <button className="btn-primary" onClick={openIntentPicker}>
+                  Signup Now
+                </button>
                 <button className="btn-ghost" onClick={() => navigate("/login")}>
                   Log in
                 </button>
-                {/* <button className="btn-primary" onClick={() => navigate("/register")}>
-                  Get started
-                </button> */}
               </>
             )}
           </div>
@@ -787,55 +758,41 @@ export default function Landing() {
               you'll pass it forward-helping someone else stay in motion, too. No fluff-just people 
               lifting each other up and keeping their word.
             </p>
-            <div className="hero-intent">
-              <p className="hero-intent-label">Choose your intention</p>
-              <div className="hero-intent-options">
-                {INTENT_OPTIONS.map((option) => (
-                  <button
-                    key={option.id}
-                    type="button"
-                    className={`hero-intent-button${
-                      selectedIntent === option.id ? " is-active" : ""
-                    }`}
-                    onClick={() => setSelectedIntent(option.id)}
-                  >
-                    <span className="hero-intent-title">{option.label}</span>
-                    <span className="hero-intent-sub">{option.detail}</span>
-                  </button>
-                ))}
-              </div>
-              <p className="hero-intent-note">
-                {selectedIntentOption
-                  ? `Great. We'll tailor your onboarding for ${selectedIntentOption.label.toLowerCase()}.`
-                  : "Pick an intention to personalize your start."}
-              </p>
-            </div>
             <div className="hero-cta">
               <button
                 className="btn-primary"
-                onClick={() =>
-                  navigate(
-                    selectedIntent
-                      ? `/register?intent=${encodeURIComponent(selectedIntent)}`
-                      : "/register"
-                  )
-                }
-                disabled={!selectedIntent}
+                onClick={openIntentPicker}
               >
-                {selectedIntent ? "Continue to signup" : "Choose an intention"}
+                Signup Now
               </button>
               <button className="btn-ghost" onClick={() => navigate("/login")}>
                 Already with us?
               </button>
             </div>
-            {!selectedIntent && (
-              <button
-                type="button"
-                className="hero-cta-skip"
-                onClick={() => navigate("/register")}
-              >
-                Skip for now
-              </button>
+            {intentOpen && (
+              <div className="hero-intent" ref={intentRef}>
+                <p className="hero-intent-label">Choose your intention</p>
+                <div className="hero-intent-options">
+                  {INTENT_OPTIONS.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      className={`hero-intent-button${
+                        selectedIntent === option.id ? " is-active" : ""
+                      }`}
+                      onClick={() => handleIntentSelect(option.id)}
+                    >
+                      <span className="hero-intent-title">{option.label}</span>
+                      <span className="hero-intent-sub">{option.detail}</span>
+                    </button>
+                  ))}
+                </div>
+                <p className="hero-intent-note">
+                  {selectedIntentOption
+                    ? `Great. We'll tailor your onboarding for ${selectedIntentOption.label.toLowerCase()}.`
+                    : "Pick an intention to continue to signup."}
+                </p>
+              </div>
             )}
           </div>
 
@@ -903,140 +860,6 @@ export default function Landing() {
           </div>
         </section>
 
-        <section className="section">
-          <div className="section-header">
-            <h2>Built for people who make things</h2>
-            <span className="muted">Creators, founders, designers, builders.</span>
-          </div>
-          <div className="feature-grid">
-            <div className="feature">
-              <h3>Frictionless invites</h3>
-              <p>Find friends by handle and get instant context with bios and posts.</p>
-            </div>
-            <div className="feature">
-              <h3>Signals not noise</h3>
-              <p>Activity cues highlight who&apos;s moving so you can support fast.</p>
-            </div>
-            <div className="feature">
-              <h3>Media-forward</h3>
-              <p>Drop images, videos, and quick updates—no formatting battles.</p>
-            </div>
-            <div className="feature">
-              <h3>Private threads</h3>
-              <p>DMs that stay lightweight, focused, and discoverable with your crew.</p>
-            </div>
-            <div className="feature">
-              <h3>Momentum metrics</h3>
-              <p>Track streaks and tiny wins to keep the habit alive week over week.</p>
-            </div>
-            <div className="feature">
-              <h3>Secure & trusted</h3>
-              <p>Built on Strapi with modern auth—your circle stays private.</p>
-            </div>
-          </div>
-        </section>
-
-        <section className="section">
-          <div className="section-header">
-            <h2>What you Get!</h2>
-            <span className="muted">Define Trust Within Our Community!</span>
-          </div>
-          <ul className="trust-list">
-            <li>
-              <CheckCircle2 size={20} aria-hidden="true" />
-              <span>No doomscrolling features</span>
-            </li>
-            <li>
-              <CheckCircle2 size={20} aria-hidden="true" />
-              <span>Encouragement and accountability first</span>
-            </li>
-            <li>
-              <CheckCircle2 size={20} aria-hidden="true" />
-              <span>Clear rules with fast reporting</span>
-            </li>
-            <li>
-              <CheckCircle2 size={20} aria-hidden="true" />
-              <span>Safer defaults, private-by-default profiles</span>
-            </li>
-          </ul>
-        </section>
-
-        <section className="section safety-section" id="safety">
-          <div className="section-header">
-            <h2>Safety &amp; Moderation</h2>
-            <span className="muted">Clear expectations, quick action, respectful space.</span>
-          </div>
-          <div className="safety-grid">
-            <div className="safety-card">
-              <h3>Report in a few taps</h3>
-              <p>
-                Flag a post or user from any profile. Reports go straight into our
-                review queue.
-              </p>
-            </div>
-            <div className="safety-card">
-              <h3>Mute or block instantly</h3>
-              <p>
-                Mute stops inbound messages. Block removes all communication between
-                two users.
-              </p>
-            </div>
-            <div className="safety-card">
-              <h3>Private-by-default</h3>
-              <p>
-                Share at your pace. Keep your updates in a smaller circle until you
-                decide otherwise.
-              </p>
-            </div>
-          </div>
-          <div className="safety-steps" id="reporting">
-            <div className="safety-step">
-              <span className="safety-step-number">1</span>
-              <div>
-                <strong>Report</strong>
-                <p>Tell us what happened and why it feels unsafe or off-topic.</p>
-              </div>
-            </div>
-            <div className="safety-step">
-              <span className="safety-step-number">2</span>
-              <div>
-                <strong>Review</strong>
-                <p>Our team reviews context, history, and impact.</p>
-              </div>
-            </div>
-            <div className="safety-step">
-              <span className="safety-step-number">3</span>
-              <div>
-                <strong>Action</strong>
-                <p>We remove content, warn, or restrict accounts based on severity.</p>
-              </div>
-            </div>
-          </div>
-          <div className="safety-actions">
-            <a className="btn-ghost" href="/guidelines#reporting">
-              Read Community Guidelines
-            </a>
-            <a className="btn-primary" href="/report">
-              How reporting works
-            </a>
-          </div>
-        </section>
-
-        {/* <section className="cta">
-          <div>
-            <h3>Ready to stick to your dream?</h3>
-            <p>Join the crew that celebrates your output, not your busywork.</p>
-          </div>
-          <div className="cta-actions">
-            <button className="btn-primary" onClick={() => navigate("/register")}>
-              Claim your spot
-            </button>
-            <button className="btn-ghost" onClick={() => navigate("/login")}>
-              I already have an account
-            </button>
-          </div>
-        </section> */}
-
         <footer className="landing-footer">
           <div className="footer-row footer-brand">
             <div className="footer-logo">
@@ -1055,6 +878,7 @@ export default function Landing() {
                 <a href="/register">Create account</a>
               </>
             )}
+            <a href="/what-makes-us-different">What makes us different</a>
             <a href="/guidelines">Community Guidelines</a>
           </div>
           <div className="footer-row footer-column">
@@ -1081,92 +905,6 @@ export default function Landing() {
           </div>
         </footer>
       </div>
-
-      <button
-        type="button"
-        className="suggestion-fab"
-        onClick={() => {
-          setSuggestionOpen(true);
-          setSuggestionStatus(null);
-          setSuggestionError(null);
-        }}
-      >
-        Make A Suggestion!
-      </button>
-
-      {suggestionOpen && (
-        <div className="suggestion-overlay" role="dialog" aria-modal="true">
-          <div className="suggestion-modal">
-            <div className="suggestion-header">
-              <div>
-                <h3>Suggestion Box</h3>
-                <p>Help us shape the beta. Share what you want to see next.</p>
-              </div>
-              <button
-                type="button"
-                className="suggestion-close"
-                onClick={() => setSuggestionOpen(false)}
-              >
-                Close
-              </button>
-            </div>
-            <div className="suggestion-body">
-              <div className="field">
-                <label>Your name (optional)</label>
-                <input
-                  className="auth-input"
-                  value={suggestionName}
-                  onChange={(e) => setSuggestionName(e.target.value)}
-                  placeholder="Your name"
-                />
-              </div>
-              <div className="field">
-                <label>Email (optional)</label>
-                <input
-                  className="auth-input"
-                  type="email"
-                  value={suggestionEmail}
-                  onChange={(e) => setSuggestionEmail(e.target.value)}
-                  placeholder="you@example.com"
-                />
-              </div>
-              <div className="field">
-                <label>Your suggestion</label>
-                <textarea
-                  className="auth-input"
-                  rows={4}
-                  value={suggestionMessage}
-                  onChange={(e) => setSuggestionMessage(e.target.value)}
-                  placeholder="Tell us what would make Your Social Place better."
-                />
-              </div>
-              {suggestionError && (
-                <p className="auth-message error">{suggestionError}</p>
-              )}
-              {suggestionStatus && (
-                <p className="auth-message info">{suggestionStatus}</p>
-              )}
-            </div>
-            <div className="suggestion-footer">
-              <button
-                className="btn-ghost"
-                type="button"
-                onClick={() => setSuggestionOpen(false)}
-              >
-                Cancel
-              </button>
-              <button
-                className="btn-primary"
-                type="button"
-                onClick={handleSuggestionSubmit}
-                disabled={suggestionSending}
-              >
-                {suggestionSending ? "Sending..." : "Send suggestion"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

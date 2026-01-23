@@ -9,7 +9,7 @@ import "../css/login.css";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { getOrCreateDeviceId } from "../utils/device-id";
 
-type VerificationMethod = "sms" | "email";
+type VerificationMethod = "sms" | "email" | "totp";
 
 export default function Login() {
   const [identifier, setIdentifier] = useState("");
@@ -68,11 +68,15 @@ export default function Login() {
         setChallengeId(res.data.challengeId);
         setChallengeMethod(res.data.method);
         setDeliveryHint(res.data.deliveryHint ?? null);
-        setInfo(
-          res.data.deliveryHint
-            ? `We sent a code to ${res.data.deliveryHint}.`
-            : "We sent a verification code."
-        );
+        if (res.data.method === "totp") {
+          setInfo("Enter the code from your authenticator app.");
+        } else {
+          setInfo(
+            res.data.deliveryHint
+              ? `We sent a code to ${res.data.deliveryHint}.`
+              : "We sent a verification code."
+          );
+        }
         return;
       }
 
@@ -103,7 +107,7 @@ export default function Login() {
       }
 
       if (msgLower.includes("invalid identifier") || msgLower.includes("invalid password")) {
-        setError("Invalid email, username, or password.");
+        setError("Invalid email, phone number, or password.");
         return;
       }
 
@@ -190,6 +194,10 @@ export default function Login() {
 
   const handleResend = async () => {
     if (!challengeId) return;
+    if (challengeMethod === "totp") {
+      setError("Authenticator codes cannot be resent.");
+      return;
+    }
     setError(null);
     setInfo(null);
     try {
@@ -241,11 +249,11 @@ export default function Login() {
         {!isVerificationStep ? (
           <>
             <div className="field">
-              <label>Email or username</label>
+              <label>Email or phone number</label>
               <input
                 className="auth-input"
                 type="text"
-                placeholder="you@example.com"
+                placeholder="you@example.com or +1 555 555 1234"
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
                 required
@@ -267,7 +275,7 @@ export default function Login() {
             </div>
 
             <p className="auth-hint">
-              We will send a verification code using your preferred method from profile settings.
+              If you have 2FA enabled, we will send a code or prompt your authenticator app.
             </p>
 
             <label className="auth-check">
@@ -299,14 +307,16 @@ export default function Login() {
             </div>
 
             <div className="sms-actions">
-              <button
-                type="button"
-                className="btn ghost"
-                onClick={handleResend}
-                disabled={resending}
-              >
-                {resending ? "Resending..." : "Resend code"}
-              </button>
+              {challengeMethod !== "totp" && (
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={handleResend}
+                  disabled={resending}
+                >
+                  {resending ? "Resending..." : "Resend code"}
+                </button>
+              )}
               <button type="button" className="btn ghost" onClick={handleBack}>
                 Back to login
               </button>

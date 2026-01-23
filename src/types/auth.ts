@@ -1,7 +1,6 @@
 // src/types/auth.ts
 export type AuthUser = {
   id: number;
-  username: string;
   email: string;
   confirmed: boolean;
 };
@@ -20,7 +19,7 @@ export type LoginStartResponse =
     }
   | {
       requiresVerification: true;
-      method: "sms" | "email";
+      method: "sms" | "email" | "totp";
       challengeId: string;
       deliveryHint?: string;
     };
