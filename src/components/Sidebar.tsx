@@ -41,6 +41,8 @@ type SidebarProps = {
   onSettingsViewChange?: (view: "profile" | "settings") => void;
   settingsSection?: SettingsSection;
   onSettingsSectionChange?: (section: SettingsSection) => void;
+  groupView?: "feed" | "settings";
+  onGroupViewChange?: (view: "feed" | "settings") => void;
 };
 
 const trimPreviewText = (value?: string, max = 72) => {
@@ -57,6 +59,8 @@ export default function Sidebar({
   onSettingsViewChange,
   settingsSection = "appearance",
   onSettingsSectionChange,
+  groupView = "feed",
+  onGroupViewChange,
 }: SidebarProps) {
   const navigate = useNavigate();
   const { user, profile, logout } = useAuth();
@@ -149,7 +153,7 @@ export default function Sidebar({
 
   const nameForDisplay = profileCard?.displayName || "Me";
   const handleLogoClick = () => {
-    navigate("/");
+    navigate("/dashboard");
     setMenuOpen(false);
   };
 
@@ -181,6 +185,9 @@ export default function Sidebar({
     canToggleSettings &&
     isSettingsView &&
     typeof onSettingsSectionChange === "function";
+  const canToggleGroupSettings =
+    active === "groups" && typeof onGroupViewChange === "function";
+  const isGroupSettingsView = groupView === "settings";
 
   const handleSettingsToggle = () => {
     if (!onSettingsViewChange) return;
@@ -195,6 +202,14 @@ export default function Sidebar({
     setShowNotifications(false);
     setMenuOpen(false);
     onSettingsSectionChange(section);
+  };
+
+  const handleGroupSettingsToggle = () => {
+    if (!onGroupViewChange) return;
+    setShowProfileMenu(false);
+    setShowNotifications(false);
+    setMenuOpen(false);
+    onGroupViewChange(isGroupSettingsView ? "feed" : "settings");
   };
 
   const messagePreviewText = useMemo(() => {
@@ -493,6 +508,24 @@ export default function Sidebar({
               >
                 My Groups
               </button>
+              {canToggleGroupSettings && (
+                <button
+                  className="mobile-profile-item"
+                  type="button"
+                  onClick={handleGroupSettingsToggle}
+                >
+                  {isGroupSettingsView
+                    ? "Return to group feed"
+                    : "Group look and feel"}
+                </button>
+              )}
+              <button
+                className="mobile-profile-item"
+                type="button"
+                onClick={() => handleProfileAction("/")}
+              >
+                Return Home
+              </button>
               <button
                 className="mobile-profile-item"
                 type="button"
@@ -689,6 +722,14 @@ export default function Sidebar({
                     className="btn ghost nav-btn"
                     type="button"
                     style={{ width: "100%", border: "none", borderRadius: 0, justifyContent: "flex-start" }}
+                    onClick={() => handleProfileAction("/")}
+                  >
+                    Return Home
+                  </button>
+                  <button
+                    className="btn ghost nav-btn"
+                    type="button"
+                    style={{ width: "100%", border: "none", borderRadius: 0, justifyContent: "flex-start" }}
                     onClick={() => {
                       logout();
                       navigate("/login");
@@ -736,6 +777,47 @@ export default function Sidebar({
                 )}
               </span>
               <span>{isSettingsView ? "Back to Profile" : "Settings"}</span>
+            </button>
+          )}
+          {canToggleGroupSettings && (
+            <button
+              type="button"
+              className={`btn ghost sidebar-settings-button${
+                isGroupSettingsView ? " is-active" : ""
+              }`}
+              onClick={handleGroupSettingsToggle}
+              aria-pressed={isGroupSettingsView}
+            >
+              <span className="sidebar-settings-icon" aria-hidden="true">
+                {isGroupSettingsView ? (
+                  <svg viewBox="0 0 24 24">
+                    <path
+                      d="M15 6l-6 6 6 6"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 24 24">
+                    <path
+                      d="M19.4 13a7.6 7.6 0 0 0 .05-2l2.1-1.64-2-3.46-2.46 1a7.56 7.56 0 0 0-1.72-1l-.38-2.6h-4l-.38 2.6a7.56 7.56 0 0 0-1.72 1l-2.46-1-2 3.46L4.55 11a7.6 7.6 0 0 0 0 2l-2.1 1.64 2 3.46 2.46-1c.54.42 1.12.76 1.72 1l.38 2.6h4l.38-2.6c.6-.24 1.18-.58 1.72-1l2.46 1 2-3.46L19.4 13zM12 15.2a3.2 3.2 0 1 1 0-6.4 3.2 3.2 0 0 1 0 6.4z"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                )}
+              </span>
+              <span>
+                {isGroupSettingsView
+                  ? "Return to group feed"
+                  : "Group look and feel"}
+              </span>
             </button>
           )}
           {canSelectSettingsSection && (

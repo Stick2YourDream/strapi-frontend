@@ -1,5 +1,5 @@
 // src/pages/Dashboard.tsx
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api/strapi";
 import axios from "axios";
@@ -10,6 +10,7 @@ import TopbarSearch from "../components/TopbarSearch";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { useUserPreferences } from "../context/UserPreferencesContext";
 import type { SignalTag } from "../constants/signalTags";
+import { sanitizePostText } from "../utils/emoji";
 
 type CommentItem = {
   id: string | number;
@@ -108,6 +109,17 @@ const getOwnerName = (owner: unknown, fallback: string) => {
   };
   return getString(ownerAttrs.email) ?? (typeof owner === "string" ? owner : fallback);
 };
+const cleanNameFallback = (value?: string) => {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (text.includes("@")) return text.split("@")[0];
+  return text;
+};
+const firstNameFromLabel = (value?: string) => {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  return text.split(/\s+/)[0] || "";
+};
 const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
 const pickMediaUrl = (mediaField: unknown): string | undefined => {
   if (!mediaField) return undefined;
@@ -128,6 +140,7 @@ const pickMediaUrl = (mediaField: unknown): string | undefined => {
 };
 
 const PREVIEW_DEBOUNCE_MS = 450;
+const POSTS_PAGE_SIZE = 20;
 const extractFirstUrl = (text: string) => {
   const match = text.match(/(https?:\/\/[^\s]+|www\.[^\s]+)/i);
   if (!match) return "";
@@ -155,6 +168,25 @@ const mediaDescriptor = (mediaUrl?: string, hasLink?: boolean) => {
   if (mediaUrl) return isVideoUrl(mediaUrl) ? "with a video" : "with a picture";
   if (hasLink) return "with a link";
   return "";
+};
+const buildIdFilter = (field: string, ids: number[]) =>
+  ids.map((id, index) => `filters[${field}][id][$in][${index}]=${id}`).join("&");
+const getPostKey = (entry: unknown) => {
+  const record = asRecord(entry);
+  const rawId = record.id ?? record.documentId;
+  return rawId === undefined ? "" : String(rawId);
+};
+const mergePostLists = (prev: unknown[], next: unknown[]) => {
+  if (!next.length) return prev;
+  const seen = new Set(prev.map((entry) => getPostKey(entry)).filter(Boolean));
+  const merged = [...prev];
+  next.forEach((entry) => {
+    const key = getPostKey(entry);
+    if (key && seen.has(key)) return;
+    merged.push(entry);
+    if (key) seen.add(key);
+  });
+  return merged;
 };
 const feedbackLabelFor = (post: NormalizedPost) => {
   const audience = post.feedbackAudience;
@@ -352,15 +384,23 @@ export default function Dashboard() {
   const [feedbackAudience, setFeedbackAudience] = useState("none");
   const [feedbackTargetId, setFeedbackTargetId] = useState<number | null>(null);
   const [friendOptions, setFriendOptions] = useState<FriendOption[]>([]);
-  const [, setFriendIds] = useState<number[]>([]);
+  const [friendIds, setFriendIds] = useState<number[]>([]);
   const [favoriteFriendIds, setFavoriteFriendIds] = useState<number[]>([]);
-  const [, setGroupIds] = useState<number[]>([]);
+  const [groupIds, setGroupIds] = useState<number[]>([]);
   const [commentInputs, setCommentInputs] = useState<Record<string | number, string>>({});
   const [linkPreview, setLinkPreview] = useState<LinkPreview | null>(null);
   const [linkPreviewLoading, setLinkPreviewLoading] = useState(false);
   const [linkPreviewError, setLinkPreviewError] = useState<string | null>(null);
   const [previewCache, setPreviewCache] = useState<Record<string, LinkPreview | null>>({});
   const [profileAvatarUrl, setProfileAvatarUrl] = useState<string | null>(null);
+  const [profileNameMap, setProfileNameMap] = useState<Record<number, string>>({});
+  const [userPostsPage, setUserPostsPage] = useState(1);
+  const [groupPostsPage, setGroupPostsPage] = useState(1);
+  const [hasMoreUserPosts, setHasMoreUserPosts] = useState(true);
+  const [hasMoreGroupPosts, setHasMoreGroupPosts] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const loadIdRef = useRef(0);
 
   const navigate = useNavigate();
   const { user, profile } = useAuth();
@@ -416,23 +456,28 @@ export default function Dashboard() {
     };
   }, [user]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadPosts = async () => {
-      setLoading(true);
+  const reloadPosts = useCallback(
+    async (options?: { silent?: boolean }) => {
+      const loadId = ++loadIdRef.current;
+      if (!options?.silent) {
+        setLoading(true);
+      }
       setError(null);
 
       const token = localStorage.getItem("token");
       if (!token) {
-        setLoading(false);
+        if (!options?.silent) {
+          setLoading(false);
+        }
         navigate("/login");
         return;
       }
 
       try {
         if (!userId) {
-          setLoading(false);
+          if (!options?.silent) {
+            setLoading(false);
+          }
           return;
         }
 
@@ -441,6 +486,8 @@ export default function Dashboard() {
             `&filters[$or][1][target][id][$eq]=${userId}` +
             `&populate=requester&populate=target`
         );
+
+        if (loadId !== loadIdRef.current) return;
 
         const acceptedIds = new Set<number>();
         const favoriteIds = new Set<number>();
@@ -494,42 +541,130 @@ export default function Dashboard() {
         setGroupIds(memberGroups);
 
         const userFilterIds = Array.from(new Set([userId, ...nextFriendIds]));
-        const userFilter = userFilterIds
-          .map((id, index) => `filters[owner][id][$in][${index}]=${id}`)
-          .join("&");
-        const groupFilter = memberGroups
-          .map((id, index) => `filters[group][id][$in][${index}]=${id}`)
-          .join("&");
+        const userFilter = userFilterIds.length
+          ? buildIdFilter("owner", userFilterIds)
+          : "";
+        const groupFilter = memberGroups.length ? buildIdFilter("group", memberGroups) : "";
 
         const [adminRes, userRes, groupRes, commentsRes] = await Promise.all([
-          api.get("/posts?populate=Pictures"),
+          api.get(`/posts?populate=Pictures&pagination[pageSize]=${POSTS_PAGE_SIZE}`),
           userFilterIds.length
             ? api.get(
                 `/users-posts?${userFilter}&populate=Users_Pictures&populate=owner&populate=feedbackTarget` +
-                  `&sort=createdAt:desc&pagination[pageSize]=200`
+                  `&sort=createdAt:desc&pagination[pageSize]=${POSTS_PAGE_SIZE}&pagination[page]=1`
               )
-            : Promise.resolve({ data: { data: [] } }),
+            : Promise.resolve({ data: { data: [], meta: {} } }),
           memberGroups.length
             ? api.get(
                 `/group-posts?${groupFilter}&populate=media&populate=owner&populate=group` +
-                  `&sort=createdAt:desc&pagination[pageSize]=200`
+                  `&sort=createdAt:desc&pagination[pageSize]=${POSTS_PAGE_SIZE}&pagination[page]=1`
               )
-            : Promise.resolve({ data: { data: [] } }),
+            : Promise.resolve({ data: { data: [], meta: {} } }),
           api.get("/comments?populate=owner"),
         ]);
 
-        const allComments = commentsRes.data?.data ?? [];
+        if (loadId !== loadIdRef.current) return;
 
-        if (cancelled) return;
+        const allComments = commentsRes.data?.data ?? [];
+        const userPostsData = userRes.data?.data ?? [];
+        const groupPostsData = groupRes.data?.data ?? [];
+        const profileIds = new Set<number>();
+        const addProfileId = (id?: number) => {
+          if (typeof id === "number" && Number.isFinite(id)) {
+            profileIds.add(id);
+          }
+        };
+        const collectOwnerId = (owner: unknown) => {
+          const ownerId = getEntityId(owner);
+          if (ownerId) profileIds.add(ownerId);
+        };
+        addProfileId(userId);
+        nextFriendIds.forEach((id) => addProfileId(id));
+
+        userPostsData.forEach((entry: unknown) => {
+          const attrs = normalize(entry) as {
+            owner?: unknown;
+            feedbackTarget?: unknown;
+          };
+          collectOwnerId(attrs.owner ?? asRecord(entry).owner);
+          collectOwnerId(attrs.feedbackTarget);
+        });
+
+        groupPostsData.forEach((entry: unknown) => {
+          const attrs = normalize(entry) as { owner?: unknown };
+          collectOwnerId(attrs.owner ?? asRecord(entry).owner);
+        });
+
+        allComments.forEach((entry: unknown) => {
+          const record = asRecord(entry);
+          const attrs = asRecord(record.attributes);
+          collectOwnerId(attrs.owner ?? record.owner);
+        });
+
+        let nextNameMap: Record<number, string> = {};
+        if (userId && nameFromProfile) {
+          nextNameMap[userId] = nameFromProfile;
+        }
+
+        if (profileIds.size > 0) {
+          const profileFilter = Array.from(profileIds)
+            .map((id, index) => `filters[user][id][$in][${index}]=${id}`)
+            .join("&");
+          try {
+            const profilesRes = await api.get(
+              `/profiles?${profileFilter}&populate=user&pagination[pageSize]=200`
+            );
+            (profilesRes.data?.data ?? []).forEach((entry: unknown) => {
+              const attrs = normalize(entry) as {
+                firstName?: string;
+                lastName?: string;
+                handle?: string;
+                user?: unknown;
+              };
+              const userAttrs = normalize(getEntity(attrs.user)) as { email?: string };
+              const profileUserId = getEntityId(attrs.user);
+              if (!profileUserId) return;
+              const firstName = String(attrs.firstName || attrs.firstname || "").trim();
+              const lastName = String(attrs.lastName || attrs.lastname || "").trim();
+              const fullName = `${firstName} ${lastName}`.trim();
+              const fallback = String(attrs.handle || userAttrs.email || "").trim();
+              const label = fullName || fallback;
+              if (label) {
+                nextNameMap[profileUserId] = label;
+              }
+            });
+          } catch {
+            // ignore profile name mapping failures
+          }
+        }
+
+        const userPagination = userRes.data?.meta?.pagination;
+        const groupPagination = groupRes.data?.meta?.pagination;
+        setUserPostsPage(1);
+        setGroupPostsPage(1);
+        setHasMoreUserPosts(
+          userFilterIds.length
+            ? userPagination
+              ? userPagination.page < userPagination.pageCount
+              : userPostsData.length >= POSTS_PAGE_SIZE
+            : false
+        );
+        setHasMoreGroupPosts(
+          memberGroups.length
+            ? groupPagination
+              ? groupPagination.page < groupPagination.pageCount
+              : groupPostsData.length >= POSTS_PAGE_SIZE
+            : false
+        );
+
+        setProfileNameMap(nextNameMap);
         setPosts({
-          user: userRes.data?.data ?? [],
-          group: groupRes.data?.data ?? [],
+          user: userPostsData,
+          group: groupPostsData,
           comments: allComments,
           admin: adminRes.data?.data ?? [],
         });
       } catch (err: unknown) {
-        if (cancelled) return;
-
         if (axios.isAxiosError(err)) {
           const status = err.response?.status;
           const data = err.response?.data as
@@ -559,15 +694,117 @@ export default function Dashboard() {
           setError("Failed to load posts");
         }
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!options?.silent) {
+          setLoading(false);
+        }
       }
-    };
+    },
+    [nameFromProfile, navigate, userId]
+  );
 
-    loadPosts();
+  useEffect(() => {
+    void reloadPosts();
+  }, [reloadPosts]);
+
+  const loadMorePosts = useCallback(async () => {
+    if (isLoadingMore) return;
+    if (!hasMoreUserPosts && !hasMoreGroupPosts) return;
+    if (!userId) return;
+
+    const userFilterIds = Array.from(new Set([userId, ...friendIds]));
+    const shouldLoadUser = hasMoreUserPosts && userFilterIds.length > 0;
+    const shouldLoadGroup = hasMoreGroupPosts && groupIds.length > 0;
+    if (!shouldLoadUser && !shouldLoadGroup) return;
+
+    setIsLoadingMore(true);
+    const loadId = loadIdRef.current;
+    try {
+      const nextUserPage = shouldLoadUser ? userPostsPage + 1 : userPostsPage;
+      const nextGroupPage = shouldLoadGroup ? groupPostsPage + 1 : groupPostsPage;
+      const userFilter = shouldLoadUser ? buildIdFilter("owner", userFilterIds) : "";
+      const groupFilter = shouldLoadGroup ? buildIdFilter("group", groupIds) : "";
+
+      const [userRes, groupRes] = await Promise.all([
+        shouldLoadUser
+          ? api.get(
+              `/users-posts?${userFilter}&populate=Users_Pictures&populate=owner&populate=feedbackTarget` +
+                `&sort=createdAt:desc&pagination[pageSize]=${POSTS_PAGE_SIZE}&pagination[page]=${nextUserPage}`
+            )
+          : Promise.resolve({ data: { data: [], meta: {} } }),
+        shouldLoadGroup
+          ? api.get(
+              `/group-posts?${groupFilter}&populate=media&populate=owner&populate=group` +
+                `&sort=createdAt:desc&pagination[pageSize]=${POSTS_PAGE_SIZE}&pagination[page]=${nextGroupPage}`
+            )
+          : Promise.resolve({ data: { data: [], meta: {} } }),
+      ]);
+
+      if (loadId !== loadIdRef.current) return;
+
+      const userPostsData = userRes.data?.data ?? [];
+      const groupPostsData = groupRes.data?.data ?? [];
+
+      if (shouldLoadUser) {
+        const userPagination = userRes.data?.meta?.pagination;
+        setUserPostsPage(nextUserPage);
+        setHasMoreUserPosts(
+          userPagination
+            ? userPagination.page < userPagination.pageCount
+            : userPostsData.length >= POSTS_PAGE_SIZE
+        );
+      }
+      if (shouldLoadGroup) {
+        const groupPagination = groupRes.data?.meta?.pagination;
+        setGroupPostsPage(nextGroupPage);
+        setHasMoreGroupPosts(
+          groupPagination
+            ? groupPagination.page < groupPagination.pageCount
+            : groupPostsData.length >= POSTS_PAGE_SIZE
+        );
+      }
+
+      if (userPostsData.length || groupPostsData.length) {
+        setPosts((prev) => ({
+          ...prev,
+          user: shouldLoadUser ? mergePostLists(prev.user, userPostsData) : prev.user,
+          group: shouldLoadGroup ? mergePostLists(prev.group, groupPostsData) : prev.group,
+        }));
+      }
+    } catch (err) {
+      console.error("Load more posts failed", err);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [
+    friendIds,
+    groupIds,
+    hasMoreGroupPosts,
+    hasMoreUserPosts,
+    isLoadingMore,
+    userId,
+    userPostsPage,
+    groupPostsPage,
+  ]);
+
+  useEffect(() => {
+    const node = loadMoreRef.current;
+    if (!node) return;
+    if (!hasMoreUserPosts && !hasMoreGroupPosts) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          void loadMorePosts();
+        }
+      },
+      { rootMargin: "240px" }
+    );
+
+    observer.observe(node);
     return () => {
-      cancelled = true;
+      observer.disconnect();
     };
-  }, [navigate, userId]);
+  }, [hasMoreGroupPosts, hasMoreUserPosts, loadMorePosts]);
 
   const fetchLinkPreview = useCallback(
     async (url: string, options?: { silent?: boolean }): Promise<LinkPreview | null> => {
@@ -612,6 +849,12 @@ export default function Dashboard() {
   const normalizedPosts: NormalizedPost[] = useMemo(() => {
     const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
     const allComments = posts.comments ?? [];
+    const resolveOwnerName = (ownerId?: number, fallback?: string) => {
+      const mapped = ownerId ? profileNameMap[ownerId] : undefined;
+      const base = mapped || cleanNameFallback(fallback) || fallback || "";
+      const firstName = firstNameFromLabel(base);
+      return firstName || base || "User";
+    };
 
     const normalizeUserPost = (post: unknown): NormalizedPost => {
       const attributes = normalize(post) as {
@@ -667,7 +910,10 @@ export default function Dashboard() {
           return {
             id: commentId,
             body: getString(commentRecord.body) ?? "",
-            owner: getOwnerName(ownerSource, "User"),
+            owner: resolveOwnerName(
+              getEntityId(ownerSource),
+              getOwnerName(ownerSource, "User")
+            ),
             ownerId: getEntityId(ownerSource),
           };
         });
@@ -675,14 +921,17 @@ export default function Dashboard() {
       const ownerData = getEntity(attributes.owner);
       const ownerAttrs = normalize(ownerData) as { email?: string };
       const ownerId = getEntityId(ownerData);
-      const ownerName = getString(ownerAttrs.email) ?? "User";
+      const ownerName = resolveOwnerName(ownerId, getString(ownerAttrs.email) ?? "User");
       const feedbackTargetData = getEntity(attributes.feedbackTarget);
       const feedbackTargetAttrs = normalize(feedbackTargetData) as {
         email?: string;
       };
       const feedbackTargetId = getEntityId(feedbackTargetData);
       const feedbackTargetName = feedbackTargetId
-        ? getString(feedbackTargetAttrs.email) ?? `User ${feedbackTargetId}`
+        ? resolveOwnerName(
+            feedbackTargetId,
+            getString(feedbackTargetAttrs.email) ?? `User ${feedbackTargetId}`
+          )
         : undefined;
       const postId =
         typeof rawPostId === "string" || typeof rawPostId === "number" ? rawPostId : title;
@@ -736,7 +985,7 @@ export default function Dashboard() {
       const ownerData = getEntity(attributes.owner);
       const ownerAttrs = normalize(ownerData) as { email?: string };
       const ownerId = getEntityId(ownerData);
-      const ownerName = getString(ownerAttrs.email) ?? "Member";
+      const ownerName = resolveOwnerName(ownerId, getString(ownerAttrs.email) ?? "Member");
       const groupData = getEntity(attributes.group);
       const groupAttrs = normalize(groupData) as { name?: string };
       const groupName = getString(groupAttrs.name) ?? "Group";
@@ -808,7 +1057,10 @@ export default function Dashboard() {
           return {
             id: commentId,
             body: getString(commentRecord.body) ?? "",
-            owner: getOwnerName(ownerSource, "User"),
+            owner: resolveOwnerName(
+              getEntityId(ownerSource),
+              getOwnerName(ownerSource, "User")
+            ),
             ownerId: getEntityId(ownerSource),
           };
         });
@@ -835,7 +1087,7 @@ export default function Dashboard() {
     const favoriteSet = new Set(favoriteFriendIds);
 
     return sortByCreatedAtDesc([...adminPosts, ...userPosts, ...groupPosts], favoriteSet);
-  }, [favoriteFriendIds, posts]);
+  }, [favoriteFriendIds, posts, profileNameMap]);
 
   useEffect(() => {
     const url = extractFirstUrl(formContent);
@@ -911,7 +1163,8 @@ export default function Dashboard() {
   }, []);
 
   const createPost = async () => {
-    const content = formContent.trim();
+    const sanitized = sanitizePostText(formContent);
+    const content = sanitized.trim();
     if (!content && !formFile) {
       setFormError("Add a message or a photo to post.");
       return;
@@ -959,17 +1212,7 @@ export default function Dashboard() {
       setLinkPreviewError(null);
       setFeedbackAudience("none");
       setFeedbackTargetId(null);
-      const [adminRes, userRes] = await Promise.all([
-        api.get("/posts?populate=Pictures"),
-        api.get("/users-posts?populate=Users_Pictures&populate=owner&populate=feedbackTarget"),
-      ]);
-      const commentsRes = await api.get("/comments?populate=owner");
-      setPosts((prev) => ({
-        ...prev,
-        admin: adminRes.data?.data ?? prev.admin ?? [],
-        user: userRes.data?.data ?? [],
-        comments: commentsRes.data?.data ?? [],
-      }));
+      await reloadPosts({ silent: true });
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
         const msg =
@@ -1096,7 +1339,8 @@ export default function Dashboard() {
                     className="auth-input"
                     value={formContent}
                     onChange={(e) => {
-                      setFormContent(e.target.value);
+                      const nextValue = sanitizePostText(e.target.value);
+                      setFormContent(nextValue);
                       setFormError(null);
                     }}
                     placeholder="What's on your mind?"
@@ -1401,6 +1645,13 @@ export default function Dashboard() {
                 </article>
               );
             })}
+          </div>
+          <div className="posts-load-more" ref={loadMoreRef} aria-live="polite">
+            {isLoadingMore && <span>Loading more posts...</span>}
+            {!isLoadingMore &&
+              !hasMoreUserPosts &&
+              !hasMoreGroupPosts &&
+              normalizedPosts.length > 0 && <span>You are all caught up.</span>}
           </div>
       </>
     )}

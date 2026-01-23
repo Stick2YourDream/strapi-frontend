@@ -214,6 +214,8 @@ const VideoTile = ({
   rootRef,
   dataScreenId,
   style,
+  mediaStyle,
+  mediaClassName,
 }: {
   stream: MediaStream | null;
   label: string;
@@ -231,9 +233,14 @@ const VideoTile = ({
   rootRef?: Ref<HTMLDivElement>;
   dataScreenId?: string;
   style?: CSSProperties;
+  mediaStyle?: CSSProperties;
+  mediaClassName?: string;
 }) => {
   const ref = useRef<HTMLVideoElement | null>(null);
   const hasVideo = Boolean(stream?.getVideoTracks().some((track) => track.enabled));
+  const mediaClasses = `video-tile__media${hasVideo ? "" : " is-hidden"}${
+    mediaClassName ? ` ${mediaClassName}` : ""
+  }`;
 
   useEffect(() => {
     if (!ref.current) return;
@@ -263,7 +270,8 @@ const VideoTile = ({
           autoPlay
           playsInline
           muted={muted}
-          className={`video-tile__media${hasVideo ? "" : " is-hidden"}`}
+          className={mediaClasses}
+          style={mediaStyle}
         />
       )}
       {(!stream || !hasVideo) && (
@@ -354,6 +362,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const [pipPosition, setPipPosition] = useState<{ x: number; y: number } | null>(null);
   const [isPipDragging, setIsPipDragging] = useState(false);
   const [isMobileLayout, setIsMobileLayout] = useState(false);
+  const [screenZoomLevels, setScreenZoomLevels] = useState<Record<string, number>>({});
   const [popoutContainer, setPopoutContainer] = useState<HTMLDivElement | null>(null);
   const ringtoneRef = useRef<{ audio: HTMLAudioElement | null }>({
     audio: null,
@@ -668,21 +677,56 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     sendMessage(emoji, "emoji");
   };
 
+  const getScreenZoom = useCallback(
+    (targetId: string) => screenZoomLevels[targetId] ?? 1,
+    [screenZoomLevels]
+  );
+
+  const updateScreenZoom = useCallback((targetId: string, nextZoom: number) => {
+    const clamped = Math.min(3, Math.max(1, nextZoom));
+    setScreenZoomLevels((prev) => ({ ...prev, [targetId]: clamped }));
+  }, []);
+
   const sendControlPointer = (
     event: PointerEvent<HTMLDivElement>,
     targetSocketId: string,
     type: "move" | "click"
   ) => {
     if (screenControlTarget !== targetSocketId) return;
+    const zoom = getScreenZoom(targetSocketId);
     const rect = event.currentTarget.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
-    const x = (event.clientX - rect.left) / rect.width;
-    const y = (event.clientY - rect.top) / rect.height;
+    const rawX = event.clientX - rect.left;
+    const rawY = event.clientY - rect.top;
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
+    const scaledX = (rawX - centerX) / zoom + centerX;
+    const scaledY = (rawY - centerY) / zoom + centerY;
+    const x = Math.min(1, Math.max(0, scaledX / rect.width));
+    const y = Math.min(1, Math.max(0, scaledY / rect.height));
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
     const now = performance.now();
     if (type === "move" && now - controlThrottleRef.current < 50) return;
     controlThrottleRef.current = now;
     sendScreenControlEvent(targetSocketId, { type, x, y });
+  };
+
+  const handleControlPointerDown = (
+    event: PointerEvent<HTMLDivElement>,
+    targetSocketId: string
+  ) => {
+    if (screenControlTarget !== targetSocketId) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    sendControlPointer(event, targetSocketId, "move");
+  };
+
+  const handleControlPointerUp = (
+    event: PointerEvent<HTMLDivElement>,
+    targetSocketId: string
+  ) => {
+    if (screenControlTarget !== targetSocketId) return;
+    sendControlPointer(event, targetSocketId, "click");
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
   };
 
   const playEndCallTone = async () => {
@@ -967,62 +1011,6 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                         {isVideoEnabled ? "On" : "Off"}
                       </button>
                     </div>
-                    <div className="video-preview-group">
-                      <span className="video-preview-label">Blur</span>
-                      <button
-                        type="button"
-                        className={`video-preview-toggle${videoEffects.blur ? " is-active" : ""}`}
-                        onClick={() => setVideoEffects({ blur: !videoEffects.blur })}
-                      >
-                        {videoEffects.blur ? "On" : "Off"}
-                      </button>
-                    </div>
-                  </div>
-                  <div className="video-preview-row">
-                    <div className="video-preview-group is-wide">
-                      <span className="video-preview-label">Camera</span>
-                      <div className="video-preview-backgrounds">
-                        {FILTER_OPTIONS.map((option) => (
-                          <button
-                            key={option.id}
-                            type="button"
-                            className={`video-preview-bg${
-                              videoEffects.filter === option.id ? " is-active" : ""
-                            }`}
-                            onClick={() =>
-                              setVideoEffects({
-                                filter: option.id as typeof videoEffects.filter,
-                              })
-                            }
-                          >
-                            {option.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="video-preview-row">
-                    <div className="video-preview-group is-wide">
-                      <span className="video-preview-label">Background</span>
-                      <div className="video-preview-backgrounds">
-                        {BACKGROUND_OPTIONS.map((option) => (
-                          <button
-                            key={option.id}
-                            type="button"
-                            className={`video-preview-bg${
-                              videoEffects.background === option.id ? " is-active" : ""
-                            }`}
-                            onClick={() =>
-                              setVideoEffects({
-                                background: option.id as typeof videoEffects.background,
-                              })
-                            }
-                          >
-                            {option.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
                   </div>
                 </div>
               </div>
@@ -1164,6 +1152,16 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                       : `screen-${entry.socketId || entry.id}`;
                     const isFullscreen = fullscreenTargetId === tileId;
                     const isPrimary = tileId === primaryScreenTileId;
+                    const zoomKey = entry.isLocal
+                      ? "local"
+                      : entry.socketId || entry.id || "";
+                    const screenZoom = getScreenZoom(zoomKey);
+                    const zoomStyle: CSSProperties = {
+                      transform: `scale(${screenZoom})`,
+                      transformOrigin: "center center",
+                      transition: "transform 0.2s ease",
+                    };
+                    const zoomLabel = `${Math.round(screenZoom * 100)}%`;
                     if (entry.isLocal) {
                       return (
                         <VideoTile
@@ -1175,6 +1173,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                           className={`is-screen is-local${isPrimary ? " is-primary" : ""}`}
                           rootRef={registerScreenTile(tileId)}
                           dataScreenId={tileId}
+                          mediaStyle={zoomStyle}
                         >
                           <div className="screen-share-actions">
                             {activeScreenController && (
@@ -1192,6 +1191,27 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                             >
                               {isFullscreen ? "Exit full screen" : "Full screen"}
                             </button>
+                            <div className="screen-share-zoom">
+                              <button
+                                type="button"
+                                className="screen-share-control"
+                                onClick={() => updateScreenZoom(zoomKey, screenZoom - 0.25)}
+                                disabled={screenZoom <= 1}
+                                aria-label="Zoom out"
+                              >
+                                -
+                              </button>
+                              <span className="screen-share-zoom-label">{zoomLabel}</span>
+                              <button
+                                type="button"
+                                className="screen-share-control"
+                                onClick={() => updateScreenZoom(zoomKey, screenZoom + 0.25)}
+                                disabled={screenZoom >= 3}
+                                aria-label="Zoom in"
+                              >
+                                +
+                              </button>
+                            </div>
                             <button
                               type="button"
                               className="screen-share-control"
@@ -1236,6 +1256,14 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                     const targetId = entry.socketId || entry.id;
                     const isControlling = screenControlTarget === targetId;
                     const isPending = pendingScreenControlTargets.includes(targetId);
+                    const targetZoomKey = targetId || "remote";
+                    const targetZoom = getScreenZoom(targetZoomKey);
+                    const targetZoomStyle: CSSProperties = {
+                      transform: `scale(${targetZoom})`,
+                      transformOrigin: "center center",
+                      transition: "transform 0.2s ease",
+                    };
+                    const targetZoomLabel = `${Math.round(targetZoom * 100)}%`;
 
                     return (
                       <VideoTile
@@ -1246,14 +1274,20 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                         className={`is-screen${isControlling ? " is-controlling" : ""}${
                           isPrimary ? " is-primary" : ""
                         }`}
+                        mediaStyle={targetZoomStyle}
                         onPointerMove={
                           isControlling
                             ? (event) => sendControlPointer(event, targetId, "move")
                             : undefined
                         }
+                        onPointerDown={
+                          isControlling
+                            ? (event) => handleControlPointerDown(event, targetId)
+                            : undefined
+                        }
                         onPointerUp={
                           isControlling
-                            ? (event) => sendControlPointer(event, targetId, "click")
+                            ? (event) => handleControlPointerUp(event, targetId)
                             : undefined
                         }
                         onPointerLeave={
@@ -1273,6 +1307,27 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                           >
                             {isFullscreen ? "Exit full screen" : "Full screen"}
                           </button>
+                          <div className="screen-share-zoom">
+                            <button
+                              type="button"
+                              className="screen-share-control"
+                              onClick={() => updateScreenZoom(targetZoomKey, targetZoom - 0.25)}
+                              disabled={targetZoom <= 1}
+                              aria-label="Zoom out"
+                            >
+                              -
+                            </button>
+                            <span className="screen-share-zoom-label">{targetZoomLabel}</span>
+                            <button
+                              type="button"
+                              className="screen-share-control"
+                              onClick={() => updateScreenZoom(targetZoomKey, targetZoom + 0.25)}
+                              disabled={targetZoom >= 3}
+                              aria-label="Zoom in"
+                            >
+                              +
+                            </button>
+                          </div>
                           <button
                             type="button"
                             className="screen-share-control"

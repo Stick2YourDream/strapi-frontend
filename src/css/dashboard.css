@@ -666,6 +666,16 @@
   text-align: center;
 }
 
+.posts-load-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 12px 0 24px;
+  color: #9aa5bb;
+  font-size: 14px;
+}
+
 @media (max-width: 720px) {
   .dash-hero {
     flex-direction: column;

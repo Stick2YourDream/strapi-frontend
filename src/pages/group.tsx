@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import "../css/dashboard.css";
 import "../css/groups.css";
@@ -7,6 +7,7 @@ import Sidebar from "../components/Sidebar";
 import TopbarSearch from "../components/TopbarSearch";
 import { useAuth } from "../context/AuthContext";
 import { usePageMeta } from "../hooks/usePageMeta";
+import { sanitizePostText } from "../utils/emoji";
 
 type GroupDetail = {
   id: number | string;
@@ -26,7 +27,7 @@ type GroupMember = {
   id: number | string;
   userId: number;
   name: string;
-  role: "admin" | "member";
+  role: "admin" | "moderator" | "member";
 };
 
 type GroupInvite = {
@@ -44,9 +45,27 @@ type GroupPost = {
   ownerId?: number;
 };
 
+type LinkPreview = {
+  url?: string;
+  title?: string;
+  description?: string;
+  image?: string;
+  siteName?: string;
+  type?: string;
+};
+
 const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
 const getEntity = (entry: any) => entry?.data ?? entry ?? null;
 const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
+const getUserDisplayName = (entry: any, fallback = "Member") => {
+  const attrs = normalize(entry);
+  const firstName = String(attrs?.firstName || attrs?.firstname || "").trim();
+  const lastName = String(attrs?.lastName || attrs?.lastname || "").trim();
+  const fullName = `${firstName} ${lastName}`.trim();
+  const handle = String(attrs?.handle || attrs?.username || "").trim();
+  const email = String(attrs?.email || "").trim();
+  return fullName || handle || email || fallback;
+};
 
 const pickMediaUrl = (mediaField: any): string | undefined => {
   if (!mediaField) return undefined;
@@ -120,6 +139,66 @@ const formatTime = (value?: string) => {
 };
 
 const isVideoUrl = (value?: string) => !!value && /\.(mp4|webm|mov)$/i.test(value);
+const extractFirstUrl = (text: string) => {
+  const match = text.match(/(https?:\/\/[^\s]+|www\.[^\s]+)/i);
+  if (!match) return "";
+  let url = match[0].replace(/[),.!?]+$/, "");
+  if (url.startsWith("www.")) url = `https://${url}`;
+  return url;
+};
+const hostnameFor = (value: string) => {
+  try {
+    return new URL(value).hostname.replace(/^www\./, "");
+  } catch {
+    return value;
+  }
+};
+const isYoutubeUrl = (value: string) => {
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    return host.includes("youtube.com") || host === "youtu.be";
+  } catch {
+    return false;
+  }
+};
+
+const LinkPreviewCard = ({
+  preview,
+  url,
+  compact = false,
+}: {
+  preview: LinkPreview;
+  url: string;
+  compact?: boolean;
+}) => {
+  const title = preview.title || preview.siteName || hostnameFor(url);
+  const meta = preview.siteName || hostnameFor(url);
+  const showBadge = preview.type === "video" || isYoutubeUrl(url);
+  return (
+    <a
+      className={`link-preview-card${compact ? " is-compact" : ""}`}
+      href={url}
+      target="_blank"
+      rel="noreferrer"
+    >
+      <div className="link-preview-media">
+        {preview.image ? (
+          <img src={preview.image} alt={title} loading="lazy" />
+        ) : (
+          <div className="link-preview-placeholder">LINK</div>
+        )}
+        {showBadge && <span className="link-preview-badge">Video</span>}
+      </div>
+      <div className="link-preview-body">
+        <p className="link-preview-title">{title}</p>
+        {preview.description && (
+          <p className="link-preview-desc">{preview.description}</p>
+        )}
+        <span className="link-preview-url">{meta}</span>
+      </div>
+    </a>
+  );
+};
 
 export default function GroupDetail() {
   const { groupId } = useParams();
@@ -136,8 +215,10 @@ export default function GroupDetail() {
   const [posts, setPosts] = useState<GroupPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [linkPreviews, setLinkPreviews] = useState<Record<string, LinkPreview | null>>({});
+  const linkPreviewRef = useRef<Record<string, LinkPreview | null>>({});
 
-  const [myRole, setMyRole] = useState<"admin" | "member" | null>(null);
+  const [myRole, setMyRole] = useState<"admin" | "moderator" | "member" | null>(null);
   const [myMembershipId, setMyMembershipId] = useState<number | string | null>(null);
   const [pendingInviteId, setPendingInviteId] = useState<number | string | null>(null);
 
@@ -164,11 +245,11 @@ export default function GroupDetail() {
   const [settingsClearImage, setSettingsClearImage] = useState(false);
   const [settingsStatus, setSettingsStatus] = useState<string | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
+  const [groupView, setGroupView] = useState<"feed" | "settings">("feed");
 
   const mapGroup = useCallback((entry: any): GroupDetail => {
     const attrs = normalize(entry);
     const ownerEntry = getEntity(attrs.owner);
-    const ownerAttrs = normalize(ownerEntry);
     return {
       id: entry?.id ?? attrs.documentId ?? attrs.id,
       documentId: entry?.documentId ?? attrs.documentId,
@@ -179,8 +260,8 @@ export default function GroupDetail() {
       gradientStart: attrs.gradientStart || "",
       gradientEnd: attrs.gradientEnd || "",
       gradientAngle: Number(attrs.gradientAngle ?? 135),
-      ownerName: ownerAttrs.email || "",
-      ownerId: ownerEntry?.id ?? ownerAttrs.id,
+      ownerName: getUserDisplayName(ownerEntry, "Owner"),
+      ownerId: ownerEntry?.id ?? normalize(ownerEntry)?.id,
     };
   }, []);
 
@@ -238,7 +319,14 @@ export default function GroupDetail() {
 
       const memberEntry = myMemberRes.data?.data?.[0];
       const memberAttrs = normalize(memberEntry);
-      const role = memberAttrs?.role === "admin" ? "admin" : memberAttrs?.role === "member" ? "member" : null;
+      const role =
+        memberAttrs?.role === "admin"
+          ? "admin"
+          : memberAttrs?.role === "moderator"
+          ? "moderator"
+          : memberAttrs?.role === "member"
+          ? "member"
+          : null;
 
       setMyRole(role);
       setMyMembershipId(memberEntry?.id ?? null);
@@ -248,12 +336,16 @@ export default function GroupDetail() {
         .map((entry: any) => {
           const attrs = normalize(entry);
           const userEntry = getEntity(attrs.user);
-          const userAttrs = normalize(userEntry);
           return {
             id: entry.id ?? attrs.documentId,
-            userId: userEntry?.id ?? userAttrs.id,
-            name: userAttrs.email || "Member",
-            role: attrs.role === "admin" ? "admin" : "member",
+            userId: userEntry?.id ?? normalize(userEntry)?.id,
+            name: getUserDisplayName(userEntry, "Member"),
+            role:
+              attrs.role === "admin"
+                ? "admin"
+                : attrs.role === "moderator"
+                ? "moderator"
+                : "member",
           };
         })
         .filter((entry: GroupMember) => entry.userId) as GroupMember[];
@@ -262,15 +354,14 @@ export default function GroupDetail() {
         .map((entry: any) => {
           const attrs = normalize(entry);
           const ownerEntry = getEntity(attrs.owner);
-          const ownerAttrs = normalize(ownerEntry);
           return {
             id: entry.id ?? attrs.documentId,
             title: attrs.title || "",
             body: attrs.body || "",
             mediaUrls: pickMediaUrls(attrs.media),
             createdAt: attrs.createdAt,
-            ownerName: ownerAttrs.email || "Member",
-            ownerId: ownerEntry?.id ?? ownerAttrs.id,
+            ownerName: getUserDisplayName(ownerEntry, "Member"),
+            ownerId: ownerEntry?.id ?? normalize(ownerEntry)?.id,
           };
         })
         .filter(Boolean) as GroupPost[];
@@ -283,10 +374,9 @@ export default function GroupDetail() {
         .map((entry: any) => {
           const attrs = normalize(entry);
           const inviteeEntry = getEntity(attrs.invitee);
-          const inviteeAttrs = normalize(inviteeEntry);
           return {
             id: entry.id ?? attrs.documentId,
-            inviteeName: inviteeAttrs.email || "Invitee",
+            inviteeName: getUserDisplayName(inviteeEntry, "Invitee"),
           };
         })
         .filter((entry: GroupInvite) => entry.inviteeName);
@@ -313,6 +403,53 @@ export default function GroupDetail() {
   useEffect(() => {
     void loadGroup();
   }, [loadGroup]);
+
+  useEffect(() => {
+    linkPreviewRef.current = linkPreviews;
+  }, [linkPreviews]);
+
+  const fetchLinkPreview = useCallback(async (url: string) => {
+    if (!url) return;
+    if (linkPreviewRef.current[url] !== undefined) return;
+    linkPreviewRef.current = { ...linkPreviewRef.current, [url]: null };
+    setLinkPreviews((prev) => ({ ...prev, [url]: null }));
+    try {
+      const res = await api.get("/link-preview", { params: { url } });
+      const data = res.data?.data;
+      const preview: LinkPreview | null = data?.url
+        ? {
+            url: data.url,
+            title: data.title,
+            description: data.description,
+            image: data.image,
+            siteName: data.siteName,
+            type: data.type,
+          }
+        : null;
+      linkPreviewRef.current = { ...linkPreviewRef.current, [url]: preview };
+      setLinkPreviews((prev) => ({ ...prev, [url]: preview }));
+    } catch {
+      linkPreviewRef.current = { ...linkPreviewRef.current, [url]: null };
+      setLinkPreviews((prev) => ({ ...prev, [url]: null }));
+    }
+  }, []);
+
+  useEffect(() => {
+    const urls = new Set<string>();
+    posts.forEach((post) => {
+      const postUrl = extractFirstUrl(post.body || "");
+      if (postUrl) urls.add(postUrl);
+    });
+    urls.forEach((url) => {
+      void fetchLinkPreview(url);
+    });
+  }, [fetchLinkPreview, posts]);
+
+  useEffect(() => {
+    if (myRole !== "admin" && myRole !== "moderator") {
+      setGroupView("feed");
+    }
+  }, [myRole]);
 
   useEffect(() => {
     if (!settingsImageFile) {
@@ -377,7 +514,8 @@ export default function GroupDetail() {
 
   const handleCreatePost = async () => {
     if (!group) return;
-    const body = postBody.trim();
+    const sanitized = sanitizePostText(postBody);
+    const body = sanitized.trim();
     if (!body && postFiles.length === 0) {
       setPostStatus("Add a message or media.");
       return;
@@ -423,7 +561,10 @@ export default function GroupDetail() {
     }
   };
 
-  const handleRoleChange = async (memberId: number | string, role: "admin" | "member") => {
+  const handleRoleChange = async (
+    memberId: number | string,
+    role: "admin" | "moderator" | "member"
+  ) => {
     try {
       await api.put(`/group-members/${memberId}`, { data: { role } });
       await loadGroup();
@@ -565,8 +706,10 @@ export default function GroupDetail() {
     );
   }
 
-  const canPost = myRole === "admin" || myRole === "member";
+  const canPost = myRole === "admin" || myRole === "moderator" || myRole === "member";
   const isAdmin = myRole === "admin";
+  const canManageGroup = myRole === "admin" || myRole === "moderator";
+  const showSettingsView = canManageGroup && groupView === "settings";
   const isPrivateLocked = group.visibility === "private" && !myRole;
   const memberLabel = isPrivateLocked
     ? "Invite-only list"
@@ -574,7 +717,11 @@ export default function GroupDetail() {
 
   return (
     <div className="dashboard-shell">
-      <Sidebar active="groups" />
+      <Sidebar
+        active="groups"
+        groupView={groupView}
+        onGroupViewChange={canManageGroup ? setGroupView : undefined}
+      />
       <div className="main-content group-shell">
         <div className="group-detail-hero" style={buildGroupStyle(group)}>
           <div className="group-detail-hero__overlay" />
@@ -620,182 +767,210 @@ export default function GroupDetail() {
 
         {error && <p className="status status-error">{error}</p>}
 
-        <div className="panel-grid">
-          {canPost && (
-            <section className="panel group-post-panel">
-              <div className="panel-header">
-                <p className="eyebrow">New post</p>
-                <h3>Share the momentum</h3>
-                <p className="panel-sub">Drop a message, photo, or video update.</p>
-              </div>
-              <div className="form-grid">
-                <input
-                  className="auth-input"
-                  type="text"
-                  placeholder="Title (optional)"
-                  value={postTitle}
-                  onChange={(e) => setPostTitle(e.target.value)}
-                />
-                <textarea
-                  className="auth-input"
-                  rows={4}
-                  placeholder="What is the update?"
-                  value={postBody}
-                  onChange={(e) => setPostBody(e.target.value)}
-                />
-                <input
-                  type="file"
-                  accept="image/*,video/*"
-                  multiple
-                  onChange={(e) => setPostFiles(Array.from(e.target.files ?? []))}
-                />
-                {postStatus && <div className="status">{postStatus}</div>}
-                <button
-                  className="btn primary"
-                  type="button"
-                  onClick={handleCreatePost}
-                  disabled={posting}
-                >
-                  {posting ? "Posting..." : "Post to group"}
-                </button>
-              </div>
-            </section>
-          )}
-
-          <section className="panel group-member-panel">
-            <div className="panel-header">
-              <p className="eyebrow">Members</p>
-              <h3>People in this group</h3>
-              <p className="panel-sub">{memberLabel}</p>
-            </div>
-            {isPrivateLocked ? (
-              <p className="status">Invite-only members list.</p>
-            ) : (
-              <div className="group-member-list">
-                {members.map((member) => (
-                  <div key={member.id} className="group-member-row">
-                    <div>
-                      <strong>{member.name}</strong>
-                      <span className="group-member-role">{member.role}</span>
-                    </div>
-                    {isAdmin && (
-                      <div className="group-member-actions">
-                        <select
-                          className="group-role-select"
-                          value={member.role}
-                          onChange={(e) =>
-                            handleRoleChange(
-                              member.id,
-                              e.target.value === "admin" ? "admin" : "member"
-                            )
-                          }
-                        >
-                          <option value="member">member</option>
-                          <option value="admin">admin</option>
-                        </select>
-                        <button
-                          className="btn ghost"
-                          type="button"
-                          onClick={() => handleRemoveMember(member.id)}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    )}
+        {!showSettingsView && (
+          <>
+            <div className="panel-grid">
+              {canPost && (
+                <section className="panel group-post-panel">
+                  <div className="panel-header">
+                    <p className="eyebrow">New post</p>
+                    <h3>Share the momentum</h3>
+                    <p className="panel-sub">Drop a message, photo, or video update.</p>
                   </div>
-                ))}
-              </div>
-            )}
-          </section>
+                  <div className="form-grid">
+                    <input
+                      className="auth-input"
+                      type="text"
+                      placeholder="Title (optional)"
+                      value={postTitle}
+                      onChange={(e) => setPostTitle(e.target.value)}
+                    />
+                    <textarea
+                      className="auth-input"
+                      rows={4}
+                      placeholder="What is the update?"
+                      value={postBody}
+                      onChange={(e) => setPostBody(sanitizePostText(e.target.value))}
+                    />
+                    <input
+                      type="file"
+                      accept="image/*,video/*"
+                      multiple
+                      onChange={(e) => setPostFiles(Array.from(e.target.files ?? []))}
+                    />
+                    {postStatus && <div className="status">{postStatus}</div>}
+                    <button
+                      className="btn primary"
+                      type="button"
+                      onClick={handleCreatePost}
+                      disabled={posting}
+                    >
+                      {posting ? "Posting..." : "Post to group"}
+                    </button>
+                  </div>
+                </section>
+              )}
 
-          {isAdmin && (
-            <section className="panel group-invite-admin">
-              <div className="panel-header">
-                <p className="eyebrow">Invite</p>
-                <h3>Add members</h3>
-                <p className="panel-sub">Invite by handle or email.</p>
-              </div>
-              <div className="form-grid">
-                <input
-                  className="auth-input"
-                  type="text"
-                  value={inviteIdentifier}
-                  onChange={(e) => setInviteIdentifier(e.target.value)}
-                  placeholder="handle or email"
-                />
-                {inviteStatus && <div className="status">{inviteStatus}</div>}
-                <button
-                  className="btn primary"
-                  type="button"
-                  onClick={handleInviteMember}
-                  disabled={inviting}
-                >
-                  {inviting ? "Sending..." : "Send invite"}
-                </button>
-              </div>
-              {invites.length > 0 && (
-                <div className="group-invite-pending">
-                  <strong>Pending invites</strong>
-                  {invites.map((invite) => (
-                    <div key={invite.id} className="group-invite-pill">
-                      {invite.inviteeName}
+              <section className="panel group-member-panel">
+                <div className="panel-header">
+                  <p className="eyebrow">Members</p>
+                  <h3>People in this group</h3>
+                  <p className="panel-sub">{memberLabel}</p>
+                </div>
+                {isPrivateLocked ? (
+                  <p className="status">Invite-only members list.</p>
+                ) : (
+                  <div className="group-member-list">
+                    {members.map((member) => (
+                      <div key={member.id} className="group-member-row">
+                        <div>
+                          <strong>{member.name}</strong>
+                          <span className="group-member-role">{member.role}</span>
+                        </div>
+                        {isAdmin && (
+                          <div className="group-member-actions">
+                            <select
+                              className="group-role-select"
+                              value={member.role}
+                              onChange={(e) =>
+                                handleRoleChange(
+                                  member.id,
+                                  e.target.value === "admin"
+                                    ? "admin"
+                                    : e.target.value === "moderator"
+                                    ? "moderator"
+                                    : "member"
+                                )
+                              }
+                            >
+                              <option value="member">member</option>
+                              <option value="moderator">moderator</option>
+                              <option value="admin">admin</option>
+                            </select>
+                            <button
+                              className="btn ghost"
+                              type="button"
+                              onClick={() => handleRemoveMember(member.id)}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              {isAdmin && (
+                <section className="panel group-invite-admin">
+                  <div className="panel-header">
+                    <p className="eyebrow">Invite</p>
+                    <h3>Add members</h3>
+                    <p className="panel-sub">Invite by handle or email.</p>
+                  </div>
+                  <div className="form-grid">
+                    <input
+                      className="auth-input"
+                      type="text"
+                      value={inviteIdentifier}
+                      onChange={(e) => setInviteIdentifier(e.target.value)}
+                      placeholder="handle or email"
+                    />
+                    {inviteStatus && <div className="status">{inviteStatus}</div>}
+                    <button
+                      className="btn primary"
+                      type="button"
+                      onClick={handleInviteMember}
+                      disabled={inviting}
+                    >
+                      {inviting ? "Sending..." : "Send invite"}
+                    </button>
+                  </div>
+                  {invites.length > 0 && (
+                    <div className="group-invite-pending">
+                      <strong>Pending invites</strong>
+                      {invites.map((invite) => (
+                        <div key={invite.id} className="group-invite-pill">
+                          {invite.inviteeName}
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
+                </section>
+              )}
+            </div>
+
+            <section className="group-section">
+              <div className="group-section-header">
+                <div>
+                  <p className="eyebrow">Posts</p>
+                  <h3>Latest updates</h3>
+                </div>
+              </div>
+              {isPrivateLocked ? (
+                <p className="status">Accept your invite to see private posts.</p>
+              ) : (
+                <div className="group-post-grid">
+                  {posts.map((post) => {
+                    const postUrl = extractFirstUrl(post.body || "");
+                    const preview = postUrl ? linkPreviews[postUrl] : undefined;
+                    const previewData = postUrl ? preview ?? { url: postUrl } : null;
+                    return (
+                      <div key={post.id} className="group-post-card">
+                        <div className="group-post-header">
+                          <div>
+                            <strong>{post.ownerName}</strong>
+                            <span className="group-post-time">
+                              {formatTime(post.createdAt)}
+                            </span>
+                          </div>
+                          {(isAdmin || post.ownerId === user?.id) && (
+                            <button
+                              className="btn ghost"
+                              type="button"
+                              onClick={() => handleRemovePost(post.id)}
+                            >
+                              Delete
+                            </button>
+                          )}
+                        </div>
+                        {post.title && <h4>{post.title}</h4>}
+                        {post.body && <p>{post.body}</p>}
+                        {previewData && (
+                          <LinkPreviewCard
+                            preview={previewData}
+                            url={previewData.url || postUrl}
+                            compact
+                          />
+                        )}
+                        {post.mediaUrls.length > 0 && (
+                          <div className="group-post-media">
+                            {post.mediaUrls.map((url) =>
+                              isVideoUrl(url) ? (
+                                <video key={url} src={url} controls />
+                              ) : (
+                                <img
+                                  key={url}
+                                  src={url}
+                                  alt="Group post media"
+                                  loading="lazy"
+                                />
+                              )
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {posts.length === 0 && <p className="status">No posts yet.</p>}
                 </div>
               )}
             </section>
-          )}
-        </div>
+          </>
+        )}
 
-        <section className="group-section">
-          <div className="group-section-header">
-            <div>
-              <p className="eyebrow">Posts</p>
-              <h3>Latest updates</h3>
-            </div>
-          </div>
-          {isPrivateLocked ? (
-            <p className="status">Accept your invite to see private posts.</p>
-          ) : (
-            <div className="group-post-grid">
-              {posts.map((post) => (
-                <div key={post.id} className="group-post-card">
-                  <div className="group-post-header">
-                    <div>
-                      <strong>{post.ownerName}</strong>
-                      <span className="group-post-time">{formatTime(post.createdAt)}</span>
-                    </div>
-                    {(isAdmin || post.ownerId === user?.id) && (
-                      <button
-                        className="btn ghost"
-                        type="button"
-                        onClick={() => handleRemovePost(post.id)}
-                      >
-                        Delete
-                      </button>
-                    )}
-                  </div>
-                  {post.title && <h4>{post.title}</h4>}
-                  {post.body && <p>{post.body}</p>}
-                  {post.mediaUrls.length > 0 && (
-                    <div className="group-post-media">
-                      {post.mediaUrls.map((url) =>
-                        isVideoUrl(url) ? (
-                          <video key={url} src={url} controls />
-                        ) : (
-                          <img key={url} src={url} alt="Group post media" loading="lazy" />
-                        )
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
-              {posts.length === 0 && <p className="status">No posts yet.</p>}
-            </div>
-          )}
-        </section>
-
-        {isAdmin && settingsPreview && (
+        {showSettingsView && settingsPreview && (
           <section className="group-section">
             <div className="group-section-header">
               <div>
@@ -894,7 +1069,9 @@ export default function GroupDetail() {
                         type="file"
                         accept="image/*"
                         onChange={(e) =>
-                          setSettingsImageFile(e.target.files?.[0] ? e.target.files[0] : null)
+                          setSettingsImageFile(
+                            e.target.files?.[0] ? e.target.files[0] : null
+                          )
                         }
                       />
                       {group.backgroundImage && (
@@ -917,17 +1094,22 @@ export default function GroupDetail() {
                   >
                     {savingSettings ? "Saving..." : "Save settings"}
                   </button>
-                  <button
-                    className="btn ghost group-danger"
-                    type="button"
-                    onClick={handleDeleteGroup}
-                  >
-                    Delete group
-                  </button>
+                  {isAdmin && (
+                    <button
+                      className="btn ghost group-danger"
+                      type="button"
+                      onClick={handleDeleteGroup}
+                    >
+                      Delete group
+                    </button>
+                  )}
                 </div>
               </section>
               <section className="panel group-settings-preview">
-                <div className="group-settings-preview__card" style={buildGroupStyle(settingsPreview)}>
+                <div
+                  className="group-settings-preview__card"
+                  style={buildGroupStyle(settingsPreview)}
+                >
                   <div className="group-settings-preview__content">
                     <span className="pill">{settingsVisibility}</span>
                     <h3>{settingsPreview.name}</h3>

@@ -1110,6 +1110,24 @@
   cursor: pointer;
 }
 
+.screen-share-control:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.screen-share-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.screen-share-zoom-label {
+  font-size: 0.65rem;
+  color: #e2e8f0;
+  min-width: 44px;
+  text-align: center;
+}
+
 .screen-share-status {
   font-size: 0.65rem;
   color: #cbd5f5;

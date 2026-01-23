@@ -158,7 +158,7 @@ type VideoCallContextValue = {
   closeCallComposer: () => void;
   setSelectedInvitees: (invitees: VideoCallInvitee[]) => void;
   setPresenceTargets: (userIds: number[]) => void;
-  startCall: () => Promise<void>;
+  startCall: (invitees?: VideoCallInvitee[]) => Promise<void>;
   acceptCall: () => Promise<void>;
   declineCall: () => void;
   leaveCall: () => void;
@@ -1169,12 +1169,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     }
 
     const effects = videoEffectsRef.current;
-    const forceProcessing = status === "connecting" || status === "in-call";
     const needsProcessing =
-      forceProcessing ||
-      effects.blur ||
-      effects.background !== "none" ||
-      effects.filter !== "none";
+      effects.blur || effects.background !== "none" || effects.filter !== "none";
     if (!needsProcessing) {
       stopVideoProcessing();
       return rawTrack;
@@ -2113,12 +2109,16 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       return await ensureMedia({ audio: true, video: true });
     } catch {
       try {
-        return await ensureMedia({ audio: false, video: false });
-      } catch (err) {
-        setError(
-          "Please allow microphone access to join the call. Camera is optional. If this is your first time, check browser permissions and use HTTPS (or localhost)."
-        );
-        throw err;
+        return await ensureMedia({ audio: false, video: true });
+      } catch {
+        try {
+          return await ensureMedia({ audio: true, video: false });
+        } catch (err) {
+          setError(
+            "Please allow microphone or camera access to join the call. If this is your first time, check browser permissions and use HTTPS (or localhost)."
+          );
+          throw err;
+        }
       }
     }
   }, [ensureMedia]);
@@ -2203,14 +2203,6 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
 
   cleanupCallRef.current = cleanupCall;
 
-  const openCallComposer = useCallback((invitees?: VideoCallInvitee[]) => {
-    setSelectedInviteesState(invitees || []);
-    setStatus("setup");
-    setIsOpen(true);
-    setError(null);
-    void ensureMedia({ video: true }).catch(() => undefined);
-  }, [ensureMedia]);
-
   const closeCallComposer = useCallback(() => {
     if (status === "in-call" || status === "connecting") return;
     if (localStreamRef.current) {
@@ -2232,9 +2224,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     setSelectedInviteesState(invitees);
   }, []);
 
-  const startCall = useCallback(async () => {
+  const startCall = useCallback(async (invitees?: VideoCallInvitee[]) => {
     if (!socketRef.current || !user?.id) return;
-    if (selectedInvitees.length > MAX_VIDEO_PARTICIPANTS - 1) {
+    const targetInvitees = invitees ?? selectedInvitees;
+    if (targetInvitees.length > MAX_VIDEO_PARTICIPANTS - 1) {
       setError(`Max ${MAX_VIDEO_PARTICIPANTS} participants per call.`);
       return;
     }
@@ -2274,7 +2267,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     socketRef.current.emit("call:join", { roomId });
     socketRef.current.emit("call:invite", {
       roomId,
-      invitees: selectedInvitees.map((invitee) => invitee.userId),
+      invitees: targetInvitees.map((invitee) => invitee.userId),
       e2eeEnabled: callEncryptionEnabledRef.current,
     });
   }, [
@@ -2285,6 +2278,23 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     setCallEncryptionMode,
     user?.id,
   ]);
+
+  const openCallComposer = useCallback(
+    (invitees?: VideoCallInvitee[]) => {
+      if (status === "in-call" || status === "connecting") return;
+      const nextInvitees = invitees || [];
+      setSelectedInviteesState(nextInvitees);
+      setError(null);
+      if (nextInvitees.length > 0) {
+        void startCall(nextInvitees);
+        return;
+      }
+      setStatus("setup");
+      setIsOpen(true);
+      void ensureMedia({ video: true }).catch(() => undefined);
+    },
+    [ensureMedia, startCall, status]
+  );
 
   const acceptCall = useCallback(async () => {
     if (!socketRef.current || !incomingCall) return;
