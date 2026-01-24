@@ -533,6 +533,14 @@
   color: #c7cede;
 }
 
+.post-visibility-select {
+  margin-left: auto;
+  min-width: 140px;
+  background: rgba(9, 13, 24, 0.7);
+  font-size: 12px;
+  padding: 6px 10px;
+}
+
 .post-meta-name {
   font-weight: 700;
   color: #f8fafc;
@@ -598,6 +606,10 @@
 }
 
 @media (hover: none), (pointer: coarse) {
+  .post-card {
+    transition: none;
+  }
+
   .post-card:hover {
     transform: translateZ(0);
     box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06);
@@ -941,6 +953,11 @@
 
   .posts-grid--two {
     grid-template-columns: 1fr;
+  }
+
+  .post-card:hover {
+    transform: translateZ(0);
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   }
 }
 

@@ -85,6 +85,7 @@ type MediaPost = {
   feedbackTargetName?: string;
   likes?: number;
   shares?: number;
+  visibility?: string;
 };
 
 type CommentItem = {
@@ -636,6 +637,33 @@ export default function Me() {
         String(post.id) === postKey ? { ...post, [field]: value } : post
       )
     );
+  };
+  const updatePostVisibility = async (post: MediaPost, nextVisibility: string) => {
+    const visibility = String(nextVisibility || "").trim();
+    if (!visibility) return;
+    const attempts: string[] = [];
+    if (post.documentId) attempts.push(`/users-posts/${post.documentId}`);
+    const idNumber = typeof post.id === "number" ? post.id : Number(post.id);
+    if (Number.isFinite(idNumber)) attempts.push(`/users-posts/${idNumber}`);
+    attempts.push(`/users-posts/${post.id}`);
+
+    for (const url of attempts) {
+      try {
+        await api.put(url, { data: { visibility } });
+        setPosts((prev) =>
+          prev.map((entry) =>
+            String(entry.id) === String(post.id) ? { ...entry, visibility } : entry
+          )
+        );
+        setPostError(null);
+        return;
+      } catch (err) {
+        if (url === attempts[attempts.length - 1]) {
+          console.error("Update post visibility failed", err);
+        }
+      }
+    }
+    setPostError("Failed to update post visibility.");
   };
   const buildShareUrl = (postKey: string) => {
     if (typeof window === "undefined") return "";
@@ -1803,6 +1831,7 @@ export default function Me() {
         feedbackTargetName,
         likes: Number(attrs.likes ?? 0),
         shares: Number(attrs.shares ?? 0),
+        visibility: attrs.visibility || undefined,
       };
     });
 
@@ -4842,6 +4871,7 @@ export default function Me() {
             const likesCount = Number(p.likes ?? 0);
             const sharesCount = Number(p.shares ?? 0);
             const commentsCount = comments.length;
+            const currentVisibility = p.visibility || "friends";
 
             return (
               <article
@@ -4858,6 +4888,15 @@ export default function Me() {
                   </span>
                   {descriptor && <span className="post-meta-tag">{descriptor}</span>}
                   {feedbackLabel && <span className="post-feedback-tag">{feedbackLabel}</span>}
+                  <select
+                    className="auth-input post-feedback-select post-visibility-select"
+                    value={currentVisibility}
+                    onChange={(e) => void updatePostVisibility(p, e.target.value)}
+                  >
+                    <option value="public">Public</option>
+                    <option value="friends">Friends</option>
+                    <option value="private">Private</option>
+                  </select>
                   {canDelete && (
                     <button
                       className="btn ghost post-delete"
