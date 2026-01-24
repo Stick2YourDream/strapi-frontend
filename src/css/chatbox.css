@@ -1363,12 +1363,12 @@
 .video-chat-meta {
   display: flex;
   justify-content: space-between;
-  font-size: 0.7rem;
+  font-size: calc(var(--video-chat-text-size, 0.85rem) * 0.82);
   color: #94a3b8;
 }
 
 .video-chat-body {
-  font-size: 0.85rem;
+  font-size: var(--video-chat-text-size, 0.85rem);
   color: #e2e8f0;
   line-height: 1.45;
 }
@@ -1394,6 +1394,29 @@
 .video-chat-tools {
   display: flex;
   gap: 8px;
+  align-items: center;
+}
+
+.video-chat-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(8, 12, 22, 0.6);
+  color: #cbd5f5;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.video-chat-size select {
+  border: none;
+  background: transparent;
+  color: #e2e8f0;
+  font-weight: 600;
+  font-size: 0.75rem;
 }
 
 .video-chat-reactions {
@@ -1478,7 +1501,7 @@
   background: rgba(8, 12, 20, 0.8);
   color: #e2e8f0;
   padding: 8px 10px;
-  font-size: 0.85rem;
+  font-size: var(--video-chat-text-size, 0.85rem);
   resize: none;
 }
 

@@ -19,6 +19,7 @@ import {
   type VideoCallInvitee,
   type VideoCallMessage,
 } from "../context/VideoCallContext";
+import { useAuth } from "../context/AuthContext";
 import { sanitizePostText } from "../utils/emoji";
 import callRingtoneUrl from "../assets/call.mp3";
 
@@ -372,10 +373,12 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     sendScreenControlEvent,
     sendMessage,
   } = useVideoCall();
+  const { user } = useAuth();
 
   const [chatInput, setChatInput] = useState("");
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showGifPicker, setShowGifPicker] = useState(false);
+  const [chatTextSize, setChatTextSize] = useState<"sm" | "md" | "lg">("md");
   const [showEffectsPanel, setShowEffectsPanel] = useState(false);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [screenViewMode, setScreenViewMode] = useState<"split" | "screen" | "video">("split");
@@ -543,13 +546,16 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   );
   const resolveMessageName = useCallback(
     (message: VideoCallMessage) => {
+      if (user?.id && message.from.userId === user.id) {
+        return "Me";
+      }
       return resolveParticipantLabel({
         userId: message.from.userId,
         displayName: message.from.displayName,
         handle: message.from.handle,
       });
     },
-    [resolveParticipantLabel]
+    [resolveParticipantLabel, user?.id]
   );
   const incomingHostName = useMemo(() => {
     if (!incomingCall) return "Caller";
@@ -577,7 +583,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
       entries.push({
         id: "local",
         stream: localScreenStream,
-        label: "Your screen",
+        label: "My screen",
         isLocal: true,
       });
     }
@@ -786,6 +792,14 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const showMicSelector = audioInputs.length > 1;
   const cameraSelectionValue = selectedVideoInputId || "default";
   const showCameraSelector = videoInputs.length > 1;
+  const chatFontSize = chatTextSize === "sm" ? 13 : chatTextSize === "lg" ? 17 : 15;
+  const chatStyle = useMemo(
+    () =>
+      ({
+        "--video-chat-text-size": `${chatFontSize}px`,
+      }) as CSSProperties,
+    [chatFontSize]
+  );
 
   const totalParticipants = 1 + remoteList.length;
   const maxInvitees = maxParticipants - 1;
@@ -1923,7 +1937,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
           )}
         </div>
 
-        <div className="video-call-sidebar">
+        <div className="video-call-sidebar" style={chatStyle}>
           <div className="video-chat-header">
             <strong>Call chat</strong>
             <span>{showCallUi ? "Live" : "Ready"}</span>
@@ -2005,6 +2019,20 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
               >
                 GIF
               </button>
+              <label className="video-chat-size">
+                <span>Text</span>
+                <select
+                  value={chatTextSize}
+                  onChange={(event) =>
+                    setChatTextSize(event.target.value as "sm" | "md" | "lg")
+                  }
+                  aria-label="Chat text size"
+                >
+                  <option value="sm">Small</option>
+                  <option value="md">Medium</option>
+                  <option value="lg">Large</option>
+                </select>
+              </label>
             </div>
             <div className="video-chat-reactions">
               {REACTION_EMOJIS.map((emoji) => (
@@ -2053,6 +2081,12 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                 className="video-chat-textarea"
                 value={chatInput}
                 onChange={(event) => setChatInput(sanitizePostText(event.target.value))}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" || event.shiftKey) return;
+                  event.preventDefault();
+                  if (!showCallUi) return;
+                  handleSend();
+                }}
                 placeholder="Type a message"
                 rows={2}
                 disabled={!showCallUi}
