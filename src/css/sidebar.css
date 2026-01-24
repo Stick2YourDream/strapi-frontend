@@ -204,6 +204,17 @@
   transform: translateY(-1px);
 }
 
+.mobile-profile-item:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.mobile-profile-item:disabled:hover {
+  background: transparent;
+  border-color: transparent;
+  transform: none;
+}
+
 .mobile-profile-item:focus {
   outline: none;
   border-color: rgba(92, 240, 199, 0.6);
@@ -400,6 +411,17 @@
 .sidebar-nav-link:hover {
   border-color: rgba(125, 211, 252, 0.35);
   background: rgba(59, 130, 246, 0.16);
+}
+
+.sidebar-nav-link:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.sidebar-nav-link:disabled:hover {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.01);
+  transform: none;
 }
 
 .sidebar-nav-link.is-active {

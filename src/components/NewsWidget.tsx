@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import {
   fetchNewsArticles,
@@ -59,7 +58,6 @@ const isStandaloneMode = () => {
 };
 
 export default function NewsWidget() {
-  const navigate = useNavigate();
   const { profile } = useAuth();
   const newsEnabled = profile?.notificationSettings?.newsEnabled !== false;
 
@@ -222,8 +220,8 @@ export default function NewsWidget() {
               Install app
             </button>
           )}
-          <button className="btn primary" type="button" onClick={() => navigate("/news")}>
-            Open Newsroom
+          <button className="btn primary" type="button" disabled>
+            Newsroom (Coming soon)
           </button>
         </div>
       </div>

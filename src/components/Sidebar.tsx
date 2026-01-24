@@ -529,11 +529,12 @@ export default function Sidebar({
                 My Groups
               </button>
               <button
-                className="mobile-profile-item"
+                className="mobile-profile-item mobile-profile-item--disabled"
                 type="button"
-                onClick={() => handleProfileAction("/news")}
+                disabled
+                aria-disabled="true"
               >
-                Newsroom
+                Newsroom (Coming soon)
               </button>
               {isStaff && (
                 <button
@@ -788,12 +789,13 @@ export default function Sidebar({
               </button>
               <button
                 type="button"
-                className={`btn ghost sidebar-nav-link${
+                className={`btn ghost sidebar-nav-link sidebar-nav-link--disabled${
                   active === "news" ? " is-active" : ""
                 }`}
-                onClick={() => handleProfileAction("/news")}
+                disabled
+                aria-disabled="true"
               >
-                Newsroom
+                Newsroom (Coming soon)
               </button>
               {isStaff && (
                 <button

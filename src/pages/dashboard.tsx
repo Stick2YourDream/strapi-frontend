@@ -13,7 +13,7 @@ import type { SignalTag } from "../constants/signalTags";
 import { sanitizePostText } from "../utils/emoji";
 import ReactionPicker from "../components/ReactionPicker";
 import { formatPostUpdateLabel } from "../utils/time";
-import NewsWidget from "../components/NewsWidget";
+// import NewsWidget from "../components/NewsWidget";
 import "../css/news-widget.css";
 
 type CommentItem = {
@@ -1772,7 +1772,7 @@ export default function Dashboard() {
 
               {formError && <p className="auth-message error">{formError}</p>}
             </section>
-            <NewsWidget />
+            {/* <NewsWidget /> */}
           </div>
 
           <div className="posts-toolbar">
