@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import {
   fetchNewsArticles,
@@ -58,6 +59,7 @@ const isStandaloneMode = () => {
 };
 
 export default function NewsWidget() {
+  const navigate = useNavigate();
   const { profile } = useAuth();
   const newsEnabled = profile?.notificationSettings?.newsEnabled !== false;
 
