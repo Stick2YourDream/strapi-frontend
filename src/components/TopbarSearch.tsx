@@ -351,7 +351,8 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
             code: country.code || country.isoCode || "",
           })
         );
-        const usIndex = list.findIndex((country) => {
+        const usIndex = list.findIndex(
+          (country: { name?: string; code?: string; isoCode?: string }) => {
           const name = String(country.name || "").trim().toLowerCase();
           return (
             String(country.code || "").toUpperCase() === "US" ||
