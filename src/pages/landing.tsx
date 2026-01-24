@@ -169,16 +169,34 @@ export default function Landing() {
     return url.startsWith("/") ? `${apiBase}${url}` : url;
   };
 
-  const buildFocusPost = (entry: any, source: "featured" | "admin"): FocusPost => {
+  const getOwnerId = (entry: any): number | null => {
+    const attrs = normalize(entry);
+    const owner = attrs.owner?.data ?? attrs.owner;
+    const rawId = owner?.id ?? owner?.data?.id;
+    const numeric = Number(rawId);
+    return Number.isFinite(numeric) ? numeric : null;
+  };
+
+  const buildFocusPost = (
+    entry: any,
+    source: "featured" | "admin",
+    authorMap?: Record<number, string>
+  ): FocusPost => {
     const attrs = normalize(entry);
     const titleRaw = attrs.Title || "";
     const contentRaw = source === "admin" ? attrs.Posts_Content || "" : attrs.Users_Content || "";
     const linkUrl = extractFirstUrl(contentRaw);
     const mediaField = source === "admin" ? attrs.Pictures : attrs.Users_Pictures;
     const ownerData = source === "featured" ? normalize(attrs.owner?.data ?? attrs.owner) : null;
+    const ownerId = source === "featured" ? getOwnerId(entry) : null;
+    const mappedAuthor = ownerId ? authorMap?.[ownerId] : undefined;
     const author =
       source === "featured"
-        ? ownerData?.email || "Community"
+        ? mappedAuthor ||
+          ownerData?.handle ||
+          ownerData?.username ||
+          ownerData?.email ||
+          "Community"
         : "Your Social Place";
 
     const title =
@@ -196,6 +214,33 @@ export default function Landing() {
     };
   };
 
+  const fetchFocusAuthorMap = async (userIds: number[]) => {
+    if (!userIds.length) return {};
+    const filter = userIds
+      .map((id, index) => `filters[user][id][$in][${index}]=${id}`)
+      .join("&");
+    const res = await api.get(
+      `/profiles?${filter}&populate=user&pagination[pageSize]=${userIds.length}`
+    );
+    const map: Record<number, string> = {};
+    (res.data?.data ?? []).forEach((entry: any) => {
+      const attrs = normalize(entry);
+      const userData = attrs.user?.data ?? attrs.user;
+      const rawId = userData?.id ?? userData?.data?.id;
+      const numeric = Number(rawId);
+      if (!Number.isFinite(numeric)) return;
+      const first = String(attrs.firstName || "").trim();
+      const last = String(attrs.lastName || "").trim();
+      const full = `${first} ${last}`.trim();
+      const handle = String(attrs.handle || "").trim();
+      const label = full || handle;
+      if (label) {
+        map[numeric] = label;
+      }
+    });
+    return map;
+  };
+
   useEffect(() => {
     let active = true;
 
@@ -210,11 +255,26 @@ export default function Landing() {
         ]);
 
         if (!active) return;
-        const admin = (adminRes.data?.data ?? []).map((p: any) =>
-          buildFocusPost(p, "admin")
+        const adminEntries = adminRes.data?.data ?? [];
+        const featuredEntries = featuredRes.data?.data ?? [];
+        const ownerIds = Array.from(
+          new Set(
+            featuredEntries
+              .map((entry: any) => getOwnerId(entry))
+              .filter((id): id is number => Number.isFinite(id))
+          )
         );
-        const featured = (featuredRes.data?.data ?? []).map((p: any) =>
-          buildFocusPost(p, "featured")
+        let authorMap: Record<number, string> = {};
+        try {
+          authorMap = await fetchFocusAuthorMap(ownerIds);
+        } catch {
+          authorMap = {};
+        }
+        if (!active) return;
+
+        const admin = adminEntries.map((p: any) => buildFocusPost(p, "admin"));
+        const featured = featuredEntries.map((p: any) =>
+          buildFocusPost(p, "featured", authorMap)
         );
         setAdminPosts(admin);
         setFeaturedPosts(featured);

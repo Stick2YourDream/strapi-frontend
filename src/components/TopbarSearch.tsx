@@ -349,8 +349,20 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
           name: country.name,
           code: country.code || country.isoCode || "",
         }));
+        const usIndex = list.findIndex((country) => {
+          const name = String(country.name || "").trim().toLowerCase();
+          return (
+            String(country.code || "").toUpperCase() === "US" ||
+            name === "united states" ||
+            name === "united states of america"
+          );
+        });
+        const ordered =
+          usIndex > 0
+            ? [list[usIndex], ...list.slice(0, usIndex), ...list.slice(usIndex + 1)]
+            : list;
         if (active) {
-          setCountryOptions(list);
+          setCountryOptions(ordered);
           setLocationError(null);
         }
       } catch {
