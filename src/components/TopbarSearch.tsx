@@ -345,10 +345,12 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
     const loadCountries = async () => {
       try {
         const res = await api.get("/locations/countries");
-        const list = (res.data?.data ?? []).map((country: any) => ({
-          name: country.name,
-          code: country.code || country.isoCode || "",
-        }));
+        const list = (res.data?.data ?? []).map(
+          (country: { name?: string; code?: string; isoCode?: string }) => ({
+            name: country.name,
+            code: country.code || country.isoCode || "",
+          })
+        );
         const usIndex = list.findIndex((country) => {
           const name = String(country.name || "").trim().toLowerCase();
           return (

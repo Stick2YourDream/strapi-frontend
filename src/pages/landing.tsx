@@ -255,13 +255,13 @@ export default function Landing() {
         ]);
 
         if (!active) return;
-        const adminEntries = adminRes.data?.data ?? [];
-        const featuredEntries = featuredRes.data?.data ?? [];
-        const ownerIds = Array.from(
-          new Set(
+        const adminEntries = (adminRes.data?.data ?? []) as any[];
+        const featuredEntries = (featuredRes.data?.data ?? []) as any[];
+        const ownerIds: number[] = Array.from(
+          new Set<number>(
             featuredEntries
               .map((entry: any) => getOwnerId(entry))
-              .filter((id): id is number => Number.isFinite(id))
+              .filter((id: number | null): id is number => Number.isFinite(id))
           )
         );
         let authorMap: Record<number, string> = {};
