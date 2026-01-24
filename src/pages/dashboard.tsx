@@ -378,7 +378,7 @@ export default function Dashboard() {
   const [postFilter, setPostFilter] = useState<PostFilter>("all");
   const [friendOptions, setFriendOptions] = useState<FriendOption[]>([]);
   const [friendIds, setFriendIds] = useState<number[]>([]);
-  const [favoriteFriendIds, setFavoriteFriendIds] = useState<number[]>([]);
+  const [, setFavoriteFriendIds] = useState<number[]>([]);
   const [groupIds, setGroupIds] = useState<number[]>([]);
   const [commentInputs, setCommentInputs] = useState<Record<string | number, string>>({});
   const [openCommentsFor, setOpenCommentsFor] = useState<Record<string | number, boolean>>(
