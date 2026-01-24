@@ -518,29 +518,47 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     });
     return map;
   }, [friends, remoteParticipants, selectedInvitees]);
-  const resolveMessageName = useCallback(
-    (message: VideoCallMessage) => {
-      const fromId = message.from.userId;
-      const candidate =
-        (fromId ? participantNameById.get(fromId) : undefined) ||
-        message.from.displayName ||
-        "Friend";
-      const trimmed = candidate.trim();
-      if (trimmed && !trimmed.includes("@")) return trimmed;
-      if (message.from.handle) return message.from.handle;
-      return "Friend";
+  const resolveParticipantLabel = useCallback(
+    (options: {
+      userId?: number;
+      displayName?: string;
+      handle?: string;
+      fallback?: string;
+    }) => {
+      const fromMap = options.userId ? participantNameById.get(options.userId) : undefined;
+      const candidates = [fromMap, options.displayName, options.fallback]
+        .map((value) => String(value || "").trim())
+        .filter((value) => value.length > 0);
+      for (const candidate of candidates) {
+        if (!candidate.includes("@")) {
+          return candidate;
+        }
+      }
+      const handle = String(options.handle || "").trim();
+      if (handle) return handle;
+      if (options.userId) return `User ${options.userId}`;
+      return "User";
     },
     [participantNameById]
   );
+  const resolveMessageName = useCallback(
+    (message: VideoCallMessage) => {
+      return resolveParticipantLabel({
+        userId: message.from.userId,
+        displayName: message.from.displayName,
+        handle: message.from.handle,
+      });
+    },
+    [resolveParticipantLabel]
+  );
   const incomingHostName = useMemo(() => {
-    if (!incomingCall) return "Friend";
-    const known = participantNameById.get(incomingCall.hostId);
-    const candidate = known || incomingCall.hostName || incomingCall.hostHandle || "Friend";
-    const trimmed = candidate.trim();
-    if (trimmed && !trimmed.includes("@")) return trimmed;
-    if (incomingCall.hostHandle) return incomingCall.hostHandle;
-    return "Friend";
-  }, [incomingCall, participantNameById]);
+    if (!incomingCall) return "Caller";
+    return resolveParticipantLabel({
+      userId: incomingCall.hostId,
+      displayName: incomingCall.hostName,
+      handle: incomingCall.hostHandle,
+    });
+  }, [incomingCall, resolveParticipantLabel]);
   const hasRemoteMedia = useMemo(() => {
     if (remoteList.length > 0) return true;
     if (Object.keys(remoteStreams).length > 0) return true;
@@ -565,7 +583,11 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     }
     Object.entries(remoteScreenStreams).forEach(([socketId, stream]) => {
       const participant = remoteParticipants[socketId];
-      const name = participant?.displayName || participant?.handle || "Friend";
+      const name = resolveParticipantLabel({
+        userId: participant?.userId,
+        displayName: participant?.displayName,
+        handle: participant?.handle,
+      });
       entries.push({
         id: socketId,
         stream,
@@ -575,7 +597,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
       });
     });
     return entries;
-  }, [localScreenStream, remoteParticipants, remoteScreenStreams]);
+  }, [localScreenStream, remoteParticipants, remoteScreenStreams, resolveParticipantLabel]);
 
   const hasScreenShares = screenShareEntries.length > 0;
   const effectiveViewMode = hasScreenShares ? screenViewMode : "video";
@@ -1374,7 +1396,12 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   {screenControlRequests.map((request) => (
                     <div key={request.socketId} className="screen-control-request">
                       <span>
-                        {request.displayName || request.handle || "Friend"} wants control.
+                        {resolveParticipantLabel({
+                          userId: request.userId,
+                          displayName: request.displayName,
+                          handle: request.handle,
+                        })}{" "}
+                        wants control.
                       </span>
                       <div className="screen-control-actions">
                         <button
@@ -1453,9 +1480,11 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                             {activeScreenController && (
                               <span className="screen-share-status">
                                 Controlled by{" "}
-                                {activeScreenController.displayName ||
-                                  activeScreenController.handle ||
-                                  "Friend"}
+                                {resolveParticipantLabel({
+                                  userId: activeScreenController.userId,
+                                  displayName: activeScreenController.displayName,
+                                  handle: activeScreenController.handle,
+                                })}
                               </span>
                             )}
                             <button
@@ -1693,7 +1722,11 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                       <VideoTile
                         key={participant.socketId}
                         stream={remoteStreams[participant.socketId] || null}
-                        label={participant.displayName || participant.handle || "Friend"}
+                        label={resolveParticipantLabel({
+                          userId: participant.userId,
+                          displayName: participant.displayName,
+                          handle: participant.handle,
+                        })}
                         avatarUrl={participant.avatarUrl}
                         status={
                           remoteStreams[participant.socketId] ? "" : "Waiting for video"

@@ -12,6 +12,7 @@ const RELEASE_NOTES = [
   "Added Moderator and Admin GUI.",
   "Password minimum length is now 8 characters instead of 12.",
   "Added GUI for Moderators and Admins to restrict users if necessary.",
+  "Added Filters for Dashboard to View Posts by Friends, Public, Private, or All Posts.",
 ];
 
 export default function ReleaseNotesModal() {

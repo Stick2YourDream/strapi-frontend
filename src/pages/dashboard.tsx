@@ -42,6 +42,8 @@ type NormalizedPost = {
   visibility?: string;
 };
 
+type PostFilter = "all" | "admin" | "friends" | "private" | "public";
+
 type LinkPreview = {
   url: string;
   title?: string;
@@ -373,6 +375,7 @@ export default function Dashboard() {
   const [postVisibility, setPostVisibility] = useState("friends");
   const [feedbackAudience, setFeedbackAudience] = useState("none");
   const [feedbackTargetId, setFeedbackTargetId] = useState<number | null>(null);
+  const [postFilter, setPostFilter] = useState<PostFilter>("all");
   const [friendOptions, setFriendOptions] = useState<FriendOption[]>([]);
   const [friendIds, setFriendIds] = useState<number[]>([]);
   const [favoriteFriendIds, setFavoriteFriendIds] = useState<number[]>([]);
@@ -883,7 +886,7 @@ export default function Dashboard() {
     [previewCache, processPreviewQueue]
   );
 
-  const normalizedPosts: NormalizedPost[] = useMemo(() => {
+  const categorizedPosts = useMemo(() => {
     const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
     const allComments = posts.comments ?? [];
     const resolveOwnerName = (ownerId?: number, fallback?: string) => {
@@ -1171,36 +1174,69 @@ export default function Dashboard() {
     const userPosts = posts.user.map((post) => normalizeUserPost(post));
     const groupPosts = posts.group.map((post) => normalizeGroupPost(post));
     const adminPosts = posts.admin.map((post) => normalizeAdminPost(post));
-    const favoriteSet = new Set(favoriteFriendIds);
     const friendSet = new Set(friendIds);
     const currentUserId = typeof userId === "number" ? userId : undefined;
-    const favoriteFriendPosts: NormalizedPost[] = [];
     const friendPosts: NormalizedPost[] = [];
+    const privatePosts: NormalizedPost[] = [];
     const publicPosts: NormalizedPost[] = [];
 
     userPosts.forEach((post) => {
       const ownerId = post.ownerId;
-      if (ownerId && favoriteSet.has(ownerId)) {
-        favoriteFriendPosts.push(post);
+      const isSelf = currentUserId && ownerId === currentUserId;
+      const isFriend = ownerId && friendSet.has(ownerId);
+      const visibility = post.visibility;
+      const feedbackAudience = post.feedbackAudience;
+      const isPublic = visibility === "public" || feedbackAudience === "public";
+      const isPrivate = visibility === "private";
+      const isFriendScoped =
+        isSelf ||
+        isFriend ||
+        feedbackAudience === "friends" ||
+        (feedbackAudience === "specific" && post.feedbackTargetId === currentUserId);
+
+      if (isPrivate) {
+        privatePosts.push(post);
         return;
       }
-      if ((ownerId && friendSet.has(ownerId)) || (currentUserId && ownerId === currentUserId)) {
+      if (isFriendScoped) {
         friendPosts.push(post);
         return;
       }
-      if (post.visibility === "public") {
+      if (isPublic) {
         publicPosts.push(post);
+        return;
       }
+      publicPosts.push(post);
     });
 
-    return [
-      ...sortByCreatedAtDesc(adminPosts),
-      ...sortByCreatedAtDesc(favoriteFriendPosts),
-      ...sortByCreatedAtDesc(friendPosts),
-      ...sortByCreatedAtDesc(groupPosts),
-      ...sortByCreatedAtDesc(publicPosts),
-    ];
-  }, [favoriteFriendIds, friendIds, posts, profileNameMap, userId]);
+    const adminSorted = sortByCreatedAtDesc(adminPosts);
+    const friendsSorted = sortByCreatedAtDesc(friendPosts);
+    const privateSorted = sortByCreatedAtDesc(privatePosts);
+    const publicSorted = sortByCreatedAtDesc([...publicPosts, ...groupPosts]);
+
+    return {
+      admin: adminSorted,
+      friends: friendsSorted,
+      private: privateSorted,
+      public: publicSorted,
+      ordered: [...adminSorted, ...friendsSorted, ...privateSorted, ...publicSorted],
+    };
+  }, [friendIds, posts, profileNameMap, userId]);
+
+  const visiblePosts = useMemo(() => {
+    switch (postFilter) {
+      case "admin":
+        return categorizedPosts.admin;
+      case "friends":
+        return categorizedPosts.friends;
+      case "private":
+        return categorizedPosts.private;
+      case "public":
+        return categorizedPosts.public;
+      default:
+        return categorizedPosts.ordered;
+    }
+  }, [categorizedPosts, postFilter]);
 
   useEffect(() => {
     const url = extractFirstUrl(formContent);
@@ -1236,7 +1272,7 @@ export default function Dashboard() {
   useEffect(() => {
     const urls = Array.from(
       new Set(
-        normalizedPosts
+        visiblePosts
           .map((post) => extractFirstUrl(post.content))
           .filter((url) => url)
       )
@@ -1246,7 +1282,7 @@ export default function Dashboard() {
     urls.forEach((url) => {
       enqueuePreview(url);
     });
-  }, [enqueuePreview, normalizedPosts]);
+  }, [enqueuePreview, visiblePosts]);
 
   const formatDate = (date?: string) => {
     if (!date) return "";
@@ -1735,14 +1771,35 @@ export default function Dashboard() {
             </section>
           </div>
 
+          <div className="posts-toolbar">
+            <div>
+              <p className="eyebrow">Feed</p>
+              <h3>Latest posts</h3>
+            </div>
+            <div className="posts-filter">
+              <span className="posts-filter-label">Show</span>
+              <select
+                className="auth-input post-filter-select"
+                value={postFilter}
+                onChange={(e) => setPostFilter(e.target.value as PostFilter)}
+              >
+                <option value="all">All posts</option>
+                <option value="admin">Admin posts</option>
+                <option value="friends">Friends posts</option>
+                <option value="private">Private posts</option>
+                <option value="public">Public posts</option>
+              </select>
+            </div>
+          </div>
+
           <div className="posts-grid posts-grid--two">
-            {normalizedPosts.length === 0 && (
+            {visiblePosts.length === 0 && (
               <div className="empty-state">
                 <p>No posts yet. Add one in Strapi to see it here.</p>
               </div>
             )}
 
-            {normalizedPosts.map((post) => {
+            {visiblePosts.map((post) => {
               const postUrl = extractFirstUrl(post.content);
               const preview = postUrl ? previewCache[postUrl] : undefined;
               const hasLink = Boolean(postUrl);
@@ -2108,7 +2165,7 @@ export default function Dashboard() {
             {!isLoadingMore &&
               !hasMoreUserPosts &&
               !hasMoreGroupPosts &&
-              normalizedPosts.length > 0 && <span>You are all caught up.</span>}
+              visiblePosts.length > 0 && <span>You are all caught up.</span>}
           </div>
       </>
     )}
