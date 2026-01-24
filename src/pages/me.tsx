@@ -341,6 +341,7 @@ const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   soundEnabled: true,
   vibrationEnabled: true,
   pushEnabled: false,
+  newsEnabled: true,
 };
 
 const normalizeVisibility = (value: any, fallback: VisibilityLevel): VisibilityLevel => {
@@ -381,6 +382,7 @@ const normalizeNotificationSettings = (settings?: NotificationSettings | null) =
   soundEnabled: settings?.soundEnabled !== false,
   vibrationEnabled: settings?.vibrationEnabled !== false,
   pushEnabled: Boolean(settings?.pushEnabled),
+  newsEnabled: settings?.newsEnabled !== false,
 });
 
 const resolveFieldVisibility = (
@@ -4571,6 +4573,29 @@ export default function Me() {
                 </div>
                 {pushStatusLabel && <p className="security-muted">{pushStatusLabel}</p>}
                 {pushError && <p className="status status-error">{pushError}</p>}
+              </div>
+
+              <div className="security-card">
+                <h4>Dashboard news</h4>
+                <p className="security-muted">
+                  Control whether the Newsroom feed appears on your dashboard.
+                </p>
+                <div className="profile-check">
+                  <input
+                    type="checkbox"
+                    checked={profile.notificationSettings.newsEnabled !== false}
+                    onChange={(e) =>
+                      setProfile({
+                        ...profile,
+                        notificationSettings: {
+                          ...profile.notificationSettings,
+                          newsEnabled: e.target.checked,
+                        },
+                      })
+                    }
+                  />
+                  <span>Show Newsroom on my dashboard</span>
+                </div>
               </div>
             </div>
 

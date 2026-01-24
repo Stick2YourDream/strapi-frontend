@@ -35,7 +35,7 @@ const SETTINGS_SECTIONS: { id: SettingsSection; label: string }[] = [
 ];
 
 type SidebarProps = {
-  active: "dashboard" | "friends" | "me" | "groups" | "moderation";
+  active: "dashboard" | "friends" | "me" | "groups" | "moderation" | "news";
   settingsView?: "profile" | "settings";
   onSettingsViewChange?: (view: "profile" | "settings") => void;
   settingsSection?: SettingsSection;
@@ -528,6 +528,13 @@ export default function Sidebar({
               >
                 My Groups
               </button>
+              <button
+                className="mobile-profile-item"
+                type="button"
+                onClick={() => handleProfileAction("/news")}
+              >
+                Newsroom
+              </button>
               {isStaff && (
                 <button
                   className="mobile-profile-item"
@@ -778,6 +785,15 @@ export default function Sidebar({
                 onClick={() => handleProfileAction("/groups")}
               >
                 My Groups
+              </button>
+              <button
+                type="button"
+                className={`btn ghost sidebar-nav-link${
+                  active === "news" ? " is-active" : ""
+                }`}
+                onClick={() => handleProfileAction("/news")}
+              >
+                Newsroom
               </button>
               {isStaff && (
                 <button

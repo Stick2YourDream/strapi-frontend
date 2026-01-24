@@ -7,6 +7,7 @@ import Register from "../pages/register";
 import ForgotPassword from "../pages/forgot-password";
 import ResetPassword from "../pages/reset-password";
 import Dashboard from "../pages/dashboard";
+import News from "../pages/news";
 import ProtectedRoute from "../components/ProtectedRoute";
 import Friends from "../pages/friends";
 import Me from "../pages/me";
@@ -59,6 +60,14 @@ export default function AppRoutes(): JSX.Element {
         element={
           <ProtectedRoute>
             <Dashboard />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/news"
+        element={
+          <ProtectedRoute>
+            <News />
           </ProtectedRoute>
         }
       />

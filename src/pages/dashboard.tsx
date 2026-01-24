@@ -13,6 +13,8 @@ import type { SignalTag } from "../constants/signalTags";
 import { sanitizePostText } from "../utils/emoji";
 import ReactionPicker from "../components/ReactionPicker";
 import { formatPostUpdateLabel } from "../utils/time";
+import NewsWidget from "../components/NewsWidget";
+import "../css/news-widget.css";
 
 type CommentItem = {
   id: string | number;
@@ -457,6 +459,7 @@ export default function Dashboard() {
       active = false;
     };
   }, [user]);
+
 
   const reloadPosts = useCallback(
     async (options?: { silent?: boolean }) => {
@@ -1769,6 +1772,7 @@ export default function Dashboard() {
 
               {formError && <p className="auth-message error">{formError}</p>}
             </section>
+            <NewsWidget />
           </div>
 
           <div className="posts-toolbar">

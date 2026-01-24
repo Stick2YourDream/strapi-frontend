@@ -60,6 +60,7 @@ export type NotificationSettings = {
   soundEnabled?: boolean;
   vibrationEnabled?: boolean;
   pushEnabled?: boolean;
+  newsEnabled?: boolean;
 };
 
 export const PROFILE_PII_CLEAR_FIELDS = {

@@ -145,6 +145,7 @@
   overflow: hidden; /* keep children clipped to radius */
 }
 
+
 .panel-header h3 {
   margin: 4px 0 2px;
   font-size: 20px;
