@@ -425,6 +425,20 @@
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+.landing-notification-preview-row.is-action {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font-family: inherit;
+  appearance: none;
+}
+
+.landing-notification-preview-row.is-action:hover {
+  border-color: rgba(92, 240, 199, 0.45);
+  background: rgba(92, 240, 199, 0.12);
+}
+
 .landing-notification-preview-more {
   font-size: 11px;
   color: var(--muted);

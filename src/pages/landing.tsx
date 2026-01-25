@@ -18,64 +18,11 @@ type ProfileSummary = {
   handle?: string;
 };
 
-type FocusPost = {
-  id: string | number;
-  title: string;
-  excerpt: string;
-  imageUrl?: string;
-  author?: string;
-  linkUrl?: string;
-};
-
-type LinkPreview = {
-  url: string;
-  title?: string;
-  description?: string;
-  image?: string;
-  siteName?: string;
-  type?: string;
-};
-
 const INTENT_OPTIONS = [
   { id: "build-habit", label: "Build A Habit", detail: "Daily accountability" },
   { id: "stay-connected", label: "Stay Connected", detail: "Weekly momentum" },
   { id: "find-accountability", label: "Find Accountability", detail: "Supportive check-ins" },
 ];
-
-const FOCUS_PREVIEW_POSTS: FocusPost[] = [
-  {
-    id: "demo-1",
-    title: "Shipping day 7",
-    excerpt: "Shared my weekly progress and kept the streak alive.",
-    author: "Member",
-  },
-  {
-    id: "demo-2",
-    title: "Habit check-in",
-    excerpt: "30 minutes of deep work before breakfast. Anyone else doing this?",
-    author: "Member",
-  },
-  {
-    id: "demo-3",
-    title: "Feedback loop",
-    excerpt: "Posted my landing page and got two actionable tweaks.",
-    author: "Member",
-  },
-];
-
-const FOCUS_PREVIEW_STATS = [
-  { label: "Wins shipped today", value: "12" },
-  { label: "People asking for feedback", value: "5" },
-  { label: "Active accountability streaks", value: "28" },
-];
-
-const trimText = (value: string, max: number) => {
-  const cleaned = String(value || "").replace(/\s+/g, " ").trim();
-  if (!cleaned) return "";
-  if (cleaned.length <= max) return cleaned;
-  if (max <= 3) return cleaned.slice(0, max);
-  return `${cleaned.slice(0, max - 3)}...`;
-};
 
 const trimPreviewText = (value?: string, max = 72) => {
   const cleaned = String(value || "").replace(/\s+/g, " ").trim();
@@ -83,14 +30,6 @@ const trimPreviewText = (value?: string, max = 72) => {
   if (cleaned.length <= max) return cleaned;
   if (max <= 3) return cleaned.slice(0, max);
   return `${cleaned.slice(0, max - 3)}...`;
-};
-
-const extractFirstUrl = (text: string) => {
-  const match = String(text || "").match(/(https?:\/\/[^\s]+|www\.[^\s]+)/i);
-  if (!match) return "";
-  let url = match[0].replace(/[),.!?]+$/, "");
-  if (url.startsWith("www.")) url = `https://${url}`;
-  return url;
 };
 
 export default function Landing() {
@@ -112,10 +51,6 @@ export default function Landing() {
   const [profileSummary, setProfileSummary] = useState<ProfileSummary | null>(null);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
-  const [featuredPosts, setFeaturedPosts] = useState<FocusPost[]>([]);
-  const [adminPosts, setAdminPosts] = useState<FocusPost[]>([]);
-  const [focusLoading, setFocusLoading] = useState(true);
-  const [focusPreviews, setFocusPreviews] = useState<Record<string, LinkPreview | null>>({});
   const [selectedIntent, setSelectedIntent] = useState("");
   const [intentOpen, setIntentOpen] = useState(false);
   const { counts, total, loading, refresh, markAllRead, previews, acceptFriendRequest } =
@@ -132,17 +67,24 @@ export default function Landing() {
 
     const ctx = gsap.context(() => {
       const tl = gsap.timeline({ defaults: { ease: "power3.out", duration: 0.9 } });
-      tl.from(".landing-nav", { y: -12, opacity: 0, duration: 0.6 })
-        .from(".hero-badges .pill2", { y: 16, opacity: 0, stagger: 0.08 }, "-=0.2")
-        .from(".hero-copy h1", { y: 20, opacity: 0 }, "-=0.1")
-        .from(".hero-copy p", { y: 18, opacity: 0 }, "-=0.2")
-        .from(".hero-intent-button", { y: 16, opacity: 0, stagger: 0.07 }, "-=0.2")
-        .from(
-          ".hero-cta .btn-primary, .hero-cta .btn-ghost, .hero-cta-skip",
-          { y: 12, opacity: 0, stagger: 0.06 },
-          "-=0.2"
-        )
-        .from(".hero-card", { y: 26, opacity: 0 }, "-=0.4");
+      const fromIf = (selector: string, vars: gsap.TweenVars, position?: string | number) => {
+        const targets = root.querySelectorAll(selector);
+        if (!targets.length) return tl;
+        tl.from(targets, vars, position);
+        return tl;
+      };
+
+      fromIf(".landing-nav", { y: -12, opacity: 0, duration: 0.6 });
+      fromIf(".hero-badges .pill2", { y: 16, opacity: 0, stagger: 0.08 }, "-=0.2");
+      fromIf(".hero-copy h1", { y: 20, opacity: 0 }, "-=0.1");
+      fromIf(".hero-copy p", { y: 18, opacity: 0 }, "-=0.2");
+      fromIf(".hero-intent-button", { y: 16, opacity: 0, stagger: 0.07 }, "-=0.2");
+      fromIf(
+        ".hero-cta .btn-primary, .hero-cta .btn-ghost, .hero-cta-skip",
+        { y: 12, opacity: 0, stagger: 0.06 },
+        "-=0.2"
+      );
+      fromIf(".hero-card", { y: 26, opacity: 0 }, "-=0.4");
     }, root);
 
     return () => {
@@ -168,175 +110,6 @@ export default function Landing() {
     if (!url) return undefined;
     return url.startsWith("/") ? `${apiBase}${url}` : url;
   };
-
-  const getOwnerId = (entry: any): number | null => {
-    const attrs = normalize(entry);
-    const owner = attrs.owner?.data ?? attrs.owner;
-    const rawId = owner?.id ?? owner?.data?.id;
-    const numeric = Number(rawId);
-    return Number.isFinite(numeric) ? numeric : null;
-  };
-
-  const buildFocusPost = (
-    entry: any,
-    source: "featured" | "admin",
-    authorMap?: Record<number, string>
-  ): FocusPost => {
-    const attrs = normalize(entry);
-    const titleRaw = attrs.Title || "";
-    const contentRaw = source === "admin" ? attrs.Posts_Content || "" : attrs.Users_Content || "";
-    const linkUrl = extractFirstUrl(contentRaw);
-    const mediaField = source === "admin" ? attrs.Pictures : attrs.Users_Pictures;
-    const ownerData = source === "featured" ? normalize(attrs.owner?.data ?? attrs.owner) : null;
-    const ownerId = source === "featured" ? getOwnerId(entry) : null;
-    const mappedAuthor = ownerId ? authorMap?.[ownerId] : undefined;
-    const author =
-      source === "featured"
-        ? mappedAuthor ||
-          ownerData?.handle ||
-          ownerData?.username ||
-          ownerData?.email ||
-          "Community"
-        : "Your Social Place";
-
-    const title =
-      trimText(titleRaw, 56) ||
-      trimText(contentRaw, 56) ||
-      (source === "admin" ? "Admin update" : "Featured update");
-
-    return {
-      id: entry.id ?? attrs.documentId ?? title,
-      title,
-      excerpt: trimText(contentRaw, 90) || "Fresh momentum from the crew.",
-      imageUrl: pickMediaUrl(mediaField),
-      author,
-      linkUrl: linkUrl || undefined,
-    };
-  };
-
-  const fetchFocusAuthorMap = async (userIds: number[]) => {
-    if (!userIds.length) return {};
-    const filter = userIds
-      .map((id, index) => `filters[user][id][$in][${index}]=${id}`)
-      .join("&");
-    const res = await api.get(
-      `/profiles?${filter}&populate=user&pagination[pageSize]=${userIds.length}`
-    );
-    const map: Record<number, string> = {};
-    (res.data?.data ?? []).forEach((entry: any) => {
-      const attrs = normalize(entry);
-      const userData = attrs.user?.data ?? attrs.user;
-      const rawId = userData?.id ?? userData?.data?.id;
-      const numeric = Number(rawId);
-      if (!Number.isFinite(numeric)) return;
-      const first = String(attrs.firstName || "").trim();
-      const last = String(attrs.lastName || "").trim();
-      const full = `${first} ${last}`.trim();
-      const handle = String(attrs.handle || "").trim();
-      const label = full || handle;
-      if (label) {
-        map[numeric] = label;
-      }
-    });
-    return map;
-  };
-
-  useEffect(() => {
-    let active = true;
-
-    const loadFocus = async () => {
-      setFocusLoading(true);
-      try {
-        const [adminRes, featuredRes] = await Promise.all([
-          api.get("/posts?populate=Pictures&sort=createdAt:desc&pagination[pageSize]=2"),
-          api.get(
-            "/users-posts?populate=Users_Pictures&populate=owner&sort=createdAt:desc&pagination[pageSize]=2"
-          ),
-        ]);
-
-        if (!active) return;
-        const adminEntries = (adminRes.data?.data ?? []) as any[];
-        const featuredEntries = (featuredRes.data?.data ?? []) as any[];
-        const ownerIds: number[] = Array.from(
-          new Set<number>(
-            featuredEntries
-              .map((entry: any) => getOwnerId(entry))
-              .filter((id: number | null): id is number => Number.isFinite(id))
-          )
-        );
-        let authorMap: Record<number, string> = {};
-        try {
-          authorMap = await fetchFocusAuthorMap(ownerIds);
-        } catch {
-          authorMap = {};
-        }
-        if (!active) return;
-
-        const admin = adminEntries.map((p: any) => buildFocusPost(p, "admin"));
-        const featured = featuredEntries.map((p: any) =>
-          buildFocusPost(p, "featured", authorMap)
-        );
-        setAdminPosts(admin);
-        setFeaturedPosts(featured);
-      } catch {
-        if (!active) return;
-        setAdminPosts([]);
-        setFeaturedPosts([]);
-      } finally {
-        if (active) setFocusLoading(false);
-      }
-    };
-
-    loadFocus();
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    const urls = [
-      ...new Set(
-        [...featuredPosts, ...adminPosts]
-          .map((post) => post.linkUrl)
-          .filter((url): url is string => Boolean(url))
-      ),
-    ];
-    if (!urls.length) return;
-
-    urls.forEach((url) => {
-      if (focusPreviews[url] !== undefined) return;
-      api
-        .get("/link-preview", { params: { url } })
-        .then((res) => {
-          if (!active) return;
-          const data = res.data?.data;
-          const preview = data?.url
-            ? {
-                url: data.url,
-                title: data.title,
-                description: data.description,
-                image: data.image,
-                siteName: data.siteName,
-                type: data.type,
-              }
-            : null;
-          setFocusPreviews((prev) =>
-            prev[url] !== undefined ? prev : { ...prev, [url]: preview }
-          );
-        })
-        .catch(() => {
-          if (!active) return;
-          setFocusPreviews((prev) =>
-            prev[url] !== undefined ? prev : { ...prev, [url]: null }
-          );
-        });
-    });
-
-    return () => {
-      active = false;
-    };
-  }, [adminPosts, featuredPosts, focusPreviews]);
 
   useEffect(() => {
     if (!user) {
@@ -424,6 +197,23 @@ export default function Landing() {
     const owner = previews.comments.ownerName || "Someone";
     return snippet ? `${owner} commented: "${snippet}"` : `${owner} commented on your post.`;
   }, [counts.comments, previews.comments]);
+
+  const feedbackPreviewText = useMemo(() => {
+    if (counts.feedbackRequests <= 0) return "";
+    if (!previews.feedbackRequests.length) return "New feedback requests are waiting.";
+    const first = previews.feedbackRequests[0];
+    const snippet = trimPreviewText(first.title || first.content, 64);
+    const owner = first.ownerName || "Someone";
+    const audience =
+      first.feedbackAudience === "public"
+        ? "public feedback"
+        : first.feedbackAudience === "friends"
+        ? "friends feedback"
+        : "feedback";
+    return snippet
+      ? `${owner} asked for ${audience}: "${snippet}"`
+      : `${owner} asked for ${audience}.`;
+  }, [counts.feedbackRequests, previews.feedbackRequests]);
 
   const groupUpdatePreviewText = useMemo(() => {
     if (counts.groupUpdates <= 0) return "";
@@ -549,6 +339,61 @@ export default function Landing() {
         <button
           type="button"
           className="landing-notification-item is-action"
+          onClick={() => handleNotificationAction("/dashboard")}
+        >
+          <span>Feedback requests</span>
+          <span className="landing-notification-count">{counts.feedbackRequests}</span>
+        </button>
+        {counts.feedbackRequests > 0 && (
+          <div className="landing-notification-preview-list">
+            {previews.feedbackRequests.length > 0 ? (
+              previews.feedbackRequests.map((request) => {
+                const audience =
+                  request.feedbackAudience === "public"
+                    ? "Public feedback"
+                    : request.feedbackAudience === "friends"
+                    ? "Friends feedback"
+                    : "Feedback request";
+                const snippet = trimPreviewText(
+                  request.title || request.content,
+                  56
+                );
+                return (
+                  <button
+                    key={request.id}
+                    type="button"
+                    className="landing-notification-preview-row is-action"
+                    onClick={() =>
+                      handleNotificationAction(`/dashboard#post-${request.postKey}`)
+                    }
+                  >
+                    <span className="landing-notification-preview-text">
+                      {request.ownerName} · {audience}
+                      {snippet ? `: "${snippet}"` : ""}
+                    </span>
+                  </button>
+                );
+              })
+            ) : (
+              <div className="landing-notification-preview">
+                <span className="landing-notification-preview-text">
+                  {feedbackPreviewText || "New feedback requests are waiting."}
+                </span>
+              </div>
+            )}
+            {previews.feedbackRequests.length > 0 &&
+              counts.feedbackRequests > previews.feedbackRequests.length && (
+                <div className="landing-notification-preview-more">
+                  +{counts.feedbackRequests - previews.feedbackRequests.length} more requests
+                </div>
+              )}
+          </div>
+        )}
+      </div>
+      <div className="landing-notification-group">
+        <button
+          type="button"
+          className="landing-notification-item is-action"
           onClick={() => handleNotificationAction("/groups")}
         >
           <span>Group updates</span>
@@ -599,7 +444,6 @@ export default function Landing() {
     </div>
   );
 
-  const focusHasPosts = featuredPosts.length > 0 || adminPosts.length > 0;
   const selectedIntentOption = INTENT_OPTIONS.find(
     (option) => option.id === selectedIntent
   );
@@ -612,51 +456,6 @@ export default function Landing() {
   const handleIntentSelect = (intentId: string) => {
     setSelectedIntent(intentId);
     navigate(`/register?intent=${encodeURIComponent(intentId)}`);
-  };
-
-  const renderFocusItem = (post: FocusPost, fallbackLabel: string, keyPrefix: string) => {
-    const preview = post.linkUrl ? focusPreviews[post.linkUrl] : null;
-    const thumbUrl = preview?.image || post.imageUrl;
-    const title = preview?.title || post.title;
-    const excerpt = trimText(preview?.description || post.excerpt, 90);
-    const label = post.linkUrl ? "LINK" : fallbackLabel;
-    const content = (
-      <>
-        <div className="focus-thumb">
-          {thumbUrl ? (
-            <img src={thumbUrl} alt={title} loading="lazy" />
-          ) : (
-            <span>{label}</span>
-          )}
-        </div>
-        <div className="focus-body">
-          <span className="focus-title">{title}</span>
-          <span className="focus-excerpt">{excerpt}</span>
-          {post.author && <span className="focus-author">by {post.author}</span>}
-        </div>
-      </>
-    );
-
-    if (post.linkUrl) {
-      return (
-        <a
-          key={`${keyPrefix}-${post.id}`}
-          className="focus-item"
-          href={post.linkUrl}
-          target="_blank"
-          rel="noreferrer"
-          aria-label={`Open link for ${title}`}
-        >
-          {content}
-        </a>
-      );
-    }
-
-    return (
-      <div key={`${keyPrefix}-${post.id}`} className="focus-item">
-        {content}
-      </div>
-    );
   };
 
   return (
@@ -804,7 +603,7 @@ export default function Landing() {
         <section className="hero">
           <div className="hero-copy">
             <div className="hero-badges">
-              <span className="pill2">Creators & Builders</span>
+              <span className="pill2">Only Positivity</span>
               <span className="pill2">Private messages</span>
               <span className="pill2">Daily momentum</span>
             </div>
@@ -856,68 +655,6 @@ export default function Landing() {
             )}
           </div>
 
-          <div className="hero-card">
-            <h3>Today&apos;s Focus</h3>
-            <p>What our community is doing.</p>
-            {focusHasPosts ? (
-              <div className="hero-focus">
-                <div className="focus-column">
-                  <div className="focus-heading">
-                    <span className="focus-label">Featured posts</span>
-                    <span className="focus-sub">Latest community updates.</span>
-                  </div>
-                  <div className="focus-list">
-                    {featuredPosts.length ? (
-                      featuredPosts.map((post) => renderFocusItem(post, "NEW", "featured"))
-                    ) : (
-                      <div className="focus-empty">No featured posts yet.</div>
-                    )}
-                  </div>
-                </div>
-                <div className="focus-column">
-                  <div className="focus-heading">
-                    <span className="focus-label">Admin posts</span>
-                    <span className="focus-sub">Signals from the Your Social Place team.</span>
-                  </div>
-                  <div className="focus-list">
-                    {adminPosts.length ? (
-                      adminPosts.map((post) => renderFocusItem(post, "TEAM", "admin"))
-                    ) : (
-                      <div className="focus-empty">No admin posts yet.</div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="focus-preview">
-                <div className="focus-heading">
-                  <span className="focus-label">Member preview</span>
-                  <span className="focus-sub">A peek at what momentum looks like.</span>
-                </div>
-                {focusLoading && user && (
-                  <span className="focus-status">Loading live updates...</span>
-                )}
-                <div className="focus-preview-grid">
-                  <div className="focus-list">
-                    {FOCUS_PREVIEW_POSTS.map((post) =>
-                      renderFocusItem(post, "DEMO", "preview")
-                    )}
-                  </div>
-                  <div className="focus-stats">
-                    {FOCUS_PREVIEW_STATS.map((stat) => (
-                      <div key={stat.label} className="focus-stat">
-                        <span className="focus-stat-value">{stat.value}</span>
-                        <span className="focus-stat-label">{stat.label}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div className="focus-preview-note">
-                  Create an account to see live posts and join the conversation.
-                </div>
-              </div>
-            )}
-          </div>
         </section>
 
         <footer className="landing-footer">

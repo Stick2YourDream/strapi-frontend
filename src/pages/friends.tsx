@@ -109,6 +109,7 @@ const isYoutubeUrl = (value: string) => {
     return false;
   }
 };
+const isVideoUrl = (value?: string) => !!value && /\.(mp4|webm|mov)$/i.test(value);
 
 const normalizeFriendSearch = (value: string) =>
   value.trim().replace(/@+/g, "").replace(/\s+/g, " ").toLowerCase();
@@ -187,6 +188,19 @@ const formatLastSeen = (value?: string) => {
   )}`;
 };
 
+const formatPostDate = (value?: string) => {
+  if (!value) return "";
+  try {
+    return new Intl.DateTimeFormat("en", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    }).format(new Date(value));
+  } catch {
+    return value;
+  }
+};
+
 const LinkPreviewCard = ({
   preview,
   url,
@@ -261,6 +275,7 @@ export default function Friends() {
   const allPostsRef = useRef<HTMLDivElement | null>(null);
   const [linkPreviews, setLinkPreviews] = useState<Record<string, LinkPreview | null>>({});
   const linkPreviewsRef = useRef(linkPreviews);
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     linkPreviewsRef.current = linkPreviews;
@@ -272,6 +287,8 @@ export default function Friends() {
   const [actionBusy, setActionBusy] = useState<"block" | "mute" | "report" | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [activePost, setActivePost] = useState<FriendPost | null>(null);
+  const [copyToast, setCopyToast] = useState<string | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportReason, setReportReason] = useState<ReportReason>("other");
   const [reportDetails, setReportDetails] = useState("");
@@ -330,6 +347,78 @@ export default function Friends() {
     }
     return fallback;
   };
+
+  const showCopyToast = useCallback((message: string) => {
+    setCopyToast(message);
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+    toastTimeoutRef.current = setTimeout(() => {
+      setCopyToast(null);
+    }, 2200);
+  }, []);
+
+  const copyToClipboard = useCallback(async (text: string) => {
+    if (!text) return false;
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {
+      // Fallback below.
+    }
+
+    if (typeof document === "undefined") return false;
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "true");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    textarea.style.pointerEvents = "none";
+    document.body.appendChild(textarea);
+    textarea.select();
+    textarea.setSelectionRange(0, text.length);
+    const copied = document.execCommand("copy");
+    textarea.remove();
+    return copied;
+  }, []);
+
+  const getPostDescriptor = useCallback((post: FriendPost) => {
+    if (post.imageUrl) return isVideoUrl(post.imageUrl) ? "with a video" : "with a picture";
+    if (post.linkUrl) return "with a link";
+    return "";
+  }, []);
+
+  const handleDescriptorAction = useCallback(
+    async (post: FriendPost, descriptor: string) => {
+      if (descriptor === "with a picture" && post.imageUrl && !isVideoUrl(post.imageUrl)) {
+        if (typeof window !== "undefined" && !window.confirm("Download this picture?")) {
+          return;
+        }
+        if (typeof document === "undefined") return;
+        const link = document.createElement("a");
+        link.href = post.imageUrl;
+        link.download = `friend-post-${post.id}`;
+        link.rel = "noreferrer";
+        link.target = "_blank";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        return;
+      }
+
+      if (descriptor === "with a link" && post.linkUrl) {
+        const copied = await copyToClipboard(post.linkUrl);
+        if (copied) {
+          showCopyToast("Link Copied");
+        } else {
+          setActionNotice("Unable to copy link.");
+        }
+      }
+    },
+    [copyToClipboard, showCopyToast]
+  );
 
   const fetchLinkPreview = useCallback(async (url: string) => {
     if (!url) return;
@@ -660,6 +749,20 @@ export default function Friends() {
   const canViewPosts = !isBlocked && !isMuted;
   const visiblePosts = canViewPosts ? selectedPosts : [];
   const recentPosts = visiblePosts.slice(0, 3);
+  const activeDescriptor = activePost ? getPostDescriptor(activePost) : "";
+  const isActiveDescriptorActionable =
+    activeDescriptor === "with a picture" || activeDescriptor === "with a link";
+  const activePreview = activePost?.linkUrl ? linkPreviews[activePost.linkUrl] : null;
+  const activePreviewImage = activePreview?.image;
+  const showActivePreviewMedia = Boolean(
+    activePost && !activePost.imageUrl && activePreviewImage
+  );
+  const showActivePlaceholder = Boolean(
+    activePost && !activePost.imageUrl && !activePreviewImage
+  );
+  const activeFeedbackLabel = activePost ? feedbackLabelFor(activePost) : "";
+  const activeAuthorLabel = selectedFriendLabel;
+  const activePostTitleId = activePost ? `friend-post-title-${activePost.id}` : undefined;
 
   useEffect(() => {
     setShowAllPosts(false);
@@ -891,12 +994,66 @@ export default function Friends() {
     }
   };
 
+  const closePostModal = useCallback(() => {
+    setActivePost(null);
+  }, []);
+
+  const handleOpenPost = (post: FriendPost) => {
+    if (!post?.id) return;
+    setActivePost(post);
+  };
+
+  useEffect(() => {
+    if (!activePost) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setActivePost(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [activePost]);
+
+  useEffect(() => {
+    if (!activePost) return;
+    if (typeof document === "undefined") return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [activePost]);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current) {
+        clearTimeout(toastTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const renderPostList = (posts: FriendPost[], expanded = false) => (
     <ul className={`comment-list friend-posts-list${expanded ? " is-expanded" : ""}`}>
       {posts.map((post) => {
         const feedbackLabel = feedbackLabelFor(post);
         return (
-          <li key={post.id} className="comment-item">
+          <li
+            key={post.id}
+            className="comment-item friend-post-item"
+            role="button"
+            tabIndex={0}
+            onClick={(event) => {
+              const target = event.target as HTMLElement;
+              if (target.closest("a")) return;
+              handleOpenPost(post);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                handleOpenPost(post);
+              }
+            }}
+          >
             {post.imageUrl && <img src={post.imageUrl} alt={post.title} className="avatar" />}
             <div className="comment-body">
               <div className="friend-post-title">
@@ -1149,6 +1306,110 @@ export default function Friends() {
           </section>
         </div>
       </div>
+
+      {activePost && (
+        <div
+          className="post-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={activePostTitleId}
+          onClick={closePostModal}
+        >
+          <div className="post-modal__panel" onClick={(event) => event.stopPropagation()}>
+            <div className="post-modal__handle" aria-hidden="true" />
+            <button
+              className="post-modal__close"
+              type="button"
+              onClick={closePostModal}
+              aria-label="Close post"
+            >
+              X
+            </button>
+            <div className="post-modal__scroll">
+              <div className="post-modal__meta">
+                <div className="post-modal__meta-left">
+                  <span className="post-modal__author">{activeAuthorLabel}</span>
+                  {activePost.createdAt && (
+                    <span className="post-modal__time">
+                      {formatPostDate(activePost.createdAt)}
+                    </span>
+                  )}
+                </div>
+                <div className="post-modal__meta-right">
+                  {activeDescriptor &&
+                    (isActiveDescriptorActionable ? (
+                      <button
+                        type="button"
+                        className="post-meta-tag post-meta-tag--action"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          if (!activePost) return;
+                          void handleDescriptorAction(activePost, activeDescriptor);
+                        }}
+                        aria-label={
+                          activeDescriptor === "with a link"
+                            ? "Copy link"
+                            : "Download picture"
+                        }
+                      >
+                        {activeDescriptor}
+                      </button>
+                    ) : (
+                      <span className="post-meta-tag">{activeDescriptor}</span>
+                    ))}
+                  {activeFeedbackLabel && (
+                    <span className="post-feedback-tag">{activeFeedbackLabel}</span>
+                  )}
+                </div>
+              </div>
+
+              {activePost.imageUrl ? (
+                <div className="post-media post-modal__media">
+                  {isVideoUrl(activePost.imageUrl) ? (
+                    <video controls style={{ width: "100%", height: "100%", objectFit: "cover" }}>
+                      <source src={activePost.imageUrl} />
+                    </video>
+                  ) : (
+                    <img src={activePost.imageUrl} alt={activePost.title} loading="lazy" />
+                  )}
+                </div>
+              ) : showActivePreviewMedia ? (
+                <div className="post-media post-modal__media link-preview-media">
+                  <img
+                    src={activePreviewImage}
+                    alt={activePreview?.title || activePost.title}
+                    loading="lazy"
+                  />
+                </div>
+              ) : showActivePlaceholder ? (
+                <div className="post-media post-modal__media placeholder">
+                  <div className="dots" />
+                  <span>No image</span>
+                </div>
+              ) : null}
+
+              <div className="post-modal__body">
+                <h2 id={activePostTitleId}>{activePost.title}</h2>
+                <p>{activePost.content}</p>
+                {activePreview && !activePost.imageUrl && activePost.linkUrl && (
+                  <LinkPreviewCard preview={activePreview} url={activePost.linkUrl} />
+                )}
+              </div>
+            </div>
+            <div className="post-modal__mobile-actions">
+              <button
+                className="post-modal__close-btn"
+                type="button"
+                onClick={closePostModal}
+              >
+                Close
+              </button>
+              <span className="post-modal__hint">Tap outside to close</span>
+            </div>
+          </div>
+        </div>
+      )}
+      {copyToast && <div className="toast success-toast">{copyToast}</div>}
 
       {reportOpen && selectedFriend && (
         <div className="friend-report-overlay" role="dialog" aria-modal="true">

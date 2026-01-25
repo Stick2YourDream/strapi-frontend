@@ -418,6 +418,23 @@
   gap: 10px;
 }
 
+.friend-post-item {
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.friend-post-item:hover {
+  border-color: rgba(125, 211, 252, 0.35);
+  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.25);
+  transform: translateY(-1px);
+}
+
+.friend-post-item:focus-visible {
+  outline: none;
+  border-color: rgba(92, 240, 199, 0.55);
+  box-shadow: 0 0 0 2px rgba(92, 240, 199, 0.2);
+}
+
 .friend-posts-list .avatar {
   width: 48px;
   height: 48px;

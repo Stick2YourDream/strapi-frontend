@@ -8,6 +8,7 @@ type NotificationCounts = {
   messages: number;
   requests: number;
   friendPosts: number;
+  feedbackRequests: number;
   comments: number;
   likes: number;
   groupUpdates: number;
@@ -39,6 +40,17 @@ export type FriendPostPreview = {
   createdAt?: string;
 };
 
+export type FeedbackRequestPreview = {
+  id: string | number;
+  postKey: string;
+  ownerId?: number;
+  ownerName: string;
+  title?: string;
+  content?: string;
+  feedbackAudience?: string;
+  createdAt?: string;
+};
+
 export type CommentPreview = {
   id: string | number;
   ownerId?: number;
@@ -58,6 +70,7 @@ export type NotificationPreviews = {
   messages: MessagePreview | null;
   requests: FriendRequestPreview[];
   friendPosts: FriendPostPreview | null;
+  feedbackRequests: FeedbackRequestPreview[];
   comments: CommentPreview | null;
   likes: { count: number } | null;
   groupUpdates: GroupUpdatePreview | null;
@@ -169,6 +182,7 @@ export const useNotifications = (
     messages: 0,
     requests: 0,
     friendPosts: 0,
+    feedbackRequests: 0,
     comments: 0,
     likes: 0,
     groupUpdates: 0,
@@ -177,6 +191,7 @@ export const useNotifications = (
     messages: null,
     requests: [],
     friendPosts: null,
+    feedbackRequests: [],
     comments: null,
     likes: null,
     groupUpdates: null,
@@ -229,6 +244,7 @@ export const useNotifications = (
       (counts.messages > previous.messages ||
         counts.requests > previous.requests ||
         counts.friendPosts > previous.friendPosts ||
+        counts.feedbackRequests > previous.feedbackRequests ||
         counts.comments > previous.comments ||
         counts.likes > previous.likes ||
         counts.groupUpdates > previous.groupUpdates);
@@ -256,6 +272,7 @@ export const useNotifications = (
         messages: 0,
         requests: 0,
         friendPosts: 0,
+        feedbackRequests: 0,
         comments: 0,
         likes: 0,
         groupUpdates: 0,
@@ -264,6 +281,7 @@ export const useNotifications = (
         messages: null,
         requests: [],
         friendPosts: null,
+        feedbackRequests: [],
         comments: null,
         likes: null,
         groupUpdates: null,
@@ -488,6 +506,114 @@ export const useNotifications = (
         }
       }
 
+      let feedbackCount = 0;
+      let feedbackRequests: FeedbackRequestPreview[] = [];
+      const feedbackEntries: any[] = [];
+      const feedbackOwnerIds = new Set<number>();
+      const collectFeedbackEntries = (entries: any[]) => {
+        entries.forEach((entry) => {
+          const attrs = normalize(entry);
+          const postKey = String(entry?.id ?? attrs?.documentId ?? attrs?.id ?? "");
+          if (!postKey) return;
+          if (feedbackEntries.some((item) => String(item?.id ?? "") === postKey)) return;
+          feedbackEntries.push(entry);
+        });
+      };
+
+      const publicFeedbackRes = await api
+        .get(
+          `/users-posts?filters[feedbackAudience][$eq]=public` +
+            `${afterFilter}&populate=owner&sort=createdAt:desc&pagination[pageSize]=50`
+        )
+        .catch(() => null);
+      collectFeedbackEntries(publicFeedbackRes?.data?.data ?? []);
+
+      if (acceptedFriendIds.length) {
+        const friendFeedbackFilter = acceptedFriendIds
+          .map((id: number, index: number) => `filters[owner][id][$in][${index}]=${id}`)
+          .join("&");
+        const friendsFeedbackRes = await api
+          .get(
+            `/users-posts?${friendFeedbackFilter}` +
+              `&filters[feedbackAudience][$eq]=friends${afterFilter}` +
+              `&populate=owner&sort=createdAt:desc&pagination[pageSize]=50`
+          )
+          .catch(() => null);
+        collectFeedbackEntries(friendsFeedbackRes?.data?.data ?? []);
+      }
+
+      const specificFeedbackRes = await api
+        .get(
+          `/users-posts?filters[feedbackAudience][$eq]=specific` +
+            `&filters[feedbackTarget][id][$eq]=${currentUserId}` +
+            `${afterFilter}&populate=owner&populate=feedbackTarget&sort=createdAt:desc` +
+            `&pagination[pageSize]=50`
+        )
+        .catch(() => null);
+      collectFeedbackEntries(specificFeedbackRes?.data?.data ?? []);
+
+      feedbackEntries.forEach((entry) => {
+        const attrs = normalize(entry);
+        const ownerId = getEntityId(attrs.owner);
+        if (ownerId === currentUserId) return;
+        if (ownerId) feedbackOwnerIds.add(ownerId);
+      });
+
+      const missingOwnerIds = Array.from(feedbackOwnerIds).filter(
+        (id) => !profileNameCacheRef.current[id]
+      );
+      if (missingOwnerIds.length) {
+        const ownerFilter = missingOwnerIds
+          .map((id: number, index: number) => `filters[user][id][$in][${index}]=${id}`)
+          .join("&");
+        const profileRes = await api
+          .get(
+            `/profiles?${ownerFilter}&populate=user&pagination[pageSize]=${missingOwnerIds.length}`
+          )
+          .catch(() => null);
+        (profileRes?.data?.data ?? []).forEach((entry: any) => {
+          const label = getProfileLabel(entry);
+          const attrs = normalize(entry);
+          const userData = attrs.user?.data ?? attrs.user;
+          const rawId = userData?.id ?? userData?.data?.id;
+          const numeric = Number(rawId);
+          if (label && Number.isFinite(numeric)) {
+            profileNameCacheRef.current[numeric] = label;
+          }
+        });
+      }
+
+      feedbackRequests = feedbackEntries
+        .map((entry: any) => {
+          const attrs = normalize(entry);
+          const postKey = String(entry?.id ?? attrs?.documentId ?? attrs?.id ?? "");
+          if (!postKey) return null;
+          const ownerId = getEntityId(attrs.owner);
+          if (ownerId === currentUserId) return null;
+          const ownerName =
+            (ownerId && profileNameCacheRef.current[ownerId]) || getUserLabel(attrs.owner);
+          const title = attrs.Title || attrs.title;
+          const content = attrs.Users_Content || attrs.content;
+          return {
+            id: postKey,
+            postKey,
+            ownerId,
+            ownerName: ownerName || "Someone",
+            title,
+            content,
+            feedbackAudience: attrs.feedbackAudience || undefined,
+            createdAt: attrs.createdAt,
+          } as FeedbackRequestPreview;
+        })
+        .filter(Boolean) as FeedbackRequestPreview[];
+
+      feedbackRequests.sort((a, b) => {
+        const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return bTime - aTime;
+      });
+      feedbackCount = feedbackRequests.length;
+
       const groupUpdatesRes = await api
         .get(
           `/group-notifications?` +
@@ -526,6 +652,7 @@ export const useNotifications = (
         messages: messageCount,
         requests: pendingRequestCount,
         friendPosts: friendPostCount,
+        feedbackRequests: feedbackCount,
         comments: commentCount,
         likes: likeCount,
         groupUpdates: groupUpdateCount,
@@ -534,6 +661,7 @@ export const useNotifications = (
         messages: messagePreview,
         requests: requestPreviews,
         friendPosts: friendPostPreview,
+        feedbackRequests: feedbackRequests.slice(0, MAX_PREVIEW_ITEMS),
         comments: commentPreview,
         likes: likeCount > 0 ? { count: likeCount } : null,
         groupUpdates: groupUpdatePreview,
@@ -564,6 +692,7 @@ export const useNotifications = (
       ...prev,
       messages: 0,
       friendPosts: 0,
+      feedbackRequests: 0,
       comments: 0,
       likes: 0,
       groupUpdates: 0,
@@ -572,6 +701,7 @@ export const useNotifications = (
       ...prev,
       messages: null,
       friendPosts: null,
+      feedbackRequests: [],
       comments: null,
       likes: null,
       groupUpdates: null,
@@ -624,11 +754,13 @@ export const useNotifications = (
       counts.messages +
       counts.requests +
       counts.friendPosts +
+      counts.feedbackRequests +
       counts.comments +
       counts.likes +
       counts.groupUpdates,
     [
       counts.comments,
+      counts.feedbackRequests,
       counts.friendPosts,
       counts.groupUpdates,
       counts.likes,

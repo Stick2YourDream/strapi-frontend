@@ -260,6 +260,23 @@ export default function Sidebar({
     return snippet ? `${owner} commented: "${snippet}"` : `${owner} commented on your post.`;
   }, [counts.comments, previews.comments]);
 
+  const feedbackPreviewText = useMemo(() => {
+    if (counts.feedbackRequests <= 0) return "";
+    if (!previews.feedbackRequests.length) return "New feedback requests are waiting.";
+    const first = previews.feedbackRequests[0];
+    const snippet = trimPreviewText(first.title || first.content, 64);
+    const owner = first.ownerName || "Someone";
+    const audience =
+      first.feedbackAudience === "public"
+        ? "public feedback"
+        : first.feedbackAudience === "friends"
+        ? "friends feedback"
+        : "feedback";
+    return snippet
+      ? `${owner} asked for ${audience}: "${snippet}"`
+      : `${owner} asked for ${audience}.`;
+  }, [counts.feedbackRequests, previews.feedbackRequests]);
+
   const groupUpdatePreviewText = useMemo(() => {
     if (counts.groupUpdates <= 0) return "";
     if (!previews.groupUpdates) return "New group updates are waiting.";
@@ -365,6 +382,61 @@ export default function Sidebar({
         {counts.friendPosts > 0 && friendPostPreviewText && (
           <div className="sidebar-notification-preview">
             <span className="sidebar-notification-preview-text">{friendPostPreviewText}</span>
+          </div>
+        )}
+      </div>
+      <div className="sidebar-notification-group">
+        <button
+          type="button"
+          className="sidebar-notification-item is-action"
+          onClick={() => handleNotificationAction("/dashboard")}
+        >
+          <span>Feedback requests</span>
+          <span className="sidebar-notification-count">{counts.feedbackRequests}</span>
+        </button>
+        {counts.feedbackRequests > 0 && (
+          <div className="sidebar-notification-preview-list">
+            {previews.feedbackRequests.length > 0 ? (
+              previews.feedbackRequests.map((request) => {
+                const audience =
+                  request.feedbackAudience === "public"
+                    ? "Public feedback"
+                    : request.feedbackAudience === "friends"
+                    ? "Friends feedback"
+                    : "Feedback request";
+                const snippet = trimPreviewText(
+                  request.title || request.content,
+                  56
+                );
+                return (
+                  <button
+                    key={request.id}
+                    type="button"
+                    className="sidebar-notification-preview-row is-action"
+                    onClick={() =>
+                      handleNotificationAction(`/dashboard#post-${request.postKey}`)
+                    }
+                  >
+                    <span className="sidebar-notification-preview-text">
+                      {request.ownerName} · {audience}
+                      {snippet ? `: "${snippet}"` : ""}
+                    </span>
+                  </button>
+                );
+              })
+            ) : (
+              <div className="sidebar-notification-preview">
+                <span className="sidebar-notification-preview-text">
+                  {feedbackPreviewText || "New feedback requests are waiting."}
+                </span>
+              </div>
+            )}
+            {previews.feedbackRequests.length > 0 &&
+              counts.feedbackRequests > previews.feedbackRequests.length && (
+                <div className="sidebar-notification-preview-more">
+                  +{counts.feedbackRequests - previews.feedbackRequests.length} more requests
+                </div>
+              )}
           </div>
         )}
       </div>

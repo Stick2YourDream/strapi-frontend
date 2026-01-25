@@ -1,6 +1,6 @@
 // src/pages/Dashboard.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import api from "../api/strapi";
 import axios from "axios";
 import "../css/dashboard.css";
@@ -389,6 +389,8 @@ export default function Dashboard() {
   const [reactionPickerFor, setReactionPickerFor] = useState<string | number | null>(null);
   const [shareMenuFor, setShareMenuFor] = useState<string | number | null>(null);
   const [shareNotice, setShareNotice] = useState<Record<string | number, string>>({});
+  const [copyToast, setCopyToast] = useState<string | null>(null);
+  const [activePostKey, setActivePostKey] = useState<string | null>(null);
   const [linkPreview, setLinkPreview] = useState<LinkPreview | null>(null);
   const [linkPreviewLoading, setLinkPreviewLoading] = useState(false);
   const [linkPreviewError, setLinkPreviewError] = useState<string | null>(null);
@@ -396,6 +398,7 @@ export default function Dashboard() {
   const previewQueueRef = useRef<string[]>([]);
   const previewInFlightRef = useRef(0);
   const previewPendingRef = useRef<Set<string>>(new Set());
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [profileAvatarUrl, setProfileAvatarUrl] = useState<string | null>(null);
   const [profileNameMap, setProfileNameMap] = useState<Record<number, string>>({});
   const [userPostsPage, setUserPostsPage] = useState(1);
@@ -407,6 +410,8 @@ export default function Dashboard() {
   const loadIdRef = useRef(0);
 
   const navigate = useNavigate();
+  const location = useLocation();
+  const hashHandledRef = useRef<string | null>(null);
   const { user, profile } = useAuth();
   const { getBackgroundStyle } = useUserPreferences();
   usePageMeta({
@@ -1241,6 +1246,25 @@ export default function Dashboard() {
     }
   }, [categorizedPosts, postFilter]);
 
+  const activePost = useMemo(() => {
+    if (!activePostKey) return null;
+    return (
+      categorizedPosts.ordered.find((post) => String(post.id) === activePostKey) ?? null
+    );
+  }, [activePostKey, categorizedPosts]);
+
+  useEffect(() => {
+    const hash = location.hash;
+    if (!hash) return;
+    if (hashHandledRef.current === hash && visiblePosts.length) return;
+    const id = hash.replace(/^#/, "");
+    if (!id) return;
+    const target = document.getElementById(id);
+    if (!target) return;
+    hashHandledRef.current = hash;
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [location.hash, visiblePosts]);
+
   useEffect(() => {
     const url = extractFirstUrl(formContent);
     if (!url) {
@@ -1547,6 +1571,99 @@ export default function Dashboard() {
     setReactionPickerFor(null);
   }, []);
 
+  const showCopyToast = useCallback((message: string) => {
+    setCopyToast(message);
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+    toastTimeoutRef.current = setTimeout(() => {
+      setCopyToast(null);
+    }, 2200);
+  }, []);
+
+  const copyToClipboard = useCallback(async (text: string) => {
+    if (!text) return false;
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {
+      // Fallback below.
+    }
+
+    if (typeof document === "undefined") return false;
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "true");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    textarea.style.pointerEvents = "none";
+    document.body.appendChild(textarea);
+    textarea.select();
+    textarea.setSelectionRange(0, text.length);
+    const copied = document.execCommand("copy");
+    textarea.remove();
+    return copied;
+  }, []);
+
+  const handleDescriptorAction = useCallback(
+    async (post: NormalizedPost, postKey: string, descriptor: string) => {
+      if (descriptor === "with a picture" && post.imageUrl && !isVideoUrl(post.imageUrl)) {
+        if (typeof window !== "undefined" && !window.confirm("Download this picture?")) {
+          return;
+        }
+        if (typeof document === "undefined") return;
+        const link = document.createElement("a");
+        link.href = post.imageUrl;
+        link.download = `post-${postKey}`;
+        link.rel = "noreferrer";
+        link.target = "_blank";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        return;
+      }
+
+      if (descriptor === "with a link") {
+        const url = extractFirstUrl(post.content);
+        if (!url) return;
+        const copied = await copyToClipboard(url);
+        if (copied) {
+          showCopyToast("Link Copied");
+        }
+        pushShareNotice(postKey, copied ? "Link Copied" : "Unable to copy link.");
+      }
+    },
+    [copyToClipboard, pushShareNotice, showCopyToast]
+  );
+
+  const openPostModal = useCallback((postKey: string) => {
+    setActivePostKey(postKey);
+    setReactionPickerFor(null);
+    setShareMenuFor(null);
+  }, []);
+
+  const closePostModal = useCallback(() => {
+    setActivePostKey(null);
+  }, []);
+
+  const handlePostCardClick = useCallback(
+    (event: { target: EventTarget | null }, postKey: string) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (
+        target.closest(
+          "button, a, input, textarea, select, label, .post-action-group, .post-action-popover, .comment-form, .comment-list, .post-meta-tag--action"
+        )
+      ) {
+        return;
+      }
+      openPostModal(postKey);
+    },
+    [openPostModal]
+  );
+
   useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null;
@@ -1558,6 +1675,59 @@ export default function Dashboard() {
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
   }, []);
+
+  useEffect(() => {
+    if (!activePostKey) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setActivePostKey(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [activePostKey]);
+
+  useEffect(() => {
+    if (!activePostKey) return;
+    if (typeof document === "undefined") return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [activePostKey]);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current) {
+        clearTimeout(toastTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (activePostKey && !activePost) {
+      setActivePostKey(null);
+    }
+  }, [activePostKey, activePost]);
+
+  const activePostUrl = activePost ? extractFirstUrl(activePost.content) : "";
+  const activePreview = activePostUrl ? previewCache[activePostUrl] : undefined;
+  const activePreviewImage = activePreview?.image;
+  const activeDescriptor = activePost
+    ? mediaDescriptor(activePost.imageUrl, Boolean(activePostUrl))
+    : "";
+  const activeFeedbackLabel = activePost ? feedbackLabelFor(activePost) : "";
+  const activeAuthorLabel = activePost?.ownerName || "User";
+  const isActiveDescriptorActionable =
+    activeDescriptor === "with a picture" || activeDescriptor === "with a link";
+  const showActivePreviewMedia = Boolean(
+    activePost && !activePost.imageUrl && activePreviewImage
+  );
+  const showActivePlaceholder = Boolean(
+    activePost && !activePost.imageUrl && !activePreviewImage
+  );
+  const modalTitleId = activePostKey ? `post-modal-title-${activePostKey}` : undefined;
 
   return (
     <div className="dashboard-shell" style={getBackgroundStyle("dashboard")}>
@@ -1831,6 +2001,8 @@ export default function Dashboard() {
               const likesCount = Number(post.likes ?? 0);
               const sharesCount = Number(post.shares ?? 0);
               const commentsCount = post.comments?.length ?? 0;
+              const isDescriptorActionable =
+                descriptor === "with a picture" || descriptor === "with a link";
 
               return (
                 <article
@@ -1838,14 +2010,35 @@ export default function Dashboard() {
                   id={`post-${postKey}`}
                   className={`post-card${
                     showReactionPicker || showShareMenu ? " is-popover-open" : ""
-                  }`}
+                  } post-card--openable`}
+                  onClick={(event) => handlePostCardClick(event, postKey)}
+                  aria-haspopup="dialog"
                 >
                   <div className="post-meta-bar">
                     <span className="post-meta-name">{authorLabel}</span>
                     <span className="post-meta-text">
                       {formatPostUpdateLabel(post.createdAt)}
                     </span>
-                    {descriptor && <span className="post-meta-tag">{descriptor}</span>}
+                    {descriptor &&
+                      (isDescriptorActionable ? (
+                        <button
+                          type="button"
+                          className="post-meta-tag post-meta-tag--action"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void handleDescriptorAction(post, postKey, descriptor);
+                          }}
+                          aria-label={
+                            descriptor === "with a link"
+                              ? "Copy link"
+                              : "Download picture"
+                          }
+                        >
+                          {descriptor}
+                        </button>
+                      ) : (
+                        <span className="post-meta-tag">{descriptor}</span>
+                      ))}
                   </div>
 
                   {post.imageUrl ? (
@@ -2174,6 +2367,128 @@ export default function Dashboard() {
       </>
     )}
       </div>
-      </div>
+      {activePost && (
+        <div
+          className="post-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={modalTitleId}
+          onClick={closePostModal}
+        >
+          <div className="post-modal__panel" onClick={(event) => event.stopPropagation()}>
+            <div className="post-modal__handle" aria-hidden="true" />
+            <button
+              className="post-modal__close"
+              type="button"
+              onClick={closePostModal}
+              aria-label="Close post"
+            >
+              X
+            </button>
+            <div className="post-modal__scroll">
+              <div className="post-modal__meta">
+                <div className="post-modal__meta-left">
+                  <span className="post-modal__author">{activeAuthorLabel}</span>
+                  <span className="post-modal__time">
+                    {formatPostUpdateLabel(activePost.createdAt)}
+                  </span>
+                </div>
+                <div className="post-modal__meta-right">
+                  {activeDescriptor &&
+                    (isActiveDescriptorActionable ? (
+                      <button
+                        type="button"
+                        className="post-meta-tag post-meta-tag--action"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          if (!activePost || !activePostKey) return;
+                          void handleDescriptorAction(
+                            activePost,
+                            activePostKey,
+                            activeDescriptor
+                          );
+                        }}
+                        aria-label={
+                          activeDescriptor === "with a link"
+                            ? "Copy link"
+                            : "Download picture"
+                        }
+                      >
+                        {activeDescriptor}
+                      </button>
+                    ) : (
+                      <span className="post-meta-tag">{activeDescriptor}</span>
+                    ))}
+                  {activeFeedbackLabel && (
+                    <span className="post-feedback-tag">{activeFeedbackLabel}</span>
+                  )}
+                </div>
+              </div>
+
+              {activePost.imageUrl ? (
+                <div className="post-media post-modal__media">
+                  {isVideoUrl(activePost.imageUrl) ? (
+                    <video controls style={{ width: "100%", height: "100%", objectFit: "cover" }}>
+                      <source src={activePost.imageUrl} />
+                    </video>
+                  ) : (
+                    <img src={activePost.imageUrl} alt={activePost.title} loading="lazy" />
+                  )}
+                </div>
+              ) : showActivePreviewMedia ? (
+                <div className="post-media post-modal__media link-preview-media">
+                  <img
+                    src={activePreviewImage}
+                    alt={activePreview?.title || activePost.title}
+                    loading="lazy"
+                  />
+                </div>
+              ) : showActivePlaceholder ? (
+                <div className="post-media post-modal__media placeholder">
+                  <div className="dots" />
+                  <span>No image</span>
+                </div>
+              ) : null}
+
+              <div className="post-modal__body">
+                <h2 id={modalTitleId}>{activePost.title}</h2>
+                <p>{activePost.content}</p>
+                {activePreview && !activePost.imageUrl && (
+                  <LinkPreviewCard
+                    preview={activePreview}
+                    url={activePreview.url || activePostUrl}
+                  />
+                )}
+              </div>
+
+              {activePost.comments.length > 0 && (
+                <div className="post-modal__comments">
+                  <p className="eyebrow">Comments</p>
+                  <ul className="comment-list">
+                    {activePost.comments.map((comment) => (
+                      <li key={comment.id} className="comment-item">
+                        <div className="comment-author">{comment.owner || "User"}</div>
+                        <div className="comment-body">{comment.body}</div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+            <div className="post-modal__mobile-actions">
+              <button
+                className="post-modal__close-btn"
+                type="button"
+                onClick={closePostModal}
+              >
+                Close
+              </button>
+              <span className="post-modal__hint">Tap outside to close</span>
+            </div>
+          </div>
+        </div>
+      )}
+      {copyToast && <div className="toast success-toast">{copyToast}</div>}
+    </div>
   );
 }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import "../css/release-notes.css";
 
-const RELEASE_NOTES_VERSION = "2026.01.23";
+const RELEASE_NOTES_VERSION = "2026.01.25";
 const STORAGE_KEY = "releaseNotesDismissedVersion";
 const SESSION_PREFIX = "releaseNotesClosed:";
 
@@ -13,6 +13,10 @@ const RELEASE_NOTES = [
   "Password minimum length is now 8 characters instead of 12.",
   "Added GUI for Moderators and Admins to restrict users if necessary.",
   "Added Filters for Dashboard to View Posts by Friends, Public, Private, or All Posts.",
+  "Added more interactivitiy with posts",
+  "Redesigned Landing Page to remove unncessary clutter",
+  "Added Feedback Request to Notificatons",
+
 ];
 
 export default function ReleaseNotesModal() {
