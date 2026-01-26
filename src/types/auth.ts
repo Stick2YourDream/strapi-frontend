@@ -19,6 +19,11 @@ export type LoginStartResponse =
       trustedDevice?: boolean;
     }
   | {
+      requiresEmailConfirmation: true;
+      confirmationId: string;
+      deliveryHint?: string;
+    }
+  | {
       requiresVerification: true;
       method: "sms" | "email" | "totp";
       challengeId: string;
@@ -29,5 +34,6 @@ export type LoginStartResponse =
 export type RegisterResponse = {
   user: AuthUser;
   requiresConfirmation: boolean;
+  emailConfirmationId?: string;
   message?: string;
 };

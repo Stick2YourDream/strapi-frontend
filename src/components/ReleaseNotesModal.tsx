@@ -18,6 +18,8 @@ const RELEASE_NOTES = [
   "Added Feedback Request to Notificatons",
   "Added News App Integration with Dashboard (News App Created By Mycstro)",
   "Improved UI of Video Calling",
+  "Changed Verification of Emails to use OTP instead of LInk",
+  "New Landing Page Design",
 ];
 
 export default function ReleaseNotesModal() {

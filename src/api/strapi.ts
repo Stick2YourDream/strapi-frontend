@@ -17,6 +17,8 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
     "/auth/login",
     "/auth/login/verify",
     "/auth/login/resend",
+    "/auth/email/confirm/verify",
+    "/auth/email/confirm/resend",
     "/auth/sms/send",
     "/auth/forgot-password",
     "/auth/reset-password",

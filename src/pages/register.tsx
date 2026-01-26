@@ -194,7 +194,7 @@ export default function Register() {
     if (method === "phone") {
       return "Thanks for registering! You can now log in with your phone number and password.";
     }
-    return "Thank you for registering with Your Social Place. Please check your email for a confirmation link to log in.";
+    return "Thank you for registering with Your Social Place. Enter the 6-digit code sent to your email to finish setup.";
   }, [registeredMethod, contactDetails?.type]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -350,8 +350,22 @@ export default function Register() {
       const nextMessage =
         contact.type === "phone"
           ? "Thanks for registering! You can now log in with your phone number and password."
-          : "Thank you for registering with Your Social Place. Please check your email for a confirmation link to log in.";
+          : "Thank you for registering with Your Social Place. Enter the 6-digit code sent to your email to finish setup.";
       setRegisteredMethod(contact.type);
+      if (res.data.requiresConfirmation && contact.type === "email") {
+        const confirmationId = String(res.data.emailConfirmationId || "").trim();
+        if (!confirmationId) {
+          setError("Unable to start email verification. Please try again.");
+          return;
+        }
+        sessionStorage.setItem("emailConfirmationId", confirmationId);
+        sessionStorage.setItem(
+          "emailConfirmationEmail",
+          normalizedEmail || res.data.user.email || ""
+        );
+        navigate("/verify-email");
+        return;
+      }
       setInfo(nextMessage);
       setShowSuccessModal(true);
     } catch (err) {

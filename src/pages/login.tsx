@@ -57,12 +57,24 @@ export default function Login() {
       localStorage.removeItem("user");
 
       const deviceId = getOrCreateDeviceId();
+      const normalizedIdentifier = identifier.trim().toLowerCase();
       const res = await api.post<LoginStartResponse>("/auth/login", {
-        identifier: identifier.trim().toLowerCase(),
+        identifier: normalizedIdentifier,
         password,
         rememberDevice,
         deviceId,
       });
+
+      if ("requiresEmailConfirmation" in res.data && res.data.requiresEmailConfirmation) {
+        sessionStorage.setItem("emailConfirmationId", res.data.confirmationId);
+        if (normalizedIdentifier.includes("@")) {
+          sessionStorage.setItem("emailConfirmationEmail", normalizedIdentifier);
+        } else {
+          sessionStorage.removeItem("emailConfirmationEmail");
+        }
+        navigate("/verify-email");
+        return;
+      }
 
       if ("requiresVerification" in res.data && res.data.requiresVerification) {
         setChallengeId(res.data.challengeId);

@@ -76,8 +76,13 @@ export default function Landing() {
 
       fromIf(".landing-nav", { y: -12, opacity: 0, duration: 0.6 });
       fromIf(".hero-badges .pill2", { y: 16, opacity: 0, stagger: 0.08 }, "-=0.2");
-      fromIf(".hero-copy h1", { y: 20, opacity: 0 }, "-=0.1");
-      fromIf(".hero-copy p", { y: 18, opacity: 0 }, "-=0.2");
+      fromIf(".hero-logo", { scale: 0.92, opacity: 0, duration: 1.1 }, "-=0.25");
+      fromIf(
+        ".hero-title",
+        { y: 24, opacity: 0, rotateX: 14, transformPerspective: 900 },
+        "-=0.1"
+      );
+      fromIf(".hero-message", { y: 18, opacity: 0 }, "-=0.25");
       fromIf(".hero-intent-button", { y: 16, opacity: 0, stagger: 0.07 }, "-=0.2");
       fromIf(
         ".hero-cta .btn-primary, .hero-cta .btn-ghost, .hero-cta-skip",
@@ -602,20 +607,19 @@ export default function Landing() {
 
         <section className="hero">
           <div className="hero-copy">
+            <div className="hero-logo" aria-hidden="true">
+              <img src="/logo2.png" alt="" />
+            </div>
             <div className="hero-badges">
               <span className="pill2">Only Positivity</span>
               <span className="pill2">Private messages</span>
               <span className="pill2">Daily momentum</span>
             </div>
-            <h1>
-              Let's Build a Community that Supports Each Other.
-            </h1>
-            <p>
-              Your Social Place is built on mutual support-because you don't have to do this alone. 
-              Share what you're working on, and get real feedback when you're stuck, encouragement 
-              when you're tired, and accountability when you need that extra push. And as you grow, 
-              you'll pass it forward-helping someone else stay in motion, too. No fluff-just people 
-              lifting each other up and keeping their word.
+            <h1 className="hero-title">A social place built for people, not companies.</h1>
+            <p className="hero-message">
+              Your Social Place is where real people show up for each other. Share your goals, get
+              honest feedback, and keep your momentum without chasing ads or algorithms. This space
+              is for you, your growth, and the friends who keep you moving.
             </p>
             <div className="hero-cta">
               <button
@@ -658,45 +662,52 @@ export default function Landing() {
         </section>
 
         <footer className="landing-footer">
-          <div className="footer-row footer-brand">
+          <div className="footer-brand">
             <div className="footer-logo">
-              <img src="/logo.png" alt="Your Social Place logo" />
+              <img src="/logo2.png" alt="Your Social Place logo" />
             </div>
-            <p>
-              A motivational support network built for real progress. Beta access
-              is live and evolving.
-            </p>
+            <div className="footer-brand-text">
+              <strong>Your Social Place</strong>
+              <p>
+                A motivational support network built for real progress. Beta access is live and
+                evolving.
+              </p>
+            </div>
           </div>
-          <div className="footer-row footer-column">
-            <span className="footer-title">Explore</span>
-            {!user && (
-              <>
-                <a href="/login">Login</a>
-                <a href="/register">Create account</a>
-              </>
-            )}
-            <a href="/what-makes-us-different">What makes us different</a>
-            <a href="/guidelines">Community Guidelines</a>
+          <div className="footer-nav">
+            <div className="footer-column">
+              <span className="footer-title">Explore</span>
+              {!user && (
+                <>
+                  <a href="/login">Login</a>
+                  <a href="/register">Create account</a>
+                </>
+              )}
+              <a href="/what-makes-us-different">What makes us different</a>
+              <a href="/guidelines">Community Guidelines</a>
+            </div>
+            <div className="footer-column">
+              <span className="footer-title">Safety</span>
+              <a href="/safety">Safety &amp; Moderation</a>
+              <a href="/report">Report a user</a>
+            </div>
+            <div className="footer-column">
+              <span className="footer-title">Legal</span>
+              <a href="/terms">Terms</a>
+              <a href="/privacy">Privacy</a>
+              <a href="/delete-account">Delete account</a>
+              <a href="/delete-data">Delete data</a>
+              <a href="/cookies">Cookie Policy</a>
+            </div>
+            <div className="footer-column footer-contact">
+              <span className="footer-title">Connect</span>
+              <a href="mailto:support@yoursocialplace.com">Contact</a>
+              <a className="footer-muted" href="mailto:support@yoursocialplace.com">
+                support@yoursocialplace.com
+              </a>
+            </div>
           </div>
-          <div className="footer-row footer-column">
-            <span className="footer-title">Safety</span>
-            <a href="/safety">Safety &amp; Moderation</a>
-            <a href="/report">Report a user</a>
-          </div>
-          <div className="footer-row footer-column">
-            <span className="footer-title">Legal</span>
-            <a href="/terms">Terms</a>
-            <a href="/privacy">Privacy</a>
-            <a href="/delete-account">Delete account</a>
-            <a href="/delete-data">Delete data</a>
-            <a href="/cookies">Cookie Policy</a>
-          </div>
-          <div className="footer-row footer-column">
-            <span className="footer-title">Connect</span>
-            <a href="mailto:support@yoursocialplace.com">Contact</a>
-            <span className="footer-muted">support@yoursocialplace.com</span>
-          </div>
-          <div className="footer-row footer-meta">
+          <div className="footer-meta">
             <span>Your Social Place</span>
             <span>by Stick2YourDreams</span>
           </div>
