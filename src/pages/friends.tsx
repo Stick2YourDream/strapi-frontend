@@ -1321,6 +1321,8 @@ export default function Friends() {
               className="post-modal__close"
               type="button"
               onClick={closePostModal}
+              onPointerUp={closePostModal}
+              onTouchEnd={closePostModal}
               aria-label="Close post"
             >
               X
@@ -1401,6 +1403,8 @@ export default function Friends() {
                 className="post-modal__close-btn"
                 type="button"
                 onClick={closePostModal}
+                onPointerUp={closePostModal}
+                onTouchEnd={closePostModal}
               >
                 Close
               </button>

@@ -5,6 +5,8 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEvent,
+  type KeyboardEventHandler,
   type MouseEvent,
   type MouseEventHandler,
   type PointerEvent,
@@ -23,6 +25,7 @@ import { Grid } from "@giphy/react-components";
 import { GiphyFetch } from "@giphy/js-fetch-api";
 import { useAuth } from "../context/AuthContext";
 import { sanitizePostText } from "../utils/emoji";
+import api from "../api/strapi";
 import callRingtoneUrl from "../assets/call.mp3";
 import holdMusicUrl from "../assets/on_hold.mp3";
 
@@ -409,6 +412,8 @@ const VideoTile = ({
   onPointerLeave,
   onContextMenu,
   onWheel,
+  onKeyDown,
+  onKeyUp,
   tabIndex,
   rootRef,
   dataScreenId,
@@ -430,6 +435,8 @@ const VideoTile = ({
   onPointerLeave?: PointerEventHandler<HTMLDivElement>;
   onContextMenu?: MouseEventHandler<HTMLDivElement>;
   onWheel?: WheelEventHandler<HTMLDivElement>;
+  onKeyDown?: KeyboardEventHandler<HTMLDivElement>;
+  onKeyUp?: KeyboardEventHandler<HTMLDivElement>;
   tabIndex?: number;
   rootRef?: Ref<HTMLDivElement>;
   dataScreenId?: string;
@@ -467,6 +474,8 @@ const VideoTile = ({
       onPointerLeave={onPointerLeave}
       onContextMenu={onContextMenu}
       onWheel={onWheel}
+      onKeyDown={onKeyDown}
+      onKeyUp={onKeyUp}
       tabIndex={tabIndex}
     >
       {stream && (
@@ -513,6 +522,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     status,
     selectedInvitees,
     incomingCall,
+    activeRoomId,
     isCallHost,
     localStream,
     localScreenStream,
@@ -550,6 +560,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     pendingScreenControlTargets,
     activeScreenController,
     screenControlTarget,
+    screenControlAgentId,
     screenControlCursor,
     requestScreenControl,
     grantScreenControl,
@@ -597,6 +608,13 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const [audioInputError, setAudioInputError] = useState<string | null>(null);
   const [videoInputs, setVideoInputs] = useState<MediaDeviceInfo[]>([]);
   const [videoInputError, setVideoInputError] = useState<string | null>(null);
+  const [showControlHelper, setShowControlHelper] = useState(false);
+  const [controlHelperCode, setControlHelperCode] = useState("");
+  const [controlHelperStatus, setControlHelperStatus] = useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
+  const [controlHelperError, setControlHelperError] = useState<string | null>(null);
+  const [controlHelperCopied, setControlHelperCopied] = useState(false);
   const [gifGridWidth, setGifGridWidth] = useState(0);
   const [popoutContainer, setPopoutContainer] = useState<HTMLDivElement | null>(null);
   const gifGridRef = useRef<HTMLDivElement | null>(null);
@@ -638,6 +656,19 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   }${isRenderingInPopout ? " is-popout" : ""}${
     mobilePanel === "chat" ? " is-mobile-chat" : " is-mobile-video"
   }`;
+  const apiBase = useMemo(
+    () => String(import.meta.env.VITE_API_URL || "").replace(/\/api$/, ""),
+    []
+  );
+  const controlHelperApiBase = useMemo(() => {
+    const override = String(import.meta.env.VITE_CONTROL_HELPER_URL || "").trim();
+    const resolved = override || apiBase;
+    return resolved.replace(/\/$/, "");
+  }, [apiBase]);
+  const isWindows = useMemo(() => {
+    if (typeof navigator === "undefined") return false;
+    return /Win/i.test(navigator.userAgent || "");
+  }, []);
 
   useEffect(() => {
     screenPanOffsetsRef.current = screenPanOffsets;
@@ -1380,12 +1411,78 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     });
   };
 
+  const getControlHelperErrorMessage = (err: unknown) => {
+    const fallback = "Unable to generate a connection code. Try again.";
+    if (!err || typeof err !== "object") return fallback;
+    const response = (err as { response?: { status?: number; data?: any } }).response;
+    const status = response?.status;
+    const serverMessage =
+      response?.data?.error?.message || response?.data?.message || undefined;
+    if (status === 401 || status === 403) {
+      return "Session expired. Please log in again and retry.";
+    }
+    if (serverMessage && typeof serverMessage === "string") {
+      return serverMessage;
+    }
+    if ("message" in err && typeof (err as Error).message === "string") {
+      return (err as Error).message;
+    }
+    return fallback;
+  };
+
+  const generateControlHelperCode = useCallback(async () => {
+    if (!activeRoomId) {
+      setControlHelperStatus("error");
+      setControlHelperError("Start a call before enabling Windows control.");
+      return;
+    }
+    setControlHelperStatus("loading");
+    setControlHelperError(null);
+    try {
+      const response = await api.post("/remote-control/token");
+      const token = String(response.data?.token || "").trim();
+      if (!token) {
+        throw new Error("Missing token.");
+      }
+      const payload = JSON.stringify({
+        token,
+        roomId: activeRoomId,
+        apiUrl: controlHelperApiBase,
+      });
+      const encoded = window.btoa(payload);
+      setControlHelperCode(`YSP-CTRL:${encoded}`);
+      setControlHelperStatus("ready");
+    } catch (err) {
+      setControlHelperStatus("error");
+      setControlHelperError(getControlHelperErrorMessage(err));
+      console.warn("Failed to generate control helper code.", err);
+    }
+  }, [activeRoomId, controlHelperApiBase]);
+
+  const copyControlHelperCode = useCallback(async () => {
+    if (!controlHelperCode) return;
+    try {
+      await navigator.clipboard.writeText(controlHelperCode);
+      setControlHelperCopied(true);
+      window.setTimeout(() => setControlHelperCopied(false), 1500);
+    } catch {
+      setControlHelperCopied(false);
+    }
+  }, [controlHelperCode]);
+
+  const closeControlHelper = useCallback(() => {
+    setShowControlHelper(false);
+    setControlHelperError(null);
+    setControlHelperStatus("idle");
+  }, []);
+
   const handleControlPointerDown = (
     event: PointerEvent<HTMLDivElement>,
     targetSocketId: string
   ) => {
     if (screenControlTarget !== targetSocketId) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
+    event.currentTarget.focus?.();
     sendControlPointer(event, targetSocketId, "move");
   };
 
@@ -1405,6 +1502,33 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   ) => {
     if (screenControlTarget !== targetSocketId) return;
     event.preventDefault();
+  };
+
+  const shouldIgnoreControlKey = (event: KeyboardEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement | null;
+    if (!target) return false;
+    if (target.closest("input, textarea, [contenteditable='true']")) return true;
+    return false;
+  };
+
+  const sendControlKey = (
+    event: KeyboardEvent<HTMLDivElement>,
+    targetSocketId: string,
+    state: "down" | "up"
+  ) => {
+    if (screenControlTarget !== targetSocketId) return;
+    if (shouldIgnoreControlKey(event)) return;
+    event.preventDefault();
+    sendScreenControlEvent(targetSocketId, {
+      type: "key",
+      key: event.key,
+      code: event.code,
+      state,
+      ctrlKey: event.ctrlKey,
+      altKey: event.altKey,
+      shiftKey: event.shiftKey,
+      metaKey: event.metaKey,
+    });
   };
 
   const playEndCallTone = async () => {
@@ -2121,6 +2245,19 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                             >
                               {showChat ? "Hide chat" : "Show chat"}
                             </button>
+                            <button
+                              type="button"
+                              className="screen-share-control is-helper"
+                              disabled={!isWindows}
+                              onClick={() => {
+                                setShowControlHelper(true);
+                                if (controlHelperStatus === "idle") {
+                                  void generateControlHelperCode();
+                                }
+                              }}
+                            >
+                              {isWindows ? "Enable Windows control" : "Windows control only"}
+                            </button>
                             {activeScreenController && (
                               <button
                                 type="button"
@@ -2215,6 +2352,16 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                             ? (event) => sendControlScroll(event, targetId)
                             : undefined
                         }
+                        onKeyDown={
+                          isControlling
+                            ? (event) => sendControlKey(event, targetId, "down")
+                            : undefined
+                        }
+                        onKeyUp={
+                          isControlling
+                            ? (event) => sendControlKey(event, targetId, "up")
+                            : undefined
+                        }
                         tabIndex={isControlling ? 0 : undefined}
                         rootRef={registerScreenTile(tileId)}
                         dataScreenId={tileId}
@@ -2272,6 +2419,11 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                           >
                             {showChat ? "Hide chat" : "Show chat"}
                           </button>
+                          {isControlling && screenControlAgentId && (
+                            <span className="screen-share-status">
+                              Windows control active
+                            </span>
+                          )}
                           {isControlling ? (
                             <button
                               type="button"
@@ -2823,6 +2975,66 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
             </div>
           </div>
         </div>
+        {showControlHelper && (
+          <div className="video-control-helper-overlay" onClick={closeControlHelper}>
+            <div
+              className="video-control-helper-card"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="video-control-helper-header">
+                <div>
+                  <p className="eyebrow">Windows only</p>
+                  <h3>Enable Windows Screen Control</h3>
+                </div>
+                <button
+                  type="button"
+                  className="video-control-helper-close"
+                  onClick={closeControlHelper}
+                  aria-label="Close"
+                >
+                  ×
+                </button>
+              </div>
+              <p className="video-control-helper-note">
+                Browsers can’t control your Windows desktop directly. The helper app runs on
+                your PC so approved controllers can move the real mouse and type.
+              </p>
+              <div className="video-control-helper-actions">
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={() => void generateControlHelperCode()}
+                  disabled={controlHelperStatus === "loading"}
+                >
+                  {controlHelperStatus === "loading" ? "Generating..." : "Generate new code"}
+                </button>
+                <button
+                  type="button"
+                  className="btn primary"
+                  onClick={copyControlHelperCode}
+                  disabled={!controlHelperCode}
+                >
+                  {controlHelperCopied ? "Copied" : "Copy code"}
+                </button>
+              </div>
+              <textarea
+                className="video-control-helper-code"
+                readOnly
+                value={controlHelperCode}
+                placeholder="Connection code will appear here."
+              />
+              {controlHelperError && (
+                <p className="video-control-helper-error">{controlHelperError}</p>
+              )}
+              <div className="video-control-helper-steps">
+                <span>1. Download the Your Social Place Windows Helper.</span>
+                <span>2. Paste this code into the helper and connect.</span>
+                <span>3. Approve control requests inside the call.</span>
+                <span>Tip: Share your full screen for the most accurate control.</span>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

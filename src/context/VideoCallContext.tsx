@@ -84,12 +84,19 @@ type ScreenControlCursor = {
 };
 
 type ScreenControlEvent = {
-  type: "move" | "click" | "scroll";
-  x: number;
-  y: number;
+  type: "move" | "click" | "scroll" | "key";
+  x?: number;
+  y?: number;
   button?: "left" | "right";
   deltaX?: number;
   deltaY?: number;
+  key?: string;
+  code?: string;
+  state?: "down" | "up";
+  ctrlKey?: boolean;
+  altKey?: boolean;
+  shiftKey?: boolean;
+  metaKey?: boolean;
 };
 
 type VideoCallEffects = {
@@ -143,6 +150,7 @@ type VideoCallContextValue = {
   status: VideoCallStatus;
   selectedInvitees: VideoCallInvitee[];
   incomingCall: IncomingCall | null;
+  activeRoomId: string | null;
   isCallHost: boolean;
   localStream: MediaStream | null;
   localScreenStream: MediaStream | null;
@@ -182,6 +190,7 @@ type VideoCallContextValue = {
   pendingScreenControlTargets: string[];
   activeScreenController: ScreenControlRequest | null;
   screenControlTarget: string | null;
+  screenControlAgentId: string | null;
   screenControlCursor: ScreenControlCursor | null;
   requestScreenControl: (targetSocketId: string) => void;
   grantScreenControl: (requesterSocketId: string) => void;
@@ -373,6 +382,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const [activeScreenController, setActiveScreenController] =
     useState<ScreenControlRequest | null>(null);
   const [screenControlTarget, setScreenControlTarget] = useState<string | null>(null);
+  const [screenControlAgentId, setScreenControlAgentId] = useState<string | null>(null);
   const [screenControlCursor, setScreenControlCursor] = useState<ScreenControlCursor | null>(null);
   const [videoEffects, setVideoEffectsState] = useState<VideoCallEffects>({
     blur: false,
@@ -412,6 +422,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     video: true,
   });
   const remoteHoldStatesRef = useRef<Record<string, boolean>>({});
+  const screenControlTargetRef = useRef<string | null>(null);
+  const screenControlAgentRef = useRef<string | null>(null);
   const callTimeoutRef = useRef<number | null>(null);
   const videoProcessingRef = useRef<{
     track: MediaStreamTrack | null;
@@ -430,7 +442,6 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const statusRef = useRef<VideoCallStatus>(status);
   const activeRoomRef = useRef<string | null>(activeRoomId);
   const activeScreenControllerRef = useRef<ScreenControlRequest | null>(null);
-  const screenControlTargetRef = useRef<string | null>(null);
   const presenceTargetsRef = useRef<number[]>([]);
   const e2eeSupported = useMemo(() => supportsCallE2ee(), []);
   const callEncryptionEnabledRef = useRef<boolean>(e2eeSupported);
@@ -872,6 +883,25 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const applyScreenControlEvent = useCallback((event: ScreenControlEvent) => {
     if (typeof document === "undefined" || typeof window === "undefined") return;
     if (!localScreenStreamRef.current) return;
+
+    if (event.type === "key") {
+      const target =
+        (document.activeElement as HTMLElement | null) || document.body || document.documentElement;
+      if (!target) return;
+      const init: KeyboardEventInit = {
+        key: event.key || "",
+        code: event.code || "",
+        ctrlKey: Boolean(event.ctrlKey),
+        altKey: Boolean(event.altKey),
+        shiftKey: Boolean(event.shiftKey),
+        metaKey: Boolean(event.metaKey),
+        bubbles: true,
+        cancelable: true,
+      };
+      const eventType = event.state === "up" ? "keyup" : "keydown";
+      target.dispatchEvent(new KeyboardEvent(eventType, init));
+      return;
+    }
 
     const docEl = document.documentElement;
     const viewportWidth = docEl?.clientWidth || window.innerWidth;
@@ -2089,6 +2119,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   }, [screenControlTarget]);
 
   useEffect(() => {
+    screenControlAgentRef.current = screenControlAgentId;
+  }, [screenControlAgentId]);
+
+  useEffect(() => {
     if (!user?.id) {
       profileRef.current = null;
       return;
@@ -2501,6 +2535,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           });
           if (screenControlTargetRef.current === owner) {
             setScreenControlTarget(null);
+            setScreenControlAgentId(null);
           }
           setPendingScreenControlTargets((prev) => prev.filter((entry) => entry !== owner));
         }
@@ -2546,10 +2581,11 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
 
     socket.on(
       "call:control:grant",
-      (payload: { roomId: string; from: string }) => {
+      (payload: { roomId: string; from: string; controlAgentId?: string }) => {
         if (payload?.roomId && payload.roomId !== activeRoomRef.current) return;
         if (!payload?.from) return;
         setScreenControlTarget(payload.from);
+        setScreenControlAgentId(payload.controlAgentId || null);
         setPendingScreenControlTargets((prev) =>
           prev.filter((entry) => entry !== payload.from)
         );
@@ -2574,6 +2610,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         if (!payload?.from) return;
         if (screenControlTargetRef.current === payload.from) {
           setScreenControlTarget(null);
+          setScreenControlAgentId(null);
         }
         if (activeScreenControllerRef.current?.socketId === payload.from) {
           setActiveScreenController(null);
@@ -2588,6 +2625,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         if (payload?.roomId && payload.roomId !== activeRoomRef.current) return;
         if (!payload?.from || !payload?.event) return;
         if (activeScreenControllerRef.current?.socketId !== payload.from) return;
+        if (payload.event.type === "key") {
+          applyScreenControlEvent(payload.event);
+          return;
+        }
         const x = Math.min(1, Math.max(0, Number(payload.event.x)));
         const y = Math.min(1, Math.max(0, Number(payload.event.y)));
         if (!Number.isFinite(x) || !Number.isFinite(y)) return;
@@ -2844,6 +2885,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     setPendingScreenControlTargets([]);
     setActiveScreenController(null);
     setScreenControlTarget(null);
+    setScreenControlAgentId(null);
     setScreenControlCursor(null);
   }, []);
 
@@ -3148,13 +3190,21 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     if (!socketRef.current || !activeRoomRef.current) return;
     const controllerId = targetSocketId || activeScreenControllerRef.current?.socketId;
     const ownerId = targetSocketId || screenControlTargetRef.current;
+    const agentId = screenControlAgentRef.current;
 
     if (screenControlTargetRef.current && ownerId === screenControlTargetRef.current) {
       socketRef.current.emit("call:control:stop", {
         roomId: activeRoomRef.current,
         to: ownerId,
       });
+      if (agentId && agentId !== ownerId) {
+        socketRef.current.emit("call:control:stop", {
+          roomId: activeRoomRef.current,
+          to: agentId,
+        });
+      }
       setScreenControlTarget(null);
+      setScreenControlAgentId(null);
       return;
     }
 
@@ -3171,9 +3221,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const sendScreenControlEvent = useCallback((targetSocketId: string, event: ScreenControlEvent) => {
     if (!socketRef.current || !activeRoomRef.current) return;
     if (screenControlTargetRef.current !== targetSocketId) return;
+    const resolvedTarget = screenControlAgentRef.current || targetSocketId;
     socketRef.current.emit("call:control:event", {
       roomId: activeRoomRef.current,
-      to: targetSocketId,
+      to: resolvedTarget,
       event,
     });
   }, []);
@@ -3198,6 +3249,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       status,
       selectedInvitees,
       incomingCall,
+      activeRoomId,
       isCallHost,
       localStream,
       localScreenStream,
@@ -3237,6 +3289,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       pendingScreenControlTargets,
       activeScreenController,
       screenControlTarget,
+      screenControlAgentId,
       screenControlCursor,
       requestScreenControl,
       grantScreenControl,
@@ -3254,6 +3307,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       e2eeDebug,
       endCall,
       incomingCall,
+      activeRoomId,
       isCallHost,
       isAudioEnabled,
       isHolding,
@@ -3283,6 +3337,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       pendingScreenControlTargets,
       activeScreenController,
       screenControlTarget,
+      screenControlAgentId,
       screenControlCursor,
       requestScreenControl,
       grantScreenControl,
