@@ -669,6 +669,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     if (typeof navigator === "undefined") return false;
     return /Win/i.test(navigator.userAgent || "");
   }, []);
+  const windowsHelperDownloadUrl = "https://yoursocialplace.com/downloads/ysphelper.exe";
 
   useEffect(() => {
     screenPanOffsetsRef.current = screenPanOffsets;
@@ -3000,6 +3001,14 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                 your PC so approved controllers can move the real mouse and type.
               </p>
               <div className="video-control-helper-actions">
+                <a
+                  className="btn ghost"
+                  href={windowsHelperDownloadUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Download helper
+                </a>
                 <button
                   type="button"
                   className="btn ghost"
