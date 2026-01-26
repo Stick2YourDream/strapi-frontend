@@ -240,6 +240,8 @@ const getTodayInput = () => {
 };
 
 const PREVIEW_DEBOUNCE_MS = 450;
+const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
+const MAX_UPLOAD_LABEL = "1 GB";
 const extractFirstUrl = (text: string) => {
   const match = text.match(/(https?:\/\/[^\s]+|www\.[^\s]+)/i);
   if (!match) return "";
@@ -262,7 +264,11 @@ const isYoutubeUrl = (value: string) => {
     return false;
   }
 };
-const isVideoUrl = (value?: string) => !!value && /\.(mp4|webm|mov)$/i.test(value);
+const isVideoUrl = (value?: string) => !!value && /\.(mp4|webm|mov|m4v|mkv)$/i.test(value);
+const isVideoFile = (file: File) => {
+  if (file.type && file.type.startsWith("video/")) return true;
+  return /\.(mp4|webm|mov|m4v|mkv)$/i.test(file.name);
+};
 const mediaDescriptor = (mediaUrl?: string, hasLink?: boolean) => {
   if (mediaUrl) return isVideoUrl(mediaUrl) ? "with a video" : "with a picture";
   if (hasLink) return "with a link";
@@ -478,6 +484,7 @@ export default function Me() {
   >(null);
   const [postContent, setPostContent] = useState("");
   const [postFile, setPostFile] = useState<File | null>(null);
+  const [postFilePreviewUrl, setPostFilePreviewUrl] = useState<string | null>(null);
   const [postSubmitting, setPostSubmitting] = useState(false);
   const [postError, setPostError] = useState<string | null>(null);
   const [postVisibility, setPostVisibility] = useState("friends");
@@ -556,6 +563,17 @@ export default function Me() {
     "me" | "public" | "followers"
   >("me");
   const isSettingsView = settingsView === "settings";
+  const postFileIsVideo = postFile ? isVideoFile(postFile) : false;
+
+  useEffect(() => {
+    if (!postFile) {
+      setPostFilePreviewUrl(null);
+      return;
+    }
+    const objectUrl = URL.createObjectURL(postFile);
+    setPostFilePreviewUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [postFile]);
   const pushStatusLabel = useMemo(() => {
     if (!profile.notificationSettings.pushEnabled) {
       return "Push notifications are off.";
@@ -1913,13 +1931,18 @@ export default function Me() {
     if (!user) return;
     const content = postContent.trim();
     if (!content && !postFile) {
-      setPostError("Add a message or a photo to post.");
+      setPostError("Add a message or a photo/video to post.");
       return;
     }
     if (feedbackAudience === "specific" && !feedbackTargetId) {
       setPostError("Choose a friend for a specific feedback request.");
       return;
     }
+    if (postFile && postFile.size > MAX_UPLOAD_BYTES) {
+      setPostError(`Media files must be under ${MAX_UPLOAD_LABEL}.`);
+      return;
+    }
+
     setPostError(null);
     setPostSubmitting(true);
     try {
@@ -2188,9 +2211,9 @@ export default function Me() {
   const isAgeLocked = Boolean(registrationLocks.age);
   const isBirthdayLocked = Boolean(registrationLocks.birthday);
   const isPhoneLocked = Boolean(registrationLocks.phone);
-  const isCountryLocked = Boolean(registrationLocks.country);
-  const isStateLocked = Boolean(registrationLocks.state);
-  const isCityLocked = Boolean(registrationLocks.city);
+  const isCountryLocked = false;
+  const isStateLocked = false;
+  const isCityLocked = false;
   const isLocationLocked = isCountryLocked || isStateLocked || isCityLocked;
 
   useEffect(() => {
@@ -2449,11 +2472,9 @@ export default function Me() {
       const lockAge = Boolean(registrationLocks.age);
       const lockBirthday = Boolean(registrationLocks.birthday);
       const lockPhone = Boolean(registrationLocks.phone);
-      const lockCountry = Boolean(registrationLocks.country);
-      const lockState = Boolean(registrationLocks.state || registrationLocks.country);
-      const lockCity = Boolean(
-        registrationLocks.city || registrationLocks.state || registrationLocks.country
-      );
+      const lockCountry = false;
+      const lockState = false;
+      const lockCity = false;
       const existingFirstName = String(existingPayload.firstName || "");
       const existingLastName = String(existingPayload.lastName || "");
       const existingAge = String(existingPayload.age || "");
@@ -2550,6 +2571,9 @@ export default function Me() {
       if (!nextLocks.age && rawAge) nextLocks.age = true;
       if (!nextLocks.birthday && mergedProfile.birthday.trim()) nextLocks.birthday = true;
       if (!nextLocks.phone && phoneClean) nextLocks.phone = true;
+      nextLocks.country = false;
+      nextLocks.state = false;
+      nextLocks.city = false;
 
       const encryptedProfile = await encryptProfilePayload(user.id, nextPayload);
 
@@ -4785,6 +4809,17 @@ export default function Me() {
               />
             )}
             {linkPreviewError && <p className="status status-error">{linkPreviewError}</p>}
+            {postFilePreviewUrl && (
+              <div className="post-composer__media-preview">
+                {postFileIsVideo ? (
+                  <video controls muted playsInline preload="metadata">
+                    <source src={postFilePreviewUrl} />
+                  </video>
+                ) : (
+                  <img src={postFilePreviewUrl} alt="Upload preview" />
+                )}
+              </div>
+            )}
 
             <div className="post-composer__feedback">
               <span className="post-feedback-label">Post visibility</span>
@@ -4852,9 +4887,16 @@ export default function Me() {
                 <label className="post-composer__tool">
                   <input
                     type="file"
-                    accept="image/*"
+                    accept="image/*,video/*"
                     onChange={(e) => {
-                      setPostFile(e.target.files?.[0] || null);
+                      const file = e.target.files?.[0] || null;
+                      if (file && file.size > MAX_UPLOAD_BYTES) {
+                        setPostError(`Media files must be under ${MAX_UPLOAD_LABEL}.`);
+                        e.target.value = "";
+                        setPostFile(null);
+                        return;
+                      }
+                      setPostFile(file);
                       setPostError(null);
                     }}
                   />

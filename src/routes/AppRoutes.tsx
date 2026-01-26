@@ -26,10 +26,12 @@ import ProtocolHandler from "../pages/protocol";
 import NewNote from "../pages/notes-new";
 import WhatMakesUsDifferent from "../pages/what-makes-us-different";
 import Moderation from "../pages/moderation";
+import News from "../pages/news";
 
 export default function AppRoutes(): JSX.Element {
-  const { user } = useAuth();
+  const { user, appSettings } = useAuth();
   const landingElement = user ? <Navigate to="/dashboard" replace /> : <Landing />;
+  const newsroomEnabled = appSettings?.newsroomEnabled !== false;
 
   return (
     <Routes>
@@ -66,7 +68,7 @@ export default function AppRoutes(): JSX.Element {
         path="/news"
         element={
           <ProtectedRoute>
-            <Navigate to="/dashboard" replace />
+            {newsroomEnabled ? <News /> : <Navigate to="/dashboard" replace />}
           </ProtectedRoute>
         }
       />

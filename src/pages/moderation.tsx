@@ -64,7 +64,7 @@ const statusLabel = (moderation?: ModerationState | null) => {
 };
 
 export default function Moderation() {
-  const { user } = useAuth();
+  const { user, refreshAppSettings } = useAuth();
   const isStaff = user?.appRole === "admin" || user?.appRole === "moderator";
   const [reports, setReports] = useState<ReportItem[]>([]);
   const [reportFilter, setReportFilter] = useState<ReportFilter>("open");
@@ -84,6 +84,10 @@ export default function Moderation() {
   const pageSize = 10;
   const [demoBusy, setDemoBusy] = useState(false);
   const [demoStatus, setDemoStatus] = useState<string | null>(null);
+  const [newsroomEnabled, setNewsroomEnabled] = useState(true);
+  const [settingsLoading, setSettingsLoading] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
 
   usePageMeta({
     title: "Moderation | Your Social Place",
@@ -156,6 +160,30 @@ export default function Moderation() {
       active = false;
     };
   }, [activeQuery, isStaff, page, pageSize]);
+
+  useEffect(() => {
+    if (!isStaff) return;
+    let active = true;
+    const loadSettings = async () => {
+      setSettingsLoading(true);
+      setSettingsError(null);
+      try {
+        const res = await api.get("/moderation/settings");
+        if (!active) return;
+        setNewsroomEnabled(res.data?.data?.newsroomEnabled !== false);
+      } catch {
+        if (active) {
+          setSettingsError("Unable to load moderation settings.");
+        }
+      } finally {
+        if (active) setSettingsLoading(false);
+      }
+    };
+    void loadSettings();
+    return () => {
+      active = false;
+    };
+  }, [isStaff]);
 
   if (!isStaff) {
     return <Navigate to="/dashboard" replace />;
@@ -283,6 +311,21 @@ export default function Moderation() {
       }
     } finally {
       setDemoBusy(false);
+    }
+  };
+
+  const handleToggleNewsroom = async (nextValue: boolean) => {
+    if (settingsSaving) return;
+    setSettingsSaving(true);
+    setSettingsError(null);
+    try {
+      await api.put("/moderation/settings", { newsroomEnabled: nextValue });
+      setNewsroomEnabled(nextValue);
+      await refreshAppSettings();
+    } catch {
+      setSettingsError("Unable to update moderation settings.");
+    } finally {
+      setSettingsSaving(false);
     }
   };
 
@@ -524,6 +567,41 @@ export default function Moderation() {
               </button>
             </div>
             {demoStatus && <div className="status">{demoStatus}</div>}
+          </section>
+
+          <section className="panel moderation-panel moderation-settings-panel">
+            <div className="moderation-panel-header">
+              <div>
+                <h3 className="moderation-panel-title">Platform settings</h3>
+                <p className="panel-sub">
+                  Control access to the Newsroom page and sidebar button.
+                </p>
+              </div>
+            </div>
+            {settingsLoading && <div className="status">Loading settings...</div>}
+            {!settingsLoading && (
+              <div className="moderation-settings-row">
+                <div>
+                  <strong>Newsroom availability</strong>
+                  <p className="moderation-report-meta">
+                    Toggle the Newsroom page, button, and route.
+                  </p>
+                </div>
+                <label className="moderation-toggle">
+                  <input
+                    type="checkbox"
+                    checked={newsroomEnabled}
+                    disabled={settingsSaving}
+                    onChange={(event) => handleToggleNewsroom(event.target.checked)}
+                  />
+                  <span className="moderation-toggle-track" aria-hidden="true" />
+                  <span className="moderation-toggle-label">
+                    {newsroomEnabled ? "Enabled" : "Disabled"}
+                  </span>
+                </label>
+              </div>
+            )}
+            {settingsError && <div className="status status-error">{settingsError}</div>}
           </section>
         </div>
       </div>

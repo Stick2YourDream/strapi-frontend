@@ -40,11 +40,11 @@ export default function Landing() {
   usePageMeta({
     title: "Your Social Place | Motivational social network without all the fluff",
     description:
-      "Your Social Place is a community driven motivational social network where real people share dreams, goals, progress, and help uplift each other.",
+      "Your Social Place is a motivational social network for accountability with live video calls, screen sharing, real-time chat, groups, and Newsroom updates.",
     type: "website",
     canonical: "https://yoursocialplace.com/",
     keywords:
-      "Your Social Place, motivational social network, community driven, accountability, goals, progress, friends, social network",
+      "Your Social Place, motivational social network, accountability, goals, progress, friends, groups, live video calls, screen sharing, real-time chat, Newsroom, moderation, privacy controls, PWA",
     image: "https://yoursocialplace.com/logo.png",
     imageAlt: "Your Social Place logo",
   });

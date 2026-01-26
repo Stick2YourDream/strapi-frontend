@@ -60,8 +60,10 @@ const isStandaloneMode = () => {
 
 export default function NewsWidget() {
   const navigate = useNavigate();
-  const { profile } = useAuth();
-  const newsEnabled = profile?.notificationSettings?.newsEnabled !== false;
+  const { profile, appSettings } = useAuth();
+  const profileNewsEnabled = profile?.notificationSettings?.newsEnabled !== false;
+  const newsroomEnabled = appSettings?.newsroomEnabled !== false;
+  const newsEnabled = profileNewsEnabled && newsroomEnabled;
 
   const [query, setQuery] = useState("");
   const [provider, setProvider] = useState("");
@@ -222,18 +224,32 @@ export default function NewsWidget() {
               Install app
             </button>
           )}
-          <button className="btn primary" type="button" disabled>
-            Newsroom (Coming soon)
+          <button
+            className="btn primary"
+            type="button"
+            disabled={!newsroomEnabled}
+            onClick={() => {
+              if (!newsroomEnabled) return;
+              navigate("/news");
+            }}
+          >
+            {newsroomEnabled ? "Open Newsroom" : "Newsroom (Coming soon)"}
           </button>
         </div>
       </div>
 
       {!newsEnabled && (
         <div className="news-widget-disabled">
-          <p>Enable Newsroom in settings to show this widget.</p>
-          <button className="btn ghost" type="button" onClick={() => navigate("/me")}>
-            Go to settings
-          </button>
+          {newsroomEnabled ? (
+            <>
+              <p>Enable Newsroom in settings to show this widget.</p>
+              <button className="btn ghost" type="button" onClick={() => navigate("/me")}>
+                Go to settings
+              </button>
+            </>
+          ) : (
+            <p>The Newsroom is temporarily unavailable.</p>
+          )}
         </div>
       )}
 

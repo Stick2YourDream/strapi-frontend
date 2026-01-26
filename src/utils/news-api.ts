@@ -60,11 +60,24 @@ export type NewsPageQueryParams = {
   offset?: number;
 };
 
+export type NewsReadable = {
+  url?: string;
+  title?: string;
+  author?: string;
+  content?: string;
+  html?: string;
+  text?: string;
+  publishedAt?: string;
+  source?: string;
+  provider?: string;
+};
+
 const NEWS_PROXY_PATH = "/news";
 const NEWS_DIRECT_BASE = (import.meta.env.VITE_NEWS_API_URL ||
   "https://newsapp_backend.rousehouse.net"
 ).replace(/\/$/, "");
 const NEWS_ACCESS_MODE = String(import.meta.env.VITE_NEWS_ACCESS_MODE || "proxy");
+type NewsRequestParams = Record<string, string | number | undefined>;
 
 const isRecord = (value: unknown): value is UnknownRecord =>
   typeof value === "object" && value !== null;
@@ -139,7 +152,7 @@ const canFallbackToDirect =
 
 const requestNews = async (
   path: string,
-  params?: NewsQueryParams,
+  params?: NewsRequestParams,
   mode: "proxy" | "direct" = "proxy"
 ) => {
   try {
@@ -259,15 +272,31 @@ const normalizeArticle = (item: unknown, index: number): NewsArticle | null => {
 const extractStatKeys = (payload: unknown, key: "providers" | "sources") => {
   const record = asRecord(payload);
   const data = isRecord(record.data) ? record.data : record;
-  const candidate = isRecord(data[key]) ? data[key] : data[key];
+  const candidate = data[key];
+  const readEntry = (entry: unknown) => {
+    if (typeof entry === "string") return entry;
+    if (!isRecord(entry)) return undefined;
+    const primaryKey = key === "providers" ? "provider" : "source";
+    return (
+      readString(entry[primaryKey]) ||
+      readString(entry.name) ||
+      readString(entry.value) ||
+      readString(entry.label) ||
+      readString(entry.id)
+    );
+  };
   if (Array.isArray(candidate)) {
-    return candidate.map((entry) => String(entry)).filter(Boolean);
+    return candidate
+      .map((entry) => readEntry(entry) || String(entry))
+      .filter(Boolean);
   }
   if (isRecord(candidate)) {
     return Object.keys(candidate).filter(Boolean);
   }
   if (Array.isArray(data)) {
-    return data.map((entry) => String(entry)).filter(Boolean);
+    return data
+      .map((entry) => readEntry(entry) || String(entry))
+      .filter(Boolean);
   }
   if (isRecord(data)) {
     return Object.keys(data).filter(Boolean);
@@ -293,6 +322,32 @@ const extractStatValue = (payload: unknown) => {
   return 0;
 };
 
+const readErrorMessage = (payload: unknown) => {
+  const record = asRecord(payload);
+  const errorCandidate = isRecord(record.error)
+    ? record.error
+    : isRecord(record.data)
+    ? (record.data as UnknownRecord).error
+    : undefined;
+  if (typeof errorCandidate === "string") return errorCandidate;
+  if (isRecord(errorCandidate)) {
+    return (
+      readString(errorCandidate.message) ||
+      readString(errorCandidate.detail) ||
+      readString(errorCandidate.error) ||
+      undefined
+    );
+  }
+  return undefined;
+};
+
+const throwIfError = (payload: unknown) => {
+  const message = readErrorMessage(payload);
+  if (message) {
+    throw new Error(message);
+  }
+};
+
 const extractStatString = (payload: unknown) => {
   const record = asRecord(payload);
   const data = isRecord(record.data) ? record.data : record;
@@ -310,6 +365,7 @@ export const fetchNewsArticles = async (params: NewsQueryParams) => {
     params,
     shouldUseDirectOnly ? "direct" : "proxy"
   );
+  throwIfError(payload);
   const rows = Array.isArray(payload?.data)
     ? payload.data
     : Array.isArray(payload?.articles)
@@ -329,6 +385,7 @@ export const fetchNewsProviders = async () => {
     undefined,
     shouldUseDirectOnly ? "direct" : "proxy"
   );
+  throwIfError(payload);
   return extractStatKeys(payload, "providers");
 };
 
@@ -338,6 +395,7 @@ export const fetchNewsSources = async () => {
     undefined,
     shouldUseDirectOnly ? "direct" : "proxy"
   );
+  throwIfError(payload);
   return extractStatKeys(payload, "sources");
 };
 
@@ -347,6 +405,7 @@ export const fetchNewsContentTypes = async () => {
     undefined,
     shouldUseDirectOnly ? "direct" : "proxy"
   );
+  throwIfError(payload);
   const record = asRecord(payload);
   const data = isRecord(record.data) ? record.data : record;
   if (Array.isArray(data)) return data.map((item) => String(item)).filter(Boolean);
@@ -360,6 +419,7 @@ export const fetchNewsAssetCount = async () => {
     undefined,
     shouldUseDirectOnly ? "direct" : "proxy"
   );
+  throwIfError(payload);
   return extractStatValue(payload);
 };
 
@@ -369,6 +429,7 @@ export const fetchNewsArticleCount = async () => {
     undefined,
     shouldUseDirectOnly ? "direct" : "proxy"
   );
+  throwIfError(payload);
   return extractStatValue(payload);
 };
 
@@ -378,6 +439,7 @@ export const fetchNewsPageCount = async () => {
     undefined,
     shouldUseDirectOnly ? "direct" : "proxy"
   );
+  throwIfError(payload);
   return extractStatValue(payload);
 };
 
@@ -387,6 +449,7 @@ export const fetchNewsAssetSize = async () => {
     undefined,
     shouldUseDirectOnly ? "direct" : "proxy"
   );
+  throwIfError(payload);
   return extractStatValue(payload);
 };
 
@@ -396,6 +459,7 @@ export const fetchNewsArticleSize = async () => {
     undefined,
     shouldUseDirectOnly ? "direct" : "proxy"
   );
+  throwIfError(payload);
   return extractStatValue(payload);
 };
 
@@ -405,6 +469,7 @@ export const fetchNewsPageSize = async () => {
     undefined,
     shouldUseDirectOnly ? "direct" : "proxy"
   );
+  throwIfError(payload);
   return extractStatValue(payload);
 };
 
@@ -414,6 +479,7 @@ export const fetchNewsLastUpdated = async () => {
     undefined,
     shouldUseDirectOnly ? "direct" : "proxy"
   );
+  throwIfError(payload);
   return extractStatString(payload);
 };
 
@@ -444,6 +510,7 @@ export const fetchNewsAssets = async (params: NewsAssetQueryParams) => {
     params,
     shouldUseDirectOnly ? "direct" : "proxy"
   );
+  throwIfError(payload);
   const rows = Array.isArray(payload?.data)
     ? payload.data
     : Array.isArray(payload?.assets)
@@ -474,6 +541,7 @@ export const fetchNewsPages = async (params: NewsPageQueryParams) => {
     params,
     shouldUseDirectOnly ? "direct" : "proxy"
   );
+  throwIfError(payload);
   const rows = Array.isArray(payload?.data)
     ? payload.data
     : Array.isArray(payload?.pages)
@@ -482,4 +550,49 @@ export const fetchNewsPages = async (params: NewsPageQueryParams) => {
     ? payload
     : [];
   return rows.map((item: unknown, index: number) => normalizePage(item, index));
+};
+
+export const fetchNewsReadable = async (url: string, home?: string) => {
+  const payload = await requestNews(
+    "/articles/readable",
+    { url, home },
+    shouldUseDirectOnly ? "direct" : "proxy"
+  );
+  throwIfError(payload);
+  const record = asRecord(payload?.data) ? asRecord(payload.data) : asRecord(payload);
+  return {
+    url: readString(record.url) || url,
+    title:
+      readString(record.title) ||
+      readString(record.headline) ||
+      readString(record.name) ||
+      undefined,
+    author:
+      readString(record.author) ||
+      readString(record.byline) ||
+      readString(record.creator) ||
+      undefined,
+    content:
+      readString(record.content) ||
+      readString(record.text) ||
+      readString(record.summary) ||
+      readString(record.description) ||
+      undefined,
+    html:
+      readString(record.html) ||
+      readString(record.body_html) ||
+      readString(record.bodyHtml) ||
+      readString(record.final_html) ||
+      readString(record.finalHtml) ||
+      undefined,
+    text: readString(record.text) || undefined,
+    publishedAt:
+      readString(record.publishedAt) ||
+      readString(record.published_at) ||
+      readString(record.date) ||
+      readString(record.created_at) ||
+      readString(record.createdAt),
+    source: readNamedValue(record.source) || readString(record.source),
+    provider: readString(record.provider) || undefined,
+  } as NewsReadable;
 };

@@ -76,10 +76,15 @@ interface ProfileSummary {
   lastSeenAt?: string;
 }
 
+interface AppSettings {
+  newsroomEnabled: boolean;
+}
+
 interface AuthContextType {
   user: User | null;
   profile: ProfileSummary | null;
   profileLoading: boolean;
+  appSettings: AppSettings;
   keyBackupStatus: "unknown" | "ready" | "needs-setup" | "needs-restore";
   keyBackupLoading: boolean;
   keyBackupError: string | null;
@@ -87,6 +92,7 @@ interface AuthContextType {
   updateUser: (user: User) => void;
   logout: () => void;
   refreshProfile: () => Promise<void>;
+  refreshAppSettings: () => Promise<void>;
   refreshKeyBackup: () => Promise<void>;
   createKeyBackup: (passphrase: string) => Promise<void>;
   restoreKeyBackup: (passphrase: string) => Promise<boolean>;
@@ -99,6 +105,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [loading, setLoading] = useState(true); // Track if auth is initializing
   const [profile, setProfile] = useState<ProfileSummary | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
+  const [appSettings, setAppSettings] = useState<AppSettings>({ newsroomEnabled: true });
   const [keyBackupStatus, setKeyBackupStatus] =
     useState<AuthContextType["keyBackupStatus"]>("unknown");
   const [keyBackupLoading, setKeyBackupLoading] = useState(false);
@@ -238,6 +245,22 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     }
   };
 
+  const refreshAppSettings = async () => {
+    if (!user) {
+      setAppSettings({ newsroomEnabled: true });
+      return;
+    }
+    try {
+      const res = await api.get("/moderation/settings");
+      const data = res.data?.data;
+      setAppSettings({
+        newsroomEnabled: data?.newsroomEnabled !== false,
+      });
+    } catch {
+      // keep the existing settings if the request fails
+    }
+  };
+
   const refreshKeyBackup = async () => {
     if (!user) {
       setKeyBackupStatus("unknown");
@@ -316,6 +339,14 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   useEffect(() => {
     if (!user) {
+      setAppSettings({ newsroomEnabled: true });
+      return;
+    }
+    void refreshAppSettings();
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user) {
       setKeyBackupStatus("unknown");
       setKeyBackupError(null);
       return;
@@ -376,6 +407,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         user,
         profile,
         profileLoading,
+        appSettings,
         keyBackupStatus,
         keyBackupLoading,
         keyBackupError,
@@ -383,6 +415,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         updateUser,
         logout,
         refreshProfile,
+        refreshAppSettings,
         refreshKeyBackup,
         createKeyBackup: createKeyBackupWithPassphrase,
         restoreKeyBackup: restoreKeyBackupWithPassphrase,
@@ -399,6 +432,7 @@ export const StaticAuthProvider = ({ children }: { children: React.ReactNode }) 
     user: null,
     profile: null,
     profileLoading: false,
+    appSettings: { newsroomEnabled: true },
     keyBackupStatus: "unknown",
     keyBackupLoading: false,
     keyBackupError: null,
@@ -406,6 +440,7 @@ export const StaticAuthProvider = ({ children }: { children: React.ReactNode }) 
     updateUser: () => undefined,
     logout: () => undefined,
     refreshProfile: async () => undefined,
+    refreshAppSettings: async () => undefined,
     refreshKeyBackup: async () => undefined,
     createKeyBackup: async () => undefined,
     restoreKeyBackup: async () => false,

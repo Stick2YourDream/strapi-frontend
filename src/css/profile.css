@@ -757,6 +757,21 @@
   color: #9aa5bb;
 }
 
+.post-composer__media-preview {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  background: rgba(6, 10, 18, 0.55);
+  overflow: hidden;
+}
+
+.post-composer__media-preview img,
+.post-composer__media-preview video {
+  width: 100%;
+  max-height: 320px;
+  object-fit: cover;
+  display: block;
+}
+
 .post-composer__actions {
   display: flex;
   justify-content: space-between;

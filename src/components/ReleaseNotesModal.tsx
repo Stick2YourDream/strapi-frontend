@@ -16,7 +16,8 @@ const RELEASE_NOTES = [
   "Added more interactivitiy with posts",
   "Redesigned Landing Page to remove unncessary clutter",
   "Added Feedback Request to Notificatons",
-
+  "Added News App Integration with Dashboard (News App Created By Mycstro)",
+  "Improved UI of Video Calling",
 ];
 
 export default function ReleaseNotesModal() {

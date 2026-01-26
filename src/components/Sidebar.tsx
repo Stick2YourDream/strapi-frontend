@@ -62,7 +62,7 @@ export default function Sidebar({
   onGroupViewChange,
 }: SidebarProps) {
   const navigate = useNavigate();
-  const { user, profile, logout } = useAuth();
+  const { user, profile, logout, appSettings } = useAuth();
   const [showMoreProfile, setShowMoreProfile] = useState(false);
   const [profileSummary, setProfileSummary] = useState<ProfileSummary | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -208,6 +208,7 @@ export default function Sidebar({
     active === "groups" && typeof onGroupViewChange === "function";
   const isGroupSettingsView = groupView === "settings";
   const isStaff = user?.appRole === "admin" || user?.appRole === "moderator";
+  const newsroomEnabled = appSettings?.newsroomEnabled !== false;
 
   const handleSettingsToggle = () => {
     if (!onSettingsViewChange) return;
@@ -601,12 +602,18 @@ export default function Sidebar({
                 My Groups
               </button>
               <button
-                className="mobile-profile-item mobile-profile-item--disabled"
+                className={`mobile-profile-item${
+                  newsroomEnabled ? "" : " mobile-profile-item--disabled"
+                }`}
                 type="button"
-                disabled
-                aria-disabled="true"
+                disabled={!newsroomEnabled}
+                aria-disabled={!newsroomEnabled}
+                onClick={() => {
+                  if (!newsroomEnabled) return;
+                  handleProfileAction("/news");
+                }}
               >
-                Newsroom (Coming soon)
+                {newsroomEnabled ? "Newsroom" : "Newsroom (Coming soon)"}
               </button>
               {isStaff && (
                 <button
@@ -861,13 +868,17 @@ export default function Sidebar({
               </button>
               <button
                 type="button"
-                className={`btn ghost sidebar-nav-link sidebar-nav-link--disabled${
-                  active === "news" ? " is-active" : ""
-                }`}
-                disabled
-                aria-disabled="true"
+                className={`btn ghost sidebar-nav-link${
+                  !newsroomEnabled ? " sidebar-nav-link--disabled" : ""
+                }${active === "news" ? " is-active" : ""}`}
+                disabled={!newsroomEnabled}
+                aria-disabled={!newsroomEnabled}
+                onClick={() => {
+                  if (!newsroomEnabled) return;
+                  handleProfileAction("/news");
+                }}
               >
-                Newsroom (Coming soon)
+                {newsroomEnabled ? "Newsroom" : "Newsroom (Coming soon)"}
               </button>
               {isStaff && (
                 <button

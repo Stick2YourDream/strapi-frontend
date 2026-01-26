@@ -155,6 +155,8 @@ type VideoCallContextValue = {
   maxParticipants: number;
   isVideoEnabled: boolean;
   isAudioEnabled: boolean;
+  isHolding: boolean;
+  isOnHold: boolean;
   selectedAudioInputId: string;
   selectedVideoInputId: string;
   isScreenSharing: boolean;
@@ -174,7 +176,7 @@ type VideoCallContextValue = {
   toggleAudio: () => void;
   setAudioInputDevice: (deviceId: string) => Promise<void>;
   setVideoInputDevice: (deviceId: string) => Promise<void>;
-  startScreenShare: () => Promise<void>;
+  startScreenShare: (options?: { mediaDevices?: MediaDevices | null }) => Promise<void>;
   stopScreenShare: () => void;
   screenControlRequests: ScreenControlRequest[];
   pendingScreenControlTargets: string[];
@@ -187,6 +189,7 @@ type VideoCallContextValue = {
   stopScreenControl: (targetSocketId?: string) => void;
   sendScreenControlEvent: (targetSocketId: string, event: ScreenControlEvent) => void;
   sendMessage: (body: string, kind?: VideoCallMessage["kind"], gifUrl?: string) => void;
+  toggleHold: () => void;
 };
 
 const MAX_VIDEO_PARTICIPANTS = 8;
@@ -361,6 +364,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const [e2eeDebug, setE2eeDebug] = useState<string | null>(null);
   const [isVideoEnabled, setIsVideoEnabled] = useState(true);
   const [isAudioEnabled, setIsAudioEnabled] = useState(true);
+  const [isHolding, setIsHolding] = useState(false);
+  const [remoteHoldStates, setRemoteHoldStates] = useState<Record<string, boolean>>({});
   const [selectedAudioInputId, setSelectedAudioInputId] = useState<string>("default");
   const [selectedVideoInputId, setSelectedVideoInputId] = useState<string>("default");
   const [screenControlRequests, setScreenControlRequests] = useState<ScreenControlRequest[]>([]);
@@ -401,6 +406,12 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const localSocketIdRef = useRef<string | null>(null);
   const incomingCallRef = useRef<IncomingCall | null>(null);
   const videoEffectsRef = useRef(videoEffects);
+  const holdEnabledRef = useRef(false);
+  const holdRestoreRef = useRef<{ audio: boolean; video: boolean }>({
+    audio: true,
+    video: true,
+  });
+  const remoteHoldStatesRef = useRef<Record<string, boolean>>({});
   const callTimeoutRef = useRef<number | null>(null);
   const videoProcessingRef = useRef<{
     track: MediaStreamTrack | null;
@@ -454,6 +465,11 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       return next;
     });
   }, []);
+
+  const isOnHold = useMemo(
+    () => isHolding || Object.values(remoteHoldStates).some(Boolean),
+    [isHolding, remoteHoldStates]
+  );
 
   const getPeerNegotiationState = useCallback((socketId: string) => {
     const existing = peerNegotiationRef.current.get(socketId);
@@ -1062,8 +1078,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     [removeScreenShareTracks]
   );
 
-  const startScreenShare = useCallback(async () => {
-    if (!navigator.mediaDevices?.getDisplayMedia) {
+  const startScreenShare = useCallback(async (options?: { mediaDevices?: MediaDevices | null }) => {
+    const mediaDevices = options?.mediaDevices ?? navigator.mediaDevices;
+    if (!mediaDevices?.getDisplayMedia) {
       setError("Screen sharing is not supported in this browser.");
       return;
     }
@@ -1085,15 +1102,15 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       };
       let stream: MediaStream;
       try {
-        stream = await navigator.mediaDevices.getDisplayMedia(displayOptions);
+        stream = await mediaDevices.getDisplayMedia(displayOptions);
       } catch {
         try {
-          stream = await navigator.mediaDevices.getDisplayMedia({
+          stream = await mediaDevices.getDisplayMedia({
             video: true,
             audio: true,
           });
         } catch {
-          stream = await navigator.mediaDevices.getDisplayMedia({
+          stream = await mediaDevices.getDisplayMedia({
             video: true,
           });
         }
@@ -1118,7 +1135,12 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       } catch {
         // ignore focus errors
       }
-    } catch {
+    } catch (error) {
+      const name = (error as Error)?.name;
+      if (name === "NotAllowedError" || name === "AbortError") {
+        setError(null);
+        return;
+      }
       setError("Unable to start screen sharing.");
     }
   }, [attachScreenShareTrack, stopScreenShare]);
@@ -1448,6 +1470,36 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     [drawBackdrop, getCameraFilter]
   );
 
+  const applyHoldState = useCallback((hold: boolean) => {
+    holdEnabledRef.current = hold;
+    const rawStream = rawStreamRef.current;
+    if (!rawStream) return;
+    const audioTrack = rawStream.getAudioTracks()[0] || null;
+    const videoTrack = rawStream.getVideoTracks()[0] || null;
+    if (hold) {
+      holdRestoreRef.current = {
+        audio: audioTrack?.enabled ?? false,
+        video: videoTrack?.enabled ?? false,
+      };
+    }
+    const nextAudio = hold ? false : holdRestoreRef.current.audio;
+    const nextVideo = hold ? false : holdRestoreRef.current.video;
+    if (audioTrack) {
+      audioTrack.enabled = nextAudio;
+    }
+    if (videoTrack) {
+      videoTrack.enabled = nextVideo;
+    }
+    if (audioProcessingRef.current.track) {
+      audioProcessingRef.current.track.enabled = nextAudio;
+    }
+    if (videoProcessingRef.current.track) {
+      videoProcessingRef.current.track.enabled = nextVideo;
+    }
+    setIsAudioEnabled(nextAudio);
+    setIsVideoEnabled(nextVideo);
+  }, []);
+
   const applyVideoEffects = useCallback(() => {
     const rawStream = rawStreamRef.current;
     const rawTrack = rawStream?.getVideoTracks()[0] || null;
@@ -1536,6 +1588,14 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     (videoTrack: MediaStreamTrack | null) => {
       const outgoingAudioTrack = getOutgoingAudioTrack();
       const audioTracks = outgoingAudioTrack ? [outgoingAudioTrack] : [];
+      if (holdEnabledRef.current) {
+        audioTracks.forEach((track) => {
+          track.enabled = false;
+        });
+        if (videoTrack) {
+          videoTrack.enabled = false;
+        }
+      }
       const tracks = [...audioTracks, ...(videoTrack ? [videoTrack] : [])];
       const stream = new MediaStream(tracks);
 
@@ -1672,6 +1732,12 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       return next;
     });
     setRemoteParticipants((prev) => {
+      const next = { ...prev };
+      delete next[socketId];
+      return next;
+    });
+    setRemoteHoldStates((prev) => {
+      if (!prev[socketId]) return prev;
       const next = { ...prev };
       delete next[socketId];
       return next;
@@ -1997,6 +2063,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   useEffect(() => {
     remoteStreamsRef.current = remoteStreams;
   }, [remoteStreams]);
+
+  useEffect(() => {
+    remoteHoldStatesRef.current = remoteHoldStates;
+  }, [remoteHoldStates]);
 
   useEffect(() => {
     remoteScreenStreamsRef.current = remoteScreenStreams;
@@ -2369,6 +2439,26 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     socket.on("call:chat", (payload: VideoCallMessage) => {
       setMessages((prev) => [...prev, { ...payload, id: createMessageId() }]);
     });
+
+    socket.on(
+      "call:hold",
+      (payload: { roomId: string; from: string; hold: boolean }) => {
+        if (payload?.roomId && payload.roomId !== activeRoomRef.current) return;
+        if (!payload?.from) return;
+        const localId = localSocketIdRef.current || socket.id;
+        if (payload.from === localId) return;
+        setRemoteHoldStates((prev) => {
+          if (!payload.hold) {
+            if (!prev[payload.from]) return prev;
+            const next = { ...prev };
+            delete next[payload.from];
+            return next;
+          }
+          if (prev[payload.from]) return prev;
+          return { ...prev, [payload.from]: true };
+        });
+      }
+    );
 
     socket.on(
       "call:screen:start",
@@ -2746,6 +2836,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     setError(null);
     setIsCallHost(false);
     setE2eeDebug(null);
+    setIsHolding(false);
+    setRemoteHoldStates({});
+    holdEnabledRef.current = false;
+    holdRestoreRef.current = { audio: true, video: true };
     setScreenControlRequests([]);
     setPendingScreenControlTargets([]);
     setActiveScreenController(null);
@@ -2950,6 +3044,12 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       void ensureMedia({ video: true }).catch(() => undefined);
       return;
     }
+    if (holdEnabledRef.current) {
+      const nextDesired = !holdRestoreRef.current.video;
+      holdRestoreRef.current = { ...holdRestoreRef.current, video: nextDesired };
+      setIsVideoEnabled(false);
+      return;
+    }
     const nextEnabled = !rawTrack.enabled;
     rawTrack.enabled = nextEnabled;
     if (videoProcessingRef.current.track) {
@@ -2965,6 +3065,12 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       void ensureMedia({ audio: true }).catch(() => undefined);
       return;
     }
+    if (holdEnabledRef.current) {
+      const nextDesired = !holdRestoreRef.current.audio;
+      holdRestoreRef.current = { ...holdRestoreRef.current, audio: nextDesired };
+      setIsAudioEnabled(false);
+      return;
+    }
     const nextEnabled = !tracks[0].enabled;
     tracks.forEach((track) => {
       track.enabled = nextEnabled;
@@ -2975,6 +3081,18 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     }
     setIsAudioEnabled(nextEnabled);
   }, [ensureMedia]);
+
+  const toggleHold = useCallback(() => {
+    const next = !holdEnabledRef.current;
+    setIsHolding(next);
+    applyHoldState(next);
+    if (socketRef.current && activeRoomRef.current) {
+      socketRef.current.emit("call:hold", {
+        roomId: activeRoomRef.current,
+        hold: next,
+      });
+    }
+  }, [applyHoldState]);
 
   const requestScreenControl = useCallback((targetSocketId: string) => {
     if (!socketRef.current || !activeRoomRef.current) return;
@@ -3092,6 +3210,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       maxParticipants: MAX_VIDEO_PARTICIPANTS,
       isVideoEnabled,
       isAudioEnabled,
+      isHolding,
+      isOnHold,
       selectedAudioInputId,
       selectedVideoInputId,
       isScreenSharing: Boolean(localScreenStream),
@@ -3124,6 +3244,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       stopScreenControl,
       sendScreenControlEvent,
       sendMessage,
+      toggleHold,
     }),
     [
       acceptCall,
@@ -3135,6 +3256,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       incomingCall,
       isCallHost,
       isAudioEnabled,
+      isHolding,
+      isOnHold,
       selectedAudioInputId,
       selectedVideoInputId,
       isOpen,
@@ -3170,6 +3293,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       startCall,
       status,
       toggleAudio,
+      toggleHold,
       toggleVideo,
     ]
   );

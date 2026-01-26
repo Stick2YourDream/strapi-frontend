@@ -151,6 +151,8 @@ const pickMediaUrl = (mediaField: unknown): string | undefined => {
 const PREVIEW_DEBOUNCE_MS = 450;
 const PREVIEW_MAX_CONCURRENT = 3;
 const POSTS_PAGE_SIZE = 20;
+const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
+const MAX_UPLOAD_LABEL = "1 GB";
 const extractFirstUrl = (text: string) => {
   const match = text.match(/(https?:\/\/[^\s]+|www\.[^\s]+)/i);
   if (!match) return "";
@@ -173,7 +175,11 @@ const isYoutubeUrl = (value: string) => {
     return false;
   }
 };
-const isVideoUrl = (value?: string) => !!value && /\.(mp4|webm|mov)$/i.test(value);
+const isVideoUrl = (value?: string) => !!value && /\.(mp4|webm|mov|m4v|mkv)$/i.test(value);
+const isVideoFile = (file: File) => {
+  if (file.type && file.type.startsWith("video/")) return true;
+  return /\.(mp4|webm|mov|m4v|mkv)$/i.test(file.name);
+};
 const mediaDescriptor = (mediaUrl?: string, hasLink?: boolean) => {
   if (mediaUrl) return isVideoUrl(mediaUrl) ? "with a video" : "with a picture";
   if (hasLink) return "with a link";
@@ -181,6 +187,25 @@ const mediaDescriptor = (mediaUrl?: string, hasLink?: boolean) => {
 };
 const buildIdFilter = (field: string, ids: number[]) =>
   ids.map((id, index) => `filters[${field}][id][$in][${index}]=${id}`).join("&");
+const buildOrIdFilter = (groupIndex: number, field: string, ids: number[]) =>
+  ids
+    .map(
+      (id, index) =>
+        `filters[$or][${groupIndex}][${field}][id][$in][${index}]=${id}`
+    )
+    .join("&");
+const buildUserPostsQuery = (ownerIds: number[]) => {
+  const parts: string[] = [];
+  let groupIndex = 0;
+  if (ownerIds.length) {
+    parts.push(buildOrIdFilter(groupIndex, "owner", ownerIds));
+    groupIndex += 1;
+  }
+  parts.push(`filters[$or][${groupIndex}][visibility][$eq]=public`);
+  groupIndex += 1;
+  parts.push(`filters[$or][${groupIndex}][feedbackAudience][$eq]=public`);
+  return `${parts.join("&")}&includeDemo=true`;
+};
 const getPostKey = (entry: unknown) => {
   const record = asRecord(entry);
   const rawId = record.id ?? record.documentId;
@@ -391,6 +416,7 @@ export default function Dashboard() {
   const [shareNotice, setShareNotice] = useState<Record<string | number, string>>({});
   const [copyToast, setCopyToast] = useState<string | null>(null);
   const [activePostKey, setActivePostKey] = useState<string | null>(null);
+  const [formFilePreviewUrl, setFormFilePreviewUrl] = useState<string | null>(null);
   const [linkPreview, setLinkPreview] = useState<LinkPreview | null>(null);
   const [linkPreviewLoading, setLinkPreviewLoading] = useState(false);
   const [linkPreviewError, setLinkPreviewError] = useState<string | null>(null);
@@ -408,6 +434,8 @@ export default function Dashboard() {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const loadIdRef = useRef(0);
+  const [showGoToTop, setShowGoToTop] = useState(false);
+  const hashFetchRef = useRef<string | null>(null);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -425,6 +453,17 @@ export default function Dashboard() {
   const userLabel = nameFromProfile || user?.email || "Friend";
   const userInitial = userLabel.charAt(0).toUpperCase();
   const userId = user?.id;
+  const formFileIsVideo = formFile ? isVideoFile(formFile) : false;
+
+  useEffect(() => {
+    if (!formFile) {
+      setFormFilePreviewUrl(null);
+      return;
+    }
+    const objectUrl = URL.createObjectURL(formFile);
+    setFormFilePreviewUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [formFile]);
 
   useEffect(() => {
     if (feedbackAudience !== "specific") {
@@ -551,20 +590,15 @@ export default function Dashboard() {
         setGroupIds(memberGroups);
 
         const userFilterIds = Array.from(new Set([userId, ...nextFriendIds]));
-        const userFilter = userFilterIds.length
-          ? buildIdFilter("owner", userFilterIds)
-          : "";
-        const userQuery = userFilter ? `${userFilter}&includeDemo=true` : "includeDemo=true";
+        const userQuery = buildUserPostsQuery(userFilterIds);
         const groupFilter = memberGroups.length ? buildIdFilter("group", memberGroups) : "";
 
         const [adminRes, userRes, groupRes, commentsRes] = await Promise.all([
           api.get(`/posts?populate=Pictures&pagination[pageSize]=${POSTS_PAGE_SIZE}`),
-          userFilterIds.length
-            ? api.get(
-                `/users-posts?${userQuery}&populate=Users_Pictures&populate=owner&populate=feedbackTarget` +
-                  `&sort=createdAt:desc&pagination[pageSize]=${POSTS_PAGE_SIZE}&pagination[page]=1`
-              )
-            : Promise.resolve({ data: { data: [], meta: {} } }),
+          api.get(
+            `/users-posts?${userQuery}&populate=Users_Pictures&populate=owner&populate=feedbackTarget` +
+              `&sort=createdAt:desc&pagination[pageSize]=${POSTS_PAGE_SIZE}&pagination[page]=1`
+          ),
           memberGroups.length
             ? api.get(
                 `/group-posts?${groupFilter}&populate=media&populate=owner&populate=group` +
@@ -656,11 +690,9 @@ export default function Dashboard() {
         setUserPostsPage(1);
         setGroupPostsPage(1);
         setHasMoreUserPosts(
-          userFilterIds.length
-            ? userPagination
-              ? userPagination.page < userPagination.pageCount
-              : userPostsData.length >= POSTS_PAGE_SIZE
-            : false
+          userPagination
+            ? userPagination.page < userPagination.pageCount
+            : userPostsData.length >= POSTS_PAGE_SIZE
         );
         setHasMoreGroupPosts(
           memberGroups.length
@@ -725,7 +757,7 @@ export default function Dashboard() {
     if (!userId) return;
 
     const userFilterIds = Array.from(new Set([userId, ...friendIds]));
-    const shouldLoadUser = hasMoreUserPosts && userFilterIds.length > 0;
+    const shouldLoadUser = hasMoreUserPosts;
     const shouldLoadGroup = hasMoreGroupPosts && groupIds.length > 0;
     if (!shouldLoadUser && !shouldLoadGroup) return;
 
@@ -734,8 +766,7 @@ export default function Dashboard() {
     try {
       const nextUserPage = shouldLoadUser ? userPostsPage + 1 : userPostsPage;
       const nextGroupPage = shouldLoadGroup ? groupPostsPage + 1 : groupPostsPage;
-      const userFilter = shouldLoadUser ? buildIdFilter("owner", userFilterIds) : "";
-      const userQuery = userFilter ? `${userFilter}&includeDemo=true` : "includeDemo=true";
+      const userQuery = buildUserPostsQuery(userFilterIds);
       const groupFilter = shouldLoadGroup ? buildIdFilter("group", groupIds) : "";
 
       const [userRes, groupRes] = await Promise.all([
@@ -1203,7 +1234,9 @@ export default function Dashboard() {
         (feedbackAudience === "specific" && post.feedbackTargetId === currentUserId);
 
       if (isPrivate) {
-        privatePosts.push(post);
+        if (isSelf) {
+          privatePosts.push(post);
+        }
         return;
       }
       if (isFriendScoped) {
@@ -1253,17 +1286,69 @@ export default function Dashboard() {
     );
   }, [activePostKey, categorizedPosts]);
 
+  const fetchUserPostByKey = useCallback(async (postKey: string) => {
+    if (!postKey) return false;
+    try {
+      const res = await api.get(
+        `/users-posts/${postKey}?populate=Users_Pictures&populate=owner&populate=feedbackTarget`
+      );
+      const entry = res.data?.data;
+      if (!entry) return false;
+      setPosts((prev) => ({
+        ...prev,
+        user: mergePostLists(prev.user, [entry]),
+      }));
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
   useEffect(() => {
     const hash = location.hash;
     if (!hash) return;
-    if (hashHandledRef.current === hash && visiblePosts.length) return;
+    const hashKey = `${location.key}:${hash}`;
+    if (hashHandledRef.current === hashKey && visiblePosts.length) return;
     const id = hash.replace(/^#/, "");
     if (!id) return;
-    const target = document.getElementById(id);
-    if (!target) return;
-    hashHandledRef.current = hash;
-    target.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [location.hash, visiblePosts]);
+    const postKey = id.startsWith("post-") ? id.slice(5) : id;
+    if (!postKey) return;
+    if (postFilter !== "all") {
+      setPostFilter("all");
+    }
+    const existingPost = categorizedPosts.ordered.find(
+      (post) => String(post.id) === postKey
+    );
+    if (existingPost) {
+      hashHandledRef.current = hashKey;
+      setActivePostKey(postKey);
+      const target = document.getElementById(id);
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+      return;
+    }
+    if (hashFetchRef.current === postKey) return;
+    hashFetchRef.current = postKey;
+    void (async () => {
+      const loaded = await fetchUserPostByKey(postKey);
+      hashFetchRef.current = null;
+      if (!loaded) return;
+      hashHandledRef.current = hashKey;
+      setActivePostKey(postKey);
+      const target = document.getElementById(id);
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    })();
+  }, [
+    categorizedPosts.ordered,
+    fetchUserPostByKey,
+    location.hash,
+    location.key,
+    postFilter,
+    visiblePosts.length,
+  ]);
 
   useEffect(() => {
     const url = extractFirstUrl(formContent);
@@ -1295,6 +1380,15 @@ export default function Dashboard() {
       clearTimeout(handle);
     };
   }, [fetchLinkPreview, formContent, linkPreview?.url, previewCache]);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      setShowGoToTop(window.scrollY > 600);
+    };
+    handleScroll();
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
 
   useEffect(() => {
     const urls = Array.from(
@@ -1341,7 +1435,7 @@ export default function Dashboard() {
     const sanitized = sanitizePostText(formContent);
     const content = sanitized.trim();
     if (!content && !formFile) {
-      setFormError("Add a message or a photo to post.");
+      setFormError("Add a message or a photo/video to post.");
       return;
     }
     if (feedbackAudience === "specific" && !feedbackTargetId) {
@@ -1353,6 +1447,11 @@ export default function Dashboard() {
     const previewTitle = linkPreview?.url === url ? linkPreview.title : undefined;
     const derivedTitle =
       previewTitle || (url ? hostnameFor(url) : "") || content || "Post";
+
+    if (formFile && formFile.size > MAX_UPLOAD_BYTES) {
+      setFormError(`Media files must be under ${MAX_UPLOAD_LABEL}.`);
+      return;
+    }
 
     setFormError(null);
     setSubmitting(true);
@@ -1646,6 +1745,17 @@ export default function Dashboard() {
 
   const closePostModal = useCallback(() => {
     setActivePostKey(null);
+    if (location.hash) {
+      navigate(
+        { pathname: location.pathname, search: location.search, hash: "" },
+        { replace: true }
+      );
+    }
+  }, [location.hash, location.pathname, location.search, navigate]);
+
+  const handleGoToTop = useCallback(() => {
+    if (typeof window === "undefined") return;
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }, []);
 
   const handlePostCardClick = useCallback(
@@ -1841,6 +1951,17 @@ export default function Dashboard() {
                 />
               )}
               {linkPreviewError && <p className="status status-error">{linkPreviewError}</p>}
+              {formFilePreviewUrl && (
+                <div className="post-composer__media-preview">
+                  {formFileIsVideo ? (
+                    <video controls muted playsInline preload="metadata">
+                      <source src={formFilePreviewUrl} />
+                    </video>
+                  ) : (
+                    <img src={formFilePreviewUrl} alt="Upload preview" />
+                  )}
+                </div>
+              )}
 
               <div className="post-composer__feedback">
                 <span className="post-feedback-label">Post visibility</span>
@@ -1908,9 +2029,15 @@ export default function Dashboard() {
                   <label className="post-composer__tool">
                     <input
                       type="file"
-                      accept="image/*"
+                      accept="image/*,video/*"
                       onChange={(e) => {
                         const file = e.target.files?.[0] || null;
+                        if (file && file.size > MAX_UPLOAD_BYTES) {
+                          setFormError(`Media files must be under ${MAX_UPLOAD_LABEL}.`);
+                          e.target.value = "";
+                          setFormFile(null);
+                          return;
+                        }
                         setFormFile(file);
                         setFormError(null);
                       }}
@@ -2364,6 +2491,15 @@ export default function Dashboard() {
               !hasMoreGroupPosts &&
               visiblePosts.length > 0 && <span>You are all caught up.</span>}
           </div>
+          {showGoToTop && !activePostKey && (
+            <button
+              type="button"
+              className="go-top-button"
+              onClick={handleGoToTop}
+            >
+              Go to top
+            </button>
+          )}
       </>
     )}
       </div>

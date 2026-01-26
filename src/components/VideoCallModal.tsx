@@ -19,9 +19,12 @@ import {
   type VideoCallInvitee,
   type VideoCallMessage,
 } from "../context/VideoCallContext";
+import { Grid } from "@giphy/react-components";
+import { GiphyFetch } from "@giphy/js-fetch-api";
 import { useAuth } from "../context/AuthContext";
 import { sanitizePostText } from "../utils/emoji";
 import callRingtoneUrl from "../assets/call.mp3";
+import holdMusicUrl from "../assets/on_hold.mp3";
 
 type VideoCallModalProps = {
   friends: VideoCallInvitee[];
@@ -32,59 +35,224 @@ type PanOffset = {
   y: number;
 };
 
-const EMOJIS = [
-  "\u{1F44D}",
-  "\u{1F44E}",
-  "\u{1F44F}",
-  "\u{1F44A}",
-  "\u{1F91D}",
-  "\u{1F64F}",
-  "\u{1F64C}",
-  "\u{1F4AA}",
-  "\u{1F525}",
-  "\u{1F4AF}",
-  "\u{2728}",
-  "\u{1F389}",
-  "\u{1F38A}",
-  "\u{1F381}",
-  "\u{1F3C6}",
-  "\u{1F680}",
-  "\u{1F4A1}",
-  "\u{1F31F}",
-  "\u{1F60E}",
-  "\u{1F60A}",
-  "\u{1F603}",
-  "\u{1F604}",
-  "\u{1F606}",
-  "\u{1F602}",
-  "\u{1F923}",
-  "\u{1F609}",
-  "\u{1F60D}",
-  "\u{1F618}",
-  "\u{1F970}",
-  "\u{1F929}",
-  "\u{1F972}",
-  "\u{1F913}",
-  "\u{1F914}",
-  "\u{1F92F}",
-  "\u{1F62E}",
-  "\u{1F632}",
-  "\u{1F622}",
-  "\u{1F62D}",
-  "\u{1F620}",
-  "\u{1F621}",
-  "\u{1F624}",
-  "\u{1F607}",
-  "\u{1F47B}",
-  "\u{1F47D}",
-  "\u{1F984}",
-  "\u{1F33F}",
-  "\u{1F339}",
-  "\u{1F30A}",
-  "\u{1F387}",
-  "\u{2764}",
-  "\u{1F49A}",
-  "\u{1F499}",
+type EmojiCategory = {
+  id: string;
+  label: string;
+  emojis: string[];
+};
+
+type Emoji3dItem = {
+  id: string;
+  label: string;
+  url: string;
+  fallback: string;
+};
+
+type Emoji3dCategory = {
+  id: string;
+  label: string;
+  items: Emoji3dItem[];
+};
+
+type GifCategory = {
+  id: string;
+  label: string;
+  query?: string;
+};
+
+const EMOJI_3D_BASE_URL = "https://fonts.gstatic.com/s/e/notoemoji/latest";
+const getEmoji3dUrl = (code: string) => `${EMOJI_3D_BASE_URL}/${code}/512.gif`;
+
+const EMOJI_CATEGORIES: EmojiCategory[] = [
+  {
+    id: "smileys",
+    label: "Smileys",
+    emojis: [
+      "\u{1F603}",
+      "\u{1F604}",
+      "\u{1F606}",
+      "\u{1F602}",
+      "\u{1F923}",
+      "\u{1F609}",
+      "\u{1F60D}",
+      "\u{1F618}",
+      "\u{1F970}",
+      "\u{1F929}",
+      "\u{1F60E}",
+      "\u{1F60A}",
+      "\u{1F972}",
+      "\u{1F913}",
+      "\u{1F914}",
+      "\u{1F92F}",
+      "\u{1F62E}",
+      "\u{1F632}",
+      "\u{1F622}",
+      "\u{1F62D}",
+      "\u{1F620}",
+      "\u{1F621}",
+      "\u{1F624}",
+      "\u{1F607}",
+      "\u{1F47B}",
+      "\u{1F47D}",
+    ],
+  },
+  {
+    id: "hands",
+    label: "Hands",
+    emojis: [
+      "\u{1F44D}",
+      "\u{1F44E}",
+      "\u{1F44F}",
+      "\u{1F44A}",
+      "\u{1F91D}",
+      "\u{1F64F}",
+      "\u{1F64C}",
+      "\u{1F4AA}",
+    ],
+  },
+  {
+    id: "celebrate",
+    label: "Celebrate",
+    emojis: [
+      "\u{2728}",
+      "\u{1F389}",
+      "\u{1F38A}",
+      "\u{1F381}",
+      "\u{1F3C6}",
+      "\u{1F680}",
+      "\u{1F4A1}",
+      "\u{1F31F}",
+      "\u{1F525}",
+      "\u{1F4AF}",
+    ],
+  },
+  {
+    id: "nature",
+    label: "Nature",
+    emojis: ["\u{1F33F}", "\u{1F339}", "\u{1F30A}", "\u{1F387}", "\u{1F984}"],
+  },
+  {
+    id: "love",
+    label: "Love",
+    emojis: ["\u{2764}", "\u{1F49A}", "\u{1F499}"],
+  },
+];
+
+const EMOJI_3D_CATEGORIES: Emoji3dCategory[] = [
+  {
+    id: "celebrate-3d",
+    label: "Celebrate",
+    items: [
+      {
+        id: "party",
+        label: "Party popper",
+        url: getEmoji3dUrl("1f389"),
+        fallback: "\u{1F389}",
+      },
+      {
+        id: "confetti",
+        label: "Confetti",
+        url: getEmoji3dUrl("1f38a"),
+        fallback: "\u{1F38A}",
+      },
+      {
+        id: "gift",
+        label: "Gift",
+        url: getEmoji3dUrl("1f381"),
+        fallback: "\u{1F381}",
+      },
+      {
+        id: "trophy",
+        label: "Trophy",
+        url: getEmoji3dUrl("1f3c6"),
+        fallback: "\u{1F3C6}",
+      },
+    ],
+  },
+  {
+    id: "reactions-3d",
+    label: "Reactions",
+    items: [
+      {
+        id: "thumbs-up",
+        label: "Thumbs up",
+        url: getEmoji3dUrl("1f44d"),
+        fallback: "\u{1F44D}",
+      },
+      {
+        id: "clap",
+        label: "Clap",
+        url: getEmoji3dUrl("1f44f"),
+        fallback: "\u{1F44F}",
+      },
+      {
+        id: "fire",
+        label: "Fire",
+        url: getEmoji3dUrl("1f525"),
+        fallback: "\u{1F525}",
+      },
+      {
+        id: "wow",
+        label: "Wow",
+        url: getEmoji3dUrl("1f62e"),
+        fallback: "\u{1F62E}",
+      },
+      {
+        id: "heart",
+        label: "Love",
+        url: getEmoji3dUrl("2764_fe0f"),
+        fallback: "\u2764",
+      },
+      {
+        id: "pray",
+        label: "Thank you",
+        url: getEmoji3dUrl("1f64f"),
+        fallback: "\u{1F64F}",
+      },
+    ],
+  },
+  {
+    id: "vibes-3d",
+    label: "Vibes",
+    items: [
+      {
+        id: "cool",
+        label: "Cool",
+        url: getEmoji3dUrl("1f60e"),
+        fallback: "\u{1F60E}",
+      },
+      {
+        id: "sparkle",
+        label: "Sparkle",
+        url: getEmoji3dUrl("2728"),
+        fallback: "\u2728",
+      },
+      {
+        id: "rocket",
+        label: "Rocket",
+        url: getEmoji3dUrl("1f680"),
+        fallback: "\u{1F680}",
+      },
+      {
+        id: "muscle",
+        label: "Strength",
+        url: getEmoji3dUrl("1f4aa"),
+        fallback: "\u{1F4AA}",
+      },
+      {
+        id: "light",
+        label: "Idea",
+        url: getEmoji3dUrl("1f4a1"),
+        fallback: "\u{1F4A1}",
+      },
+      {
+        id: "star",
+        label: "Star",
+        url: getEmoji3dUrl("1f31f"),
+        fallback: "\u{1F31F}",
+      },
+    ],
+  },
 ];
 
 const REACTION_EMOJIS = [
@@ -169,6 +337,21 @@ const GIFS = [
     label: "High five",
     url: "https://media.giphy.com/media/3o6Zt5b8oCV0nG5CQU/giphy.gif",
   },
+];
+
+const GIF_CATEGORIES: GifCategory[] = [
+  { id: "trending", label: "Trending" },
+  { id: "celebration", label: "Celebration", query: "celebration" },
+  { id: "hype", label: "Hype", query: "hype" },
+  { id: "laugh", label: "Laugh", query: "laugh" },
+  { id: "applause", label: "Applause", query: "applause" },
+  { id: "reactions", label: "Reactions", query: "reaction" },
+  { id: "success", label: "Success", query: "success" },
+  { id: "mindblown", label: "Mind blown", query: "mind blown" },
+  { id: "sports", label: "Sports", query: "sports" },
+  { id: "work", label: "Work", query: "work" },
+  { id: "dance", label: "Dance", query: "dance" },
+  { id: "motivation", label: "Motivation", query: "motivation" },
 ];
 
 const BACKGROUND_OPTIONS = [
@@ -342,6 +525,8 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     maxParticipants,
     isVideoEnabled,
     isAudioEnabled,
+    isHolding,
+    isOnHold,
     selectedAudioInputId,
     selectedVideoInputId,
     isScreenSharing,
@@ -372,6 +557,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     stopScreenControl,
     sendScreenControlEvent,
     sendMessage,
+    toggleHold,
   } = useVideoCall();
   const { user } = useAuth();
 
@@ -379,9 +565,23 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showGifPicker, setShowGifPicker] = useState(false);
   const [chatTextSize, setChatTextSize] = useState<"sm" | "md" | "lg">("md");
+  const [emojiMode, setEmojiMode] = useState<"2d" | "3d">("2d");
+  const [emojiCategoryId, setEmojiCategoryId] = useState(EMOJI_CATEGORIES[0]?.id || "smileys");
+  const [emoji3dCategoryId, setEmoji3dCategoryId] = useState(
+    EMOJI_3D_CATEGORIES[0]?.id || "celebrate-3d"
+  );
+  const [gifCategoryId, setGifCategoryId] = useState(GIF_CATEGORIES[0]?.id || "trending");
+  const [gifSearch, setGifSearch] = useState("");
+  const [activeReactionMessageId, setActiveReactionMessageId] = useState<string | null>(null);
+  const [messageReactions, setMessageReactions] = useState<
+    Record<string, Record<string, string[]>>
+  >({});
+  const [emoji3dErrors, setEmoji3dErrors] = useState<Record<string, boolean>>({});
   const [showEffectsPanel, setShowEffectsPanel] = useState(false);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [screenViewMode, setScreenViewMode] = useState<"split" | "screen" | "video">("split");
+  const [focusedScreenId, setFocusedScreenId] = useState<string | null>(null);
+  const [focusedVideoId, setFocusedVideoId] = useState<string | null>(null);
   const [isChatVisible, setIsChatVisible] = useState(true);
   const [isScreenBorderless, setIsScreenBorderless] = useState(false);
   const [fullscreenTargetId, setFullscreenTargetId] = useState<string | null>(null);
@@ -397,10 +597,13 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const [audioInputError, setAudioInputError] = useState<string | null>(null);
   const [videoInputs, setVideoInputs] = useState<MediaDeviceInfo[]>([]);
   const [videoInputError, setVideoInputError] = useState<string | null>(null);
+  const [gifGridWidth, setGifGridWidth] = useState(0);
   const [popoutContainer, setPopoutContainer] = useState<HTMLDivElement | null>(null);
+  const gifGridRef = useRef<HTMLDivElement | null>(null);
   const ringtoneRef = useRef<{ audio: HTMLAudioElement | null }>({
     audio: null,
   });
+  const holdAudioRef = useRef<HTMLAudioElement | null>(null);
   const ringbackRef = useRef<{ ctx: AudioContext | null; timer: number | null }>({
     ctx: null,
     timer: null,
@@ -498,6 +701,21 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     };
   }, [isPopout]);
 
+  useEffect(() => {
+    if (!showGifPicker) return;
+    const node = gifGridRef.current;
+    if (!node) return;
+    const updateWidth = () => {
+      const nextWidth = node.clientWidth || node.offsetWidth;
+      if (nextWidth) setGifGridWidth(nextWidth);
+    };
+    updateWidth();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => updateWidth());
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [showGifPicker]);
+
   const remoteList = useMemo(
     () => Object.values(remoteParticipants),
     [remoteParticipants]
@@ -557,6 +775,39 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     },
     [resolveParticipantLabel, user?.id]
   );
+  const giphyApiKey = String(import.meta.env.VITE_GIPHY_API_KEY || "");
+  const giphyFetch = useMemo(
+    () => (giphyApiKey ? new GiphyFetch(giphyApiKey) : null),
+    [giphyApiKey]
+  );
+  const canUseGiphy = Boolean(giphyFetch);
+  const currentUserKey = user?.id ? `user-${user.id}` : "me";
+  const activeEmojiCategory =
+    EMOJI_CATEGORIES.find((category) => category.id === emojiCategoryId) ||
+    EMOJI_CATEGORIES[0];
+  const activeEmoji3dCategory =
+    EMOJI_3D_CATEGORIES.find((category) => category.id === emoji3dCategoryId) ||
+    EMOJI_3D_CATEGORIES[0];
+  const activeGifCategory =
+    GIF_CATEGORIES.find((category) => category.id === gifCategoryId) ||
+    GIF_CATEGORIES[0];
+  const gifQuery = useMemo(() => {
+    const trimmed = gifSearch.trim();
+    if (trimmed) return trimmed;
+    if (activeGifCategory.id !== "trending") {
+      return activeGifCategory.query || activeGifCategory.label;
+    }
+    return "";
+  }, [activeGifCategory, gifSearch]);
+  const gifGridKey = useMemo(
+    () => `${activeGifCategory.id}-${gifQuery || "trending"}`,
+    [activeGifCategory.id, gifQuery]
+  );
+  const gifGridColumns = useMemo(() => {
+    if (gifGridWidth >= 420) return 3;
+    if (gifGridWidth >= 280) return 2;
+    return 1;
+  }, [gifGridWidth]);
   const incomingHostName = useMemo(() => {
     if (!incomingCall) return "Caller";
     return resolveParticipantLabel({
@@ -605,19 +856,47 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     return entries;
   }, [localScreenStream, remoteParticipants, remoteScreenStreams, resolveParticipantLabel]);
 
+  const getScreenFocusKey = useCallback(
+    (entry: { id: string; socketId?: string; isLocal: boolean }) =>
+      entry.isLocal ? "local" : entry.socketId || entry.id,
+    []
+  );
+
   const hasScreenShares = screenShareEntries.length > 0;
   const effectiveViewMode = hasScreenShares ? screenViewMode : "video";
   const showScreenTiles = effectiveViewMode !== "video";
   const showVideoTiles = effectiveViewMode !== "screen";
-  const primaryVideoSocketId = remoteList[0]?.socketId || "local";
+  const focusedScreenKey = effectiveViewMode === "screen" ? focusedScreenId : null;
+  const focusedVideoKey = effectiveViewMode === "video" ? focusedVideoId : null;
+  const visibleScreenShareEntries = useMemo(() => {
+    if (!focusedScreenKey) return screenShareEntries;
+    return screenShareEntries.filter(
+      (entry) => getScreenFocusKey(entry) === focusedScreenKey
+    );
+  }, [focusedScreenKey, getScreenFocusKey, screenShareEntries]);
+  const focusedRemoteMissing = Boolean(
+    focusedVideoKey &&
+      focusedVideoKey !== "local" &&
+      !remoteParticipants[focusedVideoKey]
+  );
+  const visibleVideoParticipants = useMemo(() => {
+    if (!focusedVideoKey || focusedRemoteMissing) return remoteList;
+    if (focusedVideoKey === "local") return [];
+    const participant = remoteParticipants[focusedVideoKey];
+    return participant ? [participant] : [];
+  }, [focusedRemoteMissing, focusedVideoKey, remoteList, remoteParticipants]);
+  const showLocalVideo =
+    !focusedVideoKey || focusedVideoKey === "local" || focusedRemoteMissing;
+  const isLocalFocused = focusedVideoKey === "local";
+  const primaryVideoSocketId = focusedVideoKey || remoteList[0]?.socketId || "local";
   const isLocalPrimary = primaryVideoSocketId === "local";
   const primaryScreenTileId = useMemo(() => {
-    if (!showScreenTiles || screenShareEntries.length === 0) return null;
-    const remoteEntry = screenShareEntries.find((entry) => !entry.isLocal);
-    const entry = remoteEntry || screenShareEntries[0];
+    if (!showScreenTiles || visibleScreenShareEntries.length === 0) return null;
+    const remoteEntry = visibleScreenShareEntries.find((entry) => !entry.isLocal);
+    const entry = remoteEntry || visibleScreenShareEntries[0];
     if (!entry) return null;
     return entry.isLocal ? "screen-local" : `screen-${entry.socketId || entry.id}`;
-  }, [screenShareEntries, showScreenTiles]);
+  }, [showScreenTiles, visibleScreenShareEntries]);
   const gridClassName = `video-call-grid${
     effectiveViewMode === "screen"
       ? " is-screen-only"
@@ -632,6 +911,47 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     }
     prevHasScreenSharesRef.current = hasScreenShares;
   }, [hasScreenShares, screenViewMode]);
+
+  useEffect(() => {
+    if (screenViewMode === "split") {
+      setFocusedScreenId(null);
+      setFocusedVideoId(null);
+    }
+  }, [screenViewMode]);
+
+  useEffect(() => {
+    if (!focusedScreenId) return;
+    const exists = screenShareEntries.some(
+      (entry) => getScreenFocusKey(entry) === focusedScreenId
+    );
+    if (!exists) {
+      setFocusedScreenId(null);
+    }
+  }, [focusedScreenId, getScreenFocusKey, screenShareEntries]);
+
+  useEffect(() => {
+    if (!focusedVideoId) return;
+    if (focusedVideoId === "local") return;
+    if (!remoteParticipants[focusedVideoId]) {
+      setFocusedVideoId(null);
+    }
+  }, [focusedVideoId, remoteParticipants]);
+
+  const toggleScreenFocus = useCallback(
+    (entry: { id: string; socketId?: string; isLocal: boolean }) => {
+      const key = getScreenFocusKey(entry);
+      setScreenViewMode("screen");
+      setFocusedVideoId(null);
+      setFocusedScreenId((prev) => (prev === key ? null : key));
+    },
+    [getScreenFocusKey]
+  );
+
+  const toggleVideoFocus = useCallback((targetId: string) => {
+    setScreenViewMode("video");
+    setFocusedScreenId(null);
+    setFocusedVideoId((prev) => (prev === targetId ? null : targetId));
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.matchMedia) return;
@@ -800,6 +1120,13 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
       }) as CSSProperties,
     [chatFontSize]
   );
+  const orderedMessages = useMemo(
+    () =>
+      [...messages].sort(
+        (a, b) => new Date(b.at).getTime() - new Date(a.at).getTime()
+      ),
+    [messages]
+  );
 
   const totalParticipants = 1 + remoteList.length;
   const maxInvitees = maxParticipants - 1;
@@ -835,14 +1162,77 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     setShowEmojiPicker(false);
   };
 
+  const handleAnimatedEmojiPick = (item: Emoji3dItem) => {
+    sendMessage(item.url, "gif", item.url);
+    setShowEmojiPicker(false);
+  };
+
   const handleGifPick = (gifUrl: string) => {
     sendMessage(gifUrl, "gif", gifUrl);
     setShowGifPicker(false);
   };
 
-  const handleReaction = (emoji: string) => {
-    sendMessage(emoji, "emoji");
-  };
+  const toggleMessageReaction = useCallback(
+    (messageId: string, emoji: string) => {
+      setMessageReactions((prev) => {
+        const messageMap = { ...(prev[messageId] || {}) };
+        const existing = new Set(messageMap[emoji] || []);
+        if (existing.has(currentUserKey)) {
+          existing.delete(currentUserKey);
+        } else {
+          existing.add(currentUserKey);
+        }
+        if (existing.size === 0) {
+          delete messageMap[emoji];
+        } else {
+          messageMap[emoji] = Array.from(existing);
+        }
+        return { ...prev, [messageId]: messageMap };
+      });
+    },
+    [currentUserKey]
+  );
+
+  const openReactionPicker = useCallback((messageId: string) => {
+    setActiveReactionMessageId((prev) => (prev === messageId ? null : messageId));
+  }, []);
+
+  const fetchGifs = useCallback(
+    (offset: number) => {
+      const params = { offset, limit: 18, rating: "pg-13" as const };
+      if (!giphyFetch) {
+        return Promise.resolve({
+          data: [],
+          pagination: { total_count: 0, count: 0, offset },
+          meta: { status: 200, msg: "OK", response_id: "" },
+        });
+      }
+      if (gifQuery) {
+        return giphyFetch.search(gifQuery, params);
+      }
+      return giphyFetch.trending(params);
+    },
+    [giphyFetch, gifQuery]
+  );
+
+  const handleToggleScreenShare = useCallback(() => {
+    if (isScreenSharing) {
+      stopScreenShare();
+      return;
+    }
+    if (isPopout && popoutWindowRef.current) {
+      try {
+        popoutWindowRef.current.focus();
+      } catch {
+        // ignore focus errors
+      }
+      void startScreenShare({
+        mediaDevices: popoutWindowRef.current.navigator?.mediaDevices,
+      });
+      return;
+    }
+    void startScreenShare();
+  }, [isPopout, isScreenSharing, startScreenShare, stopScreenShare]);
 
   const getScreenZoom = useCallback(
     (targetId: string) => screenZoomLevels[targetId] ?? 1,
@@ -1153,12 +1543,176 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     return () => stopRingback();
   }, [hasRemoteMedia, status]);
 
+  useEffect(() => {
+    const audio = holdAudioRef.current ?? new Audio(holdMusicUrl);
+    audio.loop = true;
+    audio.volume = 0.45;
+    holdAudioRef.current = audio;
+    if (!showCallUi || !isOnHold) {
+      audio.pause();
+      audio.currentTime = 0;
+      return;
+    }
+    audio.play().catch(() => undefined);
+    return () => {
+      audio.pause();
+      audio.currentTime = 0;
+    };
+  }, [isOnHold, showCallUi]);
+
   if (!showModal) return null;
 
   const modalContent = (
     <div className={overlayClassName}>
       <div className={modalClassName}>
         <div className="video-call-main">
+          {showCallUi && (
+            <div className="video-call-controls-top">
+              <div className="video-call-controls-group">
+                <button
+                  type="button"
+                  className={`video-control video-control-icon${
+                    isAudioEnabled ? "" : " is-off"
+                  }`}
+                  onClick={toggleAudio}
+                  data-hint={isAudioEnabled ? "Mic on" : "Mic off"}
+                  aria-label={isAudioEnabled ? "Mic on" : "Mic off"}
+                  title={isAudioEnabled ? "Mic on" : "Mic off"}
+                >
+                  <i
+                    className={`fa-solid ${
+                      isAudioEnabled ? "fa-microphone" : "fa-microphone-slash"
+                    }`}
+                    aria-hidden="true"
+                  />
+                </button>
+                {showMicSelector && (
+                  <label className="video-control-select is-compact">
+                    <span className="sr-only">Microphone</span>
+                    <select
+                      value={micSelectionValue}
+                      onChange={(e) => void setAudioInputDevice(e.target.value)}
+                      title="Select microphone"
+                    >
+                      <option value="default">Default mic</option>
+                      {audioInputs.map((device, index) => (
+                        <option key={device.deviceId || String(index)} value={device.deviceId}>
+                          {device.label || `Microphone ${index + 1}`}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <button
+                  type="button"
+                  className={`video-control video-control-icon${
+                    isVideoEnabled ? "" : " is-off"
+                  }`}
+                  onClick={toggleVideo}
+                  data-hint={isVideoEnabled ? "Cam on" : "Cam off"}
+                  aria-label={isVideoEnabled ? "Cam on" : "Cam off"}
+                  title={isVideoEnabled ? "Cam on" : "Cam off"}
+                >
+                  <i
+                    className={`fa-solid ${isVideoEnabled ? "fa-video" : "fa-video-slash"}`}
+                    aria-hidden="true"
+                  />
+                </button>
+                {showCameraSelector && (
+                  <label className="video-control-select is-compact">
+                    <span className="sr-only">Camera</span>
+                    <select
+                      value={cameraSelectionValue}
+                      onChange={(e) => void setVideoInputDevice(e.target.value)}
+                      title="Select camera"
+                    >
+                      <option value="default">Default camera</option>
+                      {videoInputs.map((device, index) => (
+                        <option key={device.deviceId || String(index)} value={device.deviceId}>
+                          {device.label || `Camera ${index + 1}`}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <button
+                  type="button"
+                  className={`video-control video-control-icon${
+                    isScreenSharing ? " is-active" : ""
+                  }`}
+                  onClick={handleToggleScreenShare}
+                  data-hint={isScreenSharing ? "Stop share" : "Share screen"}
+                  aria-label={isScreenSharing ? "Stop share" : "Share screen"}
+                  title={isScreenSharing ? "Stop share" : "Share screen"}
+                >
+                  <i
+                    className={`fa-solid ${isScreenSharing ? "fa-stop" : "fa-desktop"}`}
+                    aria-hidden="true"
+                  />
+                </button>
+                <button
+                  type="button"
+                  className={`video-control video-control-icon ghost${
+                    isHolding ? " is-active" : ""
+                  }`}
+                  onClick={toggleHold}
+                  data-hint={isHolding ? "Resume call" : "Hold call"}
+                  aria-label={isHolding ? "Resume call" : "Hold call"}
+                  title={isHolding ? "Resume call" : "Hold call"}
+                >
+                  <i
+                    className={`fa-solid ${isHolding ? "fa-play" : "fa-pause"}`}
+                    aria-hidden="true"
+                  />
+                </button>
+                <button
+                  type="button"
+                  className={`video-control video-control-icon ghost${
+                    showEffectsPanel ? " is-active" : ""
+                  }`}
+                  onClick={() => setShowEffectsPanel((prev) => !prev)}
+                  aria-pressed={showEffectsPanel}
+                  data-hint="Effects"
+                  aria-label="Effects"
+                  title="Effects"
+                >
+                  <i className="fa-solid fa-sliders" aria-hidden="true" />
+                </button>
+              </div>
+              <div className="video-call-controls-group">
+                <button
+                  type="button"
+                  className="video-control video-control-icon ghost"
+                  onClick={leaveCall}
+                  data-hint="Leave call"
+                  aria-label="Leave call"
+                  title="Leave call"
+                >
+                  <i className="fa-solid fa-right-from-bracket" aria-hidden="true" />
+                </button>
+                {isCallHost && (
+                  <button
+                    type="button"
+                    className="video-control video-control-icon end"
+                    onClick={() => {
+                      void playEndCallTone();
+                      endCall();
+                    }}
+                    data-hint="End call"
+                    aria-label="End call"
+                    title="End call"
+                  >
+                    <i className="fa-solid fa-phone-slash" aria-hidden="true" />
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+          {(audioInputError || videoInputError) && (
+            <div className="video-control-status">
+              {audioInputError || videoInputError}
+            </div>
+          )}
           <div className="video-call-header">
             <div>
               <p className="video-call-eyebrow">
@@ -1438,13 +1992,27 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                 </div>
               )}
               <div className={gridClassName} ref={gridRef}>
+                {isOnHold && (
+                  <div className="video-call-hold-overlay">
+                    <div className="video-call-hold-card">
+                      <p className="video-call-hold-title">Call on hold</p>
+                      <p className="video-call-hold-sub">
+                        {isHolding
+                          ? "You placed the call on hold. Resume when you're ready."
+                          : "You're on hold. We'll reconnect you shortly."}
+                      </p>
+                    </div>
+                  </div>
+                )}
                 {showScreenTiles &&
-                  screenShareEntries.map((entry) => {
+                  visibleScreenShareEntries.map((entry) => {
                     const tileId = entry.isLocal
                       ? "screen-local"
                       : `screen-${entry.socketId || entry.id}`;
                     const isFullscreen = fullscreenTargetId === tileId;
                     const isPrimary = tileId === primaryScreenTileId;
+                    const screenFocusKey = getScreenFocusKey(entry);
+                    const isScreenFocused = focusedScreenKey === screenFocusKey;
                     const zoomKey = entry.isLocal
                       ? "local"
                       : entry.socketId || entry.id || "";
@@ -1507,6 +2075,16 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                               onClick={() => toggleFullscreen(tileId)}
                             >
                               {isFullscreen ? "Exit full screen" : "Full screen"}
+                            </button>
+                            <button
+                              type="button"
+                              className={`screen-share-control${
+                                isScreenFocused ? " is-active" : ""
+                              }`}
+                              onClick={() => toggleScreenFocus(entry)}
+                              aria-pressed={isScreenFocused}
+                            >
+                              {isScreenFocused ? "Show all" : "Focus"}
                             </button>
                             <div className="screen-share-zoom">
                               <button
@@ -1649,6 +2227,16 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                           >
                             {isFullscreen ? "Exit full screen" : "Full screen"}
                           </button>
+                          <button
+                            type="button"
+                            className={`screen-share-control${
+                              isScreenFocused ? " is-active" : ""
+                            }`}
+                            onClick={() => toggleScreenFocus(entry)}
+                            aria-pressed={isScreenFocused}
+                          >
+                            {isScreenFocused ? "Show all" : "Focus"}
+                          </button>
                           <div className="screen-share-zoom">
                             <button
                               type="button"
@@ -1716,40 +2304,71 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                 )}
                 {showVideoTiles && (
                   <>
-                    <VideoTile
-                      stream={localStream}
-                      label="You"
-                      muted
-                      status={!localStream ? "Camera off" : isVideoEnabled ? "" : "Camera off"}
-                      className={`is-local is-self-video${
-                        isLocalPrimary ? " is-primary" : ""
-                      }${!isLocalPrimary && isMobileLayout ? " is-draggable" : ""}${
-                        isPipDragging ? " is-dragging" : ""
-                      }${localEffectClass ? ` ${localEffectClass}` : ""}`}
-                      style={pipStyle}
-                      onPointerDown={handlePipPointerDown}
-                      onPointerMove={handlePipPointerMove}
-                      onPointerUp={handlePipPointerUp}
-                      onPointerLeave={handlePipPointerUp}
-                    />
-                    {remoteList.map((participant) => (
+                    {showLocalVideo && (
                       <VideoTile
-                        key={participant.socketId}
-                        stream={remoteStreams[participant.socketId] || null}
-                        label={resolveParticipantLabel({
-                          userId: participant.userId,
-                          displayName: participant.displayName,
-                          handle: participant.handle,
-                        })}
-                        avatarUrl={participant.avatarUrl}
-                        status={
-                          remoteStreams[participant.socketId] ? "" : "Waiting for video"
-                        }
-                        className={
-                          participant.socketId === primaryVideoSocketId ? "is-primary" : undefined
-                        }
-                      />
-                    ))}
+                        stream={localStream}
+                        label="You"
+                        muted
+                        status={!localStream ? "Camera off" : isVideoEnabled ? "" : "Camera off"}
+                        className={`is-local is-self-video${
+                          isLocalPrimary ? " is-primary" : ""
+                        }${!isLocalPrimary && isMobileLayout ? " is-draggable" : ""}${
+                          isPipDragging ? " is-dragging" : ""
+                        }${localEffectClass ? ` ${localEffectClass}` : ""}`}
+                        style={pipStyle}
+                        onPointerDown={handlePipPointerDown}
+                        onPointerMove={handlePipPointerMove}
+                        onPointerUp={handlePipPointerUp}
+                        onPointerLeave={handlePipPointerUp}
+                      >
+                        <div className="video-tile__actions">
+                          <button
+                            type="button"
+                            className={`video-tile-focus${
+                              isLocalFocused ? " is-active" : ""
+                            }`}
+                            onClick={() => toggleVideoFocus("local")}
+                            aria-pressed={isLocalFocused}
+                          >
+                            {isLocalFocused ? "Show all" : "Focus"}
+                          </button>
+                        </div>
+                      </VideoTile>
+                    )}
+                    {visibleVideoParticipants.map((participant) => {
+                      const isFocused = focusedVideoKey === participant.socketId;
+                      return (
+                        <VideoTile
+                          key={participant.socketId}
+                          stream={remoteStreams[participant.socketId] || null}
+                          label={resolveParticipantLabel({
+                            userId: participant.userId,
+                            displayName: participant.displayName,
+                            handle: participant.handle,
+                          })}
+                          avatarUrl={participant.avatarUrl}
+                          status={
+                            remoteStreams[participant.socketId] ? "" : "Waiting for video"
+                          }
+                          className={
+                            participant.socketId === primaryVideoSocketId ? "is-primary" : undefined
+                          }
+                        >
+                          <div className="video-tile__actions">
+                            <button
+                              type="button"
+                              className={`video-tile-focus${
+                                isFocused ? " is-active" : ""
+                              }`}
+                              onClick={() => toggleVideoFocus(participant.socketId)}
+                              aria-pressed={isFocused}
+                            >
+                              {isFocused ? "Show all" : "Focus"}
+                            </button>
+                          </div>
+                        </VideoTile>
+                      );
+                    })}
                     {status === "connecting" && remoteList.length === 0 && (
                       <div className="video-tile is-skeleton">
                         <div className="video-tile__placeholder">
@@ -1848,91 +2467,6 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   </div>
                 </div>
               )}
-              <div className="video-call-controls">
-                <button
-                  type="button"
-                  className={`video-control${isAudioEnabled ? "" : " is-off"}`}
-                  onClick={toggleAudio}
-                >
-                  {isAudioEnabled ? "Mic on" : "Mic off"}
-                </button>
-                {showMicSelector && (
-                  <label className="video-control-select">
-                    <span className="sr-only">Microphone</span>
-                    <select
-                      value={micSelectionValue}
-                      onChange={(e) => void setAudioInputDevice(e.target.value)}
-                    >
-                      <option value="default">Default mic</option>
-                      {audioInputs.map((device, index) => (
-                        <option key={device.deviceId || String(index)} value={device.deviceId}>
-                          {device.label || `Microphone ${index + 1}`}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-                <button
-                  type="button"
-                  className={`video-control${isVideoEnabled ? "" : " is-off"}`}
-                  onClick={toggleVideo}
-                >
-                  {isVideoEnabled ? "Cam on" : "Cam off"}
-                </button>
-                {showCameraSelector && (
-                  <label className="video-control-select">
-                    <span className="sr-only">Camera</span>
-                    <select
-                      value={cameraSelectionValue}
-                      onChange={(e) => void setVideoInputDevice(e.target.value)}
-                    >
-                      <option value="default">Default camera</option>
-                      {videoInputs.map((device, index) => (
-                        <option key={device.deviceId || String(index)} value={device.deviceId}>
-                          {device.label || `Camera ${index + 1}`}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-                <button
-                  type="button"
-                  className={`video-control${isScreenSharing ? " is-active" : ""}`}
-                  onClick={() =>
-                    isScreenSharing ? stopScreenShare() : void startScreenShare()
-                  }
-                >
-                  {isScreenSharing ? "Stop share" : "Share screen"}
-                </button>
-                <button
-                  type="button"
-                  className={`video-control ghost${showEffectsPanel ? " is-active" : ""}`}
-                  onClick={() => setShowEffectsPanel((prev) => !prev)}
-                  aria-pressed={showEffectsPanel}
-                >
-                  Effects
-                </button>
-                <button type="button" className="video-control ghost" onClick={leaveCall}>
-                  Leave call
-                </button>
-                {isCallHost && (
-                  <button
-                    type="button"
-                    className="video-control end"
-                    onClick={() => {
-                      void playEndCallTone();
-                      endCall();
-                    }}
-                  >
-                    End call
-                  </button>
-                )}
-              </div>
-              {(audioInputError || videoInputError) && (
-                <div className="video-control-status">
-                  {audioInputError || videoInputError}
-                </div>
-              )}
             </>
           )}
         </div>
@@ -1964,35 +2498,91 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
             {messages.length === 0 ? (
               <p className="status">Messages appear here during the call.</p>
             ) : (
-              messages.map((message) => (
-                <div
-                  key={message.id}
-                  className={`video-chat-message${message.kind === "emoji" ? " is-emoji" : ""}${
-                    message.kind === "gif" ? " is-gif" : ""
-                  }`}
-                >
-                  <div className="video-chat-meta">
-                    <span>{resolveMessageName(message)}</span>
-                    <span>
-                      {new Date(message.at).toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </span>
-                  </div>
+              orderedMessages.map((message) => {
+                const reactionMap = messageReactions[message.id] || {};
+                const reactionEntries = Object.entries(reactionMap);
+                const isPickerOpen = activeReactionMessageId === message.id;
+                return (
                   <div
-                    className={`video-chat-body${
-                      message.kind === "emoji" ? " is-emoji" : ""
+                    key={message.id}
+                    className={`video-chat-message${message.kind === "emoji" ? " is-emoji" : ""}${
+                      message.kind === "gif" ? " is-gif" : ""
                     }`}
                   >
-                    {message.kind === "gif" && message.gifUrl ? (
-                      <img src={message.gifUrl} alt="GIF" loading="lazy" />
-                    ) : (
-                      <span>{formatMessage(message)}</span>
+                    <div className="video-chat-meta">
+                      <span>{resolveMessageName(message)}</span>
+                      <span>
+                        {new Date(message.at).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </span>
+                    </div>
+                    <div
+                      className={`video-chat-body${
+                        message.kind === "emoji" ? " is-emoji" : ""
+                      }`}
+                    >
+                      {message.kind === "gif" && message.gifUrl ? (
+                        <img src={message.gifUrl} alt="GIF" loading="lazy" />
+                      ) : (
+                        <span>{formatMessage(message)}</span>
+                      )}
+                    </div>
+                    <div className="video-chat-reaction-row">
+                      {reactionEntries.map(([emoji, users]) => {
+                        const userList = Array.isArray(users) ? users : [];
+                        const isActive = userList.includes(currentUserKey);
+                        return (
+                          <button
+                            key={`${message.id}-${emoji}`}
+                            type="button"
+                            className={`video-chat-reaction-chip${
+                              isActive ? " is-active" : ""
+                            }`}
+                            onClick={() => toggleMessageReaction(message.id, emoji)}
+                            aria-pressed={isActive}
+                          >
+                            <span className="video-chat-reaction-symbol">{emoji}</span>
+                            <span className="video-chat-reaction-count">{userList.length}</span>
+                          </button>
+                        );
+                      })}
+                      {showCallUi && (
+                        <button
+                          type="button"
+                          className={`video-chat-reaction-add${
+                            isPickerOpen ? " is-active" : ""
+                          }`}
+                          onClick={() => openReactionPicker(message.id)}
+                          aria-pressed={isPickerOpen}
+                          aria-label="Add reaction"
+                        >
+                          <i className="fa-regular fa-face-smile" aria-hidden="true" />
+                        </button>
+                      )}
+                    </div>
+                    {isPickerOpen && (
+                      <div className="video-chat-reaction-picker">
+                        {REACTION_EMOJIS.map((emoji) => (
+                          <button
+                            key={`${message.id}-pick-${emoji}`}
+                            type="button"
+                            className="video-chat-reaction-emoji"
+                            onClick={() => {
+                              toggleMessageReaction(message.id, emoji);
+                              setActiveReactionMessageId(null);
+                            }}
+                            aria-label={`React with ${emoji}`}
+                          >
+                            {emoji}
+                          </button>
+                        ))}
+                      </div>
                     )}
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
           <div className="video-chat-input">
@@ -2006,7 +2596,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                 }}
                 aria-label="Pick emoji"
               >
-                {"\u{1F603}"}
+                <i className="fa-solid fa-face-smile" aria-hidden="true" />
               </button>
               <button
                 type="button"
@@ -2034,46 +2624,177 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                 </select>
               </label>
             </div>
-            <div className="video-chat-reactions">
-              {REACTION_EMOJIS.map((emoji) => (
-                <button
-                  key={emoji}
-                  type="button"
-                  className="video-chat-reaction"
-                  onClick={() => handleReaction(emoji)}
-                  aria-label={`React with ${emoji}`}
-                  disabled={!showCallUi}
-                >
-                  {emoji}
-                </button>
-              ))}
-            </div>
             {showEmojiPicker && (
               <div className="video-chat-picker">
-                {EMOJIS.map((emoji) => (
+                <div className="video-chat-picker-tabs">
                   <button
-                    key={emoji}
                     type="button"
-                    className="video-chat-emoji"
-                    onClick={() => handleEmojiPick(emoji)}
+                    className={`video-chat-picker-tab${
+                      emojiMode === "2d" ? " is-active" : ""
+                    }`}
+                    onClick={() => setEmojiMode("2d")}
                   >
-                    {emoji}
+                    2D emojis
                   </button>
-                ))}
+                  <button
+                    type="button"
+                    className={`video-chat-picker-tab${
+                      emojiMode === "3d" ? " is-active" : ""
+                    }`}
+                    onClick={() => setEmojiMode("3d")}
+                  >
+                    3D emojis
+                  </button>
+                </div>
+                <div className="video-chat-picker-categories">
+                  {emojiMode === "2d"
+                    ? EMOJI_CATEGORIES.map((category) => (
+                        <button
+                          key={category.id}
+                          type="button"
+                          className={`video-chat-picker-category${
+                            category.id === activeEmojiCategory.id ? " is-active" : ""
+                          }`}
+                          onClick={() => setEmojiCategoryId(category.id)}
+                        >
+                          {category.label}
+                        </button>
+                      ))
+                    : EMOJI_3D_CATEGORIES.map((category) => (
+                        <button
+                          key={category.id}
+                          type="button"
+                          className={`video-chat-picker-category${
+                            category.id === activeEmoji3dCategory.id ? " is-active" : ""
+                          }`}
+                          onClick={() => setEmoji3dCategoryId(category.id)}
+                        >
+                          {category.label}
+                        </button>
+                      ))}
+                </div>
+                <div
+                  className={`video-chat-picker-grid${
+                    emojiMode === "3d" ? " is-3d" : ""
+                  }`}
+                >
+                  {emojiMode === "2d"
+                    ? activeEmojiCategory.emojis.map((emoji) => (
+                        <button
+                          key={`${activeEmojiCategory.id}-${emoji}`}
+                          type="button"
+                          className="video-chat-emoji"
+                          onClick={() => handleEmojiPick(emoji)}
+                        >
+                          {emoji}
+                        </button>
+                      ))
+                    : activeEmoji3dCategory.items.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className="video-chat-emoji is-3d"
+                          onClick={() => handleAnimatedEmojiPick(item)}
+                          aria-label={item.label}
+                        >
+                          {emoji3dErrors[item.id] ? (
+                            <span className="video-chat-emoji-fallback">
+                              {item.fallback}
+                            </span>
+                          ) : (
+                            <img
+                              src={item.url}
+                              alt={item.label}
+                              loading="lazy"
+                              onError={() =>
+                                setEmoji3dErrors((prev) => ({ ...prev, [item.id]: true }))
+                              }
+                            />
+                          )}
+                          <span className="video-chat-emoji-label">{item.label}</span>
+                        </button>
+                      ))}
+                </div>
               </div>
             )}
             {showGifPicker && (
               <div className="video-chat-picker is-gif">
-                {GIFS.map((gif) => (
-                  <button
-                    key={gif.url}
-                    type="button"
-                    className="video-chat-gif"
-                    onClick={() => handleGifPick(gif.url)}
-                  >
-                    <img src={gif.url} alt={gif.label} loading="lazy" />
-                  </button>
-                ))}
+                <div className="video-chat-gif-toolbar">
+                  <div className="video-chat-gif-search">
+                    <i className="fa-solid fa-magnifying-glass" aria-hidden="true" />
+                    <input
+                      type="search"
+                      value={gifSearch}
+                      onChange={(event) => setGifSearch(event.target.value)}
+                      placeholder="Search GIFs"
+                      aria-label="Search GIFs"
+                    />
+                    {gifSearch && (
+                      <button
+                        type="button"
+                        className="video-chat-gif-clear"
+                        onClick={() => setGifSearch("")}
+                        aria-label="Clear GIF search"
+                      >
+                        <i className="fa-solid fa-xmark" aria-hidden="true" />
+                      </button>
+                    )}
+                  </div>
+                  <div className="video-chat-gif-categories">
+                    {GIF_CATEGORIES.map((category) => (
+                      <button
+                        key={category.id}
+                        type="button"
+                        className={`video-chat-gif-category${
+                          category.id === activeGifCategory.id ? " is-active" : ""
+                        }`}
+                        onClick={() => {
+                          setGifCategoryId(category.id);
+                          setGifSearch("");
+                        }}
+                      >
+                        {category.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {!canUseGiphy && (
+                  <p className="video-chat-picker-note is-error">
+                    Add VITE_GIPHY_API_KEY to load the full GIF library.
+                  </p>
+                )}
+                <div className="video-chat-gif-grid" ref={gifGridRef}>
+                  {canUseGiphy ? (
+                    gifGridWidth > 0 && (
+                      <Grid
+                        key={gifGridKey}
+                        width={gifGridWidth}
+                        columns={gifGridColumns}
+                        gutter={8}
+                        fetchGifs={fetchGifs}
+                        onGifClick={(gif, event) => {
+                          event.preventDefault();
+                          const gifUrl =
+                            gif.images?.original?.url ||
+                            gif.images?.fixed_width?.url ||
+                            gif.images?.downsized?.url;
+                          if (gifUrl) handleGifPick(gifUrl);
+                        }}
+                      />
+                    )
+                  ) : (
+                    GIFS.map((gif) => (
+                      <button
+                        key={gif.url}
+                        type="button"
+                        className="video-chat-gif"
+                        onClick={() => handleGifPick(gif.url)}
+                      >
+                        <img src={gif.url} alt={gif.label} loading="lazy" />
+                      </button>
+                    ))
+                  )}
+                </div>
               </div>
             )}
             <div className="video-chat-compose">
