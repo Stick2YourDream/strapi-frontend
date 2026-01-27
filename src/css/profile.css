@@ -13,7 +13,7 @@
   position: relative;
   overflow: visible;
   isolation: isolate;
-  z-index: 20;
+  z-index: 8;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   align-items: center;
