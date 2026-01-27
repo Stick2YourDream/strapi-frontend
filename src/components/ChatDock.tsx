@@ -47,21 +47,6 @@ const getDisplayName = (handle?: string, firstName?: string, lastName?: string) 
   return name || (handle ? `@${handle}` : "Friend");
 };
 
-type ChatSizePreset = {
-  id: "small" | "medium" | "large" | "xlarge" | "fullscreen";
-  label: string;
-  width?: number;
-  height?: number;
-};
-
-const CHAT_SIZE_PRESETS: ChatSizePreset[] = [
-  { id: "small", label: "Small", width: 400, height: 520 },
-  { id: "medium", label: "Medium", width: 500, height: 680 },
-  { id: "large", label: "Large", width: 570, height: 720 },
-  { id: "xlarge", label: "Extra Large", width: 650, height: 800 },
-  { id: "fullscreen", label: "Full" },
-];
-
 export default function ChatDock() {
   const location = useLocation();
   const { user } = useAuth();
@@ -386,20 +371,6 @@ export default function ChatDock() {
     });
   }, [activeFriend?.userId, chatLogs, fetchPreviewMeta]);
 
-  const activeSizeId = useMemo(() => {
-    const match = CHAT_SIZE_PRESETS.find(
-      (preset) => preset.width === chatPrefs.width && preset.height === chatPrefs.height
-    );
-    if (match) return match.id;
-    if (isMobile || typeof window === "undefined") return null;
-    const fullWidth = Math.max(320, window.innerWidth - 36);
-    const fullHeight = Math.max(320, window.innerHeight - 36);
-    if (Math.abs(chatPrefs.width - fullWidth) < 8 && Math.abs(chatPrefs.height - fullHeight) < 8) {
-      return "fullscreen";
-    }
-    return null;
-  }, [chatPrefs.height, chatPrefs.width, isMobile]);
-
   if (!user || hideForRoute) return null;
 
   const friendId = activeFriend?.userId;
@@ -450,23 +421,6 @@ export default function ChatDock() {
     return letters.toUpperCase();
   };
 
-  const handleSizePreset = (preset: ChatSizePreset) => {
-    if (preset.id === "fullscreen") {
-      if (typeof window === "undefined") return;
-      const width = Math.max(320, window.innerWidth - 36);
-      const height = Math.max(320, window.innerHeight - 36);
-      setChatPrefs({ width, height });
-      return;
-    }
-    if (!preset.width || !preset.height) return;
-    setChatPrefs({ width: preset.width, height: preset.height });
-  };
-
-  const handleSizeChange = (value: string) => {
-    const preset = CHAT_SIZE_PRESETS.find((entry) => entry.id === value);
-    if (preset) handleSizePreset(preset);
-  };
-
   const toggleReactionPicker = (messageId: string) => {
     setReactionPickerFor((prev) => (prev === messageId ? null : messageId));
   };
@@ -483,7 +437,18 @@ export default function ChatDock() {
   };
 
   const toggleLabel = popoutMinimized ? "Expand chat" : "Minimize chat";
-  const isFullscreen = activeSizeId === "fullscreen" && !isMobile && !popoutMinimized;
+  const isFullscreen =
+    !isMobile &&
+    !popoutMinimized &&
+    typeof window !== "undefined" &&
+    (() => {
+      const fullWidth = Math.max(320, window.innerWidth - 36);
+      const fullHeight = Math.max(320, window.innerHeight - 36);
+      return (
+        Math.abs(chatPrefs.width - fullWidth) < 8 &&
+        Math.abs(chatPrefs.height - fullHeight) < 8
+      );
+    })();
 
   const popoutStyle = {
     ...(isMobile
@@ -590,13 +555,34 @@ export default function ChatDock() {
           {!popoutMinimized && (
             <>
               <button
-                className="chat-video-launch"
+                className="chat-video-launch chat-action chat-action--video"
                 type="button"
                 onClick={() =>
                   openCallComposer(activeFriend ? [toInvitee(activeFriend)] : [])
                 }
               >
-                Video call
+                <span className="chat-action-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                    <path
+                      d="M4.5 7.25A2.75 2.75 0 0 1 7.25 4.5h6.5a2.75 2.75 0 0 1 2.75 2.75v9.5a2.75 2.75 0 0 1-2.75 2.75h-6.5A2.75 2.75 0 0 1 4.5 16.75v-9.5Z"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                    />
+                    <path
+                      d="m16.5 10.25 3.25-2v7.5l-3.25-2.1"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </span>
+                <span className="chat-action-text">
+                  <span className="chat-action-title">Video Call</span>
+                  <span className="chat-action-help">Start face to face</span>
+                </span>
               </button>
               <SuggestionWidget variant="inline" />
               <div className="chat-font-control">
@@ -612,22 +598,6 @@ export default function ChatDock() {
                 />
                 <span className="chat-font-label large">A</span>
               </div>
-              {!isMobile && (
-                <label className="chat-size-select">
-                  <span className="chat-size-label">ChatBox Size</span>
-                  <select
-                    className="chat-size-dropdown"
-                    value={activeSizeId || "medium"}
-                    onChange={(e) => handleSizeChange(e.target.value)}
-                  >
-                    {CHAT_SIZE_PRESETS.map((preset) => (
-                      <option key={preset.id} value={preset.id}>
-                        {preset.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
             </>
           )}
         </div>

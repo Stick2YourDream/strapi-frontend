@@ -1,12 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import api from "../api/strapi";
-import { ensureProfileKeyShares, type NotificationSettings } from "../utils/profile-e2ee";
+import {
+  decryptFriendProfilePayload,
+  ensureProfileKeyShares,
+  type NotificationSettings,
+  type PrivacySettings,
+  type ProfileVisibility,
+  type VisibilityLevel,
+} from "../utils/profile-e2ee";
 import notificationSoundUrl from "../assets/notificationsoundeffect.mp3";
 import { syncPushSubscription } from "../utils/push-notifications";
 
 type NotificationCounts = {
   messages: number;
   requests: number;
+  birthdays: number;
   friendPosts: number;
   feedbackRequests: number;
   comments: number;
@@ -66,9 +74,18 @@ export type GroupUpdatePreview = {
   createdAt?: string;
 };
 
+export type BirthdayPreview = {
+  id: string;
+  userId: number;
+  handle?: string;
+  displayName: string;
+  birthday: string;
+};
+
 export type NotificationPreviews = {
   messages: MessagePreview | null;
   requests: FriendRequestPreview[];
+  birthdays: BirthdayPreview[];
   friendPosts: FriendPostPreview | null;
   feedbackRequests: FeedbackRequestPreview[];
   comments: CommentPreview | null;
@@ -78,6 +95,7 @@ export type NotificationPreviews = {
 
 const NOTIF_LAST_SEEN_KEY = "notifications_last_seen_v1";
 const NOTIF_LIKE_SNAPSHOT_KEY = "notifications_like_snapshot_v1";
+const NOTIF_BIRTHDAY_SEEN_KEY = "notifications_birthdays_seen_v1";
 const REFRESH_MS = 60000;
 const MAX_PREVIEW_ITEMS = 3;
 let lastPushUserId: number | null = null;
@@ -149,6 +167,110 @@ const setLikeSnapshot = (userId: number, snapshot: Record<string, number>) => {
   localStorage.setItem(NOTIF_LIKE_SNAPSHOT_KEY, JSON.stringify(next));
 };
 
+const getBirthdaySeen = (userId: number) => {
+  if (typeof window === "undefined") return {};
+  const raw = safeParseJson(localStorage.getItem(NOTIF_BIRTHDAY_SEEN_KEY));
+  if (!raw || typeof raw !== "object") return {};
+  const entry = (raw as Record<string, Record<string, string>>)[String(userId)];
+  return entry && typeof entry === "object" ? entry : {};
+};
+
+const setBirthdaySeen = (userId: number, seen: Record<string, string>) => {
+  if (typeof window === "undefined") return;
+  const raw = safeParseJson(localStorage.getItem(NOTIF_BIRTHDAY_SEEN_KEY));
+  const base = raw && typeof raw === "object" ? raw : {};
+  const next = {
+    ...(base as Record<string, Record<string, string>>),
+    [String(userId)]: seen,
+  };
+  localStorage.setItem(NOTIF_BIRTHDAY_SEEN_KEY, JSON.stringify(next));
+};
+
+const DEFAULT_PRIVACY_SETTINGS: Required<PrivacySettings> = {
+  bio: "public",
+  links: "public",
+  location: "public",
+  birthday: "public",
+  followers: "public",
+  following: "public",
+  activity: "public",
+};
+
+const normalizeVisibility = (value: unknown, fallback: VisibilityLevel): VisibilityLevel => {
+  if (value === "public" || value === "followers" || value === "private") return value;
+  return fallback;
+};
+
+const normalizeProfileVisibility = (value: unknown): ProfileVisibility => {
+  if (value === "public" || value === "followers" || value === "private" || value === "custom") {
+    return value;
+  }
+  return "public";
+};
+
+const normalizePrivacySettings = (
+  settings?: PrivacySettings | null
+): Required<PrivacySettings> => ({
+  bio: normalizeVisibility(settings?.bio, DEFAULT_PRIVACY_SETTINGS.bio),
+  links: normalizeVisibility(settings?.links, DEFAULT_PRIVACY_SETTINGS.links),
+  location: normalizeVisibility(settings?.location, DEFAULT_PRIVACY_SETTINGS.location),
+  birthday: normalizeVisibility(settings?.birthday, DEFAULT_PRIVACY_SETTINGS.birthday),
+  followers: normalizeVisibility(settings?.followers, DEFAULT_PRIVACY_SETTINGS.followers),
+  following: normalizeVisibility(settings?.following, DEFAULT_PRIVACY_SETTINGS.following),
+  activity: normalizeVisibility(settings?.activity, DEFAULT_PRIVACY_SETTINGS.activity),
+});
+
+const resolveFieldVisibility = (
+  profileVisibility: ProfileVisibility,
+  privacySettings: PrivacySettings,
+  field: keyof PrivacySettings,
+  fallback: VisibilityLevel
+) => {
+  if (profileVisibility === "custom") {
+    return normalizeVisibility(privacySettings[field], fallback);
+  }
+  return normalizeVisibility(profileVisibility, fallback);
+};
+
+const canView = (audience: "public" | "followers", visibility: VisibilityLevel) => {
+  if (visibility === "public") return true;
+  if (visibility === "followers") return audience === "followers";
+  return false;
+};
+
+const pad2 = (value: number) => String(value).padStart(2, "0");
+
+const getLocalDateKey = (date = new Date()) =>
+  `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+
+const getLocalMonthDayKey = (date = new Date()) =>
+  `${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+
+const normalizeBirthdayDate = (value?: string) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const datePart = raw.split("T")[0];
+  if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return datePart;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return `${parsed.getFullYear()}-${pad2(parsed.getMonth() + 1)}-${pad2(parsed.getDate())}`;
+};
+
+const getBirthdayMonthDayKey = (value?: string) => {
+  const normalized = normalizeBirthdayDate(value);
+  if (!normalized) return "";
+  const [, month, day] = normalized.split("-");
+  return month && day ? `${month}-${day}` : "";
+};
+
+const isBirthdayToday = (value?: string, today = new Date()) => {
+  const birthdayKey = getBirthdayMonthDayKey(value);
+  if (!birthdayKey) return false;
+  return birthdayKey === getLocalMonthDayKey(today);
+};
+
+const getBirthdayToken = (friendId: number, todayKey: string) => `${friendId}:${todayKey}`;
+
 export const useNotifications = (
   userId?: number | null,
   settings?: NotificationSettings
@@ -181,6 +303,7 @@ export const useNotifications = (
   const [counts, setCounts] = useState<NotificationCounts>({
     messages: 0,
     requests: 0,
+    birthdays: 0,
     friendPosts: 0,
     feedbackRequests: 0,
     comments: 0,
@@ -190,6 +313,7 @@ export const useNotifications = (
   const [previews, setPreviews] = useState<NotificationPreviews>(() => ({
     messages: null,
     requests: [],
+    birthdays: [],
     friendPosts: null,
     feedbackRequests: [],
     comments: null,
@@ -200,6 +324,8 @@ export const useNotifications = (
   const lastSeenRef = useRef<string | null>(null);
   const likeSnapshotRef = useRef<Record<string, number> | null>(null);
   const latestLikeSnapshotRef = useRef<Record<string, number>>({});
+  const birthdaySeenRef = useRef<Record<string, string>>({});
+  const birthdayTokensRef = useRef<string[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const initialLoadRef = useRef(true);
   const lastCountsRef = useRef<NotificationCounts | null>(null);
@@ -243,6 +369,7 @@ export const useNotifications = (
       previous !== null &&
       (counts.messages > previous.messages ||
         counts.requests > previous.requests ||
+        counts.birthdays > previous.birthdays ||
         counts.friendPosts > previous.friendPosts ||
         counts.feedbackRequests > previous.feedbackRequests ||
         counts.comments > previous.comments ||
@@ -271,6 +398,7 @@ export const useNotifications = (
       setCounts({
         messages: 0,
         requests: 0,
+        birthdays: 0,
         friendPosts: 0,
         feedbackRequests: 0,
         comments: 0,
@@ -280,6 +408,7 @@ export const useNotifications = (
       setPreviews({
         messages: null,
         requests: [],
+        birthdays: [],
         friendPosts: null,
         feedbackRequests: [],
         comments: null,
@@ -293,6 +422,10 @@ export const useNotifications = (
     setLoading(true);
 
     try {
+      const today = new Date();
+      const todayKey = getLocalDateKey(today);
+      birthdaySeenRef.current = getBirthdaySeen(currentUserId);
+      const birthdaySeen = birthdaySeenRef.current;
       const lastSeenIso = lastSeenRef.current;
       const afterFilter = lastSeenIso
         ? `&filters[createdAt][$gt]=${encodeURIComponent(lastSeenIso)}`
@@ -352,6 +485,84 @@ export const useNotifications = (
         .map((f: any) => (f.requesterId === currentUserId ? f.targetId : f.requesterId))
         .filter(Boolean);
       const favoriteSet = new Set(favoriteFriendIds as number[]);
+
+      let birthdayCount = 0;
+      let birthdayPreviews: BirthdayPreview[] = [];
+      birthdayTokensRef.current = [];
+      if (acceptedFriendIds.length) {
+        const friendFilter = acceptedFriendIds
+          .map((id: number, index: number) => `filters[user][id][$in][${index}]=${id}`)
+          .join("&");
+        const profilesRes = await api
+          .get(
+            `/profiles?${friendFilter}` +
+              `&populate=user&pagination[pageSize]=${acceptedFriendIds.length}`
+          )
+          .catch(() => null);
+        const profileEntries = profilesRes?.data?.data ?? [];
+        const birthdayMatches: BirthdayPreview[] = [];
+        for (const entry of profileEntries) {
+          const attrs = normalize(entry);
+          const friendId = getEntityId(attrs.user);
+          if (!friendId || friendId === currentUserId) continue;
+          const encryptedProfile = String(attrs.encryptedProfile || "");
+          let payload: Record<string, unknown> | null = null;
+          if (encryptedProfile) {
+            try {
+              payload = await decryptFriendProfilePayload(
+                friendId,
+                currentUserId,
+                encryptedProfile
+              );
+            } catch {
+              payload = null;
+            }
+          }
+          const birthdayValue = normalizeBirthdayDate(
+            String(payload?.birthday || attrs.birthday || "")
+          );
+          if (!birthdayValue || !isBirthdayToday(birthdayValue, today)) continue;
+          const profileVisibility = normalizeProfileVisibility(
+            payload?.profileVisibility ?? attrs.profileVisibility
+          );
+          const privacySettings = normalizePrivacySettings(
+            (payload?.privacySettings as PrivacySettings | undefined) ??
+              (attrs.privacySettings as PrivacySettings | undefined)
+          );
+          const birthdayVisibility = resolveFieldVisibility(
+            profileVisibility,
+            privacySettings,
+            "birthday",
+            "public"
+          );
+          if (!canView("followers", birthdayVisibility)) continue;
+          const firstName = String(payload?.firstName || "").trim();
+          const lastName = String(payload?.lastName || "").trim();
+          const fullName = `${firstName} ${lastName}`.trim();
+          const handle = String(attrs.handle || "").trim() || undefined;
+          const fallbackName = handle
+            ? handle.replace(/^@/, "")
+            : getUserLabel(attrs.user) || "Your friend";
+          birthdayMatches.push({
+            id: String(friendId),
+            userId: friendId,
+            handle,
+            displayName: fullName || fallbackName,
+            birthday: birthdayValue,
+          });
+        }
+
+        const unseen = birthdayMatches
+          .map((entry) => {
+            const token = getBirthdayToken(entry.userId, todayKey);
+            return { entry, token };
+          })
+          .filter(({ token }) => !birthdaySeen[token]);
+
+        birthdayTokensRef.current = unseen.map(({ token }) => token);
+        birthdayCount = unseen.length;
+        birthdayPreviews = unseen.slice(0, MAX_PREVIEW_ITEMS).map(({ entry }) => entry);
+      }
 
       const messagesRes = await api
         .get(
@@ -651,6 +862,7 @@ export const useNotifications = (
       setCounts({
         messages: messageCount,
         requests: pendingRequestCount,
+        birthdays: birthdayCount,
         friendPosts: friendPostCount,
         feedbackRequests: feedbackCount,
         comments: commentCount,
@@ -660,6 +872,7 @@ export const useNotifications = (
       setPreviews({
         messages: messagePreview,
         requests: requestPreviews,
+        birthdays: birthdayPreviews,
         friendPosts: friendPostPreview,
         feedbackRequests: feedbackRequests.slice(0, MAX_PREVIEW_ITEMS),
         comments: commentPreview,
@@ -675,6 +888,7 @@ export const useNotifications = (
     if (!userId || !Number.isFinite(Number(userId))) return;
     lastSeenRef.current = getLastSeen(Number(userId));
     likeSnapshotRef.current = getLikeSnapshot(Number(userId));
+    birthdaySeenRef.current = getBirthdaySeen(Number(userId));
     refresh();
 
     const interval = window.setInterval(refresh, REFRESH_MS);
@@ -688,9 +902,16 @@ export const useNotifications = (
     setLastSeen(Number(userId), iso);
     likeSnapshotRef.current = latestLikeSnapshotRef.current;
     setLikeSnapshot(Number(userId), latestLikeSnapshotRef.current);
+    const birthdaySeen = { ...birthdaySeenRef.current };
+    birthdayTokensRef.current.forEach((token) => {
+      birthdaySeen[token] = iso;
+    });
+    birthdaySeenRef.current = birthdaySeen;
+    setBirthdaySeen(Number(userId), birthdaySeen);
     setCounts((prev) => ({
       ...prev,
       messages: 0,
+      birthdays: 0,
       friendPosts: 0,
       feedbackRequests: 0,
       comments: 0,
@@ -700,6 +921,7 @@ export const useNotifications = (
     setPreviews((prev) => ({
       ...prev,
       messages: null,
+      birthdays: [],
       friendPosts: null,
       feedbackRequests: [],
       comments: null,
@@ -707,6 +929,36 @@ export const useNotifications = (
       groupUpdates: null,
     }));
   }, [userId]);
+
+  const sendBirthdayMessage = useCallback(
+    async (preview: BirthdayPreview, message: string) => {
+      if (!userId || !Number.isFinite(Number(userId))) return false;
+      if (!preview?.userId || !Number.isFinite(preview.userId)) return false;
+      const body = String(message || "").trim();
+      if (!body) return false;
+      try {
+        await api.post("/messages", {
+          data: {
+            body,
+            recipient: Number(preview.userId),
+          },
+        });
+        const iso = new Date().toISOString();
+        const todayKey = getLocalDateKey();
+        const token = getBirthdayToken(Number(preview.userId), todayKey);
+        const seen = { ...birthdaySeenRef.current, [token]: iso };
+        birthdaySeenRef.current = seen;
+        setBirthdaySeen(Number(userId), seen);
+        birthdayTokensRef.current = birthdayTokensRef.current.filter((entry) => entry !== token);
+        await refresh();
+        return true;
+      } catch (error) {
+        console.warn("Unable to send birthday message:", error);
+        return false;
+      }
+    },
+    [refresh, userId]
+  );
 
   const acceptFriendRequest = useCallback(
     async (request: FriendRequestPreview) => {
@@ -746,19 +998,21 @@ export const useNotifications = (
         return false;
       }
     },
-    [refresh]
+    [refresh, userId]
   );
 
   const total = useMemo(
     () =>
       counts.messages +
       counts.requests +
+      counts.birthdays +
       counts.friendPosts +
       counts.feedbackRequests +
       counts.comments +
       counts.likes +
       counts.groupUpdates,
     [
+      counts.birthdays,
       counts.comments,
       counts.feedbackRequests,
       counts.friendPosts,
@@ -769,5 +1023,14 @@ export const useNotifications = (
     ]
   );
 
-  return { counts, total, loading, refresh, markAllRead, previews, acceptFriendRequest };
+  return {
+    counts,
+    total,
+    loading,
+    refresh,
+    markAllRead,
+    previews,
+    acceptFriendRequest,
+    sendBirthdayMessage,
+  };
 };

@@ -71,14 +71,44 @@ export default function SuggestionWidget({ variant = "fab" }: SuggestionWidgetPr
 
   if (!user) return null;
 
-  const buttonClassName =
-    variant === "inline" ? "suggestion-inline" : "suggestion-fab";
+  const isInline = variant === "inline";
+  const buttonClassName = isInline
+    ? "suggestion-inline chat-action chat-action--suggestion"
+    : "suggestion-fab";
 
   return (
     <>
       {!open && (
         <button type="button" className={buttonClassName} onClick={openWidget}>
-          Make a suggestion
+          {isInline ? (
+            <>
+              <span className="chat-action-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+                  <path
+                    d="M6.25 5.25h11.5A2.75 2.75 0 0 1 20.5 8v7.25A2.75 2.75 0 0 1 17.75 18H11.9l-3.4 2.5v-2.5H6.25A2.75 2.75 0 0 1 3.5 15.25V8a2.75 2.75 0 0 1 2.75-2.75Z"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <path
+                    d="M12 9.25v4.5M9.75 11.5h4.5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.7"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </span>
+              <span className="chat-action-text">
+                <span className="chat-action-title">Suggestion</span>
+                <span className="chat-action-help">Help shape the beta</span>
+              </span>
+            </>
+          ) : (
+            "Make a suggestion"
+          )}
         </button>
       )}
 

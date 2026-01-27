@@ -937,7 +937,7 @@
 
 .go-top-button {
   position: fixed;
-  right: 28px;
+  left: 28px;
   bottom: 28px;
   z-index: 55;
   border-radius: 999px;
@@ -1248,12 +1248,16 @@
   }
 
   .go-top-button {
-    right: 16px;
+    left: 16px;
     bottom: 16px;
   }
 }
 
 @media (max-width: 720px) {
+  .go-top-button {
+    display: none;
+  }
+
   .post-composer__top {
     grid-template-columns: 1fr;
   }

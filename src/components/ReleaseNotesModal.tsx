@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
+import { useAuth } from "../context/AuthContext";
 import "../css/release-notes.css";
 
-const RELEASE_NOTES_VERSION = "2026.01.25";
+const RELEASE_NOTES_VERSION = "2026.01.26";
 const STORAGE_KEY = "releaseNotesDismissedVersion";
 const SESSION_PREFIX = "releaseNotesClosed:";
 
@@ -9,7 +10,7 @@ const RELEASE_NOTES = [
   "Moved links from My Dashboard to permanently show on the left sidebar for desktop version.",
   "Made change for previously logged in users to automatically be directed to their Dashboard page upon visit to the site and/or app.",
   "Added \"Like\", \"Comment\", and \"Subscribe\" buttons to the bottom of each user post.",
-  "Added Moderator and Admin GUI.",
+  "Added Moderator and Admin UI.",
   "Password minimum length is now 8 characters instead of 12.",
   "Added GUI for Moderators and Admins to restrict users if necessary.",
   "Added Filters for Dashboard to View Posts by Friends, Public, Private, or All Posts.",
@@ -20,9 +21,13 @@ const RELEASE_NOTES = [
   "Improved UI of Video Calling",
   "Changed Verification of Emails to use OTP instead of LInk",
   "New Landing Page Design",
+  "Added Birthday Notifications and Reactions",
+  "Updated My Profile UI to be more user friendly",
+  "Updated ChatBox UI to include user friendly icons",
 ];
 
 export default function ReleaseNotesModal() {
+  const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const sessionKey = useMemo(
     () => `${SESSION_PREFIX}${RELEASE_NOTES_VERSION}`,
@@ -31,14 +36,18 @@ export default function ReleaseNotesModal() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (!user) {
+      setOpen(false);
+      return;
+    }
     const dismissed = window.localStorage.getItem(STORAGE_KEY);
     const closed = window.sessionStorage.getItem(sessionKey);
     if (dismissed !== RELEASE_NOTES_VERSION && !closed) {
       setOpen(true);
     }
-  }, [sessionKey]);
+  }, [sessionKey, user]);
 
-  if (!open) return null;
+  if (!user || !open) return null;
 
   const handleClose = () => {
     if (typeof window !== "undefined") {

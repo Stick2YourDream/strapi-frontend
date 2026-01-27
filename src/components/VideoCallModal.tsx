@@ -28,6 +28,7 @@ import { sanitizePostText } from "../utils/emoji";
 import api from "../api/strapi";
 import callRingtoneUrl from "../assets/call.mp3";
 import holdMusicUrl from "../assets/on_hold.mp3";
+import messageSoundUrl from "../assets/notificationsoundeffect.mp3";
 
 type VideoCallModalProps = {
   friends: VideoCallInvitee[];
@@ -570,7 +571,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     sendMessage,
     toggleHold,
   } = useVideoCall();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
 
   const [chatInput, setChatInput] = useState("");
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -622,6 +623,8 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     audio: null,
   });
   const holdAudioRef = useRef<HTMLAudioElement | null>(null);
+  const messageSoundRef = useRef<HTMLAudioElement | null>(null);
+  const lastMessageIdRef = useRef<string | null>(null);
   const ringbackRef = useRef<{ ctx: AudioContext | null; timer: number | null }>({
     ctx: null,
     timer: null,
@@ -751,6 +754,17 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const remoteList = useMemo(
     () => Object.values(remoteParticipants),
     [remoteParticipants]
+  );
+  const remoteAudioStreams = useMemo(
+    () =>
+      Object.entries(remoteStreams)
+        .filter(([, stream]) =>
+          stream
+            .getAudioTracks()
+            .some((track) => track.enabled && track.readyState === "live")
+        )
+        .map(([socketId, stream]) => ({ socketId, stream })),
+    [remoteStreams]
   );
   const participantNameById = useMemo(() => {
     const map = new Map<number, string>();
@@ -898,6 +912,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const effectiveViewMode = hasScreenShares ? screenViewMode : "video";
   const showScreenTiles = effectiveViewMode !== "video";
   const showVideoTiles = effectiveViewMode !== "screen";
+  const shouldRenderRemoteAudio = showCallUi && !showVideoTiles;
   const focusedScreenKey = effectiveViewMode === "screen" ? focusedScreenId : null;
   const focusedVideoKey = effectiveViewMode === "video" ? focusedVideoId : null;
   const visibleScreenShareEntries = useMemo(() => {
@@ -1159,6 +1174,27 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
       ),
     [messages]
   );
+
+  useEffect(() => {
+    if (!showCallUi) {
+      lastMessageIdRef.current = null;
+    }
+  }, [showCallUi]);
+
+  useEffect(() => {
+    if (!showCallUi) return;
+    if (profile?.notificationSettings?.soundEnabled === false) return;
+    const latest = orderedMessages[0];
+    if (!latest) return;
+    if (lastMessageIdRef.current === latest.id) return;
+    lastMessageIdRef.current = latest.id;
+    if (latest.from.userId === user?.id) return;
+    const audio = messageSoundRef.current ?? new Audio(messageSoundUrl);
+    audio.volume = 0.6;
+    audio.currentTime = 0;
+    messageSoundRef.current = audio;
+    audio.play().catch(() => undefined);
+  }, [orderedMessages, profile?.notificationSettings?.soundEnabled, showCallUi, user?.id]);
 
   const totalParticipants = 1 + remoteList.length;
   const maxInvitees = maxParticipants - 1;
@@ -1673,7 +1709,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     audio.loop = true;
     audio.volume = 0.45;
     holdAudioRef.current = audio;
-    if (!showCallUi || !isOnHold) {
+    if (!showCallUi || !isOnHold || isHolding) {
       audio.pause();
       audio.currentTime = 0;
       return;
@@ -1683,7 +1719,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
       audio.pause();
       audio.currentTime = 0;
     };
-  }, [isOnHold, showCallUi]);
+  }, [isHolding, isOnHold, showCallUi]);
 
   if (!showModal) return null;
 
@@ -1869,78 +1905,144 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                 <span className="video-call-toolbar-label">View</span>
                 <button
                   type="button"
-                  className={`video-view-button${
+                  className={`video-view-button is-icon${
                     effectiveViewMode === "split" ? " is-active" : ""
                   }`}
                   onClick={() => setScreenViewMode("split")}
+                  data-hint="Split view"
+                  aria-label="Split view"
+                  title="Split view"
                 >
-                  Split
+                  <i className="fa-solid fa-table-columns" aria-hidden="true" />
                 </button>
+                {hasScreenShares && (
+                  <button
+                    type="button"
+                    className={`video-view-button is-icon${
+                      effectiveViewMode === "screen" ? " is-active" : ""
+                    }`}
+                    onClick={() => setScreenViewMode("screen")}
+                    data-hint="Screen view"
+                    aria-label="Screen view"
+                    title="Screen view"
+                  >
+                    <i className="fa-solid fa-display" aria-hidden="true" />
+                  </button>
+                )}
                 <button
                   type="button"
-                  className={`video-view-button${
-                    effectiveViewMode === "screen" ? " is-active" : ""
-                  }`}
-                  onClick={() => setScreenViewMode("screen")}
-                  disabled={!hasScreenShares}
-                >
-                  Screen
-                </button>
-                <button
-                  type="button"
-                  className={`video-view-button${
+                  className={`video-view-button is-icon${
                     effectiveViewMode === "video" ? " is-active" : ""
                   }`}
                   onClick={() => setScreenViewMode("video")}
+                  data-hint="Video view"
+                  aria-label="Video view"
+                  title="Video view"
                 >
-                  Video
+                  <i className="fa-solid fa-video" aria-hidden="true" />
                 </button>
               </div>
               <div className="video-call-toolbar-group">
+                {hasScreenShares && (
+                  <button
+                    type="button"
+                    className={`video-view-button is-icon${
+                      isScreenBorderless ? " is-active" : ""
+                    }`}
+                    onClick={() => setIsScreenBorderless((prev) => !prev)}
+                    data-hint={isScreenBorderless ? "Windowed" : "Borderless"}
+                    aria-label={isScreenBorderless ? "Windowed" : "Borderless"}
+                    title={isScreenBorderless ? "Windowed" : "Borderless"}
+                  >
+                    <i
+                      className={`fa-solid ${isScreenBorderless ? "fa-compress" : "fa-expand"}`}
+                      aria-hidden="true"
+                    />
+                  </button>
+                )}
                 <button
                   type="button"
-                  className={`video-view-button${isScreenBorderless ? " is-active" : ""}`}
-                  onClick={() => setIsScreenBorderless((prev) => !prev)}
-                  disabled={!hasScreenShares}
-                >
-                  {isScreenBorderless ? "Windowed" : "Borderless"}
-                </button>
-                <button
-                  type="button"
-                  className={`video-view-button is-chat-toggle${showChat ? " is-active" : ""}`}
+                  className={`video-view-button is-icon is-chat-toggle${
+                    showChat ? " is-active" : ""
+                  }`}
                   onClick={() => setIsChatVisible((prev) => !prev)}
                   disabled={!showCallUi}
+                  data-hint={showChat ? "Hide chat" : "Show chat"}
+                  aria-label={showChat ? "Hide chat" : "Show chat"}
+                  title={showChat ? "Hide chat" : "Show chat"}
                 >
-                  {showChat ? "Hide chat" : "Show chat"}
+                  <i
+                    className={`fa-solid ${
+                      showChat ? "fa-comment-slash" : "fa-comments"
+                    }`}
+                    aria-hidden="true"
+                  />
                 </button>
               </div>
               <div className="video-call-toolbar-group is-mobile-only">
                 <span className="video-call-toolbar-label">Panel</span>
                 <button
                   type="button"
-                  className={`video-view-button${mobilePanel === "video" ? " is-active" : ""}`}
+                  className={`video-view-button is-icon${
+                    mobilePanel === "video" ? " is-active" : ""
+                  }`}
                   onClick={() => setMobilePanel("video")}
+                  data-hint="Video panel"
+                  aria-label="Video panel"
+                  title="Video panel"
                 >
-                  Video
+                  <i className="fa-solid fa-video" aria-hidden="true" />
                 </button>
                 <button
                   type="button"
-                  className={`video-view-button${mobilePanel === "chat" ? " is-active" : ""}`}
+                  className={`video-view-button is-icon${
+                    mobilePanel === "chat" ? " is-active" : ""
+                  }`}
                   onClick={() => setMobilePanel("chat")}
+                  data-hint="Chat panel"
+                  aria-label="Chat panel"
+                  title="Chat panel"
                 >
-                  Chat
+                  <i className="fa-solid fa-comments" aria-hidden="true" />
                 </button>
               </div>
               <div className="video-call-toolbar-group">
                 <button
                   type="button"
-                  className={`video-view-button${isPopout ? " is-active" : ""}`}
+                  className={`video-view-button is-icon${isPopout ? " is-active" : ""}`}
                   onClick={() => setIsPopout((prev) => !prev)}
                   aria-pressed={isPopout}
+                  data-hint={isPopout ? "Dock" : "Pop out"}
+                  aria-label={isPopout ? "Dock" : "Pop out"}
+                  title={isPopout ? "Dock" : "Pop out"}
                 >
-                  {isPopout ? "Dock" : "Pop out"}
+                  <i
+                    className={`fa-solid ${
+                      isPopout ? "fa-compress" : "fa-up-right-from-square"
+                    }`}
+                    aria-hidden="true"
+                  />
                 </button>
               </div>
+            </div>
+          )}
+
+          {shouldRenderRemoteAudio && remoteAudioStreams.length > 0 && (
+            <div className="video-call-audio" aria-hidden="true">
+              {remoteAudioStreams.map(({ socketId, stream }) => (
+                <audio
+                  key={socketId}
+                  autoPlay
+                  playsInline
+                  ref={(node) => {
+                    if (!node) return;
+                    if (node.srcObject !== stream) {
+                      node.srcObject = stream;
+                    }
+                    node.play().catch(() => undefined);
+                  }}
+                />
+              ))}
             </div>
           )}
 

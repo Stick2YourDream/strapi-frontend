@@ -1,5 +1,5 @@
 // src/pages/Me.tsx
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "../css/dashboard.css";
 import "../css/profile.css";
@@ -27,6 +27,12 @@ import {
 } from "../utils/profile-e2ee";
 import { sanitizePostText } from "../utils/emoji";
 import { getOrCreateDeviceId } from "../utils/device-id";
+import {
+  approveDeviceKeyRequest,
+  listDeviceKeyRequests,
+  rejectDeviceKeyRequest,
+  type DeviceKeyRequest,
+} from "../utils/device-approval";
 import { syncPushSubscription, type PushSyncStatus } from "../utils/push-notifications";
 import { formatPostUpdateLabel } from "../utils/time";
 
@@ -202,10 +208,21 @@ const normalizeRegistrationLocks = (value: any): RegistrationLocks | null => {
   };
 };
 
+const normalizeBirthdayInput = (value?: string) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const datePart = raw.split("T")[0];
+  if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return datePart;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return raw;
+  return parsed.toISOString().slice(0, 10);
+};
+
 const formatBirthday = (value?: string) => {
-  if (!value) return "";
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (!match) return value;
+  const normalized = normalizeBirthdayInput(value);
+  if (!normalized) return "";
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(normalized);
+  if (!match) return normalized;
   const year = Number(match[1]);
   const month = Number(match[2]);
   const day = Number(match[3]);
@@ -477,6 +494,10 @@ export default function Me() {
   const [editing, setEditing] = useState(true);
   const [settingsView, setSettingsView] = useState<"profile" | "settings">("profile");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  const settingsMenuRef = useRef<HTMLDivElement | null>(null);
+  const settingsTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const [settingsTriggerWidth, setSettingsTriggerWidth] = useState<number | null>(null);
   const [hobbyInput, setHobbyInput] = useState("");
   const [hobbyList, setHobbyList] = useState<string[]>([]);
   const [activeHobbyPicker, setActiveHobbyPicker] = useState<
@@ -513,6 +534,18 @@ export default function Me() {
   const [trustedLoading, setTrustedLoading] = useState(false);
   const [trustedError, setTrustedError] = useState<string | null>(null);
   const [trustedSuccess, setTrustedSuccess] = useState<string | null>(null);
+  const [currentDeviceTrusted, setCurrentDeviceTrusted] = useState<boolean | null>(null);
+  const [deviceKeyRequests, setDeviceKeyRequests] = useState<DeviceKeyRequest[]>([]);
+  const [deviceKeyRequestsLoading, setDeviceKeyRequestsLoading] = useState(false);
+  const [deviceKeyRequestsError, setDeviceKeyRequestsError] = useState<string | null>(
+    null
+  );
+  const [deviceKeyRequestsBlockedNote, setDeviceKeyRequestsBlockedNote] = useState<
+    string | null
+  >(null);
+  const [deviceKeyRequestsSuccess, setDeviceKeyRequestsSuccess] = useState<
+    string | null
+  >(null);
   const [loginPhone, setLoginPhone] = useState("");
   const [phoneChangeChallengeId, setPhoneChangeChallengeId] = useState<string | null>(null);
   const [phoneChangeCode, setPhoneChangeCode] = useState("");
@@ -530,6 +563,7 @@ export default function Me() {
   const [twoFactorLoading, setTwoFactorLoading] = useState(false);
   const [twoFactorError, setTwoFactorError] = useState<string | null>(null);
   const [twoFactorSuccess, setTwoFactorSuccess] = useState<string | null>(null);
+  const [phoneVerified, setPhoneVerified] = useState<boolean | null>(null);
   const [totpSetup, setTotpSetup] = useState<{
     otpauthUrl: string;
     qrCodeDataUrl: string;
@@ -574,8 +608,19 @@ export default function Me() {
     setPostFilePreviewUrl(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
   }, [postFile]);
+  const pushEnabled = Boolean(profile.notificationSettings.pushEnabled);
+  const pushBlockedByPhone = phoneVerified !== true && !pushEnabled;
+  const phoneVerificationLabel = useMemo(() => {
+    if (phoneVerified === null) {
+      return "Checking phone verification status…";
+    }
+    if (phoneVerified) {
+      return null;
+    }
+    return "Verify your phone number in Account Security to enable push notifications.";
+  }, [phoneVerified]);
   const pushStatusLabel = useMemo(() => {
-    if (!profile.notificationSettings.pushEnabled) {
+    if (!pushEnabled) {
       return "Push notifications are off.";
     }
     if (pushStatus === "enabled") {
@@ -591,7 +636,7 @@ export default function Me() {
       return "Push notifications are not supported on this device.";
     }
     return null;
-  }, [profile.notificationSettings.pushEnabled, pushStatus]);
+  }, [pushEnabled, pushStatus]);
 
   const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
@@ -856,14 +901,64 @@ export default function Me() {
     setTrustedLoading(true);
     setTrustedError(null);
     setTrustedSuccess(null);
+    setCurrentDeviceTrusted(null);
+    setDeviceKeyRequestsBlockedNote(null);
     try {
       const deviceId = getOrCreateDeviceId();
       const res = await api.get("/auth/trusted-devices", { params: { deviceId } });
-      setTrustedDevices(res.data?.devices ?? []);
+      const devices: TrustedDevice[] = res.data?.devices ?? [];
+      setTrustedDevices(devices);
+      const isTrusted = devices.some((device) => device.isCurrent);
+      setCurrentDeviceTrusted(isTrusted);
+      if (isTrusted) {
+        setDeviceKeyRequestsBlockedNote(null);
+      } else {
+        setDeviceKeyRequestsBlockedNote(
+          "Trust this device to manage approval requests. Use Remember device when you sign in."
+        );
+        setDeviceKeyRequestsError(null);
+        setDeviceKeyRequestsSuccess(null);
+        setDeviceKeyRequests([]);
+      }
     } catch {
       setTrustedError("Unable to load trusted devices.");
     } finally {
       setTrustedLoading(false);
+    }
+  };
+
+  const loadDeviceKeyRequests = async () => {
+    if (!user) return;
+    if (currentDeviceTrusted !== true) {
+      setDeviceKeyRequests([]);
+      setDeviceKeyRequestsError(null);
+      setDeviceKeyRequestsSuccess(null);
+      setDeviceKeyRequestsBlockedNote(
+        currentDeviceTrusted === null
+          ? "Checking whether this device is trusted…"
+          : "Trust this device to manage approval requests. Use Remember device when you sign in."
+      );
+      return;
+    }
+    setDeviceKeyRequestsLoading(true);
+    setDeviceKeyRequestsError(null);
+    setDeviceKeyRequestsSuccess(null);
+    setDeviceKeyRequestsBlockedNote(null);
+    try {
+      const requests = await listDeviceKeyRequests();
+      setDeviceKeyRequests(requests);
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to load device approval requests.";
+        setDeviceKeyRequestsError(String(msg));
+      } else {
+        setDeviceKeyRequestsError("Unable to load device approval requests.");
+      }
+    } finally {
+      setDeviceKeyRequestsLoading(false);
     }
   };
 
@@ -904,6 +999,48 @@ export default function Me() {
         setTrustedError(String(msg));
       } else {
         setTrustedError("Unable to sign out other devices.");
+      }
+    }
+  };
+
+  const handleApproveDeviceKeyRequest = async (request: DeviceKeyRequest) => {
+    if (!user) return;
+    setDeviceKeyRequestsError(null);
+    setDeviceKeyRequestsSuccess(null);
+    try {
+      await approveDeviceKeyRequest(user.id, request);
+      setDeviceKeyRequestsSuccess("Device approved.");
+      await loadDeviceKeyRequests();
+      await loadTrustedDevices();
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to approve device.";
+        setDeviceKeyRequestsError(String(msg));
+      } else {
+        setDeviceKeyRequestsError("Unable to approve device.");
+      }
+    }
+  };
+
+  const handleRejectDeviceKeyRequest = async (requestId: string) => {
+    setDeviceKeyRequestsError(null);
+    setDeviceKeyRequestsSuccess(null);
+    try {
+      await rejectDeviceKeyRequest(requestId);
+      setDeviceKeyRequestsSuccess("Request dismissed.");
+      await loadDeviceKeyRequests();
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to dismiss request.";
+        setDeviceKeyRequestsError(String(msg));
+      } else {
+        setDeviceKeyRequestsError("Unable to dismiss request.");
       }
     }
   };
@@ -1042,6 +1179,15 @@ export default function Me() {
     setPushError(null);
     setNotificationSaving(true);
     try {
+      if (pushEnabled && phoneVerified !== true) {
+        setPushError(
+          phoneVerified === null
+            ? "Checking phone verification status. Try again in a moment."
+            : "Verify your phone number before enabling push notifications."
+        );
+        setNotificationSaving(false);
+        return;
+      }
       await persistProfileSettings(profile);
       const pushResult = await syncPushSubscription({
         enable: Boolean(profile.notificationSettings.pushEnabled),
@@ -1279,6 +1425,7 @@ export default function Me() {
         }
       }
       resetPhoneChange();
+      setPhoneVerified(true);
       setPhoneChangeSuccess("Phone number updated.");
       setLoginPhone("");
     } catch (err) {
@@ -1336,6 +1483,7 @@ export default function Me() {
       setTwoFactorEnabled(Boolean(data.enabled));
       setTwoFactorMethod(method);
       setTwoFactorHasAuthenticator(Boolean(data.hasAuthenticator));
+      setPhoneVerified(Boolean(data.phoneVerified));
     } catch (err) {
       if (axios.isAxiosError(err)) {
         const msg =
@@ -1698,7 +1846,7 @@ export default function Me() {
       });
   }, [loading, lockedUniqueHandle, profile.handle, user]);
 
-  const setProfileFromEntry = async (entry: any) => {
+const setProfileFromEntry = async (entry: any) => {
     if (!entry) return;
     const attrs = normalize(entry);
     profileIdRef.current = entry?.documentId ?? entry?.id ?? null;
@@ -1719,14 +1867,19 @@ export default function Me() {
     }
     profilePayloadRef.current = payload;
     const explicitLocks = normalizeRegistrationLocks(attrs.registrationLocked) || {};
+    const normalizedBirthday = normalizeBirthdayInput(payload.birthday);
+    const hasBirthdayValue = Boolean(String(normalizedBirthday || "").trim());
     const derivedLocks: RegistrationLocks = {
       firstName: Boolean(String(payload.firstName || "").trim()),
       lastName: Boolean(String(payload.lastName || "").trim()),
       age: Boolean(String(payload.age || "").trim()),
-      birthday: Boolean(String(payload.birthday || "").trim()),
+      birthday: hasBirthdayValue,
       phone: Boolean(String(payload.phone || "").trim()),
     };
-    registrationLocksRef.current = { ...derivedLocks, ...explicitLocks };
+    const mergedLocks: RegistrationLocks = { ...derivedLocks, ...explicitLocks };
+    // If the birthday value is missing, do not keep it locked.
+    if (!hasBirthdayValue) mergedLocks.birthday = false;
+    registrationLocksRef.current = mergedLocks;
 
     const parsedHobbies = parseHobbies(payload.hobbies || "");
     const preferredRaw = String(attrs.preferredVerificationMethod || "")
@@ -1762,7 +1915,7 @@ export default function Me() {
       firstName: payload.firstName || "",
       lastName: payload.lastName || "",
       age: payload.age || "",
-      birthday: payload.birthday || "",
+      birthday: normalizedBirthday,
       gender: payload.gender || "",
       religion: payload.religion || "",
       country: payload.country || "",
@@ -2325,6 +2478,11 @@ export default function Me() {
   }, [user?.id]);
 
   useEffect(() => {
+    if (!user || currentDeviceTrusted !== true) return;
+    void loadDeviceKeyRequests();
+  }, [user?.id, currentDeviceTrusted]);
+
+  useEffect(() => {
     if (!user) return;
     setEmailDraft(user.email || "");
   }, [user?.id, user?.email]);
@@ -2483,7 +2641,7 @@ export default function Me() {
       const existingState = String(existingPayload.state || "");
       const existingStateCode = String(existingPayload.stateCode || "");
       const existingCity = String(existingPayload.city || "");
-      const existingBirthday = String(existingPayload.birthday || "");
+      const existingBirthday = normalizeBirthdayInput(existingPayload.birthday);
       const existingPhone = String(existingPayload.phone || "");
 
       const effectiveFirstName = lockFirstName ? existingFirstName : rawFirstName;
@@ -2497,6 +2655,7 @@ export default function Me() {
         existingBirthday,
         mergedProfile.birthday || ""
       );
+      const normalizedBirthday = normalizeBirthdayInput(effectiveBirthday);
       const effectivePhone = resolveLockedValue(lockPhone, existingPhone, phoneClean || "");
       const normalizedProfileVisibility = normalizeProfileVisibility(
         mergedProfile.profileVisibility
@@ -2524,7 +2683,7 @@ export default function Me() {
         firstName: safeFirst,
         lastName: effectiveLastName,
         age: effectiveAge,
-        birthday: effectiveBirthday,
+        birthday: normalizedBirthday,
         gender: mergedProfile.gender,
         religion: mergedProfile.religion,
         country: resolveLockedValue(
@@ -2569,7 +2728,7 @@ export default function Me() {
       if (!nextLocks.firstName && rawFirstName) nextLocks.firstName = true;
       if (!nextLocks.lastName && rawLastName) nextLocks.lastName = true;
       if (!nextLocks.age && rawAge) nextLocks.age = true;
-      if (!nextLocks.birthday && mergedProfile.birthday.trim()) nextLocks.birthday = true;
+      if (!nextLocks.birthday && normalizedBirthday.trim()) nextLocks.birthday = true;
       if (!nextLocks.phone && phoneClean) nextLocks.phone = true;
       nextLocks.country = false;
       nextLocks.state = false;
@@ -2822,6 +2981,183 @@ export default function Me() {
     ["Occupation", profile.occupation],
     ["Bio", profile.bio],
   ];
+
+  const SETTINGS_SECTIONS: { id: SettingsSection; label: string }[] = [
+    { id: "appearance", label: "Background & Chat" },
+    { id: "security", label: "Account & Security" },
+    { id: "privacy", label: "Visibility & Discoverability" },
+    { id: "notifications", label: "Sound, Vibration & Quiet Hours" },
+    { id: "changes", label: "Changes & Deactivation" },
+  ];
+  const settingsSelectValue: SettingsSection | "profile" = isSettingsView
+    ? settingsSection
+    : "profile";
+  const settingsMenuLabel =
+    settingsSelectValue === "profile"
+      ? "Profile"
+      : SETTINGS_SECTIONS.find((section) => section.id === settingsSection)?.label ||
+        "Settings";
+  const settingsMenuStyle: CSSProperties | undefined = settingsTriggerWidth
+    ? ({ "--settings-trigger-width": `${settingsTriggerWidth}px` } as CSSProperties)
+    : undefined;
+  const handleSettingsSelectChange = (value: SettingsSection | "profile") => {
+    if (value === "profile") {
+      setSettingsView("profile");
+      setSettingsMenuOpen(false);
+      setEditing(false);
+      return;
+    }
+    setSettingsSection(value);
+    setSettingsView("settings");
+    setSettingsMenuOpen(false);
+    setEditing(false);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  const toggleSettingsMenu = () => {
+    setSettingsMenuOpen((prev) => !prev);
+  };
+  const syncSettingsTriggerWidth = () => {
+    const nextWidth = settingsTriggerRef.current?.offsetWidth;
+    if (nextWidth && nextWidth !== settingsTriggerWidth) {
+      setSettingsTriggerWidth(nextWidth);
+    }
+  };
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const frame = window.requestAnimationFrame(syncSettingsTriggerWidth);
+    return () => window.cancelAnimationFrame(frame);
+  }, [settingsMenuOpen, settingsMenuLabel]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleResize = () => syncSettingsTriggerWidth();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+  useEffect(() => {
+    if (!settingsMenuOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!settingsMenuRef.current) return;
+      if (target instanceof Node && settingsMenuRef.current.contains(target)) return;
+      setSettingsMenuOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSettingsMenuOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [settingsMenuOpen]);
+  const renderProfileHeader = () => (
+    <div className="panel-grid" style={{ marginBottom: "16px" }}>
+      <section className="panel profile-header-panel">
+        <div className="profile-header-avatar-overlay" aria-hidden="true">
+          {avatarImg ? (
+            <img src={avatarImg} alt="" loading="lazy" />
+          ) : (
+            <span className="profile-header-avatar-fallback">{initials}</span>
+          )}
+        </div>
+
+        <div className="profile-header-content">
+          <div className="profile-header-meta">
+            <h2 className="profile-header-title">{displayName}</h2>
+            <span className="profile-header-handle-pill">@{displayHandle}</span>
+          </div>
+          <p className="profile-header-bio">
+            {profile.bio || "Share a quick bio to help friends recognize you."}
+          </p>
+          <div className="profile-header-actions">
+            <button
+              className="btn primary profile-header-action-button"
+              type="button"
+              onClick={() => {
+                setSettingsMenuOpen(false);
+                setSettingsView("profile");
+                setEditing(true);
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }}
+            >
+              Edit Profile
+            </button>
+            <div className="profile-settings-dropdown" ref={settingsMenuRef} style={settingsMenuStyle}>
+              <button
+                ref={settingsTriggerRef}
+                className={`btn primary profile-header-action-button profile-settings-trigger${
+                  settingsMenuOpen ? " is-open" : ""
+                }`}
+                type="button"
+                aria-haspopup="menu"
+                aria-expanded={settingsMenuOpen}
+                aria-label={`Settings menu. Current section: ${settingsMenuLabel}.`}
+                title={`Current section: ${settingsMenuLabel}`}
+                onClick={toggleSettingsMenu}
+              >
+                <span className="profile-settings-trigger-label">Settings:</span>
+                <span
+                  className={`profile-settings-trigger-caret${
+                    settingsMenuOpen ? " is-open" : ""
+                  }`}
+                  aria-hidden="true"
+                >
+                  <svg viewBox="0 0 16 16" focusable="false" aria-hidden="true">
+                    <path
+                      d="M4 6.5 8 10l4-3.5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.9"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </span>
+              </button>
+              {settingsMenuOpen && (
+                <div className="profile-settings-menu" role="menu" aria-label="Settings sections">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={`profile-settings-item${
+                      settingsSelectValue === "profile" ? " is-active" : ""
+                    }`}
+                    onClick={() => handleSettingsSelectChange("profile")}
+                  >
+                    <span>Profile overview</span>
+                    {settingsSelectValue === "profile" && (
+                      <span className="profile-settings-item-tag">Current</span>
+                    )}
+                  </button>
+                  <div className="profile-settings-menu-divider" />
+                  {SETTINGS_SECTIONS.map((section) => {
+                    const isActive = settingsSelectValue === section.id;
+                    return (
+                      <button
+                        key={section.id}
+                        type="button"
+                        role="menuitem"
+                        className={`profile-settings-item${isActive ? " is-active" : ""}`}
+                        onClick={() => handleSettingsSelectChange(section.id)}
+                      >
+                        <span>{section.label}</span>
+                        {isActive && (
+                          <span className="profile-settings-item-tag">Current</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
   const renderInfoCard = (label: string, value?: string) => (
     <div className="profile-card" key={label}>
       <p className="profile-card-label">{label}</p>
@@ -3337,9 +3673,10 @@ export default function Me() {
 
         <div className="main-content profile-content">
           <TopbarSearch />
+          {renderProfileHeader()}
           {isSettingsView && settingsSection === "appearance" && (
           <div className="panel-grid profile-appearance-row">
-          <section className="panel profile-appearance-panel">
+          <section className="panel profile-settings-panel profile-appearance-panel">
             <div className="profile-appearance-header">
               <div>
                 <p className="eyebrow">Style</p>
@@ -3477,75 +3814,6 @@ export default function Me() {
         {loading && <p className="status">Loading profile…</p>}
         {error && <p className="status status-error">{error}</p>}
         {success && <p className="status status-success">{success}</p>}
-
-        {!isSettingsView && (
-        <div className="panel-grid" style={{ marginBottom: "16px" }}>
-          <section
-            className="panel"
-            style={{
-              background: "linear-gradient(135deg, rgba(92,128,255,0.12), rgba(16,185,129,0.08))",
-              border: "1px solid rgba(255,255,255,0.06)",
-              display: "grid",
-              gridTemplateColumns: "auto 1fr",
-              gap: "18px",
-              alignItems: "center",
-              padding: "20px 22px",
-            }}
-          >
-            <div
-              style={{
-                width: 96,
-                height: 96,
-                borderRadius: "22px",
-                background: "rgba(255,255,255,0.06)",
-                display: "grid",
-                placeItems: "center",
-                overflow: "hidden",
-                boxShadow: "0 12px 40px rgba(0,0,0,0.25)",
-              }}
-            >
-              {avatarImg ? (
-                <img
-                  src={avatarImg}
-                  alt={displayName}
-                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                />
-              ) : (
-                <span style={{ fontWeight: 700, color: "#cdd5e8", fontSize: 22 }}>{initials}</span>
-              )}
-            </div>
-
-            <div style={{ display: "grid", gap: 10 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                <h2 style={{ margin: 0 }}>{displayName}</h2>
-                <span
-                  style={{
-                    background: "rgba(255,255,255,0.07)",
-                    border: "1px solid rgba(255,255,255,0.08)",
-                    padding: "6px 12px",
-                    borderRadius: 999,
-                    fontSize: 12,
-                    letterSpacing: 0.2,
-                  }}
-                >
-                  @{displayHandle}
-                </span>
-              </div>
-              <p style={{ margin: 0, color: "#cdd5e8", maxWidth: 720 }}>
-                {profile.bio || "Share a quick bio to help friends recognize you."}
-              </p>
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <button className="btn primary" type="button" onClick={() => setEditing(true)}>
-                  Edit Profile
-                </button>
-                <button className="btn ghost" type="button" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>
-                  Jump to top
-                </button>
-              </div>
-            </div>
-          </section>
-        </div>
-        )}
 
         {!isSettingsView && (
         <div className="panel-grid">
@@ -3857,7 +4125,7 @@ export default function Me() {
 
         {isSettingsView && settingsSection === "security" && (
         <div className="panel-grid">
-          <section className="panel security-panel">
+          <section className="panel profile-settings-panel security-panel">
             <div className="panel-header">
               <div>
                 <p className="eyebrow">Security</p>
@@ -4087,6 +4355,63 @@ export default function Me() {
                 {trustedSuccess && (
                   <p className="status status-success">{trustedSuccess}</p>
                 )}
+                <div className="trusted-request-header">
+                  <h5>Device approval requests</h5>
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={loadDeviceKeyRequests}
+                    disabled={deviceKeyRequestsLoading || currentDeviceTrusted !== true}
+                  >
+                    {deviceKeyRequestsLoading ? "Refreshing..." : "Refresh requests"}
+                  </button>
+                </div>
+                {currentDeviceTrusted === true && deviceKeyRequestsError && (
+                  <p className="status status-error">{deviceKeyRequestsError}</p>
+                )}
+                {deviceKeyRequestsSuccess && (
+                  <p className="status status-success">{deviceKeyRequestsSuccess}</p>
+                )}
+                {currentDeviceTrusted !== true && deviceKeyRequestsBlockedNote && (
+                  <p className="security-muted">{deviceKeyRequestsBlockedNote}</p>
+                )}
+                <div className="trusted-device-list trusted-request-list">
+                  {currentDeviceTrusted === true && deviceKeyRequests.length ? (
+                    deviceKeyRequests.map((request) => (
+                      <div className="trusted-device-card" key={request.id}>
+                        <div>
+                          <p className="trusted-device-label">
+                            {request.deviceLabel || "New device"}
+                          </p>
+                          <p className="trusted-device-meta">
+                            Requested {formatDeviceDate(request.createdAt)} | Expires{" "}
+                            {formatDeviceDate(request.expiresAt)}
+                          </p>
+                        </div>
+                        <div className="trusted-device-actions">
+                          <button
+                            className="btn primary"
+                            type="button"
+                            onClick={() => handleApproveDeviceKeyRequest(request)}
+                            disabled={deviceKeyRequestsLoading}
+                          >
+                            Approve
+                          </button>
+                          <button
+                            className="btn ghost"
+                            type="button"
+                            onClick={() => handleRejectDeviceKeyRequest(request.id)}
+                            disabled={deviceKeyRequestsLoading}
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  ) : currentDeviceTrusted === true ? (
+                    <p className="security-muted">No pending device requests.</p>
+                  ) : null}
+                </div>
                 <div className="trusted-device-list">
                   {trustedDevices.length ? (
                     trustedDevices.map((device) => (
@@ -4132,7 +4457,7 @@ export default function Me() {
 
         {isSettingsView && settingsSection === "privacy" && (
         <div className="panel-grid">
-          <section className="panel">
+          <section className="panel profile-settings-panel">
             <div className="panel-header">
               <div>
                 <p className="eyebrow">Privacy</p>
@@ -4452,7 +4777,7 @@ export default function Me() {
 
         {isSettingsView && settingsSection === "notifications" && (
         <div className="panel-grid">
-          <section className="panel">
+          <section className="panel profile-settings-panel">
             <div className="panel-header">
               <div>
                 <p className="eyebrow">Notifications</p>
@@ -4582,19 +4907,33 @@ export default function Me() {
                 <div className="profile-check">
                   <input
                     type="checkbox"
-                    checked={Boolean(profile.notificationSettings.pushEnabled)}
-                    onChange={(e) =>
+                    checked={pushEnabled}
+                    disabled={pushBlockedByPhone}
+                    onChange={(e) => {
+                      const nextChecked = e.target.checked;
+                      if (nextChecked && pushBlockedByPhone) {
+                        setPushError(
+                          "Verify your phone number before enabling push notifications."
+                        );
+                        return;
+                      }
+                      setPushError(null);
                       setProfile({
                         ...profile,
                         notificationSettings: {
                           ...profile.notificationSettings,
-                          pushEnabled: e.target.checked,
+                          pushEnabled: nextChecked,
                         },
-                      })
-                    }
+                      });
+                    }}
                   />
                   <span>Enable push notifications</span>
                 </div>
+                {pushBlockedByPhone && phoneVerificationLabel && (
+                  <p className={phoneVerified === null ? "security-muted" : "status status-error"}>
+                    {phoneVerificationLabel}
+                  </p>
+                )}
                 {pushStatusLabel && <p className="security-muted">{pushStatusLabel}</p>}
                 {pushError && <p className="status status-error">{pushError}</p>}
               </div>
@@ -4645,7 +4984,7 @@ export default function Me() {
 
         {isSettingsView && settingsSection === "changes" && (
         <div className="panel-grid">
-          <section className="panel">
+          <section className="panel profile-settings-panel">
             <div className="panel-header">
               <div>
                 <p className="eyebrow">Account</p>

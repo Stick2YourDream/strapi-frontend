@@ -1254,8 +1254,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       let segmentationFailed = false;
       let segmentationLoading = false;
       const segmentationIntervalMs = 1000 / 30;
-      const maskBlurPx = 6;
-      const maskShrinkPx = 2;
+      const maskBlurPx = 3;
+      const maskShrinkPx = 0;
       let segmenter: SelfieSegmentationInstance | null = null;
       let closed = false;
 

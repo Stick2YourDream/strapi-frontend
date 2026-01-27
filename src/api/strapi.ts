@@ -24,7 +24,7 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
     "/auth/reset-password",
     "/register",
   ]);
-  const isPublicEndpoint = publicAuthEndpoints.has(path);
+  const isPublicEndpoint = publicAuthEndpoints.has(path) || path.startsWith("/news");
 
   const headers = (config.headers ??
     {}) as AxiosRequestHeaders & { [key: string]: any };

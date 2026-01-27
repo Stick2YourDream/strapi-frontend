@@ -4,7 +4,11 @@ import { useNavigate } from "react-router-dom";
 import { gsap } from "gsap";
 import api from "../api/strapi";
 import { useAuth } from "../context/AuthContext";
-import { useNotifications, type FriendRequestPreview } from "../hooks/useNotifications";
+import {
+  useNotifications,
+  type BirthdayPreview,
+  type FriendRequestPreview,
+} from "../hooks/useNotifications";
 import { usePageMeta } from "../hooks/usePageMeta";
 import {
   buildProfilePayloadFromAttrs,
@@ -24,6 +28,12 @@ const INTENT_OPTIONS = [
   { id: "find-accountability", label: "Find Accountability", detail: "Supportive check-ins" },
 ];
 
+const BIRTHDAY_MESSAGES = [
+  "Happy birthday!",
+  "Have an awesome birthday!",
+  "Hope you have a great day!",
+];
+
 const trimPreviewText = (value?: string, max = 72) => {
   const cleaned = String(value || "").replace(/\s+/g, " ").trim();
   if (!cleaned) return "";
@@ -33,6 +43,7 @@ const trimPreviewText = (value?: string, max = 72) => {
 };
 
 export default function Landing() {
+  const heroTitle = "A social place built for people, not companies.";
   const navigate = useNavigate();
   const { user, profile, logout } = useAuth();
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -53,9 +64,18 @@ export default function Landing() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [selectedIntent, setSelectedIntent] = useState("");
   const [intentOpen, setIntentOpen] = useState(false);
-  const { counts, total, loading, refresh, markAllRead, previews, acceptFriendRequest } =
-    useNotifications(user?.id, profile?.notificationSettings);
+  const {
+    counts,
+    total,
+    loading,
+    refresh,
+    markAllRead,
+    previews,
+    acceptFriendRequest,
+    sendBirthdayMessage,
+  } = useNotifications(user?.id, profile?.notificationSettings);
   const [acceptingRequests, setAcceptingRequests] = useState<Record<string, boolean>>({});
+  const [birthdaySending, setBirthdaySending] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     const root = rootRef.current;
@@ -184,6 +204,17 @@ export default function Landing() {
       : `${previews.messages.senderName} sent you a new message.`;
   }, [counts.messages, previews.messages]);
 
+  const birthdayPreviewText = useMemo(() => {
+    if (counts.birthdays <= 0) return "";
+    if (!previews.birthdays.length) return "A friend has a birthday today.";
+    const [first] = previews.birthdays;
+    const remaining = Math.max(0, counts.birthdays - 1);
+    if (remaining > 0) {
+      return `${first.displayName} and ${remaining} other friends have birthdays today.`;
+    }
+    return `It is ${first.displayName}'s birthday today.`;
+  }, [counts.birthdays, previews.birthdays]);
+
   const friendPostPreviewText = useMemo(() => {
     if (counts.friendPosts <= 0) return "";
     if (!previews.friendPosts) return "New friend posts are waiting.";
@@ -251,6 +282,21 @@ export default function Landing() {
     });
   };
 
+  const handleBirthdayMessage = async (preview: BirthdayPreview, message: string) => {
+    const key = `${preview.userId}:${message}`;
+    if (birthdaySending[key]) return;
+    setBirthdaySending((prev) => ({ ...prev, [key]: true }));
+    const ok = await sendBirthdayMessage(preview, message);
+    if (!ok) {
+      console.error("Failed to send birthday message");
+    }
+    setBirthdaySending((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+
   const handleProfileAction = (path: string) => {
     navigate(path);
     setProfileMenuOpen(false);
@@ -258,6 +304,9 @@ export default function Landing() {
   };
 
   const handleNotificationAction = (path: string) => {
+    if (total > 0) {
+      markAllRead();
+    }
     navigate(path);
     setProfileMenuOpen(false);
     setShowNotifications(false);
@@ -277,6 +326,58 @@ export default function Landing() {
         {counts.messages > 0 && messagePreviewText && (
           <div className="landing-notification-preview">
             <span className="landing-notification-preview-text">{messagePreviewText}</span>
+          </div>
+        )}
+      </div>
+      <div className="landing-notification-group">
+        <button
+          type="button"
+          className="landing-notification-item is-action"
+          onClick={() => handleNotificationAction("/friends")}
+        >
+          <span>Birthdays</span>
+          <span className="landing-notification-count">{counts.birthdays}</span>
+        </button>
+        {counts.birthdays > 0 && (
+          <div className="landing-notification-preview-list">
+            {previews.birthdays.length > 0 ? (
+              previews.birthdays.map((birthday) => (
+                <div key={birthday.id} className="landing-notification-preview">
+                  <div className="landing-notification-preview-row">
+                    <span className="landing-notification-preview-text">
+                      {birthday.displayName} has a birthday today.
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                    {BIRTHDAY_MESSAGES.map((message) => {
+                      const key = `${birthday.userId}:${message}`;
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          className="landing-notification-action"
+                          disabled={birthdaySending[key]}
+                          onClick={() => void handleBirthdayMessage(birthday, message)}
+                        >
+                          {birthdaySending[key] ? "Sending..." : message}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="landing-notification-preview">
+                <span className="landing-notification-preview-text">
+                  {birthdayPreviewText || "A friend has a birthday today."}
+                </span>
+              </div>
+            )}
+            {previews.birthdays.length > 0 && counts.birthdays > previews.birthdays.length && (
+              <div className="landing-notification-preview-more">
+                +{counts.birthdays - previews.birthdays.length} more birthdays
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -615,7 +716,11 @@ export default function Landing() {
               <span className="pill2">Private messages</span>
               <span className="pill2">Daily momentum</span>
             </div>
-            <h1 className="hero-title">A social place built for people, not companies.</h1>
+            <h1 className="hero-title">
+              <span className="hero-title-text" data-text={heroTitle}>
+                {heroTitle}
+              </span>
+            </h1>
             <p className="hero-message">
               Your Social Place is where real people show up for each other. Share your goals, get
               honest feedback, and keep your momentum without chasing ads or algorithms. This space

@@ -62,6 +62,27 @@
   color: #9aa5bb;
 }
 
+.key-backup-device {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(10, 16, 28, 0.5);
+}
+
+.key-backup-device h4 {
+  margin: 0;
+  font-size: 15px;
+  color: #e5e7eb;
+}
+
+.key-backup-device-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .key-backup-field {
   display: grid;
   gap: 6px;

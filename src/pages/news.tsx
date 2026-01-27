@@ -19,6 +19,7 @@ import {
   fetchNewsLastUpdated,
   fetchNewsPageCount,
   fetchNewsPageSize,
+  fetchNewsPages,
   fetchNewsProviders,
   fetchNewsReadable,
   fetchNewsSources,
@@ -430,23 +431,59 @@ export default function News() {
       return;
     }
     let active = true;
+    const articleUrl = activeArticle.url;
+    const hydrateFromPages = async (base?: NewsReadable | null) => {
+      const pages = await fetchNewsPages({ url: articleUrl, limit: 1, offset: 0 });
+      const page = pages[0];
+      if (!page?.finalHtml) return false;
+      if (!active) return true;
+      setReadableArticle({
+        ...(base || {}),
+        url: base?.url || articleUrl,
+        title: base?.title || activeArticle?.title,
+        publishedAt: base?.publishedAt || activeArticle?.publishedAt,
+        source: base?.source || activeArticle?.source,
+        provider: base?.provider || activeArticle?.provider,
+        html: page.finalHtml,
+      });
+      return true;
+    };
     setReadableLoading(true);
     setReadableError(null);
     stopSpeech();
-    fetchNewsReadable(activeArticle.url)
-      .then((result) => {
+    const loadReadable = async () => {
+      try {
+        const result = await fetchNewsReadable(articleUrl);
         if (!active) return;
-        setReadableArticle(result);
-      })
-      .catch(() => {
+        const hasBody = Boolean(result?.text || result?.content || result?.html);
+        if (hasBody) {
+          setReadableArticle(result);
+          return;
+        }
+        const hydrated = await hydrateFromPages(result);
+        if (!hydrated) {
+          setReadableArticle(result);
+          setReadableError("Unable to load the read-only view.");
+        }
+      } catch {
         if (!active) return;
-        setReadableError("Unable to load the read-only view.");
-        setReadableArticle(null);
-      })
-      .finally(() => {
+        try {
+          const hydrated = await hydrateFromPages(null);
+          if (!hydrated) {
+            setReadableArticle(null);
+            setReadableError("Unable to load the read-only view.");
+          }
+        } catch {
+          if (!active) return;
+          setReadableArticle(null);
+          setReadableError("Unable to load the read-only view.");
+        }
+      } finally {
         if (!active) return;
         setReadableLoading(false);
-      });
+      }
+    };
+    void loadReadable();
     return () => {
       active = false;
     };

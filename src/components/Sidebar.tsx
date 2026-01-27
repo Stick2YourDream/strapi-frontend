@@ -2,7 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import api from "../api/strapi";
-import { useNotifications, type FriendRequestPreview } from "../hooks/useNotifications";
+import {
+  useNotifications,
+  type BirthdayPreview,
+  type FriendRequestPreview,
+} from "../hooks/useNotifications";
 import {
   buildProfilePayloadFromAttrs,
   decryptOwnProfilePayload,
@@ -32,6 +36,12 @@ const SETTINGS_SECTIONS: { id: SettingsSection; label: string }[] = [
   { id: "privacy", label: "Visibility & Discoverability" },
   { id: "notifications", label: "Sound, Vibration & Quiet Hours" },
   { id: "changes", label: "Changes & Deactivation" },
+];
+
+const BIRTHDAY_MESSAGES = [
+  "Happy birthday!",
+  "Have an awesome birthday!",
+  "Hope you have a great day!",
 ];
 
 type SidebarProps = {
@@ -68,9 +78,18 @@ export default function Sidebar({
   const [menuOpen, setMenuOpen] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
-  const { counts, total, loading, refresh, markAllRead, previews, acceptFriendRequest } =
-    useNotifications(user?.id, profile?.notificationSettings);
+  const {
+    counts,
+    total,
+    loading,
+    refresh,
+    markAllRead,
+    previews,
+    acceptFriendRequest,
+    sendBirthdayMessage,
+  } = useNotifications(user?.id, profile?.notificationSettings);
   const [acceptingRequests, setAcceptingRequests] = useState<Record<string, boolean>>({});
+  const [birthdaySending, setBirthdaySending] = useState<Record<string, boolean>>({});
 
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
   const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
@@ -184,6 +203,9 @@ export default function Sidebar({
   };
 
   const handleNotificationAction = (path: string) => {
+    if (total > 0) {
+      markAllRead();
+    }
     navigate(path);
     setShowProfileMenu(false);
     setShowNotifications(false);
@@ -198,7 +220,7 @@ export default function Sidebar({
   // prefer handle if loaded, else email
   const secondaryLine = profileCard?.handle || "Profile";
   const fallbackInitial = nameForDisplay.charAt(0).toUpperCase();
-  const canToggleSettings = active === "me" && typeof onSettingsViewChange === "function";
+  const canToggleSettings = false;
   const isSettingsView = settingsView === "settings";
   const canSelectSettingsSection =
     canToggleSettings &&
@@ -241,6 +263,17 @@ export default function Sidebar({
       ? `${previews.messages.senderName} sent you a new message: "${snippet}"`
       : `${previews.messages.senderName} sent you a new message.`;
   }, [counts.messages, previews.messages]);
+
+  const birthdayPreviewText = useMemo(() => {
+    if (counts.birthdays <= 0) return "";
+    if (!previews.birthdays.length) return "A friend has a birthday today.";
+    const [first] = previews.birthdays;
+    const remaining = Math.max(0, counts.birthdays - 1);
+    if (remaining > 0) {
+      return `${first.displayName} and ${remaining} other friends have birthdays today.`;
+    }
+    return `It is ${first.displayName}'s birthday today.`;
+  }, [counts.birthdays, previews.birthdays]);
 
   const friendPostPreviewText = useMemo(() => {
     if (counts.friendPosts <= 0) return "";
@@ -309,6 +342,21 @@ export default function Sidebar({
     });
   };
 
+  const handleBirthdayMessage = async (preview: BirthdayPreview, message: string) => {
+    const key = `${preview.userId}:${message}`;
+    if (birthdaySending[key]) return;
+    setBirthdaySending((prev) => ({ ...prev, [key]: true }));
+    const ok = await sendBirthdayMessage(preview, message);
+    if (!ok) {
+      console.error("Failed to send birthday message");
+    }
+    setBirthdaySending((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+
   const renderNotificationList = () => (
     <div className="sidebar-notification-list">
       <div className="sidebar-notification-group">
@@ -323,6 +371,58 @@ export default function Sidebar({
         {counts.messages > 0 && messagePreviewText && (
           <div className="sidebar-notification-preview">
             <span className="sidebar-notification-preview-text">{messagePreviewText}</span>
+          </div>
+        )}
+      </div>
+      <div className="sidebar-notification-group">
+        <button
+          type="button"
+          className="sidebar-notification-item is-action"
+          onClick={() => handleNotificationAction("/friends")}
+        >
+          <span>Birthdays</span>
+          <span className="sidebar-notification-count">{counts.birthdays}</span>
+        </button>
+        {counts.birthdays > 0 && (
+          <div className="sidebar-notification-preview-list">
+            {previews.birthdays.length > 0 ? (
+              previews.birthdays.map((birthday) => (
+                <div key={birthday.id} className="sidebar-notification-preview">
+                  <div className="sidebar-notification-preview-row">
+                    <span className="sidebar-notification-preview-text">
+                      {birthday.displayName} has a birthday today.
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                    {BIRTHDAY_MESSAGES.map((message) => {
+                      const key = `${birthday.userId}:${message}`;
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          className="sidebar-notification-action"
+                          disabled={birthdaySending[key]}
+                          onClick={() => void handleBirthdayMessage(birthday, message)}
+                        >
+                          {birthdaySending[key] ? "Sending..." : message}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="sidebar-notification-preview">
+                <span className="sidebar-notification-preview-text">
+                  {birthdayPreviewText || "A friend has a birthday today."}
+                </span>
+              </div>
+            )}
+            {previews.birthdays.length > 0 && counts.birthdays > previews.birthdays.length && (
+              <div className="sidebar-notification-preview-more">
+                +{counts.birthdays - previews.birthdays.length} more birthdays
+              </div>
+            )}
           </div>
         )}
       </div>
