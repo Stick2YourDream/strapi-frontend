@@ -7,19 +7,11 @@ const STORAGE_KEY = "releaseNotesDismissedVersion";
 const SESSION_PREFIX = "releaseNotesClosed:";
 
 const RELEASE_NOTES = [
-  "Moved links from My Dashboard to permanently show on the left sidebar for desktop version.",
-  "Made change for previously logged in users to automatically be directed to their Dashboard page upon visit to the site and/or app.",
-  "Added \"Like\", \"Comment\", and \"Subscribe\" buttons to the bottom of each user post.",
-  "Added Moderator and Admin UI.",
-  "Password minimum length is now 8 characters instead of 12.",
-  "Added GUI for Moderators and Admins to restrict users if necessary.",
   "Added Filters for Dashboard to View Posts by Friends, Public, Private, or All Posts.",
   "Added more interactivitiy with posts",
   "Redesigned Landing Page to remove unncessary clutter",
   "Added Feedback Request to Notificatons",
-  "Added News App Integration with Dashboard (News App Created By Mycstro)",
   "Improved UI of Video Calling",
-  "Changed Verification of Emails to use OTP instead of LInk",
   "New Landing Page Design",
   "Added Birthday Notifications and Reactions",
   "Updated My Profile UI to be more user friendly",

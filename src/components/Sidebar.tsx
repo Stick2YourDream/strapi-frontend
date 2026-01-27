@@ -180,6 +180,17 @@ export default function Sidebar({
     setShowNotifications(false);
   }, [active]);
 
+  useEffect(() => {
+    if (!showNotifications) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeNotifications();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [showNotifications]);
+
   const profileCard = useMemo(() => {
     if (!user) return null;
     return {
@@ -199,6 +210,20 @@ export default function Sidebar({
     navigate(path);
     setShowProfileMenu(false);
     setShowNotifications(false);
+    setMenuOpen(false);
+  };
+
+  const closeNotifications = () => {
+    setShowNotifications(false);
+  };
+
+  const toggleNotifications = () => {
+    setShowNotifications((prev) => {
+      const next = !prev;
+      if (next) refresh();
+      return next;
+    });
+    setShowProfileMenu(false);
     setMenuOpen(false);
   };
 
@@ -627,12 +652,7 @@ export default function Sidebar({
             type="button"
             className="sidebar-bell mobile-topbar-bell"
             aria-label={`Notifications (${total})`}
-            onClick={() => {
-              setShowNotifications((v) => !v);
-              setShowProfileMenu(false);
-              setMenuOpen(false);
-              refresh();
-            }}
+            onClick={toggleNotifications}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path
@@ -755,10 +775,31 @@ export default function Sidebar({
               </button>
             </div>
           )}
-          {showNotifications && (
-            <div className="mobile-notification-panel">
-              <div className="sidebar-notification-header">
+        </div>
+      </div>
+
+      {showNotifications && (
+        <div
+          className="sidebar-notification-tray"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Notifications"
+        >
+          <button
+            type="button"
+            className="sidebar-notification-tray-backdrop"
+            aria-label="Close notifications"
+            onClick={closeNotifications}
+          />
+          <div className="sidebar-notification-tray-panel">
+            <div className="sidebar-notification-header sidebar-notification-tray-header">
+              <div className="sidebar-notification-tray-title">
                 <strong>Notifications</strong>
+                <span className="sidebar-notification-tray-subtitle">
+                  {total > 0 ? `${total} new updates` : "All caught up"}
+                </span>
+              </div>
+              <div className="sidebar-notification-tray-actions">
                 <button
                   type="button"
                   className="btn ghost"
@@ -767,12 +808,27 @@ export default function Sidebar({
                 >
                   Mark read
                 </button>
+                <button
+                  type="button"
+                  className="sidebar-notification-close"
+                  onClick={closeNotifications}
+                  aria-label="Close notifications"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M6 6 18 18M18 6 6 18"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </button>
               </div>
-              {renderNotificationList()}
             </div>
-          )}
+            {renderNotificationList()}
+          </div>
         </div>
-      </div>
+      )}
 
       <aside className="dash-nav">
         <button className="brand" type="button" onClick={handleLogoClick} style={{ cursor: "pointer" }}>
@@ -852,11 +908,7 @@ export default function Sidebar({
                   type="button"
                   className="sidebar-bell"
                   aria-label={`Notifications (${total})`}
-                  onClick={() => {
-                    setShowNotifications((v) => !v);
-                    setShowProfileMenu(false);
-                    refresh();
-                  }}
+                  onClick={toggleNotifications}
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true">
                     <path
@@ -871,23 +923,6 @@ export default function Sidebar({
                   )}
                 </button>
               </div>
-              {showNotifications && (
-                <div className="sidebar-notification-panel">
-                  <div className="sidebar-notification-header">
-                    <strong>Notifications</strong>
-                    <button
-                      type="button"
-                      className="btn ghost"
-                      onClick={markAllRead}
-                      disabled={total === 0}
-                    >
-                      Mark read
-                    </button>
-                  </div>
-                  {renderNotificationList()}
-                </div>
-              )}
-
               {showProfileMenu && (
                 <div
                   id="sidebar-profile-menu"
