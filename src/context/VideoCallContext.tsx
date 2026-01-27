@@ -1233,7 +1233,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       }
       screenShareSendersRef.current.set(socketId, existing);
     },
-    [getOutgoingAudioTrack, requestVideoKeyFrame, setupSenderE2ee, tuneSenderForLowLatency]
+    [requestVideoKeyFrame, setupSenderE2ee]
   );
 
   const removeScreenShareTracks = useCallback(() => {
