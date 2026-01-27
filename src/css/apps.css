@@ -28,6 +28,26 @@
   color: #9aa3b5;
 }
 
+.apps-apk-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+  color: #d2d7e4;
+}
+
+.apps-apk-label {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 11px;
+  color: #8fb5ff;
+}
+
+.apps-apk-version {
+  font-weight: 600;
+}
+
 .apps-grid {
   display: grid;
   gap: 16px;

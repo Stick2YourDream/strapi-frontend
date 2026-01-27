@@ -536,6 +536,10 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     maxParticipants,
     isVideoEnabled,
     isAudioEnabled,
+    noiseSuppressionEnabled,
+    lowLatencyMode,
+    lowLatencySuggested,
+    lowLatencySuggestionReason,
     isHolding,
     isOnHold,
     selectedAudioInputId,
@@ -553,6 +557,8 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     endCall,
     toggleVideo,
     toggleAudio,
+    toggleNoiseSuppression,
+    toggleLowLatencyMode,
     setAudioInputDevice,
     setVideoInputDevice,
     startScreenShare,
@@ -609,6 +615,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const [audioInputError, setAudioInputError] = useState<string | null>(null);
   const [videoInputs, setVideoInputs] = useState<MediaDeviceInfo[]>([]);
   const [videoInputError, setVideoInputError] = useState<string | null>(null);
+  const [lowLatencyDismissed, setLowLatencyDismissed] = useState(false);
   const [showControlHelper, setShowControlHelper] = useState(false);
   const [controlHelperCode, setControlHelperCode] = useState("");
   const [controlHelperStatus, setControlHelperStatus] = useState<
@@ -1721,6 +1728,12 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     };
   }, [isHolding, isOnHold, showCallUi]);
 
+  useEffect(() => {
+    if (!lowLatencySuggested || lowLatencyMode) {
+      setLowLatencyDismissed(false);
+    }
+  }, [lowLatencyMode, lowLatencySuggested]);
+
   if (!showModal) return null;
 
   const modalContent = (
@@ -1764,6 +1777,45 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                     </select>
                   </label>
                 )}
+                <button
+                  type="button"
+                  className={`video-control video-control-icon${
+                    noiseSuppressionEnabled ? " is-active" : " is-off"
+                  }`}
+                  onClick={toggleNoiseSuppression}
+                  data-hint={noiseSuppressionEnabled ? "Noise filter on" : "Noise filter off"}
+                  aria-label={
+                    noiseSuppressionEnabled ? "Noise filter on" : "Noise filter off"
+                  }
+                  title={
+                    noiseSuppressionEnabled ? "Noise filter on" : "Noise filter off"
+                  }
+                >
+                  <i
+                    className={`fa-solid ${
+                      noiseSuppressionEnabled ? "fa-wave-square" : "fa-wave-square"
+                    }`}
+                    aria-hidden="true"
+                  />
+                </button>
+                <button
+                  type="button"
+                  className={`video-control video-control-icon${
+                    lowLatencyMode ? " is-active" : " is-off"
+                  }`}
+                  onClick={toggleLowLatencyMode}
+                  data-hint={
+                    lowLatencyMode ? "Low latency on" : "Low latency off"
+                  }
+                  aria-label={
+                    lowLatencyMode ? "Low latency on" : "Low latency off"
+                  }
+                  title={
+                    lowLatencyMode ? "Low latency on" : "Low latency off"
+                  }
+                >
+                  <i className="fa-solid fa-bolt" aria-hidden="true" />
+                </button>
                 <button
                   type="button"
                   className={`video-control video-control-icon${
@@ -1872,6 +1924,30 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
           {(audioInputError || videoInputError) && (
             <div className="video-control-status">
               {audioInputError || videoInputError}
+            </div>
+          )}
+          {showCallUi && lowLatencySuggested && !lowLatencyMode && !lowLatencyDismissed && (
+            <div className="video-control-status info">
+              <span>
+                Low latency suggested.
+                {lowLatencySuggestionReason ? ` ${lowLatencySuggestionReason}` : ""}
+              </span>
+              <div className="video-control-status-actions">
+                <button
+                  type="button"
+                  className="video-control-status-btn"
+                  onClick={toggleLowLatencyMode}
+                >
+                  Enable
+                </button>
+                <button
+                  type="button"
+                  className="video-control-status-btn ghost"
+                  onClick={() => setLowLatencyDismissed(true)}
+                >
+                  Not now
+                </button>
+              </div>
             </div>
           )}
           <div className="video-call-header">

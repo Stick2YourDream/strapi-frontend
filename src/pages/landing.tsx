@@ -806,6 +806,19 @@ export default function Landing() {
               <a href="/delete-data">Delete data</a>
               <a href="/cookies">Cookie Policy</a>
             </div>
+            <div className="footer-column footer-apps">
+              <span className="footer-title">Apps</span>
+              <a className="footer-app-badge" href="/apps">
+                Install the app
+              </a>
+              <a
+                className="footer-app-badge secondary"
+                href="/downloads/yoursocialplace-android.apk"
+                download
+              >
+                Download Android APK
+              </a>
+            </div>
             <div className="footer-column footer-contact">
               <span className="footer-title">Connect</span>
               <a href="mailto:support@yoursocialplace.com">Contact</a>

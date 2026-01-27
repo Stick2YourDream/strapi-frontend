@@ -1587,6 +1587,37 @@
   padding: 6px 16px 12px;
   font-size: 0.7rem;
   color: #fca5a5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.video-control-status.info {
+  color: #bfdbfe;
+}
+
+.video-control-status-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.video-control-status-btn {
+  border: none;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  cursor: pointer;
+  background: linear-gradient(135deg, #5cf0c7, #3b82f6);
+  color: #0b0d14;
+}
+
+.video-control-status-btn.ghost {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e2e8f0;
+  border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
 .video-control:hover {

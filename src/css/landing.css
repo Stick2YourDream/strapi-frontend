@@ -1268,6 +1268,36 @@
   line-height: 1.55;
 }
 
+.footer-apps {
+  gap: 10px;
+}
+
+.footer-apps .footer-app-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: #0b0d14;
+  font-weight: 700;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.footer-apps .footer-app-badge.secondary {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--mist);
+  box-shadow: none;
+}
+
+.footer-apps .footer-app-badge:hover {
+  transform: translateY(-1px);
+  color: inherit;
+}
+
 .footer-column a:hover {
   color: var(--mist);
 }

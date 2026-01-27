@@ -39,6 +39,8 @@ export default function Apps() {
   );
   const [isStandalone, setIsStandalone] = useState(isStandaloneMode());
   const [platform, setPlatform] = useState(detectPlatform());
+  const apkVersion = (import.meta.env.VITE_ANDROID_APK_VERSION as string | undefined) || "";
+  const apkCode = (import.meta.env.VITE_ANDROID_APK_CODE as string | undefined) || "";
 
   usePageMeta({
     title: "Install the App | Your Social Place",
@@ -93,6 +95,14 @@ export default function Apps() {
   };
 
   const apkUrl = "/downloads/yoursocialplace-android.apk";
+  const apkLabel = useMemo(() => {
+    if (!apkVersion && !apkCode) {
+      return "Build info will appear after the next deploy.";
+    }
+    const versionPart = apkVersion ? `v${apkVersion}` : "Version";
+    const codePart = apkCode ? ` (code ${apkCode})` : "";
+    return `${versionPart}${codePart}`;
+  }, [apkCode, apkVersion]);
 
   return (
     <div className="pwa-shell apps-shell">
@@ -129,6 +139,10 @@ export default function Apps() {
             >
               Back home
             </button>
+          </div>
+          <div className="apps-apk-meta">
+            <span className="apps-apk-label">Android APK</span>
+            <span className="apps-apk-version">{apkLabel}</span>
           </div>
           <p className="apps-muted">
             Android installs may require enabling “Install unknown apps” for your browser.

@@ -163,6 +163,10 @@ type VideoCallContextValue = {
   maxParticipants: number;
   isVideoEnabled: boolean;
   isAudioEnabled: boolean;
+  noiseSuppressionEnabled: boolean;
+  lowLatencyMode: boolean;
+  lowLatencySuggested: boolean;
+  lowLatencySuggestionReason: string | null;
   isHolding: boolean;
   isOnHold: boolean;
   selectedAudioInputId: string;
@@ -170,6 +174,8 @@ type VideoCallContextValue = {
   isScreenSharing: boolean;
   videoEffects: VideoCallEffects;
   setVideoEffects: (effects: Partial<VideoCallEffects>) => void;
+  toggleNoiseSuppression: () => void;
+  toggleLowLatencyMode: () => void;
   onlineUserIds: Set<number>;
   openCallComposer: (invitees?: VideoCallInvitee[]) => void;
   closeCallComposer: () => void;
@@ -211,6 +217,8 @@ const CALL_E2EE_ENABLED = ["1", "true", "on", "yes"].includes(
   String(import.meta.env.VITE_CALL_E2EE || "").toLowerCase()
 );
 const AUDIO_SYNC_DELAY_SEC = 0.14;
+const NOISE_SUPPRESSION_STORAGE_KEY = "call:noise-suppression";
+const LOW_LATENCY_STORAGE_KEY = "call:low-latency";
 
 const isChromeOrEdge = () => {
   if (typeof navigator === "undefined") return false;
@@ -391,6 +399,22 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     filter: "none",
   });
   const [onlineUserIds, setOnlineUserIds] = useState<Set<number>>(new Set());
+  const [noiseSuppressionEnabled, setNoiseSuppressionEnabled] = useState(() => {
+    if (typeof window === "undefined") return true;
+    const stored = window.localStorage.getItem(NOISE_SUPPRESSION_STORAGE_KEY);
+    if (!stored) return true;
+    return stored === "1";
+  });
+  const [lowLatencyMode, setLowLatencyMode] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const stored = window.localStorage.getItem(LOW_LATENCY_STORAGE_KEY);
+    if (!stored) return false;
+    return stored === "1";
+  });
+  const [lowLatencySuggested, setLowLatencySuggested] = useState(false);
+  const [lowLatencySuggestionReason, setLowLatencySuggestionReason] = useState<string | null>(
+    null
+  );
   const socketRef = useRef<Socket | null>(null);
   const peersRef = useRef<Map<string, RTCPeerConnection>>(new Map());
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -416,6 +440,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const localSocketIdRef = useRef<string | null>(null);
   const incomingCallRef = useRef<IncomingCall | null>(null);
   const videoEffectsRef = useRef(videoEffects);
+  const noiseSuppressionRef = useRef(noiseSuppressionEnabled);
+  const lowLatencyModeRef = useRef(lowLatencyMode);
   const holdEnabledRef = useRef(false);
   const holdRestoreRef = useRef<{ audio: boolean; video: boolean }>({
     audio: true,
@@ -481,6 +507,154 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     () => isHolding || Object.values(remoteHoldStates).some(Boolean),
     [isHolding, remoteHoldStates]
   );
+
+  useEffect(() => {
+    noiseSuppressionRef.current = noiseSuppressionEnabled;
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(
+      NOISE_SUPPRESSION_STORAGE_KEY,
+      noiseSuppressionEnabled ? "1" : "0"
+    );
+  }, [noiseSuppressionEnabled]);
+
+  useEffect(() => {
+    lowLatencyModeRef.current = lowLatencyMode;
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(LOW_LATENCY_STORAGE_KEY, lowLatencyMode ? "1" : "0");
+  }, [lowLatencyMode]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const connection =
+      (navigator as any).connection ||
+      (navigator as any).mozConnection ||
+      (navigator as any).webkitConnection;
+    if (!connection) return;
+
+    const evaluate = () => {
+      const effectiveType = String(connection.effectiveType || "").toLowerCase();
+      const downlink = Number(connection.downlink || 0);
+      const rtt = Number(connection.rtt || 0);
+      const saveData = Boolean(connection.saveData);
+      let suggested = false;
+      let reason: string | null = null;
+      if (saveData) {
+        suggested = true;
+        reason = "Data Saver is enabled.";
+      } else if (["slow-2g", "2g", "3g"].includes(effectiveType)) {
+        suggested = true;
+        reason = `Network type: ${effectiveType}.`;
+      } else if (downlink > 0 && downlink < 2) {
+        suggested = true;
+        reason = `Estimated downlink: ${downlink.toFixed(1)} Mbps.`;
+      } else if (rtt > 200) {
+        suggested = true;
+        reason = `High latency: ${Math.round(rtt)} ms.`;
+      }
+      setLowLatencySuggested(suggested);
+      setLowLatencySuggestionReason(reason);
+    };
+
+    evaluate();
+    connection.addEventListener?.("change", evaluate);
+    return () => {
+      connection.removeEventListener?.("change", evaluate);
+    };
+  }, []);
+
+  const applyTrackHints = useCallback((track: MediaStreamTrack | null) => {
+    if (!track) return;
+    if (track.kind === "video") {
+      try {
+        track.contentHint = "motion";
+      } catch {
+        // ignore unsupported hints
+      }
+    }
+    if (track.kind === "audio") {
+      try {
+        track.contentHint = "speech";
+      } catch {
+        // ignore unsupported hints
+      }
+    }
+  }, []);
+
+  const buildAudioConstraints = useCallback(
+    (deviceId: string | null, noiseSuppression: boolean) => {
+      const constraints: MediaTrackConstraints = {
+        noiseSuppression,
+        echoCancellation: true,
+        autoGainControl: true,
+      };
+      if (deviceId && deviceId !== "default") {
+        constraints.deviceId = { exact: deviceId };
+      }
+      return constraints;
+    },
+    []
+  );
+
+  const buildVideoConstraints = useCallback((deviceId: string | null, lowLatency: boolean) => {
+    const constraints: MediaTrackConstraints = {
+      width: { ideal: lowLatency ? 640 : 1280 },
+      height: { ideal: lowLatency ? 360 : 720 },
+      frameRate: { ideal: lowLatency ? 24 : 30 },
+    };
+    if (deviceId && deviceId !== "default") {
+      constraints.deviceId = { exact: deviceId };
+    }
+    return constraints;
+  }, []);
+
+  const tuneSenderForLowLatency = useCallback((sender?: RTCRtpSender | null) => {
+    if (!sender?.track) return;
+    try {
+      const params = sender.getParameters();
+      if (!params) return;
+      const encodings = params.encodings?.length ? params.encodings : [{}];
+      if (sender.track.kind === "video") {
+        params.degradationPreference = "maintain-framerate";
+        if (lowLatencyModeRef.current) {
+          encodings[0] = {
+            ...encodings[0],
+            maxFramerate: 24,
+            maxBitrate: 600_000,
+            scaleResolutionDownBy: 1.5,
+            priority: "high",
+            networkPriority: "high",
+          };
+        } else {
+          encodings[0] = {
+            ...encodings[0],
+            maxFramerate: 30,
+            maxBitrate: 2_000_000,
+            scaleResolutionDownBy: 1,
+            priority: "high",
+            networkPriority: "high",
+          };
+        }
+      } else if (sender.track.kind === "audio") {
+        encodings[0] = {
+          ...encodings[0],
+          priority: "high",
+          networkPriority: "high",
+        };
+      }
+      params.encodings = encodings;
+      sender.setParameters(params).catch(() => undefined);
+    } catch {
+      // ignore parameter errors
+    }
+  }, []);
+
+  const applyLowLatencyToSenders = useCallback(() => {
+    peersRef.current.forEach((pc) => {
+      pc.getSenders().forEach((sender) => {
+        tuneSenderForLowLatency(sender);
+      });
+    });
+  }, [tuneSenderForLowLatency]);
 
   const getPeerNegotiationState = useCallback((socketId: string) => {
     const existing = peerNegotiationRef.current.get(socketId);
@@ -1059,7 +1233,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       }
       screenShareSendersRef.current.set(socketId, existing);
     },
-    [requestVideoKeyFrame, setupSenderE2ee]
+    [getOutgoingAudioTrack, requestVideoKeyFrame, setupSenderE2ee, tuneSenderForLowLatency]
   );
 
   const removeScreenShareTracks = useCallback(() => {
@@ -1644,9 +1818,11 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
               }
             }
             setupSenderE2ee(sender);
+            tuneSenderForLowLatency(sender);
           } else {
             const newSender = pc.addTrack(track, stream);
             setupSenderE2ee(newSender);
+            tuneSenderForLowLatency(newSender);
           }
         });
         const screenSender = screenShareSendersRef.current.get(socketId)?.video;
@@ -1663,10 +1839,12 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
               }
             }
             setupSenderE2ee(videoSender);
+            tuneSenderForLowLatency(videoSender);
             requestVideoKeyFrame(videoSender);
           } else {
             const newSender = pc.addTrack(videoTrack, stream);
             setupSenderE2ee(newSender);
+            tuneSenderForLowLatency(newSender);
             requestVideoKeyFrame(newSender);
           }
         } else if (videoSender) {
@@ -1865,20 +2043,21 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       setSelectedAudioInputId(normalized);
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          audio:
-            normalized === "default"
-              ? true
-              : { deviceId: { exact: normalized } },
+          audio: buildAudioConstraints(
+            normalized === "default" ? null : normalized,
+            noiseSuppressionRef.current
+          ),
           video: false,
         });
         const [track] = stream.getAudioTracks();
         if (!track) return;
+        applyTrackHints(track);
         replaceAudioTrack(track);
       } catch {
         setError("Unable to switch microphone.");
       }
     },
-    [replaceAudioTrack]
+    [applyTrackHints, buildAudioConstraints, replaceAudioTrack]
   );
 
   const setVideoInputDevice = useCallback(
@@ -1892,21 +2071,68 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       setSelectedVideoInputId(normalized);
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video:
-            normalized === "default"
-              ? true
-              : { deviceId: { exact: normalized } },
+          video: buildVideoConstraints(
+            normalized === "default" ? null : normalized,
+            lowLatencyModeRef.current
+          ),
           audio: false,
         });
         const [track] = stream.getVideoTracks();
         if (!track) return;
+        applyTrackHints(track);
         replaceVideoTrack(track);
       } catch {
         setError("Unable to switch camera.");
       }
     },
-    [replaceVideoTrack]
+    [applyTrackHints, buildVideoConstraints, replaceVideoTrack]
   );
+
+  const toggleNoiseSuppression = useCallback(async () => {
+    const next = !noiseSuppressionRef.current;
+    setNoiseSuppressionEnabled(next);
+    if (!navigator.mediaDevices?.getUserMedia) return;
+    const rawTrack = rawStreamRef.current?.getAudioTracks()[0] || null;
+    if (!rawTrack) return;
+    try {
+      if (typeof rawTrack.applyConstraints === "function") {
+        await rawTrack.applyConstraints({ noiseSuppression: next });
+        return;
+      }
+    } catch {
+      // fall back to re-acquiring the track
+    }
+    try {
+      const deviceId = audioInputDeviceRef.current;
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: buildAudioConstraints(deviceId, next),
+        video: false,
+      });
+      const [track] = stream.getAudioTracks();
+      if (!track) return;
+      applyTrackHints(track);
+      replaceAudioTrack(track);
+    } catch {
+      setError("Unable to update noise suppression.");
+    }
+  }, [applyTrackHints, buildAudioConstraints, replaceAudioTrack]);
+
+  const toggleLowLatencyMode = useCallback(async () => {
+    const next = !lowLatencyModeRef.current;
+    setLowLatencyMode(next);
+    const rawTrack = rawStreamRef.current?.getVideoTracks()[0] || null;
+    if (rawTrack && typeof rawTrack.applyConstraints === "function") {
+      try {
+        await rawTrack.applyConstraints(
+          buildVideoConstraints(videoInputDeviceRef.current, next)
+        );
+      } catch {
+        // ignore constraint failures
+      }
+    }
+    applyLowLatencyToSenders();
+    requestAllVideoKeyFrames();
+  }, [applyLowLatencyToSenders, buildVideoConstraints, requestAllVideoKeyFrames]);
 
   const createPeerConnection = useCallback(
     (socketId: string) => {
@@ -2768,21 +2994,20 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       }
 
       const audioDeviceId = audioInputDeviceRef.current;
-      const audioConstraint =
-        needsAudio && audioDeviceId && audioDeviceId !== "default"
-          ? { deviceId: { exact: audioDeviceId } }
-          : needsAudio;
+      const audioConstraint = needsAudio
+        ? buildAudioConstraints(audioDeviceId, noiseSuppressionRef.current)
+        : false;
 
       const videoDeviceId = videoInputDeviceRef.current;
-      const videoConstraint =
-        needsVideo && videoDeviceId && videoDeviceId !== "default"
-          ? { deviceId: { exact: videoDeviceId } }
-          : needsVideo;
+      const videoConstraint = needsVideo
+        ? buildVideoConstraints(videoDeviceId, lowLatencyModeRef.current)
+        : false;
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: audioConstraint,
         video: videoConstraint,
       });
       stream.getTracks().forEach((track) => {
+        applyTrackHints(track);
         if (!existingRaw.getTracks().some((t) => t.id === track.id)) {
           existingRaw.addTrack(track);
         }
@@ -2806,7 +3031,13 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
 
       return localStreamRef.current;
     },
-    [applyVideoEffects, syncLocalStream]
+    [
+      applyTrackHints,
+      applyVideoEffects,
+      buildAudioConstraints,
+      buildVideoConstraints,
+      syncLocalStream,
+    ]
   );
 
   const ensureCallMedia = useCallback(async () => {
@@ -3262,6 +3493,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       maxParticipants: MAX_VIDEO_PARTICIPANTS,
       isVideoEnabled,
       isAudioEnabled,
+      noiseSuppressionEnabled,
+      lowLatencyMode,
+      lowLatencySuggested,
+      lowLatencySuggestionReason,
       isHolding,
       isOnHold,
       selectedAudioInputId,
@@ -3269,6 +3504,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       isScreenSharing: Boolean(localScreenStream),
       videoEffects,
       setVideoEffects,
+      toggleNoiseSuppression,
+      toggleLowLatencyMode,
       onlineUserIds,
       openCallComposer,
       closeCallComposer,
@@ -3310,6 +3547,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       activeRoomId,
       isCallHost,
       isAudioEnabled,
+      noiseSuppressionEnabled,
+      lowLatencyMode,
+      lowLatencySuggested,
+      lowLatencySuggestionReason,
       isHolding,
       isOnHold,
       selectedAudioInputId,
@@ -3320,6 +3561,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       setAudioInputDevice,
       setVideoInputDevice,
       setVideoEffects,
+      toggleNoiseSuppression,
+      toggleLowLatencyMode,
       onlineUserIds,
       leaveCall,
       localStream,

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import {
   clearPendingDeviceKeyRequestId,
@@ -14,6 +15,7 @@ const MIN_PASSPHRASE_LENGTH = 12;
 const MAX_RESTORE_ATTEMPTS = 5;
 
 export default function KeyBackupModal() {
+  const navigate = useNavigate();
   const {
     user,
     keyBackupStatus,
@@ -200,6 +202,11 @@ export default function KeyBackupModal() {
     setDeviceRequestExpiresAt(null);
   };
 
+  const handleOpenSecurity = () => {
+    setDismissed(true);
+    navigate("/me?section=security");
+  };
+
   return (
     <div className="key-backup-overlay" role="dialog" aria-modal="true">
       <div className="key-backup-modal">
@@ -242,6 +249,13 @@ export default function KeyBackupModal() {
                   disabled={deviceRequestLoading || deviceRequestStatus === "pending"}
                 >
                   {deviceRequestLoading ? "Requesting..." : "Request approval"}
+                </button>
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={handleOpenSecurity}
+                >
+                  Open Security settings
                 </button>
                 {deviceRequestId && (
                   <button

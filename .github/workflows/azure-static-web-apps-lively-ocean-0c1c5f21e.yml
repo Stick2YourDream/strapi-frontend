@@ -47,6 +47,8 @@ jobs:
           fi
           BUILD_VERSION_CODE=$((GITHUB_RUN_NUMBER + 2000))
           BUILD_VERSION_NAME="2.${GITHUB_RUN_NUMBER}"
+          echo "VITE_ANDROID_APK_VERSION=$BUILD_VERSION_NAME" >> $GITHUB_ENV
+          echo "VITE_ANDROID_APK_CODE=$BUILD_VERSION_CODE" >> $GITHUB_ENV
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android-twa/keystore.jks
           chmod +x android-twa/gradlew
           cd android-twa

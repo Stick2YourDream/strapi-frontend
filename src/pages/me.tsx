@@ -1,6 +1,6 @@
 // src/pages/Me.tsx
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import "../css/dashboard.css";
 import "../css/profile.css";
 import { useAuth } from "../context/AuthContext";
@@ -38,12 +38,18 @@ import { formatPostUpdateLabel } from "../utils/time";
 
 type VerificationMethod = "email" | "sms";
 type TwoFactorMethod = "email" | "sms" | "totp";
-type SettingsSection =
-  | "appearance"
-  | "security"
-  | "privacy"
-  | "notifications"
-  | "changes";
+const SETTINGS_SECTION_IDS = [
+  "appearance",
+  "security",
+  "privacy",
+  "notifications",
+  "changes",
+] as const;
+
+type SettingsSection = (typeof SETTINGS_SECTION_IDS)[number];
+
+const isSettingsSection = (value: string | null): value is SettingsSection =>
+  Boolean(value) && SETTINGS_SECTION_IDS.includes(value as SettingsSection);
 
 type Profile = {
   firstName: string;
@@ -435,6 +441,7 @@ export default function Me() {
   const { preferences, setBackgroundAll, resetBackgroundAll, setChatPrefs, getBackgroundStyle } =
     useUserPreferences();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   usePageMeta({
     title: "My Profile | Your Social Place",
     description:
@@ -498,6 +505,19 @@ export default function Me() {
   const settingsMenuRef = useRef<HTMLDivElement | null>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [settingsTriggerWidth, setSettingsTriggerWidth] = useState<number | null>(null);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sectionParam = searchParams.get("section");
+    const viewParam = searchParams.get("view");
+    if (viewParam === "settings") {
+      setSettingsView("settings");
+    }
+    if (isSettingsSection(sectionParam)) {
+      setSettingsSection(sectionParam);
+      setSettingsView("settings");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }, [searchParams]);
   const [hobbyInput, setHobbyInput] = useState("");
   const [hobbyList, setHobbyList] = useState<string[]>([]);
   const [activeHobbyPicker, setActiveHobbyPicker] = useState<
@@ -896,6 +916,12 @@ export default function Me() {
     });
   };
 
+  const fetchTrustedDevices = async () => {
+    const deviceId = getOrCreateDeviceId();
+    const res = await api.get("/auth/trusted-devices", { params: { deviceId } });
+    return (res.data?.devices ?? []) as TrustedDevice[];
+  };
+
   const loadTrustedDevices = async () => {
     if (!user) return;
     setTrustedLoading(true);
@@ -904,9 +930,7 @@ export default function Me() {
     setCurrentDeviceTrusted(null);
     setDeviceKeyRequestsBlockedNote(null);
     try {
-      const deviceId = getOrCreateDeviceId();
-      const res = await api.get("/auth/trusted-devices", { params: { deviceId } });
-      const devices: TrustedDevice[] = res.data?.devices ?? [];
+      const devices = await fetchTrustedDevices();
       setTrustedDevices(devices);
       const isTrusted = devices.some((device) => device.isCurrent);
       setCurrentDeviceTrusted(isTrusted);
@@ -985,9 +1009,21 @@ export default function Me() {
   const handleRevokeOtherDevices = async () => {
     setTrustedError(null);
     setTrustedSuccess(null);
+    setTrustedLoading(true);
     try {
-      const deviceId = getOrCreateDeviceId();
-      await api.post("/auth/trusted-devices/revoke-others", { deviceId });
+      const devices = await fetchTrustedDevices();
+      const otherDevices = devices.filter((device) => !device.isCurrent);
+      if (!otherDevices.length) {
+        setTrustedSuccess("No other devices to sign out.");
+        setTrustedDevices(devices);
+        setCurrentDeviceTrusted(devices.some((device) => device.isCurrent));
+        return;
+      }
+      await Promise.all(
+        otherDevices.map((device) =>
+          api.post("/auth/trusted-devices/revoke", { tokenHash: device.tokenHash })
+        )
+      );
       setTrustedSuccess("Signed out of other devices.");
       await loadTrustedDevices();
     } catch (err) {
@@ -1000,6 +1036,8 @@ export default function Me() {
       } else {
         setTrustedError("Unable to sign out other devices.");
       }
+    } finally {
+      setTrustedLoading(false);
     }
   };
 

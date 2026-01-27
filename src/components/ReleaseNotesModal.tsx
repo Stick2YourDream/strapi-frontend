@@ -19,6 +19,8 @@ const RELEASE_NOTES = [
 export default function ReleaseNotesModal() {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<string | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
   const sessionKey = useMemo(
     () => `${SESSION_PREFIX}${RELEASE_NOTES_VERSION}`,
     []
@@ -53,6 +55,34 @@ export default function ReleaseNotesModal() {
     setOpen(false);
   };
 
+  const handleCheckForUpdates = async () => {
+    if (typeof window === "undefined") return;
+    if (!("serviceWorker" in navigator)) {
+      setUpdateStatus("Updates are not supported in this browser.");
+      return;
+    }
+    setCheckingUpdate(true);
+    setUpdateStatus(null);
+    try {
+      const registration = await navigator.serviceWorker.getRegistration();
+      if (!registration) {
+        setUpdateStatus("No service worker is registered yet.");
+        return;
+      }
+      await registration.update();
+      if (registration.waiting) {
+        window.dispatchEvent(new CustomEvent("pwa:update-available"));
+        setUpdateStatus("Update ready. Use the refresh banner to apply it.");
+      } else {
+        setUpdateStatus("You're already on the latest version.");
+      }
+    } catch {
+      setUpdateStatus("Unable to check for updates right now.");
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
   return (
     <div
       className="release-notes-overlay"
@@ -77,8 +107,17 @@ export default function ReleaseNotesModal() {
               <li key={note}>{note}</li>
             ))}
           </ul>
+          {updateStatus && <p className="release-notes-status">{updateStatus}</p>}
         </div>
         <div className="release-notes-actions">
+          <button
+            type="button"
+            className="release-notes-btn ghost"
+            onClick={handleCheckForUpdates}
+            disabled={checkingUpdate}
+          >
+            {checkingUpdate ? "Checking..." : "Check for updates"}
+          </button>
           <button type="button" className="release-notes-btn ghost" onClick={handleClose}>
             Close
           </button>
