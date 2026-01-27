@@ -5,6 +5,7 @@ import ChatDock from "./components/ChatDock";
 import ConsentBanner from "./components/ConsentBanner";
 import KeyBackupModal from "./components/KeyBackupModal";
 import ReleaseNotesModal from "./components/ReleaseNotesModal";
+import UpdateNotice from "./components/UpdateNotice";
 
 export default function App() {
   return (
@@ -14,6 +15,7 @@ export default function App() {
       <ConsentBanner />
       <KeyBackupModal />
       <ReleaseNotesModal />
+      <UpdateNotice />
     </BrowserRouter>
   );
 }

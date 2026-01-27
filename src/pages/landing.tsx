@@ -582,6 +582,7 @@ export default function Landing() {
           <div className="landing-beta">BETA</div>
           <div className="landing-links">
             <a href="/what-makes-us-different">What makes us different</a>
+            <a href="/apps">Apps</a>
             <a href="/guidelines">Guidelines</a>
             <a href="/safety">Safety</a>
             <a href="/report">Report</a>
@@ -789,6 +790,7 @@ export default function Landing() {
                 </>
               )}
               <a href="/what-makes-us-different">What makes us different</a>
+              <a href="/apps">Apps</a>
               <a href="/guidelines">Community Guidelines</a>
             </div>
             <div className="footer-column">

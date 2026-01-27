@@ -24,6 +24,47 @@ jobs:
           cache: 'npm'
           cache-dependency-path: '**/package-lock.json'
 
+      - name: Set up Java for Android
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build Android APK
+        if: github.event_name == 'push'
+        env:
+          YSP_KEYSTORE_PATH: ${{ github.workspace }}/android-twa/keystore.jks
+          YSP_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          YSP_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          YSP_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ ! -d "android-twa" ]; then
+            echo "android-twa directory not found. Add it to this repo or update the workflow to fetch it." >&2
+            exit 1
+          fi
+          BUILD_VERSION_CODE=$((GITHUB_RUN_NUMBER + 2000))
+          BUILD_VERSION_NAME="2.${GITHUB_RUN_NUMBER}"
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android-twa/keystore.jks
+          chmod +x android-twa/gradlew
+          cd android-twa
+          ./gradlew assembleRelease \
+            -PYSP_KEYSTORE_PATH="$YSP_KEYSTORE_PATH" \
+            -PYSP_KEYSTORE_PASSWORD="$YSP_KEYSTORE_PASSWORD" \
+            -PYSP_KEY_ALIAS="$YSP_KEY_ALIAS" \
+            -PYSP_KEY_PASSWORD="$YSP_KEY_PASSWORD" \
+            -PYSP_VERSION_CODE="$BUILD_VERSION_CODE" \
+            -PYSP_VERSION_NAME="$BUILD_VERSION_NAME"
+          cd ..
+          APK_PATH=$(ls -t android-twa/app/build/outputs/apk/release/*.apk | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            echo "Release APK not found in android-twa/app/build/outputs/apk/release" >&2
+            exit 1
+          fi
+          cp "$APK_PATH" public/downloads/yoursocialplace-android.apk
+
       - name: Build frontend
         working-directory: .
         env:

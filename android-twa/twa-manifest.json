@@ -1,0 +1,45 @@
+{
+  "packageId": "com.yoursocialplace.connect",
+  "host": "yoursocialplace.com",
+  "name": "Your Social Place",
+  "launcherName": "YourSocial",
+  "display": "standalone",
+  "themeColor": "#0b0d14",
+  "themeColorDark": "#000000",
+  "navigationColor": "#000000",
+  "navigationColorDark": "#000000",
+  "navigationDividerColor": "#00000000",
+  "navigationDividerColorDark": "#00000000",
+  "backgroundColor": "#0b0d14",
+  "startUrl": "/?source=pwa",
+  "iconUrl": "https://yoursocialplace.com/icons/icon-512.png",
+  "maskableIconUrl": "https://yoursocialplace.com/icons/icon-512.png",
+  "monochromeIconUrl": "https://yoursocialplace.com/icons/icon-192.png",
+  "appVersion": "2.1",
+  "appVersionCode": 2.1,
+  "signingKey": {
+    "alias": "yoursocialplace",
+    "path": "C:\\\\Users\\\\JasonDAdams\\\\Visual Studio Projects\\\\yoursocialplace.jks"
+  },
+  "splashScreenFadeOutDuration": 300,
+  "enableNotifications": true,
+  "shortcuts": [],
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "https://yoursocialplace.com/manifest.webmanifest",
+  "fullScopeUrl": "https://yoursocialplace.com/",
+  "orientation": "default",
+  "fallbackType": "customtabs",
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "isMetaQuest": false,
+  "minSdkVersion": 21,
+  "fingerprints": [
+    {
+      "value": "80:42:A8:4E:23:6B:86:DA:B6:13:A8:31:B5:06:B3:10:34:DE:23:69:CE:4A:3F:83:42:8A:43:DA:E9:72:77:19",
+      "name": "yoursocialplace-release"
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+.apps-shell {
+  align-items: flex-start;
+}
+
+.apps-card {
+  gap: 20px;
+}
+
+.apps-primary {
+  gap: 12px;
+}
+
+.apps-copy {
+  margin: 0;
+  color: #c7cede;
+  line-height: 1.6;
+}
+
+.apps-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.apps-muted {
+  margin: 0;
+  font-size: 13px;
+  color: #9aa3b5;
+}
+
+.apps-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.apps-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.apps-steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+  font-size: 14px;
+  color: #e9ecf5;
+}
+
+.apps-steps li {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.apps-step-number {
+  font-weight: 700;
+  color: #8fb5ff;
+}
+
+.apps-update .pwa-value {
+  font-size: 14px;
+  color: #d2d7e4;
+}
+
+@media (max-width: 720px) {
+  .apps-actions {
+    flex-direction: column;
+  }
+}

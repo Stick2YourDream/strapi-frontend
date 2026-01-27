@@ -7,15 +7,13 @@ const STORAGE_KEY = "releaseNotesDismissedVersion";
 const SESSION_PREFIX = "releaseNotesClosed:";
 
 const RELEASE_NOTES = [
-  "Added Filters for Dashboard to View Posts by Friends, Public, Private, or All Posts.",
   "Added more interactivitiy with posts",
   "Redesigned Landing Page to remove unncessary clutter",
-  "Added Feedback Request to Notificatons",
   "Improved UI of Video Calling",
-  "New Landing Page Design",
   "Added Birthday Notifications and Reactions",
   "Updated My Profile UI to be more user friendly",
   "Updated ChatBox UI to include user friendly icons",
+  "Added Android and Windows App (Found in Apps on the Main Screen)"
 ];
 
 export default function ReleaseNotesModal() {

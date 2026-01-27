@@ -104,6 +104,29 @@ const registerPeriodicSync = async (registration: ServiceWorkerRegistration) => 
   }
 };
 
+const notifyUpdateAvailable = () => {
+  window.dispatchEvent(new CustomEvent("pwa:update-available"));
+};
+
+const monitorServiceWorkerUpdates = (registration: ServiceWorkerRegistration) => {
+  if (registration.waiting) {
+    notifyUpdateAvailable();
+  }
+
+  registration.addEventListener("updatefound", () => {
+    const installingWorker = registration.installing;
+    if (!installingWorker) return;
+    installingWorker.addEventListener("statechange", () => {
+      if (
+        installingWorker.state === "installed" &&
+        navigator.serviceWorker.controller
+      ) {
+        notifyUpdateAvailable();
+      }
+    });
+  });
+};
+
 setupLaunchQueue();
 
 if (import.meta.env.DEV && "serviceWorker" in navigator) {
@@ -130,6 +153,7 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
       .then((registration) => {
         void registerBackgroundSync(registration);
         void registerPeriodicSync(registration);
+        monitorServiceWorkerUpdates(registration);
       })
       .catch(() => undefined);
   });
