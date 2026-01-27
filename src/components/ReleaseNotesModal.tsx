@@ -13,7 +13,8 @@ const RELEASE_NOTES = [
   "Added Birthday Notifications and Reactions",
   "Updated My Profile UI to be more user friendly",
   "Updated ChatBox UI to include user friendly icons",
-  "Added Android and Windows App (Found in Apps on the Main Screen)"
+  "Added Android and Windows App (Found in Apps on the Main Screen",
+  "Added Low Latency Mode for Slow Connections During Video Calls",
 ];
 
 export default function ReleaseNotesModal() {
