@@ -56,15 +56,24 @@ def readBuildProperty = { String name ->
 
 def keystorePath = readBuildProperty("YSP_KEYSTORE_PATH")
 def keystorePassword = readBuildProperty("YSP_KEYSTORE_PASSWORD")
-def keyAlias = readBuildProperty("YSP_KEY_ALIAS")
-def keyPassword = readBuildProperty("YSP_KEY_PASSWORD")
-def hasSigningConfig = keystorePath && keystorePassword && keyAlias && keyPassword
+def signingKeyAlias = readBuildProperty("YSP_KEY_ALIAS")
+def signingKeyPassword = readBuildProperty("YSP_KEY_PASSWORD")
+def hasSigningConfig =
+    keystorePath && keystorePassword && signingKeyAlias && signingKeyPassword
+
+def parseIntOrDefault = { value, fallback ->
+    if (value == null) return fallback
+    try {
+        return Integer.parseInt(value.toString())
+    } catch (Exception ignored) {
+        return fallback
+    }
+}
 
 def versionCodeValue = readBuildProperty("YSP_VERSION_CODE")
 def versionNameValue = readBuildProperty("YSP_VERSION_NAME")
-def resolvedVersionCode =
-    versionCodeValue?.isInteger() ? versionCodeValue.toInteger() : 2
-def resolvedVersionName = versionNameValue ?: "2"
+def resolvedVersionCode = parseIntOrDefault(versionCodeValue, 2)
+def resolvedVersionName = versionNameValue ? versionNameValue.toString() : "2"
 
 android {
     compileSdkVersion 36
@@ -171,8 +180,8 @@ android {
             if (hasSigningConfig) {
                 storeFile file(keystorePath)
                 storePassword keystorePassword
-                keyAlias keyAlias
-                keyPassword keyPassword
+                keyAlias = signingKeyAlias
+                keyPassword = signingKeyPassword
             }
         }
     }
