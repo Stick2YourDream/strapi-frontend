@@ -689,7 +689,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
       {
         source: MediaStreamAudioSourceNode;
         analyser: AnalyserNode;
-        data: Uint8Array;
+        data: Uint8Array<ArrayBuffer>;
       }
     >
   >(new Map());
@@ -961,7 +961,11 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
         const analyser = audioContext.createAnalyser();
         analyser.fftSize = 256;
         source.connect(analyser);
-        analyserMap.set(key, { source, analyser, data: new Uint8Array(analyser.fftSize) });
+        analyserMap.set(key, {
+          source,
+          analyser,
+          data: new Uint8Array(new ArrayBuffer(analyser.fftSize)),
+        });
       } catch {
         // ignore audio analyser failures
       }
