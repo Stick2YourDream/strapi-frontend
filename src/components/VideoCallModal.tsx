@@ -42,9 +42,11 @@ import {
   faMagnifyingGlass,
   faMicrophone,
   faMicrophoneSlash,
+  faMinus,
   faPause,
   faPhoneSlash,
   faPlay,
+  faPlus,
   faRightFromBracket,
   faSliders,
   faStop,
@@ -83,6 +85,15 @@ type Emoji3dCategory = {
   id: string;
   label: string;
   items: Emoji3dItem[];
+};
+
+type VideoParticipantEntry = {
+  id: string;
+  stream: MediaStream | null;
+  label: string;
+  avatarUrl?: string;
+  isLocal: boolean;
+  status?: string;
 };
 
 type GifCategory = {
@@ -551,7 +562,6 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     selectedInvitees,
     incomingCall,
     activeRoomId,
-    isCallHost,
     localStream,
     localScreenStream,
     remoteStreams,
@@ -622,7 +632,6 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     Record<string, Record<string, string[]>>
   >({});
   const [emoji3dErrors, setEmoji3dErrors] = useState<Record<string, boolean>>({});
-  const [showEffectsPanel, setShowEffectsPanel] = useState(false);
   const [showSettingsPanel, setShowSettingsPanel] = useState(false);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [screenViewMode, setScreenViewMode] = useState<"split" | "screen" | "video">("split");
@@ -653,6 +662,11 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const [controlHelperCopied, setControlHelperCopied] = useState(false);
   const [gifGridWidth, setGifGridWidth] = useState(0);
   const [popoutContainer, setPopoutContainer] = useState<HTMLDivElement | null>(null);
+  const [popoutAudioBlocked, setPopoutAudioBlocked] = useState(false);
+  const [dominantSpeakerId, setDominantSpeakerId] = useState<string | null>(null);
+  const [fullscreenChatOverlay, setFullscreenChatOverlay] = useState(false);
+  const [fullscreenVideoOverlay, setFullscreenVideoOverlay] = useState(false);
+  const [activeScreenSettingsId, setActiveScreenSettingsId] = useState<string | null>(null);
   const gifGridRef = useRef<HTMLDivElement | null>(null);
   const ringtoneRef = useRef<{ audio: HTMLAudioElement | null }>({
     audio: null,
@@ -668,6 +682,21 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const screenTileRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const gridRef = useRef<HTMLDivElement | null>(null);
   const popoutWindowRef = useRef<Window | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioAnalyserRef = useRef<
+    Map<
+      string,
+      {
+        source: MediaStreamAudioSourceNode;
+        analyser: AnalyserNode;
+        data: Uint8Array;
+      }
+    >
+  >(new Map());
+  const speakerActivityRef = useRef<{ id: string | null; lastActiveAt: number }>({
+    id: null,
+    lastActiveAt: 0,
+  });
   const prevHasScreenSharesRef = useRef(false);
   const screenPanOffsetsRef = useRef<Record<string, PanOffset>>({});
   const screenPanDragRef = useRef<{
@@ -688,11 +717,13 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const showChat = showCallUi && (isChatVisible || mobilePanel === "chat");
   const isChatHidden = showCallUi && !isChatVisible && mobilePanel !== "chat";
   const isRenderingInPopout = Boolean(isPopout && popoutContainer);
-  const overlayClassName = `video-call-overlay${isRenderingInPopout ? " is-popout" : ""}`;
+  const overlayClassName = `video-call-overlay${
+    isRenderingInPopout ? " is-popout" : ""
+  }`;
   const modalClassName = `video-call-modal${showCallUi ? "" : " is-setup"}${
     isChatHidden ? " is-chat-hidden" : ""
-  }${isRenderingInPopout ? " is-popout" : ""}${
-    mobilePanel === "chat" ? " is-mobile-chat" : " is-mobile-video"
+  }${mobilePanel === "chat" ? " is-mobile-chat" : " is-mobile-video"}${
+    isRenderingInPopout ? " is-popout" : ""
   }`;
   const apiBase = useMemo(
     () => String(import.meta.env.VITE_API_URL || "").replace(/\/api$/, ""),
@@ -717,9 +748,14 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     if (!showCallUi) {
       setIsPopout(false);
       setMobilePanel("video");
-      setShowEffectsPanel(false);
     }
   }, [showCallUi]);
+
+  useEffect(() => {
+    if (!isRenderingInPopout) {
+      setPopoutAudioBlocked(false);
+    }
+  }, [isRenderingInPopout]);
 
   useEffect(() => {
     if (!isPopout) {
@@ -786,6 +822,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     return () => observer.disconnect();
   }, [showGifPicker]);
 
+
   const remoteList = useMemo(
     () => Object.values(remoteParticipants),
     [remoteParticipants]
@@ -843,6 +880,146 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     },
     [participantNameById]
   );
+
+  const remoteVideoParticipants = useMemo<VideoParticipantEntry[]>(
+    () =>
+      remoteList.map((participant) => ({
+        id: participant.socketId,
+        stream: remoteStreams[participant.socketId] || null,
+        label: resolveParticipantLabel({
+          userId: participant.userId,
+          displayName: participant.displayName,
+          handle: participant.handle,
+        }),
+        avatarUrl: participant.avatarUrl,
+        isLocal: false,
+        status: remoteStreams[participant.socketId] ? "" : "Waiting for video",
+      })),
+    [remoteList, remoteStreams, resolveParticipantLabel]
+  );
+
+  const localVideoParticipant = useMemo<VideoParticipantEntry>(
+    () => ({
+      id: "local",
+      stream: localStream,
+      label: "You",
+      avatarUrl: profile?.avatarUrl,
+      isLocal: true,
+      status: !localStream || !isVideoEnabled ? "Camera off" : "",
+    }),
+    [isVideoEnabled, localStream, profile?.avatarUrl]
+  );
+
+  const videoParticipants = useMemo<VideoParticipantEntry[]>(
+    () => [...remoteVideoParticipants, localVideoParticipant],
+    [localVideoParticipant, remoteVideoParticipants]
+  );
+
+  const overlayVideoParticipants = useMemo(() => {
+    if (remoteVideoParticipants.length > 0) return remoteVideoParticipants;
+    return [localVideoParticipant];
+  }, [localVideoParticipant, remoteVideoParticipants]);
+
+  const videoParticipantById = useMemo(() => {
+    const map = new Map<string, VideoParticipantEntry>();
+    videoParticipants.forEach((participant) => {
+      map.set(participant.id, participant);
+    });
+    return map;
+  }, [videoParticipants]);
+
+  useEffect(() => {
+    if (!showCallUi) {
+      setDominantSpeakerId(null);
+      return;
+    }
+    if (typeof window === "undefined") return;
+    const AudioContextCtor =
+      window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+    if (!AudioContextCtor) return;
+
+    if (!audioContextRef.current) {
+      audioContextRef.current = new AudioContextCtor();
+    }
+    const audioContext = audioContextRef.current;
+    audioContext.resume().catch(() => undefined);
+
+    const analyserMap = audioAnalyserRef.current;
+    const activeKeys = new Set<string>();
+
+    const attachAnalyser = (key: string, stream: MediaStream | null | undefined) => {
+      if (!stream) return;
+      const hasAudio = stream
+        .getAudioTracks()
+        .some((track) => track.readyState === "live");
+      if (!hasAudio) return;
+      activeKeys.add(key);
+      if (analyserMap.has(key)) return;
+      try {
+        const source = audioContext.createMediaStreamSource(stream);
+        const analyser = audioContext.createAnalyser();
+        analyser.fftSize = 256;
+        source.connect(analyser);
+        analyserMap.set(key, { source, analyser, data: new Uint8Array(analyser.fftSize) });
+      } catch {
+        // ignore audio analyser failures
+      }
+    };
+
+    attachAnalyser("local", localStream);
+    Object.entries(remoteStreams).forEach(([socketId, stream]) => {
+      attachAnalyser(socketId, stream);
+    });
+
+    analyserMap.forEach((entry, key) => {
+      if (activeKeys.has(key)) return;
+      try {
+        entry.source.disconnect();
+        entry.analyser.disconnect();
+      } catch {
+        // ignore disconnect errors
+      }
+      analyserMap.delete(key);
+    });
+
+    const threshold = 0.02;
+    const holdMs = 2500;
+    let active = true;
+
+    const tick = () => {
+      if (!active) return;
+      let topId: string | null = null;
+      let topLevel = 0;
+      analyserMap.forEach((entry, key) => {
+        entry.analyser.getByteTimeDomainData(entry.data);
+        let sum = 0;
+        for (let i = 0; i < entry.data.length; i += 1) {
+          const value = (entry.data[i] - 128) / 128;
+          sum += value * value;
+        }
+        const rms = Math.sqrt(sum / entry.data.length);
+        if (rms > topLevel) {
+          topLevel = rms;
+          topId = key;
+        }
+      });
+      const now = Date.now();
+      if (topId && topLevel >= threshold) {
+        speakerActivityRef.current = { id: topId, lastActiveAt: now };
+      }
+      const current = speakerActivityRef.current;
+      const nextId =
+        current.id && now - current.lastActiveAt < holdMs ? current.id : null;
+      setDominantSpeakerId(nextId);
+    };
+
+    const interval = window.setInterval(tick, 700);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [localStream, remoteStreams, showCallUi]);
   const resolveMessageName = useCallback(
     (message: VideoCallMessage) => {
       if (user?.id && message.from.userId === user.id) {
@@ -872,6 +1049,18 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const activeGifCategory =
     GIF_CATEGORIES.find((category) => category.id === gifCategoryId) ||
     GIF_CATEGORIES[0];
+  const activeFilterOption = useMemo(
+    () =>
+      FILTER_OPTIONS.find((option) => option.id === videoEffects.filter) ||
+      FILTER_OPTIONS[0],
+    [videoEffects.filter]
+  );
+  const activeBackgroundOption = useMemo(
+    () =>
+      BACKGROUND_OPTIONS.find((option) => option.id === videoEffects.background) ||
+      BACKGROUND_OPTIONS[0],
+    [videoEffects.background]
+  );
   const gifQuery = useMemo(() => {
     const trimmed = gifSearch.trim();
     if (trimmed) return trimmed;
@@ -942,12 +1131,21 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
       entry.isLocal ? "local" : entry.socketId || entry.id,
     []
   );
+  const getScreenTileId = useCallback(
+    (entry: { id: string; socketId?: string; isLocal: boolean }) =>
+      entry.isLocal ? "screen-local" : `screen-${entry.socketId || entry.id}`,
+    []
+  );
 
   const hasScreenShares = screenShareEntries.length > 0;
   const effectiveViewMode = hasScreenShares ? screenViewMode : "video";
   const showScreenTiles = effectiveViewMode !== "video";
   const showVideoTiles = effectiveViewMode !== "screen";
-  const shouldRenderRemoteAudio = showCallUi && !showVideoTiles;
+  const shouldRenderRemoteAudio =
+    showCallUi && (!showVideoTiles || isRenderingInPopout);
+  const totalParticipantCount = videoParticipants.length;
+  const presenterMode =
+    showCallUi && showVideoTiles && !showScreenTiles && totalParticipantCount > 2;
   const focusedScreenKey = effectiveViewMode === "screen" ? focusedScreenId : null;
   const focusedVideoKey = effectiveViewMode === "video" ? focusedVideoId : null;
   const visibleScreenShareEntries = useMemo(() => {
@@ -962,16 +1160,29 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
       !remoteParticipants[focusedVideoKey]
   );
   const visibleVideoParticipants = useMemo(() => {
+    if (presenterMode) return remoteList;
     if (!focusedVideoKey || focusedRemoteMissing) return remoteList;
     if (focusedVideoKey === "local") return [];
     const participant = remoteParticipants[focusedVideoKey];
     return participant ? [participant] : [];
-  }, [focusedRemoteMissing, focusedVideoKey, remoteList, remoteParticipants]);
+  }, [focusedRemoteMissing, focusedVideoKey, presenterMode, remoteList, remoteParticipants]);
   const showLocalVideo =
     !focusedVideoKey || focusedVideoKey === "local" || focusedRemoteMissing;
   const isLocalFocused = focusedVideoKey === "local";
-  const primaryVideoSocketId = focusedVideoKey || remoteList[0]?.socketId || "local";
+  const basePrimaryVideoSocketId = focusedVideoKey || remoteList[0]?.socketId || "local";
+  const presenterTargetId = presenterMode
+    ? focusedVideoKey || dominantSpeakerId || basePrimaryVideoSocketId
+    : null;
+  const primaryVideoSocketId = presenterMode
+    ? presenterTargetId || basePrimaryVideoSocketId
+    : basePrimaryVideoSocketId;
   const isLocalPrimary = primaryVideoSocketId === "local";
+  const presenterParticipant = presenterMode
+    ? videoParticipantById.get(presenterTargetId || "local") || localVideoParticipant
+    : null;
+  const presenterOthers = presenterMode
+    ? videoParticipants.filter((participant) => participant.id !== presenterParticipant?.id)
+    : [];
   const primaryScreenTileId = useMemo(() => {
     if (!showScreenTiles || visibleScreenShareEntries.length === 0) return null;
     const remoteEntry = visibleScreenShareEntries.find((entry) => !entry.isLocal);
@@ -979,13 +1190,31 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     if (!entry) return null;
     return entry.isLocal ? "screen-local" : `screen-${entry.socketId || entry.id}`;
   }, [showScreenTiles, visibleScreenShareEntries]);
+  const isSplitView = effectiveViewMode === "split";
   const gridClassName = `video-call-grid${
     effectiveViewMode === "screen"
       ? " is-screen-only"
       : effectiveViewMode === "video"
       ? " is-video-only"
       : " is-split"
-  }${isScreenBorderless ? " is-borderless" : ""}`;
+  }${presenterMode ? " is-presenter" : ""}${
+    isScreenBorderless ? " is-borderless" : ""
+  }`;
+
+  const splitPairs = useMemo(() => {
+    if (!isSplitView) {
+      return { pairs: [], remaining: [] };
+    }
+    const pairedIds = new Set<string>();
+    const pairs = visibleScreenShareEntries.map((entry) => {
+      const videoId = entry.isLocal ? "local" : entry.socketId || entry.id;
+      const videoParticipant = videoId ? videoParticipantById.get(videoId) : undefined;
+      if (videoParticipant) pairedIds.add(videoParticipant.id);
+      return { entry, videoParticipant };
+    });
+    const remaining = videoParticipants.filter((participant) => !pairedIds.has(participant.id));
+    return { pairs, remaining };
+  }, [isSplitView, videoParticipantById, videoParticipants, visibleScreenShareEntries]);
 
   useEffect(() => {
     if (hasScreenShares && !prevHasScreenSharesRef.current && screenViewMode === "video") {
@@ -1019,6 +1248,25 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     }
   }, [focusedVideoId, remoteParticipants]);
 
+  useEffect(() => {
+    if (!activeScreenSettingsId) return;
+    if (!isMobileLayout) {
+      setActiveScreenSettingsId(null);
+      return;
+    }
+    const exists = visibleScreenShareEntries.some(
+      (entry) => getScreenTileId(entry) === activeScreenSettingsId
+    );
+    if (!exists) {
+      setActiveScreenSettingsId(null);
+    }
+  }, [
+    activeScreenSettingsId,
+    getScreenTileId,
+    isMobileLayout,
+    visibleScreenShareEntries,
+  ]);
+
   const toggleScreenFocus = useCallback(
     (entry: { id: string; socketId?: string; isLocal: boolean }) => {
       const key = getScreenFocusKey(entry);
@@ -1035,9 +1283,100 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     setFocusedVideoId((prev) => (prev === targetId ? null : targetId));
   }, []);
 
+  const handleToggleChatVisibility = useCallback(() => {
+    if (fullscreenTargetId) {
+      setFullscreenChatOverlay((prev) => !prev);
+      return;
+    }
+    const nextShow = !showChat;
+    setIsChatVisible(nextShow);
+    if (isMobileLayout) {
+      setMobilePanel(nextShow ? "chat" : "video");
+    }
+  }, [fullscreenTargetId, isMobileLayout, showChat]);
+
+  const handleToggleVideoVisibility = useCallback(() => {
+    if (fullscreenTargetId) {
+      setFullscreenVideoOverlay((prev) => !prev);
+      return;
+    }
+    if (showVideoTiles) {
+      setScreenViewMode("screen");
+      return;
+    }
+    setScreenViewMode("split");
+  }, [fullscreenTargetId, showVideoTiles]);
+
+  const localEffectClass = useMemo(() => {
+    const classes = [];
+    if (videoEffects.background !== "none") {
+      classes.push(`has-backdrop-${videoEffects.background}`);
+    }
+    return classes.join(" ");
+  }, [videoEffects.background]);
+
+  const renderOverlayVideoTile = useCallback(
+    (participant: VideoParticipantEntry) => {
+      const tileClass = participant.isLocal
+        ? `is-local is-overlay${localEffectClass ? ` ${localEffectClass}` : ""}`
+        : "is-overlay";
+      return (
+        <VideoTile
+          key={`overlay-${participant.id}`}
+          stream={participant.stream}
+          label={participant.label}
+          avatarUrl={participant.avatarUrl}
+          muted
+          status={participant.status}
+          className={tileClass}
+        />
+      );
+    },
+    [localEffectClass]
+  );
+
+  const renderCompactVideoTile = useCallback(
+    (participant: VideoParticipantEntry, options?: { style?: CSSProperties; className?: string }) => {
+      const isFocused = focusedVideoKey === participant.id;
+      const isPrimary = participant.id === primaryVideoSocketId;
+      const baseClass = participant.isLocal
+        ? `is-local is-self-video${isPrimary ? " is-primary" : ""}${
+            localEffectClass ? ` ${localEffectClass}` : ""
+          }`
+        : isPrimary
+        ? "is-primary"
+        : "";
+      return (
+        <VideoTile
+          key={participant.id}
+          stream={participant.stream}
+          label={participant.label}
+          avatarUrl={participant.avatarUrl}
+          muted={participant.isLocal || isRenderingInPopout}
+          status={participant.status}
+          className={`${baseClass}${options?.className ? ` ${options.className}` : ""}`}
+          style={options?.style}
+        >
+          <div className="video-tile__actions">
+            <button
+              type="button"
+              className={`video-tile-focus${isFocused ? " is-active" : ""}`}
+              onClick={() => toggleVideoFocus(participant.id)}
+              aria-pressed={isFocused}
+            >
+              {isFocused ? "Show all" : "Focus"}
+            </button>
+          </div>
+        </VideoTile>
+      );
+    },
+    [focusedVideoKey, isRenderingInPopout, localEffectClass, primaryVideoSocketId, toggleVideoFocus]
+  );
+
   useEffect(() => {
-    if (typeof window === "undefined" || !window.matchMedia) return;
-    const media = window.matchMedia("(max-width: 720px)");
+    const targetWindow = isRenderingInPopout ? popoutWindowRef.current : window;
+    if (!targetWindow || !targetWindow.matchMedia) return;
+    const media = targetWindow.matchMedia("(max-width: 720px)");
     const handleChange = () => setIsMobileLayout(media.matches);
     handleChange();
     if (media.addEventListener) {
@@ -1046,7 +1385,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     }
     media.addListener(handleChange);
     return () => media.removeListener(handleChange);
-  }, []);
+  }, [isRenderingInPopout]);
 
   useEffect(() => {
     if (!navigator.mediaDevices?.enumerateDevices) return;
@@ -1181,13 +1520,11 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     };
   }, []);
 
-  const localEffectClass = useMemo(() => {
-    const classes = [];
-    if (videoEffects.background !== "none") {
-      classes.push(`has-backdrop-${videoEffects.background}`);
-    }
-    return classes.join(" ");
-  }, [videoEffects.background]);
+  useEffect(() => {
+    if (fullscreenTargetId) return;
+    setFullscreenChatOverlay(false);
+    setFullscreenVideoOverlay(false);
+  }, [fullscreenTargetId]);
 
   const previewStatus = !localStream ? "Camera off" : isVideoEnabled ? "" : "Camera off";
   const micSelectionValue = selectedAudioInputId || "default";
@@ -1208,6 +1545,10 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
         (a, b) => new Date(b.at).getTime() - new Date(a.at).getTime()
       ),
     [messages]
+  );
+  const overlayMessages = useMemo(
+    () => orderedMessages.slice(0, 6).reverse(),
+    [orderedMessages]
   );
 
   useEffect(() => {
@@ -1345,15 +1686,44 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     setShowSettingsPanel(false);
   }, []);
 
-  const handleToggleEffectsPanel = useCallback(() => {
-    setShowEffectsPanel((prev) => {
-      const next = !prev;
-      if (next) {
-        setShowSettingsPanel(false);
-      }
-      return next;
+  const toggleScreenSettings = useCallback((targetId: string) => {
+    setActiveScreenSettingsId((prev) => (prev === targetId ? null : targetId));
+  }, []);
+
+  const closeScreenSettings = useCallback(() => {
+    setActiveScreenSettingsId(null);
+  }, []);
+
+  const handleEnablePopoutAudio = useCallback(() => {
+    if (!popoutWindowRef.current) return;
+    const media = popoutWindowRef.current.document.querySelectorAll("audio");
+    if (!media.length) {
+      setPopoutAudioBlocked(false);
+      return;
+    }
+    const attempts = Array.from(media).map((node) =>
+      node
+        .play()
+        .then(() => null)
+        .catch((error) => error)
+    );
+    void Promise.all(attempts).then((results) => {
+      const blocked = results.some(
+        (error) => error && (error as Error).name === "NotAllowedError"
+      );
+      setPopoutAudioBlocked(blocked);
     });
   }, []);
+
+  useEffect(() => {
+    if (!isRenderingInPopout || !shouldRenderRemoteAudio) return;
+    handleEnablePopoutAudio();
+  }, [
+    handleEnablePopoutAudio,
+    isRenderingInPopout,
+    remoteAudioStreams.length,
+    shouldRenderRemoteAudio,
+  ]);
 
   const getScreenZoom = useCallback(
     (targetId: string) => screenZoomLevels[targetId] ?? 1,
@@ -1361,7 +1731,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   );
 
   const updateScreenZoom = useCallback((targetId: string, nextZoom: number) => {
-    const clamped = Math.min(3, Math.max(1, nextZoom));
+    const clamped = Math.min(5, Math.max(1, nextZoom));
     setScreenZoomLevels((prev) => ({ ...prev, [targetId]: clamped }));
     setScreenPanOffsets((prev) => ({ ...prev, [targetId]: { x: 0, y: 0 } }));
     setActivePanTarget((prev) => (prev === targetId ? null : prev));
@@ -1376,7 +1746,13 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     (event: PointerEvent<HTMLDivElement>, targetId: string, zoom: number) => {
       if (zoom <= 1) return;
       const target = event.target as HTMLElement | null;
-      if (target?.closest(".screen-share-actions")) return;
+      if (
+        target?.closest(".screen-share-actions") ||
+        target?.closest(".screen-share-overlays") ||
+        target?.closest(".screen-settings-modal") ||
+        target?.closest(".screen-settings-overlay")
+      )
+        return;
       const rect = event.currentTarget.getBoundingClientRect();
       if (!rect.width || !rect.height) return;
       const extraX = Math.max(0, rect.width * zoom - rect.width);
@@ -1486,7 +1862,13 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   ) => {
     if (screenControlTarget !== targetSocketId) return;
     const target = event.target as HTMLElement | null;
-    if (target?.closest(".screen-share-actions")) return;
+    if (
+      target?.closest(".screen-share-actions") ||
+      target?.closest(".screen-share-overlays") ||
+      target?.closest(".screen-settings-modal") ||
+      target?.closest(".screen-settings-overlay")
+    )
+      return;
     const rect = event.currentTarget.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
     const point = getControlPoint(event.clientX, event.clientY, targetSocketId, rect);
@@ -1796,6 +2178,21 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const modalContent = (
     <div className={overlayClassName}>
       <div className={modalClassName}>
+        {isRenderingInPopout && popoutAudioBlocked && (
+          <div className="video-popout-unlock" role="presentation">
+            <div className="video-popout-unlock-card" role="dialog" aria-label="Enable audio">
+              <h4>Enable sound</h4>
+              <p>Click to enable audio in the popout window.</p>
+              <button
+                type="button"
+                className="btn primary"
+                onClick={handleEnablePopoutAudio}
+              >
+                Enable audio
+              </button>
+            </div>
+          </div>
+        )}
         {showCallUi && showSettingsPanel && (
           <div
             className="video-settings-overlay"
@@ -1867,16 +2264,78 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   <div className="video-settings-grid">
                     <button
                       type="button"
-                      className={`video-settings-tile${showEffectsPanel ? " is-active" : ""}`}
-                      onClick={handleToggleEffectsPanel}
-                      aria-pressed={showEffectsPanel}
+                      className={`video-settings-tile${
+                        videoEffects.blur ? " is-active" : ""
+                      }`}
+                      onClick={() => setVideoEffects({ blur: !videoEffects.blur })}
+                      aria-pressed={videoEffects.blur}
                     >
-                      <FontAwesomeIcon icon={faSliders} aria-hidden="true" />
-                      <span className="video-settings-label">Camera effects</span>
+                      <FontAwesomeIcon icon={faVideo} aria-hidden="true" />
+                      <span className="video-settings-label">Blur background</span>
                       <span className="video-settings-status">
-                        {showEffectsPanel ? "Open" : "Closed"}
+                        {videoEffects.blur ? "On" : "Off"}
                       </span>
                     </button>
+                    <button
+                      type="button"
+                      className={`video-settings-tile${
+                        videoEffects.mirror ? " is-active" : ""
+                      }`}
+                      onClick={() => setVideoEffects({ mirror: !videoEffects.mirror })}
+                      aria-pressed={videoEffects.mirror}
+                    >
+                      <FontAwesomeIcon icon={faFaceSmileSolid} aria-hidden="true" />
+                      <span className="video-settings-label">Mirror camera</span>
+                      <span className="video-settings-status">
+                        {videoEffects.mirror ? "On" : "Off"}
+                      </span>
+                    </button>
+                    <div className="video-settings-tile is-static">
+                      <FontAwesomeIcon icon={faSliders} aria-hidden="true" />
+                      <span className="video-settings-label">Camera filter</span>
+                      <span className="video-settings-status">{activeFilterOption.label}</span>
+                      <label className="video-settings-select">
+                        <span>Filter</span>
+                        <select
+                          value={videoEffects.filter}
+                          onChange={(event) =>
+                            setVideoEffects({
+                              filter: event.target.value as typeof videoEffects.filter,
+                            })
+                          }
+                        >
+                          {FILTER_OPTIONS.map((option) => (
+                            <option key={option.id} value={option.id}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    <div className="video-settings-tile is-static">
+                      <FontAwesomeIcon icon={faDisplay} aria-hidden="true" />
+                      <span className="video-settings-label">Background</span>
+                      <span className="video-settings-status">
+                        {activeBackgroundOption.label}
+                      </span>
+                      <label className="video-settings-select">
+                        <span>Background</span>
+                        <select
+                          value={videoEffects.background}
+                          onChange={(event) =>
+                            setVideoEffects({
+                              background: event.target.value as typeof videoEffects.background,
+                            })
+                          }
+                        >
+                          {BACKGROUND_OPTIONS.map((option) => (
+                            <option key={option.id} value={option.id}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
                   </div>
                   {showCameraSelector && (
                     <label className="video-settings-select">
@@ -1924,6 +2383,35 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                     </p>
                   )}
                 </section>
+                {isScreenSharing && (
+                  <section className="video-settings-section">
+                    <h4>Screen share</h4>
+                    <div className="video-settings-grid">
+                      <button
+                        type="button"
+                        className={`video-settings-tile${
+                          showControlHelper ? " is-active" : ""
+                        }`}
+                        disabled={!isWindows}
+                        onClick={() => {
+                          setShowControlHelper(true);
+                          if (controlHelperStatus === "idle") {
+                            void generateControlHelperCode();
+                          }
+                        }}
+                      >
+                        <FontAwesomeIcon icon={faDesktop} aria-hidden="true" />
+                        <span className="video-settings-label">Windows control</span>
+                        <span className="video-settings-status">
+                          {isWindows ? "Enable helper" : "Windows only"}
+                        </span>
+                      </button>
+                    </div>
+                    <p className="video-settings-note">
+                      Allow trusted people to move your mouse when you share your screen.
+                    </p>
+                  </section>
+                )}
               </div>
             </div>
           </div>
@@ -2015,21 +2503,19 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                 >
                   <FontAwesomeIcon icon={faRightFromBracket} aria-hidden="true" />
                 </button>
-                {isCallHost && (
-                  <button
-                    type="button"
-                    className="video-control video-control-icon end"
-                    onClick={() => {
-                      void playEndCallTone();
-                      endCall();
-                    }}
-                    data-hint="End call"
-                    aria-label="End call"
-                    title="End call"
-                  >
-                    <FontAwesomeIcon icon={faPhoneSlash} aria-hidden="true" />
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="video-control video-control-icon end"
+                  onClick={() => {
+                    void playEndCallTone();
+                    endCall();
+                  }}
+                  data-hint="End call"
+                  aria-label="End call"
+                  title="End call"
+                >
+                  <FontAwesomeIcon icon={faPhoneSlash} aria-hidden="true" />
+                </button>
               </div>
             </div>
           )}
@@ -2153,7 +2639,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   className={`video-view-button is-icon is-chat-toggle${
                     showChat ? " is-active" : ""
                   }`}
-                  onClick={() => setIsChatVisible((prev) => !prev)}
+                  onClick={handleToggleChatVisibility}
                   disabled={!showCallUi}
                   data-hint={showChat ? "Hide chat" : "Show chat"}
                   aria-label={showChat ? "Hide chat" : "Show chat"}
@@ -2223,7 +2709,15 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                     if (node.srcObject !== stream) {
                       node.srcObject = stream;
                     }
-                    node.play().catch(() => undefined);
+                    node.play().catch((error) => {
+                      if (
+                        isRenderingInPopout &&
+                        error &&
+                        (error as Error).name === "NotAllowedError"
+                      ) {
+                        setPopoutAudioBlocked(true);
+                      }
+                    });
                   }}
                 />
               ))}
@@ -2415,11 +2909,31 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                     </div>
                   </div>
                 )}
+                {presenterMode ? (
+                  <div className="video-call-presenter">
+                    <div className="video-call-presenter-main">
+                      {presenterParticipant
+                        ? renderCompactVideoTile(presenterParticipant, {
+                            className: "is-presenter-main",
+                          })
+                        : null}
+                    </div>
+                    <div className="video-call-presenter-strip">
+                      {presenterOthers.map((participant) =>
+                        renderCompactVideoTile(participant, {
+                          className: "is-presenter-thumb",
+                        })
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <>
                 {showScreenTiles &&
-                  visibleScreenShareEntries.map((entry) => {
-                    const tileId = entry.isLocal
-                      ? "screen-local"
-                      : `screen-${entry.socketId || entry.id}`;
+                  visibleScreenShareEntries.map((entry, index) => {
+                    const gridPlacementStyle = isSplitView
+                      ? { gridColumn: 1, gridRow: index + 1 }
+                      : undefined;
+                    const tileId = getScreenTileId(entry);
                     const isFullscreen = fullscreenTargetId === tileId;
                     const isPrimary = tileId === primaryScreenTileId;
                     const screenFocusKey = getScreenFocusKey(entry);
@@ -2437,7 +2951,128 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                       transformOrigin: "center center",
                       transition: isPanning ? "none" : "transform 0.2s ease",
                     };
-                    const zoomLabel = `${Math.round(screenZoom * 100)}%`;
+                    const localIsScreenSettingsOpen =
+                      isMobileLayout && activeScreenSettingsId === tileId;
+                    const localScreenStatus = activeScreenController ? (
+                      <span className="screen-share-status">
+                        Controlled by{" "}
+                        {resolveParticipantLabel({
+                          userId: activeScreenController.userId,
+                          displayName: activeScreenController.displayName,
+                          handle: activeScreenController.handle,
+                        })}
+                      </span>
+                    ) : null;
+                    const localScreenSettingsButtons = (
+                      <>
+                        <button
+                          type="button"
+                          className="screen-share-control is-icon"
+                          onClick={() => toggleFullscreen(tileId)}
+                        >
+                          <FontAwesomeIcon
+                            icon={isFullscreen ? faCompress : faExpand}
+                            aria-hidden="true"
+                          />
+                          <span className="screen-share-label">
+                            {isFullscreen ? "Exit full screen" : "Full screen"}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`screen-share-control is-icon${
+                            isScreenFocused ? " is-active" : ""
+                          }`}
+                          onClick={() => toggleScreenFocus(entry)}
+                          aria-pressed={isScreenFocused}
+                        >
+                          <FontAwesomeIcon icon={faMagnifyingGlass} aria-hidden="true" />
+                          <span className="screen-share-label">
+                            {isScreenFocused ? "Show all" : "Focus"}
+                          </span>
+                        </button>
+                        <div className="screen-share-zoom">
+                          <button
+                            type="button"
+                            className="screen-share-control is-icon"
+                            onClick={() => updateScreenZoom(zoomKey, screenZoom - 0.25)}
+                            disabled={screenZoom <= 1}
+                            aria-label="Zoom out"
+                          >
+                            <FontAwesomeIcon icon={faMinus} aria-hidden="true" />
+                            <span className="screen-share-label">Zoom out</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="screen-share-control is-icon"
+                            onClick={() => updateScreenZoom(zoomKey, screenZoom + 0.25)}
+                            disabled={screenZoom >= 5}
+                            aria-label="Zoom in"
+                          >
+                            <FontAwesomeIcon icon={faPlus} aria-hidden="true" />
+                            <span className="screen-share-label">Zoom in</span>
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          className="screen-share-control is-icon"
+                          onClick={() => setIsScreenBorderless((prev) => !prev)}
+                        >
+                          <FontAwesomeIcon icon={faDisplay} aria-hidden="true" />
+                          <span className="screen-share-label">
+                            {isScreenBorderless ? "Windowed" : "Borderless"}
+                          </span>
+                        </button>
+                        {isFullscreen && (
+                          <>
+                            <button
+                              type="button"
+                              className={`screen-share-control is-icon${
+                                fullscreenChatOverlay ? " is-active" : ""
+                              }`}
+                              onClick={handleToggleChatVisibility}
+                              aria-pressed={fullscreenChatOverlay}
+                            >
+                              <FontAwesomeIcon
+                                icon={fullscreenChatOverlay ? faCommentSlash : faComments}
+                                aria-hidden="true"
+                              />
+                              <span className="screen-share-label">
+                                {fullscreenChatOverlay ? "Hide chat" : "Show chat"}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              className={`screen-share-control is-icon${
+                                fullscreenVideoOverlay ? " is-active" : ""
+                              }`}
+                              onClick={handleToggleVideoVisibility}
+                              aria-pressed={fullscreenVideoOverlay}
+                            >
+                              <FontAwesomeIcon
+                                icon={fullscreenVideoOverlay ? faVideoSlash : faVideo}
+                                aria-hidden="true"
+                              />
+                              <span className="screen-share-label">
+                                {fullscreenVideoOverlay ? "Hide video" : "Show video"}
+                              </span>
+                            </button>
+                          </>
+                        )}
+                        {activeScreenController && (
+                          <button
+                            type="button"
+                            className="screen-share-control is-icon"
+                            onClick={() =>
+                              stopScreenControl(activeScreenController.socketId)
+                            }
+                          >
+                            <FontAwesomeIcon icon={faStop} aria-hidden="true" />
+                            <span className="screen-share-label">Stop control</span>
+                          </button>
+                        )}
+                      </>
+                    );
                     if (entry.isLocal) {
                       return (
                         <VideoTile
@@ -2451,6 +3086,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                           }${isPannable ? " is-pannable" : ""}${
                             isPanning ? " is-panning" : ""
                           }`}
+                          style={gridPlacementStyle}
                           rootRef={registerScreenTile(tileId)}
                           dataScreenId={tileId}
                           mediaStyle={zoomStyle}
@@ -2469,94 +3105,145 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                             isPannable ? (event) => endScreenPan(event, zoomKey) : undefined
                           }
                         >
-                          <div className="screen-share-actions">
-                            {activeScreenController && (
-                              <span className="screen-share-status">
-                                Controlled by{" "}
-                                {resolveParticipantLabel({
-                                  userId: activeScreenController.userId,
-                                  displayName: activeScreenController.displayName,
-                                  handle: activeScreenController.handle,
-                                })}
-                              </span>
-                            )}
-                            <button
-                              type="button"
-                              className="screen-share-control"
-                              onClick={() => toggleFullscreen(tileId)}
-                            >
-                              {isFullscreen ? "Exit full screen" : "Full screen"}
-                            </button>
-                            <button
-                              type="button"
-                              className={`screen-share-control${
-                                isScreenFocused ? " is-active" : ""
-                              }`}
-                              onClick={() => toggleScreenFocus(entry)}
-                              aria-pressed={isScreenFocused}
-                            >
-                              {isScreenFocused ? "Show all" : "Focus"}
-                            </button>
-                            <div className="screen-share-zoom">
+                          <div
+                            className={`screen-share-actions${
+                              isFullscreen ? " is-fullscreen" : " is-compact"
+                            }`}
+                          >
+                            {isMobileLayout ? (
                               <button
                                 type="button"
-                                className="screen-share-control"
-                                onClick={() => updateScreenZoom(zoomKey, screenZoom - 0.25)}
-                                disabled={screenZoom <= 1}
-                                aria-label="Zoom out"
+                                className="screen-share-control is-icon is-settings-trigger"
+                                onClick={() => toggleScreenSettings(tileId)}
+                                aria-expanded={localIsScreenSettingsOpen}
                               >
-                                -
+                                <FontAwesomeIcon icon={faSliders} aria-hidden="true" />
+                                <span className="screen-share-label">Screen Settings</span>
                               </button>
-                              <span className="screen-share-zoom-label">{zoomLabel}</span>
-                              <button
-                                type="button"
-                                className="screen-share-control"
-                                onClick={() => updateScreenZoom(zoomKey, screenZoom + 0.25)}
-                                disabled={screenZoom >= 3}
-                                aria-label="Zoom in"
-                              >
-                                +
-                              </button>
-                            </div>
-                            <button
-                              type="button"
-                              className="screen-share-control"
-                              onClick={() => setIsScreenBorderless((prev) => !prev)}
-                            >
-                              {isScreenBorderless ? "Windowed" : "Borderless"}
-                            </button>
-                            <button
-                              type="button"
-                              className="screen-share-control is-chat-toggle"
-                              onClick={() => setIsChatVisible((prev) => !prev)}
-                            >
-                              {showChat ? "Hide chat" : "Show chat"}
-                            </button>
-                            <button
-                              type="button"
-                              className="screen-share-control is-helper"
-                              disabled={!isWindows}
-                              onClick={() => {
-                                setShowControlHelper(true);
-                                if (controlHelperStatus === "idle") {
-                                  void generateControlHelperCode();
-                                }
-                              }}
-                            >
-                              {isWindows ? "Enable Windows control" : "Windows control only"}
-                            </button>
-                            {activeScreenController && (
-                              <button
-                                type="button"
-                                className="screen-share-control"
-                                onClick={() =>
-                                  stopScreenControl(activeScreenController.socketId)
-                                }
-                              >
-                                Stop control
-                              </button>
+                            ) : (
+                              <>
+                                {localScreenStatus}
+                                {localScreenSettingsButtons}
+                              </>
                             )}
                           </div>
+                          {localIsScreenSettingsOpen && (
+                            <div
+                              className="screen-settings-overlay"
+                              onClick={closeScreenSettings}
+                            >
+                              <div
+                                className="screen-settings-modal"
+                                role="dialog"
+                                aria-modal="true"
+                                aria-label="Screen settings"
+                                onClick={(event) => event.stopPropagation()}
+                              >
+                                <div className="screen-settings-header">
+                                  <div>
+                                    <p className="screen-settings-eyebrow">Screen settings</p>
+                                    <h4>{entry.label}</h4>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="screen-settings-close"
+                                    onClick={closeScreenSettings}
+                                  >
+                                    Close
+                                  </button>
+                                </div>
+                                {localScreenStatus && (
+                                  <div className="screen-settings-status">
+                                    {localScreenStatus}
+                                  </div>
+                                )}
+                                <div className="screen-settings-body">
+                                  <div className="screen-settings-grid">
+                                    {localScreenSettingsButtons}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                          {isFullscreen &&
+                            (fullscreenChatOverlay || fullscreenVideoOverlay) && (
+                              <div className="screen-share-overlays">
+                                {fullscreenVideoOverlay && (
+                                  <div className="screen-share-overlay is-video">
+                                    <div className="screen-share-overlay-header">Video</div>
+                                    <div className="screen-share-overlay-grid">
+                                      {overlayVideoParticipants.map(renderOverlayVideoTile)}
+                                    </div>
+                                  </div>
+                                )}
+                                {fullscreenChatOverlay && (
+                                  <div className="screen-share-overlay is-chat">
+                                    <div className="screen-share-overlay-header">Chat</div>
+                                    <div className="screen-share-overlay-body">
+                                      {overlayMessages.length === 0 ? (
+                                        <p className="screen-share-overlay-empty">
+                                          No messages yet.
+                                        </p>
+                                      ) : (
+                                        overlayMessages.map((message) => (
+                                          <div
+                                            key={message.id}
+                                            className="screen-share-overlay-message"
+                                          >
+                                            <div className="screen-share-overlay-meta">
+                                              <span>{resolveMessageName(message)}</span>
+                                              <span>
+                                                {new Date(message.at).toLocaleTimeString([], {
+                                                  hour: "2-digit",
+                                                  minute: "2-digit",
+                                                })}
+                                              </span>
+                                            </div>
+                                            <div className="screen-share-overlay-text">
+                                              {message.kind === "gif" && message.gifUrl ? (
+                                                <img
+                                                  src={message.gifUrl}
+                                                  alt="GIF"
+                                                  loading="lazy"
+                                                />
+                                              ) : (
+                                                <span>{formatMessage(message)}</span>
+                                              )}
+                                            </div>
+                                          </div>
+                                        ))
+                                      )}
+                                    </div>
+                                    <div className="screen-share-overlay-compose">
+                                      <textarea
+                                        className="screen-share-overlay-input"
+                                        value={chatInput}
+                                        onChange={(event) =>
+                                          setChatInput(sanitizePostText(event.target.value))
+                                        }
+                                        onKeyDown={(event) => {
+                                          if (event.key !== "Enter" || event.shiftKey) return;
+                                          event.preventDefault();
+                                          if (!showCallUi) return;
+                                          handleSend();
+                                        }}
+                                        placeholder="Type a message"
+                                        rows={2}
+                                        disabled={!showCallUi}
+                                      />
+                                      <button
+                                        type="button"
+                                        className="btn primary"
+                                        onClick={handleSend}
+                                        disabled={!showCallUi || !chatInput.trim()}
+                                      >
+                                        Send
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           {activeScreenController && screenControlCursor && (
                             <span
                               className={`screen-control-cursor${
@@ -2587,7 +3274,131 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                       transformOrigin: "center center",
                       transition: isTargetPanning ? "none" : "transform 0.2s ease",
                     };
-                    const targetZoomLabel = `${Math.round(targetZoom * 100)}%`;
+                    const remoteIsScreenSettingsOpen =
+                      isMobileLayout && activeScreenSettingsId === tileId;
+                    const remoteScreenStatus =
+                      isControlling && screenControlAgentId ? (
+                        <span className="screen-share-status">Windows control active</span>
+                      ) : isPending ? (
+                        <span className="screen-share-status">Control requested</span>
+                      ) : null;
+                    const remoteScreenSettingsButtons = (
+                      <>
+                        <button
+                          type="button"
+                          className="screen-share-control is-icon"
+                          onClick={() => toggleFullscreen(tileId)}
+                        >
+                          <FontAwesomeIcon
+                            icon={isFullscreen ? faCompress : faExpand}
+                            aria-hidden="true"
+                          />
+                          <span className="screen-share-label">
+                            {isFullscreen ? "Exit full screen" : "Full screen"}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`screen-share-control is-icon${
+                            isScreenFocused ? " is-active" : ""
+                          }`}
+                          onClick={() => toggleScreenFocus(entry)}
+                          aria-pressed={isScreenFocused}
+                        >
+                          <FontAwesomeIcon icon={faMagnifyingGlass} aria-hidden="true" />
+                          <span className="screen-share-label">
+                            {isScreenFocused ? "Show all" : "Focus"}
+                          </span>
+                        </button>
+                        <div className="screen-share-zoom">
+                          <button
+                            type="button"
+                            className="screen-share-control is-icon"
+                            onClick={() => updateScreenZoom(targetZoomKey, targetZoom - 0.25)}
+                            disabled={targetZoom <= 1}
+                            aria-label="Zoom out"
+                          >
+                            <FontAwesomeIcon icon={faMinus} aria-hidden="true" />
+                            <span className="screen-share-label">Zoom out</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="screen-share-control is-icon"
+                            onClick={() => updateScreenZoom(targetZoomKey, targetZoom + 0.25)}
+                            disabled={targetZoom >= 5}
+                            aria-label="Zoom in"
+                          >
+                            <FontAwesomeIcon icon={faPlus} aria-hidden="true" />
+                            <span className="screen-share-label">Zoom in</span>
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          className="screen-share-control is-icon"
+                          onClick={() => setIsScreenBorderless((prev) => !prev)}
+                        >
+                          <FontAwesomeIcon icon={faDisplay} aria-hidden="true" />
+                          <span className="screen-share-label">
+                            {isScreenBorderless ? "Windowed" : "Borderless"}
+                          </span>
+                        </button>
+                        {isFullscreen && (
+                          <>
+                            <button
+                              type="button"
+                              className={`screen-share-control is-icon${
+                                fullscreenChatOverlay ? " is-active" : ""
+                              }`}
+                              onClick={handleToggleChatVisibility}
+                              aria-pressed={fullscreenChatOverlay}
+                            >
+                              <FontAwesomeIcon
+                                icon={fullscreenChatOverlay ? faCommentSlash : faComments}
+                                aria-hidden="true"
+                              />
+                              <span className="screen-share-label">
+                                {fullscreenChatOverlay ? "Hide chat" : "Show chat"}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              className={`screen-share-control is-icon${
+                                fullscreenVideoOverlay ? " is-active" : ""
+                              }`}
+                              onClick={handleToggleVideoVisibility}
+                              aria-pressed={fullscreenVideoOverlay}
+                            >
+                              <FontAwesomeIcon
+                                icon={fullscreenVideoOverlay ? faVideoSlash : faVideo}
+                                aria-hidden="true"
+                              />
+                              <span className="screen-share-label">
+                                {fullscreenVideoOverlay ? "Hide video" : "Show video"}
+                              </span>
+                            </button>
+                          </>
+                        )}
+                        {isControlling ? (
+                          <button
+                            type="button"
+                            className="screen-share-control is-icon"
+                            onClick={() => stopScreenControl(targetId)}
+                          >
+                            <FontAwesomeIcon icon={faStop} aria-hidden="true" />
+                            <span className="screen-share-label">Stop control</span>
+                          </button>
+                        ) : isPending ? null : (
+                          <button
+                            type="button"
+                            className="screen-share-control is-icon"
+                            onClick={() => requestScreenControl(targetId)}
+                          >
+                            <FontAwesomeIcon icon={faDesktop} aria-hidden="true" />
+                            <span className="screen-share-label">Take control</span>
+                          </button>
+                        )}
+                      </>
+                    );
 
                     return (
                       <VideoTile
@@ -2600,6 +3411,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                         }${isTargetPannable ? " is-pannable" : ""}${
                           isTargetPanning ? " is-panning" : ""
                         }`}
+                        style={gridPlacementStyle}
                         mediaStyle={targetZoomStyle}
                         onPointerMove={
                           isControlling
@@ -2653,84 +3465,145 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                         rootRef={registerScreenTile(tileId)}
                         dataScreenId={tileId}
                       >
-                        <div className="screen-share-actions">
-                          <button
-                            type="button"
-                            className="screen-share-control"
-                            onClick={() => toggleFullscreen(tileId)}
-                          >
-                            {isFullscreen ? "Exit full screen" : "Full screen"}
-                          </button>
-                          <button
-                            type="button"
-                            className={`screen-share-control${
-                              isScreenFocused ? " is-active" : ""
-                            }`}
-                            onClick={() => toggleScreenFocus(entry)}
-                            aria-pressed={isScreenFocused}
-                          >
-                            {isScreenFocused ? "Show all" : "Focus"}
-                          </button>
-                          <div className="screen-share-zoom">
+                        <div
+                          className={`screen-share-actions${
+                            isFullscreen ? " is-fullscreen" : " is-compact"
+                          }`}
+                        >
+                          {isMobileLayout ? (
                             <button
                               type="button"
-                              className="screen-share-control"
-                              onClick={() => updateScreenZoom(targetZoomKey, targetZoom - 0.25)}
-                              disabled={targetZoom <= 1}
-                              aria-label="Zoom out"
+                              className="screen-share-control is-icon is-settings-trigger"
+                              onClick={() => toggleScreenSettings(tileId)}
+                              aria-expanded={remoteIsScreenSettingsOpen}
                             >
-                              -
+                              <FontAwesomeIcon icon={faSliders} aria-hidden="true" />
+                              <span className="screen-share-label">Screen Settings</span>
                             </button>
-                            <span className="screen-share-zoom-label">{targetZoomLabel}</span>
-                            <button
-                              type="button"
-                              className="screen-share-control"
-                              onClick={() => updateScreenZoom(targetZoomKey, targetZoom + 0.25)}
-                              disabled={targetZoom >= 3}
-                              aria-label="Zoom in"
-                            >
-                              +
-                            </button>
-                          </div>
-                          <button
-                            type="button"
-                            className="screen-share-control"
-                            onClick={() => setIsScreenBorderless((prev) => !prev)}
-                          >
-                            {isScreenBorderless ? "Windowed" : "Borderless"}
-                          </button>
-                          <button
-                            type="button"
-                            className="screen-share-control is-chat-toggle"
-                            onClick={() => setIsChatVisible((prev) => !prev)}
-                          >
-                            {showChat ? "Hide chat" : "Show chat"}
-                          </button>
-                          {isControlling && screenControlAgentId && (
-                            <span className="screen-share-status">
-                              Windows control active
-                            </span>
-                          )}
-                          {isControlling ? (
-                            <button
-                              type="button"
-                              className="screen-share-control"
-                              onClick={() => stopScreenControl(targetId)}
-                            >
-                              Stop control
-                            </button>
-                          ) : isPending ? (
-                            <span className="screen-share-status">Control requested</span>
                           ) : (
-                            <button
-                              type="button"
-                              className="screen-share-control"
-                              onClick={() => requestScreenControl(targetId)}
-                            >
-                              Take control
-                            </button>
+                            <>
+                              {remoteScreenStatus}
+                              {remoteScreenSettingsButtons}
+                            </>
                           )}
                         </div>
+                        {remoteIsScreenSettingsOpen && (
+                          <div
+                            className="screen-settings-overlay"
+                            onClick={closeScreenSettings}
+                          >
+                            <div
+                              className="screen-settings-modal"
+                              role="dialog"
+                              aria-modal="true"
+                              aria-label="Screen settings"
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              <div className="screen-settings-header">
+                                <div>
+                                  <p className="screen-settings-eyebrow">Screen settings</p>
+                                  <h4>{entry.label}</h4>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="screen-settings-close"
+                                  onClick={closeScreenSettings}
+                                >
+                                  Close
+                                </button>
+                              </div>
+                              {remoteScreenStatus && (
+                                <div className="screen-settings-status">
+                                  {remoteScreenStatus}
+                                </div>
+                              )}
+                              <div className="screen-settings-body">
+                                <div className="screen-settings-grid">
+                                  {remoteScreenSettingsButtons}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        {isFullscreen &&
+                          (fullscreenChatOverlay || fullscreenVideoOverlay) && (
+                            <div className="screen-share-overlays">
+                              {fullscreenVideoOverlay && (
+                                <div className="screen-share-overlay is-video">
+                                  <div className="screen-share-overlay-header">Video</div>
+                                  <div className="screen-share-overlay-grid">
+                                    {overlayVideoParticipants.map(renderOverlayVideoTile)}
+                                  </div>
+                                </div>
+                              )}
+                              {fullscreenChatOverlay && (
+                                <div className="screen-share-overlay is-chat">
+                                  <div className="screen-share-overlay-header">Chat</div>
+                                  <div className="screen-share-overlay-body">
+                                    {overlayMessages.length === 0 ? (
+                                      <p className="screen-share-overlay-empty">
+                                        No messages yet.
+                                      </p>
+                                    ) : (
+                                      overlayMessages.map((message) => (
+                                        <div
+                                          key={message.id}
+                                          className="screen-share-overlay-message"
+                                        >
+                                          <div className="screen-share-overlay-meta">
+                                            <span>{resolveMessageName(message)}</span>
+                                            <span>
+                                              {new Date(message.at).toLocaleTimeString([], {
+                                                hour: "2-digit",
+                                                minute: "2-digit",
+                                              })}
+                                            </span>
+                                          </div>
+                                          <div className="screen-share-overlay-text">
+                                            {message.kind === "gif" && message.gifUrl ? (
+                                              <img
+                                                src={message.gifUrl}
+                                                alt="GIF"
+                                                loading="lazy"
+                                              />
+                                            ) : (
+                                              <span>{formatMessage(message)}</span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      ))
+                                    )}
+                                  </div>
+                                  <div className="screen-share-overlay-compose">
+                                    <textarea
+                                      className="screen-share-overlay-input"
+                                      value={chatInput}
+                                      onChange={(event) =>
+                                        setChatInput(sanitizePostText(event.target.value))
+                                      }
+                                      onKeyDown={(event) => {
+                                        if (event.key !== "Enter" || event.shiftKey) return;
+                                        event.preventDefault();
+                                        if (!showCallUi) return;
+                                        handleSend();
+                                      }}
+                                      placeholder="Type a message"
+                                      rows={2}
+                                      disabled={!showCallUi}
+                                    />
+                                    <button
+                                      type="button"
+                                      className="btn primary"
+                                      onClick={handleSend}
+                                      disabled={!showCallUi || !chatInput.trim()}
+                                    >
+                                      Send
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
                       </VideoTile>
                     );
                   })}
@@ -2741,7 +3614,23 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                     </div>
                   </div>
                 )}
-                {showVideoTiles && (
+                {showVideoTiles && isSplitView && (
+                  <>
+                    {splitPairs.pairs.map((pair, index) =>
+                      pair.videoParticipant
+                        ? renderCompactVideoTile(pair.videoParticipant, {
+                            style: { gridColumn: 2, gridRow: index + 1 },
+                          })
+                        : null
+                    )}
+                    {splitPairs.remaining.map((participant, index) =>
+                      renderCompactVideoTile(participant, {
+                        style: { gridColumn: 2, gridRow: splitPairs.pairs.length + index + 1 },
+                      })
+                    )}
+                  </>
+                )}
+                {showVideoTiles && !isSplitView && (
                   <>
                     {showLocalVideo && (
                       <VideoTile
@@ -2786,6 +3675,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                             handle: participant.handle,
                           })}
                           avatarUrl={participant.avatarUrl}
+                          muted={isRenderingInPopout}
                           status={
                             remoteStreams[participant.socketId] ? "" : "Waiting for video"
                           }
@@ -2819,93 +3709,19 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                     )}
                   </>
                 )}
+                  </>
+                )}
                 <button
                   type="button"
                   className="video-call-end-mobile"
                   onClick={() => {
                     void playEndCallTone();
-                    if (isCallHost) {
-                      endCall();
-                    } else {
-                      leaveCall();
-                    }
+                    endCall();
                   }}
                 >
-                  {isCallHost ? "End call" : "Leave call"}
+                  End call
                 </button>
               </div>
-              {showEffectsPanel && (
-                <div className="video-call-effects">
-                  <div className="video-preview-row">
-                    <div className="video-preview-group">
-                      <span className="video-preview-label">Blur</span>
-                      <button
-                        type="button"
-                        className={`video-preview-toggle${videoEffects.blur ? " is-active" : ""}`}
-                        onClick={() => setVideoEffects({ blur: !videoEffects.blur })}
-                      >
-                        {videoEffects.blur ? "On" : "Off"}
-                      </button>
-                    </div>
-                    <div className="video-preview-group">
-                      <span className="video-preview-label">Mirror</span>
-                      <button
-                        type="button"
-                        className={`video-preview-toggle${
-                          videoEffects.mirror ? " is-active" : ""
-                        }`}
-                        onClick={() => setVideoEffects({ mirror: !videoEffects.mirror })}
-                      >
-                        {videoEffects.mirror ? "On" : "Off"}
-                      </button>
-                    </div>
-                  </div>
-                  <div className="video-preview-row">
-                    <div className="video-preview-group is-wide">
-                      <span className="video-preview-label">Camera filter</span>
-                      <label className="video-preview-select">
-                        <span className="sr-only">Camera filter</span>
-                        <select
-                          value={videoEffects.filter}
-                          onChange={(event) =>
-                            setVideoEffects({
-                              filter: event.target.value as typeof videoEffects.filter,
-                            })
-                          }
-                        >
-                          {FILTER_OPTIONS.map((option) => (
-                            <option key={option.id} value={option.id}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
-                  </div>
-                  <div className="video-preview-row">
-                    <div className="video-preview-group is-wide">
-                      <span className="video-preview-label">Background</span>
-                      <label className="video-preview-select">
-                        <span className="sr-only">Background</span>
-                        <select
-                          value={videoEffects.background}
-                          onChange={(event) =>
-                            setVideoEffects({
-                              background: event.target.value as typeof videoEffects.background,
-                            })
-                          }
-                        >
-                          {BACKGROUND_OPTIONS.map((option) => (
-                            <option key={option.id} value={option.id}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
-                  </div>
-                </div>
-              )}
             </>
           )}
         </div>

@@ -1,6 +1,7 @@
 import "../css/landing.css";
 import { CheckCircle2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import SiteFooter from "../components/SiteFooter";
 import { useAuth } from "../context/AuthContext";
 import { usePageMeta } from "../hooks/usePageMeta";
 
@@ -170,49 +171,7 @@ export default function WhatMakesUsDifferent() {
           </div>
         </section>
 
-        <footer className="landing-footer">
-          <div className="footer-row footer-brand">
-            <div className="footer-logo">
-              <img src="/logo.png" alt="Your Social Place logo" />
-            </div>
-            <p>
-              A motivational support network built for real progress. Beta access is live and
-              evolving.
-            </p>
-          </div>
-          <div className="footer-row footer-column">
-            <span className="footer-title">Explore</span>
-            {!user && (
-              <>
-                <a href="/login">Login</a>
-                <a href="/register">Create account</a>
-              </>
-            )}
-            <a href="/guidelines">Community Guidelines</a>
-          </div>
-          <div className="footer-row footer-column">
-            <span className="footer-title">Safety</span>
-            <a href="/safety">Safety &amp; Moderation</a>
-            <a href="/report">Report a user</a>
-          </div>
-          <div className="footer-row footer-column">
-            <span className="footer-title">Legal</span>
-            <a href="/terms">Terms</a>
-            <a href="/privacy">Privacy</a>
-            <a href="/delete-account">Delete account</a>
-            <a href="/delete-data">Delete data</a>
-            <a href="/cookies">Cookie Policy</a>
-          </div>
-          <div className="footer-row footer-column">
-            <span className="footer-title">Connect</span>
-            <a href="mailto:support@yoursocialplace.com">Contact</a>
-            <span className="footer-muted">support@yoursocialplace.com</span>
-          </div>
-          <div className="footer-row footer-meta">
-            <span>Your Social Place</span>
-            <span>by Stick2YourDreams</span>
-          </div>
-        </footer>
+        <SiteFooter />
       </div>
     </div>
   );

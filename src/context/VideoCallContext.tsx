@@ -422,6 +422,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const remoteStreamsRef = useRef<Record<string, MediaStream>>({});
   const remoteScreenStreamsRef = useRef<Record<string, MediaStream>>({});
   const remoteParticipantsRef = useRef<Record<string, VideoCallParticipant>>({});
+  const hadRemoteParticipantsRef = useRef(false);
   const rawStreamRef = useRef<MediaStream | null>(null);
   const screenShareSendersRef = useRef<
     Map<string, { video?: RTCRtpSender; audio?: RTCRtpSender }>
@@ -3152,6 +3153,22 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
 
   cleanupCallRef.current = cleanupCall;
 
+  useEffect(() => {
+    if (status === "idle") {
+      hadRemoteParticipantsRef.current = false;
+      return;
+    }
+    const remoteCount = Object.keys(remoteParticipants).length;
+    if (remoteCount > 0) {
+      hadRemoteParticipantsRef.current = true;
+      return;
+    }
+    if (!hadRemoteParticipantsRef.current) return;
+    if (status !== "in-call" && status !== "connecting") return;
+    hadRemoteParticipantsRef.current = false;
+    cleanupCall();
+  }, [cleanupCall, remoteParticipants, status]);
+
   const closeCallComposer = useCallback(() => {
     if (status === "in-call" || status === "connecting") return;
     if (localStreamRef.current) {
@@ -3293,22 +3310,24 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   }, [incomingCall]);
 
   const leaveCall = useCallback(() => {
-    if (socketRef.current) {
-      socketRef.current.emit("call:leave", { roomId: activeRoomId });
+    const roomId = activeRoomId;
+    if (socketRef.current && roomId) {
+      const remoteCount = Object.keys(remoteParticipantsRef.current).length;
+      if (remoteCount <= 1) {
+        socketRef.current.emit("call:end", { roomId });
+      } else {
+        socketRef.current.emit("call:leave", { roomId });
+      }
     }
     cleanupCall();
   }, [activeRoomId, cleanupCall]);
 
   const endCall = useCallback(() => {
-    if (!isCallHostRef.current) {
-      leaveCall();
-      return;
-    }
     if (socketRef.current && activeRoomId) {
       socketRef.current.emit("call:end", { roomId: activeRoomId });
     }
     cleanupCall();
-  }, [activeRoomId, cleanupCall, leaveCall]);
+  }, [activeRoomId, cleanupCall]);
 
   const toggleVideo = useCallback(() => {
     const rawStream = rawStreamRef.current;
