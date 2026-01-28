@@ -3,6 +3,7 @@ import api from "../api/strapi";
 import {
   decryptFriendProfilePayload,
   ensureProfileKeyShares,
+  type NotificationReadState,
   type NotificationSettings,
   type PrivacySettings,
   type ProfileVisibility,
@@ -271,9 +272,19 @@ const isBirthdayToday = (value?: string, today = new Date()) => {
 
 const getBirthdayToken = (friendId: number, todayKey: string) => `${friendId}:${todayKey}`;
 
+const parseIsoTime = (value?: string | null) => {
+  if (!value) return null;
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : null;
+};
+
+const stringifyReadState = (state?: NotificationReadState | null) =>
+  JSON.stringify(state ?? null);
+
 export const useNotifications = (
   userId?: number | null,
-  settings?: NotificationSettings
+  settings?: NotificationSettings,
+  readState?: NotificationReadState
 ) => {
   const normalizeTime = (value?: string) => {
     if (!value) return null;
@@ -330,6 +341,22 @@ export const useNotifications = (
   const initialLoadRef = useRef(true);
   const lastCountsRef = useRef<NotificationCounts | null>(null);
   const profileNameCacheRef = useRef<Record<number, string>>({});
+  const lastSyncedReadStateRef = useRef<NotificationReadState | null>(null);
+
+  const persistReadState = useCallback(
+    async (nextState: NotificationReadState) => {
+      if (!userId || !Number.isFinite(Number(userId))) return;
+      try {
+        await api.put("/profiles/me", {
+          data: { notificationReadState: nextState },
+        });
+        lastSyncedReadStateRef.current = nextState;
+      } catch (error) {
+        console.warn("Unable to sync notification read state:", error);
+      }
+    },
+    [userId]
+  );
 
   useEffect(() => {
     if (!userId || !settings?.pushEnabled) {
@@ -886,14 +913,66 @@ export const useNotifications = (
 
   useEffect(() => {
     if (!userId || !Number.isFinite(Number(userId))) return;
-    lastSeenRef.current = getLastSeen(Number(userId));
-    likeSnapshotRef.current = getLikeSnapshot(Number(userId));
-    birthdaySeenRef.current = getBirthdaySeen(Number(userId));
+    const currentUserId = Number(userId);
+    const localLastSeen = getLastSeen(currentUserId);
+    const localLikeSnapshot = getLikeSnapshot(currentUserId);
+    const localBirthdaySeen = getBirthdaySeen(currentUserId);
+    const remoteLastSeen = readState?.lastSeenAt ? String(readState.lastSeenAt) : null;
+    const remoteLikeSnapshot =
+      readState?.likeSnapshot && typeof readState.likeSnapshot === "object"
+        ? readState.likeSnapshot
+        : null;
+    const remoteBirthdaySeen =
+      readState?.birthdaySeen && typeof readState.birthdaySeen === "object"
+        ? readState.birthdaySeen
+        : null;
+
+    const localTime = parseIsoTime(localLastSeen);
+    const remoteTime = parseIsoTime(remoteLastSeen);
+    const useRemote =
+      remoteTime !== null && (localTime === null || remoteTime >= localTime);
+    const resolvedLastSeen =
+      (useRemote ? remoteLastSeen : localLastSeen) || remoteLastSeen || localLastSeen;
+    const resolvedLikeSnapshot =
+      (useRemote ? remoteLikeSnapshot : localLikeSnapshot) ||
+      (useRemote ? localLikeSnapshot : remoteLikeSnapshot) ||
+      null;
+    const resolvedBirthdaySeen =
+      (useRemote ? remoteBirthdaySeen : localBirthdaySeen) ||
+      (useRemote ? localBirthdaySeen : remoteBirthdaySeen) ||
+      {};
+
+    lastSeenRef.current = resolvedLastSeen;
+    likeSnapshotRef.current = resolvedLikeSnapshot;
+    birthdaySeenRef.current = resolvedBirthdaySeen;
+
+    if (resolvedLastSeen) {
+      setLastSeen(currentUserId, resolvedLastSeen);
+    }
+    if (resolvedLikeSnapshot) {
+      setLikeSnapshot(currentUserId, resolvedLikeSnapshot);
+    }
+    setBirthdaySeen(currentUserId, resolvedBirthdaySeen);
+
+    const shouldSyncLocal =
+      localTime !== null &&
+      (remoteTime === null || (localTime !== null && remoteTime !== null && localTime > remoteTime));
+    if (shouldSyncLocal) {
+      const nextState: NotificationReadState = {
+        lastSeenAt: resolvedLastSeen || undefined,
+        likeSnapshot: resolvedLikeSnapshot || undefined,
+        birthdaySeen: resolvedBirthdaySeen,
+      };
+      if (stringifyReadState(nextState) !== stringifyReadState(lastSyncedReadStateRef.current)) {
+        void persistReadState(nextState);
+      }
+    }
+
     refresh();
 
     const interval = window.setInterval(refresh, REFRESH_MS);
     return () => window.clearInterval(interval);
-  }, [refresh, userId]);
+  }, [persistReadState, refresh, readState, userId]);
 
   const markAllRead = useCallback(() => {
     if (!userId || !Number.isFinite(Number(userId))) return;
@@ -908,6 +987,14 @@ export const useNotifications = (
     });
     birthdaySeenRef.current = birthdaySeen;
     setBirthdaySeen(Number(userId), birthdaySeen);
+    const nextState: NotificationReadState = {
+      lastSeenAt: iso,
+      likeSnapshot: latestLikeSnapshotRef.current,
+      birthdaySeen,
+    };
+    if (stringifyReadState(nextState) !== stringifyReadState(lastSyncedReadStateRef.current)) {
+      void persistReadState(nextState);
+    }
     setCounts((prev) => ({
       ...prev,
       messages: 0,
@@ -950,6 +1037,14 @@ export const useNotifications = (
         birthdaySeenRef.current = seen;
         setBirthdaySeen(Number(userId), seen);
         birthdayTokensRef.current = birthdayTokensRef.current.filter((entry) => entry !== token);
+        const nextState: NotificationReadState = {
+          lastSeenAt: lastSeenRef.current || undefined,
+          likeSnapshot: likeSnapshotRef.current || undefined,
+          birthdaySeen: seen,
+        };
+        if (stringifyReadState(nextState) !== stringifyReadState(lastSyncedReadStateRef.current)) {
+          void persistReadState(nextState);
+        }
         await refresh();
         return true;
       } catch (error) {
@@ -957,7 +1052,7 @@ export const useNotifications = (
         return false;
       }
     },
-    [refresh, userId]
+    [persistReadState, refresh, userId]
   );
 
   const acceptFriendRequest = useCallback(

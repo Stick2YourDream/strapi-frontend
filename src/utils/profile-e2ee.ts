@@ -63,6 +63,12 @@ export type NotificationSettings = {
   newsEnabled?: boolean;
 };
 
+export type NotificationReadState = {
+  lastSeenAt?: string;
+  likeSnapshot?: Record<string, number>;
+  birthdaySeen?: Record<string, string>;
+};
+
 export const PROFILE_PII_CLEAR_FIELDS = {
   birthday: null,
   gender: null,

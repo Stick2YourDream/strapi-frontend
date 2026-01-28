@@ -73,7 +73,7 @@ export default function Landing() {
     previews,
     acceptFriendRequest,
     sendBirthdayMessage,
-  } = useNotifications(user?.id, profile?.notificationSettings);
+  } = useNotifications(user?.id, profile?.notificationSettings, profile?.notificationReadState);
   const [acceptingRequests, setAcceptingRequests] = useState<Record<string, boolean>>({});
   const [birthdaySending, setBirthdaySending] = useState<Record<string, boolean>>({});
 

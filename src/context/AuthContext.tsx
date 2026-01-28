@@ -6,6 +6,7 @@ import {
   encryptProfilePayload,
   ensureUserKeyOnServer,
   PROFILE_PII_CLEAR_FIELDS,
+  type NotificationReadState,
   type NotificationSettings,
   type PrivacySettings,
   type ProfilePayload,
@@ -73,6 +74,7 @@ interface ProfileSummary {
   externalIndexingEnabled?: boolean;
   activityVisibility?: VisibilityLevel;
   notificationSettings?: NotificationSettings;
+  notificationReadState?: NotificationReadState;
   lastSeenAt?: string;
 }
 
@@ -237,7 +239,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
       const avatarUrl = pickMediaUrl(attrs.avatar);
       const handle = attrs.handle || undefined;
-      setProfile({ ...payload, onboardingComplete, avatarUrl, handle });
+      const notificationReadState = attrs?.notificationReadState || undefined;
+      setProfile({ ...payload, onboardingComplete, avatarUrl, handle, notificationReadState });
     } catch {
       setProfile(null);
     } finally {

@@ -77,6 +77,19 @@
   color: #e5e7eb;
 }
 
+.key-backup-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 6px;
+  font-size: 0.9rem;
+  color: #cbd5e1;
+}
+
+.key-backup-steps strong {
+  color: #e5e7eb;
+}
+
 .key-backup-device-actions {
   display: flex;
   flex-wrap: wrap;

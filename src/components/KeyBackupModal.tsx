@@ -34,6 +34,9 @@ export default function KeyBackupModal() {
   const [restoreSuccess, setRestoreSuccess] = useState(false);
   const [deviceRequestId, setDeviceRequestId] = useState<string | null>(null);
   const [deviceRequestError, setDeviceRequestError] = useState<string | null>(null);
+  const [deviceRequestLabel, setDeviceRequestLabel] = useState<string>(() =>
+    getDefaultDeviceLabel()
+  );
   const [deviceRequestStatus, setDeviceRequestStatus] = useState<
     "idle" | "requesting" | "pending" | "approved" | "rejected" | "expired"
   >("idle");
@@ -41,6 +44,7 @@ export default function KeyBackupModal() {
     null
   );
   const [deviceRequestLoading, setDeviceRequestLoading] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<string | null>(null);
 
   useEffect(() => {
     setPassphrase("");
@@ -53,6 +57,7 @@ export default function KeyBackupModal() {
     setDeviceRequestStatus("idle");
     setDeviceRequestExpiresAt(null);
     setDeviceRequestLoading(false);
+    setCopyStatus(null);
   }, [keyBackupStatus]);
 
   const mode = useMemo(() => {
@@ -79,6 +84,7 @@ export default function KeyBackupModal() {
     if (pendingId) {
       setDeviceRequestId(pendingId);
       setDeviceRequestStatus("pending");
+      setDeviceRequestLabel(getDefaultDeviceLabel());
     }
   }, [mode]);
 
@@ -179,10 +185,13 @@ export default function KeyBackupModal() {
   const handleRequestApproval = async () => {
     if (!user) return;
     setDeviceRequestError(null);
+    setCopyStatus(null);
     setDeviceRequestLoading(true);
     setDeviceRequestStatus("requesting");
     try {
-      const response = await requestDeviceKeyApproval(getDefaultDeviceLabel());
+      const label = getDefaultDeviceLabel();
+      setDeviceRequestLabel(label);
+      const response = await requestDeviceKeyApproval(label);
       setDeviceRequestId(response.requestId);
       setDeviceRequestStatus("pending");
       setDeviceRequestExpiresAt(response.expiresAt ? Number(response.expiresAt) : null);
@@ -200,11 +209,27 @@ export default function KeyBackupModal() {
     setDeviceRequestStatus("idle");
     setDeviceRequestError(null);
     setDeviceRequestExpiresAt(null);
+    setCopyStatus(null);
   };
 
   const handleOpenSecurity = () => {
     setDismissed(true);
     navigate("/me?section=security");
+  };
+
+  const handleCopySecurityLink = async () => {
+    if (typeof window === "undefined") return;
+    const link = `${window.location.origin}/me?section=security`;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(link);
+        setCopyStatus("Security link copied.");
+        return;
+      }
+      setCopyStatus("Copy not supported on this device.");
+    } catch {
+      setCopyStatus("Unable to copy the link.");
+    }
   };
 
   return (
@@ -241,6 +266,16 @@ export default function KeyBackupModal() {
                 Request approval on a device you already trust. Once approved, we'll
                 restore your encrypted profile and refresh this page.
               </p>
+              <ol className="key-backup-steps">
+                <li>
+                  Open Your Social Place on a trusted device (one you have already approved).
+                </li>
+                <li>Go to Me → Security → Device approval requests.</li>
+                <li>
+                  Approve the request for{" "}
+                  <strong>{deviceRequestLabel || "this device"}</strong>.
+                </li>
+              </ol>
               <div className="key-backup-device-actions">
                 <button
                   type="button"
@@ -256,6 +291,13 @@ export default function KeyBackupModal() {
                   onClick={handleOpenSecurity}
                 >
                   Open Security settings
+                </button>
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={handleCopySecurityLink}
+                >
+                  Copy security link
                 </button>
                 {deviceRequestId && (
                   <button
@@ -276,6 +318,7 @@ export default function KeyBackupModal() {
                     : "."}
                 </p>
               )}
+              {copyStatus && <p className="key-backup-hint">{copyStatus}</p>}
               {deviceRequestStatus === "approved" && (
                 <p className="key-backup-hint">Approved. Restoring now...</p>
               )}

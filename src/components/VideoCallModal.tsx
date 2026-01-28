@@ -29,6 +29,33 @@ import api from "../api/strapi";
 import callRingtoneUrl from "../assets/call.mp3";
 import holdMusicUrl from "../assets/on_hold.mp3";
 import messageSoundUrl from "../assets/notificationsoundeffect.mp3";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import {
+  faBolt,
+  faCommentSlash,
+  faComments,
+  faCompress,
+  faDesktop,
+  faDisplay,
+  faExpand,
+  faFaceSmile as faFaceSmileSolid,
+  faMagnifyingGlass,
+  faMicrophone,
+  faMicrophoneSlash,
+  faPause,
+  faPhoneSlash,
+  faPlay,
+  faRightFromBracket,
+  faSliders,
+  faStop,
+  faTableColumns,
+  faUpRightFromSquare,
+  faVideo,
+  faVideoSlash,
+  faWaveSquare,
+  faXmark,
+} from "@fortawesome/free-solid-svg-icons";
+import { faFaceSmile as faFaceSmileRegular } from "@fortawesome/free-regular-svg-icons";
 
 type VideoCallModalProps = {
   friends: VideoCallInvitee[];
@@ -596,6 +623,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   >({});
   const [emoji3dErrors, setEmoji3dErrors] = useState<Record<string, boolean>>({});
   const [showEffectsPanel, setShowEffectsPanel] = useState(false);
+  const [showSettingsPanel, setShowSettingsPanel] = useState(false);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [screenViewMode, setScreenViewMode] = useState<"split" | "screen" | "video">("split");
   const [focusedScreenId, setFocusedScreenId] = useState<string | null>(null);
@@ -1309,6 +1337,24 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     void startScreenShare();
   }, [isPopout, isScreenSharing, startScreenShare, stopScreenShare]);
 
+  const handleOpenSettings = useCallback(() => {
+    setShowSettingsPanel(true);
+  }, []);
+
+  const handleCloseSettings = useCallback(() => {
+    setShowSettingsPanel(false);
+  }, []);
+
+  const handleToggleEffectsPanel = useCallback(() => {
+    setShowEffectsPanel((prev) => {
+      const next = !prev;
+      if (next) {
+        setShowSettingsPanel(false);
+      }
+      return next;
+    });
+  }, []);
+
   const getScreenZoom = useCallback(
     (targetId: string) => screenZoomLevels[targetId] ?? 1,
     [screenZoomLevels]
@@ -1734,11 +1780,154 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     }
   }, [lowLatencyMode, lowLatencySuggested]);
 
+  useEffect(() => {
+    if (!showSettingsPanel) return;
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setShowSettingsPanel(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [showSettingsPanel]);
+
   if (!showModal) return null;
 
   const modalContent = (
     <div className={overlayClassName}>
       <div className={modalClassName}>
+        {showCallUi && showSettingsPanel && (
+          <div
+            className="video-settings-overlay"
+            role="presentation"
+            onClick={handleCloseSettings}
+          >
+            <div
+              className="video-settings-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Call settings"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="video-settings-header">
+                <div>
+                  <p className="video-settings-eyebrow">Settings</p>
+                  <h3>Call settings</h3>
+                </div>
+                <button
+                  type="button"
+                  className="video-settings-close"
+                  onClick={handleCloseSettings}
+                >
+                  Close
+                </button>
+              </div>
+              <div className="video-settings-body">
+                <section className="video-settings-section">
+                  <h4>Audio</h4>
+                  <div className="video-settings-grid">
+                    <button
+                      type="button"
+                      className={`video-settings-tile${
+                        noiseSuppressionEnabled ? " is-active" : ""
+                      }`}
+                      onClick={toggleNoiseSuppression}
+                      aria-pressed={noiseSuppressionEnabled}
+                    >
+                      <FontAwesomeIcon icon={faWaveSquare} aria-hidden="true" />
+                      <span className="video-settings-label">Noise filter</span>
+                      <span className="video-settings-status">
+                        {noiseSuppressionEnabled ? "On" : "Off"}
+                      </span>
+                    </button>
+                  </div>
+                  {showMicSelector && (
+                    <label className="video-settings-select">
+                      <span>Microphone</span>
+                      <select
+                        value={micSelectionValue}
+                        onChange={(e) => void setAudioInputDevice(e.target.value)}
+                        title="Select microphone"
+                      >
+                        <option value="default">Default mic</option>
+                        {audioInputs.map((device, index) => (
+                          <option
+                            key={device.deviceId || String(index)}
+                            value={device.deviceId}
+                          >
+                            {device.label || `Microphone ${index + 1}`}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                </section>
+                <section className="video-settings-section">
+                  <h4>Video</h4>
+                  <div className="video-settings-grid">
+                    <button
+                      type="button"
+                      className={`video-settings-tile${showEffectsPanel ? " is-active" : ""}`}
+                      onClick={handleToggleEffectsPanel}
+                      aria-pressed={showEffectsPanel}
+                    >
+                      <FontAwesomeIcon icon={faSliders} aria-hidden="true" />
+                      <span className="video-settings-label">Camera effects</span>
+                      <span className="video-settings-status">
+                        {showEffectsPanel ? "Open" : "Closed"}
+                      </span>
+                    </button>
+                  </div>
+                  {showCameraSelector && (
+                    <label className="video-settings-select">
+                      <span>Camera</span>
+                      <select
+                        value={cameraSelectionValue}
+                        onChange={(e) => void setVideoInputDevice(e.target.value)}
+                        title="Select camera"
+                      >
+                        <option value="default">Default camera</option>
+                        {videoInputs.map((device, index) => (
+                          <option
+                            key={device.deviceId || String(index)}
+                            value={device.deviceId}
+                          >
+                            {device.label || `Camera ${index + 1}`}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                </section>
+                <section className="video-settings-section">
+                  <h4>Performance</h4>
+                  <div className="video-settings-grid">
+                    <button
+                      type="button"
+                      className={`video-settings-tile${lowLatencyMode ? " is-active" : ""}`}
+                      onClick={toggleLowLatencyMode}
+                      aria-pressed={lowLatencyMode}
+                    >
+                      <FontAwesomeIcon icon={faBolt} aria-hidden="true" />
+                      <span className="video-settings-label">Low latency</span>
+                      <span className="video-settings-status">
+                        {lowLatencyMode ? "On" : "Off"}
+                      </span>
+                    </button>
+                  </div>
+                  {lowLatencySuggested && !lowLatencyMode && (
+                    <p className="video-settings-note">
+                      Suggested for your network
+                      {lowLatencySuggestionReason
+                        ? `: ${lowLatencySuggestionReason}`
+                        : "."}
+                    </p>
+                  )}
+                </section>
+              </div>
+            </div>
+          </div>
+        )}
         <div className="video-call-main">
           {showCallUi && (
             <div className="video-call-controls-top">
@@ -1753,68 +1942,10 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   aria-label={isAudioEnabled ? "Mic on" : "Mic off"}
                   title={isAudioEnabled ? "Mic on" : "Mic off"}
                 >
-                  <i
-                    className={`fa-solid ${
-                      isAudioEnabled ? "fa-microphone" : "fa-microphone-slash"
-                    }`}
+                  <FontAwesomeIcon
+                    icon={isAudioEnabled ? faMicrophone : faMicrophoneSlash}
                     aria-hidden="true"
                   />
-                </button>
-                {showMicSelector && (
-                  <label className="video-control-select is-compact">
-                    <span className="sr-only">Microphone</span>
-                    <select
-                      value={micSelectionValue}
-                      onChange={(e) => void setAudioInputDevice(e.target.value)}
-                      title="Select microphone"
-                    >
-                      <option value="default">Default mic</option>
-                      {audioInputs.map((device, index) => (
-                        <option key={device.deviceId || String(index)} value={device.deviceId}>
-                          {device.label || `Microphone ${index + 1}`}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-                <button
-                  type="button"
-                  className={`video-control video-control-icon${
-                    noiseSuppressionEnabled ? " is-active" : " is-off"
-                  }`}
-                  onClick={toggleNoiseSuppression}
-                  data-hint={noiseSuppressionEnabled ? "Noise filter on" : "Noise filter off"}
-                  aria-label={
-                    noiseSuppressionEnabled ? "Noise filter on" : "Noise filter off"
-                  }
-                  title={
-                    noiseSuppressionEnabled ? "Noise filter on" : "Noise filter off"
-                  }
-                >
-                  <i
-                    className={`fa-solid ${
-                      noiseSuppressionEnabled ? "fa-wave-square" : "fa-wave-square"
-                    }`}
-                    aria-hidden="true"
-                  />
-                </button>
-                <button
-                  type="button"
-                  className={`video-control video-control-icon${
-                    lowLatencyMode ? " is-active" : " is-off"
-                  }`}
-                  onClick={toggleLowLatencyMode}
-                  data-hint={
-                    lowLatencyMode ? "Low latency on" : "Low latency off"
-                  }
-                  aria-label={
-                    lowLatencyMode ? "Low latency on" : "Low latency off"
-                  }
-                  title={
-                    lowLatencyMode ? "Low latency on" : "Low latency off"
-                  }
-                >
-                  <i className="fa-solid fa-bolt" aria-hidden="true" />
                 </button>
                 <button
                   type="button"
@@ -1826,28 +1957,11 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   aria-label={isVideoEnabled ? "Cam on" : "Cam off"}
                   title={isVideoEnabled ? "Cam on" : "Cam off"}
                 >
-                  <i
-                    className={`fa-solid ${isVideoEnabled ? "fa-video" : "fa-video-slash"}`}
+                  <FontAwesomeIcon
+                    icon={isVideoEnabled ? faVideo : faVideoSlash}
                     aria-hidden="true"
                   />
                 </button>
-                {showCameraSelector && (
-                  <label className="video-control-select is-compact">
-                    <span className="sr-only">Camera</span>
-                    <select
-                      value={cameraSelectionValue}
-                      onChange={(e) => void setVideoInputDevice(e.target.value)}
-                      title="Select camera"
-                    >
-                      <option value="default">Default camera</option>
-                      {videoInputs.map((device, index) => (
-                        <option key={device.deviceId || String(index)} value={device.deviceId}>
-                          {device.label || `Camera ${index + 1}`}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
                 <button
                   type="button"
                   className={`video-control video-control-icon${
@@ -1858,8 +1972,8 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   aria-label={isScreenSharing ? "Stop share" : "Share screen"}
                   title={isScreenSharing ? "Stop share" : "Share screen"}
                 >
-                  <i
-                    className={`fa-solid ${isScreenSharing ? "fa-stop" : "fa-desktop"}`}
+                  <FontAwesomeIcon
+                    icon={isScreenSharing ? faStop : faDesktop}
                     aria-hidden="true"
                   />
                 </button>
@@ -1873,23 +1987,21 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   aria-label={isHolding ? "Resume call" : "Hold call"}
                   title={isHolding ? "Resume call" : "Hold call"}
                 >
-                  <i
-                    className={`fa-solid ${isHolding ? "fa-play" : "fa-pause"}`}
+                  <FontAwesomeIcon
+                    icon={isHolding ? faPlay : faPause}
                     aria-hidden="true"
                   />
                 </button>
                 <button
                   type="button"
-                  className={`video-control video-control-icon ghost${
-                    showEffectsPanel ? " is-active" : ""
-                  }`}
-                  onClick={() => setShowEffectsPanel((prev) => !prev)}
-                  aria-pressed={showEffectsPanel}
-                  data-hint="Effects"
-                  aria-label="Effects"
-                  title="Effects"
+                  className="video-control video-control-settings"
+                  onClick={handleOpenSettings}
+                  data-hint="Settings"
+                  aria-label="Settings"
+                  title="Settings"
                 >
-                  <i className="fa-solid fa-sliders" aria-hidden="true" />
+                  <FontAwesomeIcon icon={faSliders} aria-hidden="true" />
+                  <span className="video-control-settings-label">Settings</span>
                 </button>
               </div>
               <div className="video-call-controls-group">
@@ -1901,7 +2013,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   aria-label="Leave call"
                   title="Leave call"
                 >
-                  <i className="fa-solid fa-right-from-bracket" aria-hidden="true" />
+                  <FontAwesomeIcon icon={faRightFromBracket} aria-hidden="true" />
                 </button>
                 {isCallHost && (
                   <button
@@ -1915,7 +2027,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                     aria-label="End call"
                     title="End call"
                   >
-                    <i className="fa-solid fa-phone-slash" aria-hidden="true" />
+                    <FontAwesomeIcon icon={faPhoneSlash} aria-hidden="true" />
                   </button>
                 )}
               </div>
@@ -1989,7 +2101,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   aria-label="Split view"
                   title="Split view"
                 >
-                  <i className="fa-solid fa-table-columns" aria-hidden="true" />
+                  <FontAwesomeIcon icon={faTableColumns} aria-hidden="true" />
                 </button>
                 {hasScreenShares && (
                   <button
@@ -2002,7 +2114,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                     aria-label="Screen view"
                     title="Screen view"
                   >
-                    <i className="fa-solid fa-display" aria-hidden="true" />
+                    <FontAwesomeIcon icon={faDisplay} aria-hidden="true" />
                   </button>
                 )}
                 <button
@@ -2015,7 +2127,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   aria-label="Video view"
                   title="Video view"
                 >
-                  <i className="fa-solid fa-video" aria-hidden="true" />
+                  <FontAwesomeIcon icon={faVideo} aria-hidden="true" />
                 </button>
               </div>
               <div className="video-call-toolbar-group">
@@ -2030,8 +2142,8 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                     aria-label={isScreenBorderless ? "Windowed" : "Borderless"}
                     title={isScreenBorderless ? "Windowed" : "Borderless"}
                   >
-                    <i
-                      className={`fa-solid ${isScreenBorderless ? "fa-compress" : "fa-expand"}`}
+                    <FontAwesomeIcon
+                      icon={isScreenBorderless ? faCompress : faExpand}
                       aria-hidden="true"
                     />
                   </button>
@@ -2047,10 +2159,8 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   aria-label={showChat ? "Hide chat" : "Show chat"}
                   title={showChat ? "Hide chat" : "Show chat"}
                 >
-                  <i
-                    className={`fa-solid ${
-                      showChat ? "fa-comment-slash" : "fa-comments"
-                    }`}
+                  <FontAwesomeIcon
+                    icon={showChat ? faCommentSlash : faComments}
                     aria-hidden="true"
                   />
                 </button>
@@ -2067,7 +2177,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   aria-label="Video panel"
                   title="Video panel"
                 >
-                  <i className="fa-solid fa-video" aria-hidden="true" />
+                  <FontAwesomeIcon icon={faVideo} aria-hidden="true" />
                 </button>
                 <button
                   type="button"
@@ -2079,7 +2189,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   aria-label="Chat panel"
                   title="Chat panel"
                 >
-                  <i className="fa-solid fa-comments" aria-hidden="true" />
+                  <FontAwesomeIcon icon={faComments} aria-hidden="true" />
                 </button>
               </div>
               <div className="video-call-toolbar-group">
@@ -2092,10 +2202,8 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   aria-label={isPopout ? "Dock" : "Pop out"}
                   title={isPopout ? "Dock" : "Pop out"}
                 >
-                  <i
-                    className={`fa-solid ${
-                      isPopout ? "fa-compress" : "fa-up-right-from-square"
-                    }`}
+                  <FontAwesomeIcon
+                    icon={isPopout ? faCompress : faUpRightFromSquare}
                     aria-hidden="true"
                   />
                 </button>
@@ -2889,7 +2997,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                           aria-pressed={isPickerOpen}
                           aria-label="Add reaction"
                         >
-                          <i className="fa-regular fa-face-smile" aria-hidden="true" />
+                          <FontAwesomeIcon icon={faFaceSmileRegular} aria-hidden="true" />
                         </button>
                       )}
                     </div>
@@ -2927,7 +3035,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                 }}
                 aria-label="Pick emoji"
               >
-                <i className="fa-solid fa-face-smile" aria-hidden="true" />
+                <FontAwesomeIcon icon={faFaceSmileSolid} aria-hidden="true" />
               </button>
               <button
                 type="button"
@@ -3052,7 +3160,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
               <div className="video-chat-picker is-gif">
                 <div className="video-chat-gif-toolbar">
                   <div className="video-chat-gif-search">
-                    <i className="fa-solid fa-magnifying-glass" aria-hidden="true" />
+                    <FontAwesomeIcon icon={faMagnifyingGlass} aria-hidden="true" />
                     <input
                       type="search"
                       value={gifSearch}
@@ -3067,7 +3175,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                         onClick={() => setGifSearch("")}
                         aria-label="Clear GIF search"
                       >
-                        <i className="fa-solid fa-xmark" aria-hidden="true" />
+                        <FontAwesomeIcon icon={faXmark} aria-hidden="true" />
                       </button>
                     )}
                   </div>
