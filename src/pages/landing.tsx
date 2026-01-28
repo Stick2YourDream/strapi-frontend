@@ -16,6 +16,7 @@ import {
   decryptOwnProfilePayload,
   type ProfilePayload,
 } from "../utils/profile-e2ee";
+import { pickMediaUrl } from "../utils/media";
 
 type ProfileSummary = {
   displayName: string;
@@ -119,23 +120,6 @@ export default function Landing() {
   }, []);
 
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
-  const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
-  const pickMediaUrl = (mediaField: any): string | undefined => {
-    if (!mediaField) return undefined;
-    const candidate =
-      (Array.isArray(mediaField?.data) ? mediaField.data[0] : mediaField?.data) ??
-      (Array.isArray(mediaField) ? mediaField[0] : mediaField);
-    if (!candidate) return undefined;
-    const attrs = normalize(candidate);
-    let url =
-      attrs.url ||
-      attrs.formats?.large?.url ||
-      attrs.formats?.medium?.url ||
-      attrs.formats?.small?.url ||
-      attrs.formats?.thumbnail?.url;
-    if (!url) return undefined;
-    return url.startsWith("/") ? `${apiBase}${url}` : url;
-  };
 
   useEffect(() => {
     if (!user) {
@@ -168,7 +152,7 @@ export default function Landing() {
         setProfileSummary({
           displayName,
           handle: attrs.handle || user.email,
-          avatarUrl: pickMediaUrl(attrs.avatar),
+          avatarUrl: pickMediaUrl(attrs.avatar, { kind: "avatar" }),
         });
       } catch {
         setProfileSummary({

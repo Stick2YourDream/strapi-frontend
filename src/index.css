@@ -9,3 +9,31 @@ html, body {
   overflow-x: hidden;
   background: #05060a;
 }
+
+#root {
+  min-height: 100vh;
+}
+
+@media (max-width: 900px) and (orientation: landscape) {
+  .dashboard-shell,
+  .landing-page,
+  .terms-page,
+  .auth-shell {
+    padding-top: 64px;
+    padding-bottom: 24px;
+  }
+
+  .panel-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 1024px) and (orientation: portrait) {
+  .dashboard-shell,
+  .landing-page,
+  .terms-page,
+  .auth-shell {
+    padding-left: clamp(16px, 4vw, 64px);
+    padding-right: clamp(16px, 4vw, 64px);
+  }
+}

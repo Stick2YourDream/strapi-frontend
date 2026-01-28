@@ -24,6 +24,7 @@ import {
   decryptOwnProfilePayload,
   fetchUserKeys,
 } from "../utils/profile-e2ee";
+import { pickMediaUrl } from "../utils/media";
 
 type VideoCallInvitee = {
   userId: number;
@@ -205,6 +206,8 @@ type VideoCallContextValue = {
   sendScreenControlEvent: (targetSocketId: string, event: ScreenControlEvent) => void;
   sendMessage: (body: string, kind?: VideoCallMessage["kind"], gifUrl?: string) => void;
   toggleHold: () => void;
+  muteAllParticipants: () => void;
+  stopAllScreenShares: () => void;
 };
 
 const MAX_VIDEO_PARTICIPANTS = 8;
@@ -341,22 +344,6 @@ const loadSelfieSegmentation = () => {
     })();
   }
   return selfieSegmentationPromise;
-};
-const pickMediaUrl = (mediaField: any): string | undefined => {
-  if (!mediaField) return undefined;
-  const candidate =
-    (Array.isArray(mediaField?.data) ? mediaField.data[0] : mediaField?.data) ??
-    (Array.isArray(mediaField) ? mediaField[0] : mediaField);
-  if (!candidate) return undefined;
-  const attrs = normalize(candidate);
-  let url =
-    attrs.url ||
-    attrs.formats?.large?.url ||
-    attrs.formats?.medium?.url ||
-    attrs.formats?.small?.url ||
-    attrs.formats?.thumbnail?.url;
-  if (!url) return undefined;
-  return url.startsWith("/") ? `${apiBase}${url}` : url;
 };
 
 const VideoCallContext = createContext<VideoCallContextValue | undefined>(undefined);
@@ -2376,7 +2363,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         }`.trim();
         const displayName = nameFromPayload || attrs.handle || user.email;
         const handle = attrs.handle || "";
-        const avatarUrl = pickMediaUrl(attrs.avatar);
+        const avatarUrl = pickMediaUrl(attrs.avatar, { kind: "avatar" });
         if (active) {
           profileRef.current = {
             userId: user.id,
@@ -2399,6 +2386,28 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       active = false;
     };
   }, [user?.email, user?.id]);
+
+  const forceMuteLocalAudio = useCallback(() => {
+    const rawStream = rawStreamRef.current;
+    const tracks = rawStream?.getAudioTracks() ?? [];
+    if (holdEnabledRef.current) {
+      holdRestoreRef.current = { ...holdRestoreRef.current, audio: false };
+      setIsAudioEnabled(false);
+      return;
+    }
+    if (tracks.length === 0) {
+      setIsAudioEnabled(false);
+      return;
+    }
+    tracks.forEach((track) => {
+      track.enabled = false;
+    });
+    const processedTrack = audioProcessingRef.current.track;
+    if (processedTrack) {
+      processedTrack.enabled = false;
+    }
+    setIsAudioEnabled(false);
+  }, []);
 
   useEffect(() => {
     if (user?.id) return;
@@ -2770,6 +2779,23 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     );
 
     socket.on(
+      "call:mute-all",
+      (payload: { roomId: string; from?: string }) => {
+        if (payload?.roomId && payload.roomId !== activeRoomRef.current) return;
+        forceMuteLocalAudio();
+      }
+    );
+
+    socket.on(
+      "call:screen:stop-all",
+      (payload: { roomId: string; from?: string }) => {
+        if (payload?.roomId && payload.roomId !== activeRoomRef.current) return;
+        if (!localScreenStreamRef.current) return;
+        stopScreenShare();
+      }
+    );
+
+    socket.on(
       "call:control:request",
       (payload: {
         roomId: string;
@@ -2943,6 +2969,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     setCallEncryptionMode,
     shareCallKeyWithParticipants,
     shareCallKeyWithPublicKey,
+    forceMuteLocalAudio,
+    stopScreenShare,
     user?.email,
     user?.id,
   ]);
@@ -3386,6 +3414,18 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     }
   }, [applyHoldState]);
 
+  const muteAllParticipants = useCallback(() => {
+    if (!socketRef.current || !activeRoomRef.current) return;
+    if (!isCallHostRef.current) return;
+    socketRef.current.emit("call:mute-all", { roomId: activeRoomRef.current });
+  }, []);
+
+  const stopAllScreenShares = useCallback(() => {
+    if (!socketRef.current || !activeRoomRef.current) return;
+    if (!isCallHostRef.current) return;
+    socketRef.current.emit("call:screen:stop-all", { roomId: activeRoomRef.current });
+  }, []);
+
   const requestScreenControl = useCallback((targetSocketId: string) => {
     if (!socketRef.current || !activeRoomRef.current) return;
     if (screenControlTargetRef.current === targetSocketId) return;
@@ -3554,6 +3594,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       sendScreenControlEvent,
       sendMessage,
       toggleHold,
+      muteAllParticipants,
+      stopAllScreenShares,
     }),
     [
       acceptCall,
@@ -3612,6 +3654,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       toggleAudio,
       toggleHold,
       toggleVideo,
+      muteAllParticipants,
+      stopAllScreenShares,
     ]
   );
 

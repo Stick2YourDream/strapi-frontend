@@ -25,6 +25,7 @@ import {
   type ProfilePayload,
   type VisibilityLevel,
 } from "../utils/profile-e2ee";
+import { pickMediaUrl } from "../utils/media";
 import { sanitizePostText } from "../utils/emoji";
 import { getOrCreateDeviceId } from "../utils/device-id";
 import {
@@ -437,7 +438,7 @@ const formatDateTime = (value?: string | null) => {
 };
 
 export default function Me() {
-  const { user, refreshProfile, logout, updateUser } = useAuth();
+  const { user, refreshProfile, logout, updateUser, resetEncryptedProfile } = useAuth();
   const { preferences, setBackgroundAll, resetBackgroundAll, setChatPrefs, getBackgroundStyle } =
     useUserPreferences();
   const navigate = useNavigate();
@@ -486,6 +487,9 @@ export default function Me() {
   const profileIdRef = useRef<string | number | null>(null);
   const handleFixAttemptedRef = useRef(false);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
+  const [avatarRotateBusy, setAvatarRotateBusy] = useState(false);
+  const [avatarRotateError, setAvatarRotateError] = useState<string | null>(null);
   const [posts, setPosts] = useState<MediaPost[]>([]);
   const [postComments, setPostComments] = useState<Record<string, CommentItem[]>>({});
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
@@ -577,6 +581,9 @@ export default function Me() {
   const [passwordResetLoading, setPasswordResetLoading] = useState(false);
   const [passwordResetError, setPasswordResetError] = useState<string | null>(null);
   const [passwordResetSuccess, setPasswordResetSuccess] = useState<string | null>(null);
+  const [profileRecoveryBusy, setProfileRecoveryBusy] = useState(false);
+  const [profileRecoveryError, setProfileRecoveryError] = useState<string | null>(null);
+  const [profileRecoverySuccess, setProfileRecoverySuccess] = useState<string | null>(null);
   const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
   const [twoFactorMethod, setTwoFactorMethod] = useState<TwoFactorMethod>("email");
   const [twoFactorHasAuthenticator, setTwoFactorHasAuthenticator] = useState(false);
@@ -880,9 +887,7 @@ export default function Me() {
     try {
       const fd = new FormData();
       fd.append("files", file);
-      const uploadRes = await api.post("/upload", fd, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      const uploadRes = await api.post("/upload", fd);
       const uploaded = uploadRes.data?.[0];
       const url = uploaded?.url;
       if (!url) {
@@ -1507,6 +1512,28 @@ export default function Me() {
     }
   };
 
+  const handleProfileRecoveryReset = async () => {
+    setProfileRecoveryError(null);
+    setProfileRecoverySuccess(null);
+    if (typeof window !== "undefined") {
+      const confirmed = window.confirm(
+        "Reset your encrypted profile? This will permanently erase encrypted fields like phone, birthday, and private details. You cannot undo this."
+      );
+      if (!confirmed) return;
+    }
+    setProfileRecoveryBusy(true);
+    const success = await resetEncryptedProfile();
+    if (success) {
+      setProfileRecoverySuccess("Encrypted profile reset. Refreshing...");
+      if (typeof window !== "undefined") {
+        window.setTimeout(() => window.location.reload(), 1200);
+      }
+    } else {
+      setProfileRecoveryError("Unable to reset encrypted profile. Please try again.");
+    }
+    setProfileRecoveryBusy(false);
+  };
+
   const loadTwoFactorStatus = async () => {
     if (!user?.id) return;
     setTwoFactorLoading(true);
@@ -1680,26 +1707,80 @@ export default function Me() {
     setFeedbackTargetId(friendOptions[0].id);
   }, [feedbackAudience, feedbackTargetId, friendOptions]);
 
-  const pickMediaUrl = (mediaField: any): string | undefined => {
-    if (!mediaField) return undefined;
+  useEffect(() => {
+    if (!avatarFile) {
+      setAvatarPreviewUrl(null);
+      return;
+    }
+    const objectUrl = URL.createObjectURL(avatarFile);
+    setAvatarPreviewUrl(objectUrl);
+    return () => {
+      URL.revokeObjectURL(objectUrl);
+    };
+  }, [avatarFile]);
 
-    const candidate =
-      (Array.isArray(mediaField?.data) ? mediaField.data[0] : mediaField?.data) ??
-      (Array.isArray(mediaField) ? mediaField[0] : mediaField);
+  const loadImageFromBlob = (blob: Blob) =>
+    new Promise<HTMLImageElement>((resolve, reject) => {
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        resolve(img);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error("Unable to load image."));
+      };
+      img.src = url;
+    });
 
-    if (!candidate) return undefined;
-
-    const attrs = normalize(candidate);
-    const url =
-      attrs.url ||
-      attrs.formats?.large?.url ||
-      attrs.formats?.medium?.url ||
-      attrs.formats?.small?.url ||
-      attrs.formats?.thumbnail?.url;
-
-    if (!url) return undefined;
-    return url.startsWith("/") ? `${apiBase}${url}` : url;
+  const rotateBlob = async (blob: Blob, degrees: number) => {
+    const img = await loadImageFromBlob(blob);
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return blob;
+    const radians = (degrees * Math.PI) / 180;
+    const swap = Math.abs(degrees) % 180 === 90;
+    const width = img.naturalWidth;
+    const height = img.naturalHeight;
+    canvas.width = swap ? height : width;
+    canvas.height = swap ? width : height;
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.rotate(radians);
+    ctx.drawImage(img, -width / 2, -height / 2);
+    const outputType = blob.type || "image/jpeg";
+    return new Promise<Blob>((resolve) => {
+      canvas.toBlob((output) => resolve(output || blob), outputType, 0.92);
+    });
   };
+
+  const handleRotateAvatar = async () => {
+    if (avatarRotateBusy) return;
+    setAvatarRotateError(null);
+    if (!avatarFile && !profile.avatarUrl) {
+      setAvatarRotateError("Upload an avatar first.");
+      return;
+    }
+    setAvatarRotateBusy(true);
+    try {
+      const sourceBlob = avatarFile
+        ? avatarFile
+        : await fetch(profile.avatarUrl as string).then((res) => res.blob());
+      const rotatedBlob = await rotateBlob(sourceBlob, 90);
+      const extension = rotatedBlob.type.includes("png") ? "png" : "jpg";
+      const rotatedFile = new File(
+        [rotatedBlob],
+        `avatar-rotated-${Date.now()}.${extension}`,
+        { type: rotatedBlob.type || "image/jpeg" }
+      );
+      setAvatarFile(rotatedFile);
+    } catch {
+      setAvatarRotateError("Unable to rotate avatar. Please try again.");
+    } finally {
+      setAvatarRotateBusy(false);
+    }
+  };
+
 
   const handleCountryChange = (value: string) => {
     const match = value ? matchByName(countryOptions, value) : undefined;
@@ -1974,7 +2055,7 @@ const setProfileFromEntry = async (entry: any) => {
       activityVisibility,
       notificationSettings,
       handle: attrs.handle || "",
-      avatarUrl: pickMediaUrl(attrs.avatar),
+      avatarUrl: pickMediaUrl(attrs.avatar, { kind: "avatar" }),
       onboardingComplete,
     };
     setProfile(nextProfile);
@@ -2034,7 +2115,7 @@ const setProfileFromEntry = async (entry: any) => {
 
     const mappedPosts: MediaPost[] = (postsRes.data?.data ?? []).map((p: any) => {
       const attrs = normalize(p);
-      const pic = pickMediaUrl(attrs.Users_Pictures);
+      const pic = pickMediaUrl(attrs.Users_Pictures, { kind: "post" });
       const feedbackTargetData = getEntity(attrs.feedbackTarget);
       const feedbackTargetId = getEntityId(feedbackTargetData);
       const feedbackTargetName = feedbackTargetId
@@ -2142,9 +2223,7 @@ const setProfileFromEntry = async (entry: any) => {
       if (postFile) {
         const fd = new FormData();
         fd.append("files", postFile);
-        const uploadRes = await api.post("/upload", fd, {
-          headers: { "Content-Type": "multipart/form-data" },
-        });
+        const uploadRes = await api.post("/upload", fd);
         uploadedId = uploadRes.data?.[0]?.id;
       }
 
@@ -2614,12 +2693,10 @@ const setProfileFromEntry = async (entry: any) => {
         const fd = new FormData();
         fd.append("files", avatarFile);
 
-        const uploadRes = await api.post("/upload", fd, {
-          headers: { "Content-Type": "multipart/form-data" },
-        });
+        const uploadRes = await api.post("/upload", fd);
 
         avatarId = uploadRes.data?.[0]?.id;
-        uploadedAvatarUrl = pickMediaUrl(uploadRes.data?.[0]);
+        uploadedAvatarUrl = pickMediaUrl(uploadRes.data?.[0], { kind: "avatar" });
       }
 
       const onboardingComplete =
@@ -2862,6 +2939,7 @@ const setProfileFromEntry = async (entry: any) => {
 
       setSuccess("Profile saved successfully.");
       setSuccessModal("Profile saved successfully.");
+      setAvatarFile(null);
       setEditing(false);
     } catch (e) {
       if (axios.isAxiosError(e)) {
@@ -2924,7 +3002,7 @@ const setProfileFromEntry = async (entry: any) => {
     profile.handle && profile.handle.toLowerCase() !== "user"
       ? profile.handle
       : lockedUniqueHandle;
-  const avatarImg = profile.avatarUrl;
+  const avatarImg = avatarPreviewUrl || profile.avatarUrl;
   const initials =
     displayName
       ?.split(" ")
@@ -3096,7 +3174,7 @@ const setProfileFromEntry = async (entry: any) => {
       <section className="panel profile-header-panel">
         <div className="profile-header-avatar-overlay" aria-hidden="true">
           {avatarImg ? (
-            <img src={avatarImg} alt="" loading="lazy" />
+            <img src={avatarImg} alt="" loading="lazy" decoding="async" />
           ) : (
             <span className="profile-header-avatar-fallback">{initials}</span>
           )}
@@ -4118,6 +4196,22 @@ const setProfileFromEntry = async (entry: any) => {
                       accept="image/*"
                       onChange={(e) => setAvatarFile(e.target.files?.[0] || null)}
                     />
+                    <div className="profile-avatar-actions">
+                      <button
+                        className="btn ghost"
+                        type="button"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          handleRotateAvatar();
+                        }}
+                        disabled={avatarRotateBusy || (!avatarFile && !profile.avatarUrl)}
+                      >
+                        {avatarRotateBusy ? "Rotating..." : "Rotate avatar"}
+                      </button>
+                    </div>
+                    {avatarRotateError && (
+                      <small className="profile-avatar-error">{avatarRotateError}</small>
+                    )}
                   </label>
 
                   <div className="profile-actions">
@@ -4175,11 +4269,11 @@ const setProfileFromEntry = async (entry: any) => {
             </div>
 
             <div className="security-grid">
-              <div className="security-card">
-                <h4>Password reset</h4>
-                <p className="security-muted">
-                  We will email a reset link to {user.email}.
-                </p>
+                <div className="security-card">
+                  <h4>Password reset</h4>
+                  <p className="security-muted">
+                    We will email a reset link to {user.email}.
+                  </p>
                 <button
                   className="btn ghost"
                   type="button"
@@ -4191,13 +4285,36 @@ const setProfileFromEntry = async (entry: any) => {
                 {passwordResetError && (
                   <p className="status status-error">{passwordResetError}</p>
                 )}
-                {passwordResetSuccess && (
-                  <p className="status status-success">{passwordResetSuccess}</p>
-                )}
-              </div>
+                  {passwordResetSuccess && (
+                    <p className="status status-success">{passwordResetSuccess}</p>
+                  )}
+                </div>
 
-              <div className="security-card">
-                <h4>Two-factor authentication</h4>
+                <div className="security-card security-card-danger">
+                  <h4>Encrypted profile recovery</h4>
+                  <p className="security-muted">
+                    Forgot your passphrase and do not have trusted devices? You can reset your
+                    encrypted profile to continue. This permanently erases encrypted fields like
+                    phone, birthday, and private details.
+                  </p>
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={handleProfileRecoveryReset}
+                    disabled={profileRecoveryBusy}
+                  >
+                    {profileRecoveryBusy ? "Resetting..." : "Reset encrypted profile"}
+                  </button>
+                  {profileRecoveryError && (
+                    <p className="status status-error">{profileRecoveryError}</p>
+                  )}
+                  {profileRecoverySuccess && (
+                    <p className="status status-success">{profileRecoverySuccess}</p>
+                  )}
+                </div>
+
+                <div className="security-card">
+                  <h4>Two-factor authentication</h4>
                 <p className="security-muted">
                   Add a second step at login. Trusted devices can skip verification.
                 </p>
@@ -5157,7 +5274,7 @@ const setProfileFromEntry = async (entry: any) => {
             <div className="post-composer__top">
               <div className="post-composer__avatar">
                 {avatarImg ? (
-                  <img src={avatarImg} alt={displayName} />
+                  <img src={avatarImg} alt={displayName} loading="lazy" decoding="async" />
                 ) : (
                   <span>{initials}</span>
                 )}

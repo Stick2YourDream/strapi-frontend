@@ -4,8 +4,10 @@ import {
   buildProfilePayloadFromAttrs,
   decryptOwnProfilePayload,
   encryptProfilePayload,
+  deleteProfileKeyShares,
   ensureUserKeyOnServer,
   PROFILE_PII_CLEAR_FIELDS,
+  resetSelfProfileKey,
   type NotificationReadState,
   type NotificationSettings,
   type PrivacySettings,
@@ -16,10 +18,13 @@ import {
 import { getOrCreateProfileKey } from "../utils/crypto";
 import {
   createKeyBackup,
+  deleteKeyBackup,
   fetchKeyBackup,
   hasLocalKeyMaterial,
   restoreKeyBackup,
 } from "../utils/key-backup";
+import { resetEncryptedProfileOnServer } from "../utils/crypto-recovery";
+import { pickMediaUrl } from "../utils/media";
 
 interface User {
   id: number;
@@ -27,24 +32,6 @@ interface User {
   appRole?: "user" | "moderator" | "admin";
 }
 
-const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
-const normalizeMediaEntry = (entry: any) => entry?.attributes ?? entry ?? {};
-const pickMediaUrl = (mediaField: any): string | undefined => {
-  if (!mediaField) return undefined;
-  const candidate =
-    (Array.isArray(mediaField?.data) ? mediaField.data[0] : mediaField?.data) ??
-    (Array.isArray(mediaField) ? mediaField[0] : mediaField);
-  if (!candidate) return undefined;
-  const attrs = normalizeMediaEntry(candidate);
-  let url =
-    attrs.url ||
-    attrs.formats?.large?.url ||
-    attrs.formats?.medium?.url ||
-    attrs.formats?.small?.url ||
-    attrs.formats?.thumbnail?.url;
-  if (!url) return undefined;
-  return url.startsWith("/") ? `${apiBase}${url}` : url;
-};
 
 interface ProfileSummary {
   id?: number | string;
@@ -96,8 +83,12 @@ interface AuthContextType {
   refreshProfile: () => Promise<void>;
   refreshAppSettings: () => Promise<void>;
   refreshKeyBackup: () => Promise<void>;
-  createKeyBackup: (passphrase: string) => Promise<void>;
+  createKeyBackup: (passphrase: string) => Promise<boolean>;
   restoreKeyBackup: (passphrase: string) => Promise<boolean>;
+  resetEncryptedProfile: (options?: {
+    recoveryToken?: string;
+    recoveryCode?: string;
+  }) => Promise<boolean>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -237,7 +228,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           ? attrs.onboardingComplete
           : true;
 
-      const avatarUrl = pickMediaUrl(attrs.avatar);
+      const avatarUrl = pickMediaUrl(attrs.avatar, { kind: "avatar" });
       const handle = attrs.handle || undefined;
       const notificationReadState = attrs?.notificationReadState || undefined;
       setProfile({ ...payload, onboardingComplete, avatarUrl, handle, notificationReadState });
@@ -297,15 +288,17 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   const createKeyBackupWithPassphrase = async (passphrase: string) => {
-    if (!user) return;
+    if (!user) return false;
     setKeyBackupLoading(true);
     setKeyBackupError(null);
     try {
       await createKeyBackup(user.id, passphrase);
       setKeyBackupStatus("ready");
+      return true;
     } catch (error) {
       console.warn("Unable to create key backup:", error);
       setKeyBackupError("Unable to create key backup.");
+      return false;
     } finally {
       setKeyBackupLoading(false);
     }
@@ -324,6 +317,47 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     } catch (error) {
       console.warn("Unable to restore key backup:", error);
       setKeyBackupError("Unable to restore key backup. Check your passphrase.");
+      return false;
+    } finally {
+      setKeyBackupLoading(false);
+    }
+  };
+
+  const resetEncryptedProfile = async (options?: {
+    recoveryToken?: string;
+    recoveryCode?: string;
+  }) => {
+    if (!user) return false;
+    setKeyBackupLoading(true);
+    setKeyBackupError(null);
+    try {
+      if (options?.recoveryToken || options?.recoveryCode) {
+        await resetEncryptedProfileOnServer({
+          token: options.recoveryToken,
+          recoveryCode: options.recoveryCode,
+        });
+      } else {
+        await Promise.all([deleteKeyBackup().catch(() => undefined), deleteProfileKeyShares()]);
+      }
+      await resetSelfProfileKey(user.id);
+      const res = await api.get("/profiles/me");
+      const attrs = res.data?.data?.attributes ?? res.data?.data ?? {};
+      const basePayload = buildProfilePayloadFromAttrs(attrs);
+      const encryptedProfile = await encryptProfilePayload(user.id, basePayload);
+      await api.put("/profiles/me", {
+        data: {
+          encryptedProfile,
+          profileKeyVersion: 1,
+          ...PROFILE_PII_CLEAR_FIELDS,
+        },
+      });
+      await ensureUserKeyOnServer();
+      await refreshProfile();
+      await refreshKeyBackup();
+      return true;
+    } catch (error) {
+      console.warn("Unable to reset encrypted profile:", error);
+      setKeyBackupError("Unable to reset encrypted profile.");
       return false;
     } finally {
       setKeyBackupLoading(false);
@@ -422,6 +456,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         refreshKeyBackup,
         createKeyBackup: createKeyBackupWithPassphrase,
         restoreKeyBackup: restoreKeyBackupWithPassphrase,
+        resetEncryptedProfile,
       }}
     >
       {/* Prevent rendering children until auth state is loaded */}
@@ -431,23 +466,24 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 };
 
 export const StaticAuthProvider = ({ children }: { children: React.ReactNode }) => {
-  const emptyAuth: AuthContextType = {
-    user: null,
-    profile: null,
-    profileLoading: false,
-    appSettings: { newsroomEnabled: true },
-    keyBackupStatus: "unknown",
-    keyBackupLoading: false,
-    keyBackupError: null,
-    login: () => undefined,
-    updateUser: () => undefined,
-    logout: () => undefined,
-    refreshProfile: async () => undefined,
-    refreshAppSettings: async () => undefined,
-    refreshKeyBackup: async () => undefined,
-    createKeyBackup: async () => undefined,
-    restoreKeyBackup: async () => false,
-  };
+    const emptyAuth: AuthContextType = {
+      user: null,
+      profile: null,
+      profileLoading: false,
+      appSettings: { newsroomEnabled: true },
+      keyBackupStatus: "unknown",
+      keyBackupLoading: false,
+      keyBackupError: null,
+      login: () => undefined,
+      updateUser: () => undefined,
+      logout: () => undefined,
+      refreshProfile: async () => undefined,
+      refreshAppSettings: async () => undefined,
+      refreshKeyBackup: async () => undefined,
+      createKeyBackup: async () => false,
+      restoreKeyBackup: async () => false,
+      resetEncryptedProfile: async (_options) => false,
+    };
   return <AuthContext.Provider value={emptyAuth}>{children}</AuthContext.Provider>;
 };
 

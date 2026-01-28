@@ -86,6 +86,10 @@ export const fetchKeyBackup = async (): Promise<KeyBackupRecord | null> => {
   };
 };
 
+export const deleteKeyBackup = async () => {
+  await api.delete("/key-backups/me");
+};
+
 export const hasLocalKeyMaterial = async (userId: number) => {
   const [identityPrivate, profileKey] = await Promise.all([
     getStoredKey<CryptoKey>("identity-private"),

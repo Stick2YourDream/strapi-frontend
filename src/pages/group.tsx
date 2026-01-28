@@ -10,6 +10,7 @@ import { useAuth } from "../context/AuthContext";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { sanitizePostText } from "../utils/emoji";
 import { formatPostUpdateLabel } from "../utils/time";
+import { pickMediaUrl, pickMediaUrls } from "../utils/media";
 
 type GroupDetail = {
   id: number | string;
@@ -73,7 +74,6 @@ const getEntityId = (entry: any) => {
   const num = Number(rawId);
   return Number.isFinite(num) ? num : undefined;
 };
-const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
 const getUserDisplayName = (entry: any, fallback = "Member") => {
   const attrs = normalize(entry);
   const firstName = String(attrs?.firstName || attrs?.firstname || "").trim();
@@ -84,33 +84,6 @@ const getUserDisplayName = (entry: any, fallback = "Member") => {
   return fullName || handle || email || fallback;
 };
 
-const pickMediaUrl = (mediaField: any): string | undefined => {
-  if (!mediaField) return undefined;
-  const candidate =
-    (Array.isArray(mediaField?.data) ? mediaField.data[0] : mediaField?.data) ??
-    (Array.isArray(mediaField) ? mediaField[0] : mediaField);
-  if (!candidate) return undefined;
-  const attrs = normalize(candidate);
-  let url =
-    attrs.url ||
-    attrs.formats?.large?.url ||
-    attrs.formats?.medium?.url ||
-    attrs.formats?.small?.url ||
-    attrs.formats?.thumbnail?.url;
-  if (!url) return undefined;
-  return url.startsWith("/") ? `${apiBase}${url}` : url;
-};
-
-const pickMediaUrls = (mediaField: any): string[] => {
-  if (!mediaField) return [];
-  const items =
-    (Array.isArray(mediaField?.data) ? mediaField.data : mediaField?.data) ??
-    (Array.isArray(mediaField) ? mediaField : []);
-  if (!Array.isArray(items)) return [];
-  return items
-    .map((entry: any) => pickMediaUrl(entry))
-    .filter((url: any) => typeof url === "string");
-};
 
 const hexToRgba = (value: string, alpha: number) => {
   const hex = (value || "").replace("#", "");
@@ -193,7 +166,7 @@ const LinkPreviewCard = ({
     >
       <div className="link-preview-media">
         {preview.image ? (
-          <img src={preview.image} alt={title} loading="lazy" />
+          <img src={preview.image} alt={title} loading="lazy" decoding="async" />
         ) : (
           <div className="link-preview-placeholder">LINK</div>
         )}
@@ -272,7 +245,7 @@ export default function GroupDetail() {
       name: attrs.name || "Group",
       description: attrs.description || "",
       visibility: attrs.visibility === "public" ? "public" : "private",
-      backgroundImage: pickMediaUrl(attrs.backgroundImage),
+      backgroundImage: pickMediaUrl(attrs.backgroundImage, { kind: "cover" }),
       gradientStart: attrs.gradientStart || "",
       gradientEnd: attrs.gradientEnd || "",
       gradientAngle: Number(attrs.gradientAngle ?? 135),
@@ -416,7 +389,7 @@ export default function GroupDetail() {
             id: entry.id ?? attrs.documentId,
             title: attrs.title || "",
             body: attrs.body || "",
-            mediaUrls: pickMediaUrls(attrs.media),
+            mediaUrls: pickMediaUrls(attrs.media, { kind: "post" }),
             createdAt: attrs.createdAt,
             ownerName: getUserDisplayName(ownerEntry, "Member"),
             ownerId: ownerEntry?.id ?? normalize(ownerEntry)?.id,
@@ -739,9 +712,7 @@ export default function GroupDetail() {
       if (postFiles.length) {
         const fd = new FormData();
         postFiles.forEach((file) => fd.append("files", file));
-        const uploadRes = await api.post("/upload", fd, {
-          headers: { "Content-Type": "multipart/form-data" },
-        });
+        const uploadRes = await api.post("/upload", fd);
         mediaIds = (uploadRes.data ?? []).map((item: any) => item?.id).filter(Boolean);
       }
 
@@ -813,9 +784,7 @@ export default function GroupDetail() {
       if (settingsUseImage && settingsImageFile) {
         const fd = new FormData();
         fd.append("files", settingsImageFile);
-        const uploadRes = await api.post("/upload", fd, {
-          headers: { "Content-Type": "multipart/form-data" },
-        });
+        const uploadRes = await api.post("/upload", fd);
         backgroundId = uploadRes.data?.[0]?.id;
       }
 
@@ -1175,13 +1144,20 @@ export default function GroupDetail() {
                           <div className="group-post-media">
                             {post.mediaUrls.map((url) =>
                               isVideoUrl(url) ? (
-                                <video key={url} src={url} controls />
+                                <video
+                                  key={url}
+                                  src={url}
+                                  controls
+                                  playsInline
+                                  preload="metadata"
+                                />
                               ) : (
                                 <img
                                   key={url}
                                   src={url}
                                   alt="Group post media"
                                   loading="lazy"
+                                  decoding="async"
                                 />
                               )
                             )}

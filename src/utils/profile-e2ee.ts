@@ -9,6 +9,7 @@ import {
   getOrCreateIdentityKeyPair,
   getOrCreateProfileKey,
   importPublicKey,
+  removeStoredKey,
 } from "./crypto";
 
 export type ProfilePayload = {
@@ -203,6 +204,11 @@ export const getOrCreateSelfProfileKey = async (userId: number) => {
   return key;
 };
 
+export const resetSelfProfileKey = async (userId: number) => {
+  profileKeyCache.delete(userId);
+  await removeStoredKey(`profile-key-${userId}`);
+};
+
 export const encryptProfilePayload = async (userId: number, payload: ProfilePayload) => {
   const key = await getOrCreateSelfProfileKey(userId);
   return encryptJson(key, payload);
@@ -260,6 +266,14 @@ export const ensureProfileKeyShares = async (
       }
     })
   );
+};
+
+export const deleteProfileKeyShares = async () => {
+  try {
+    await api.delete("/profile-key-shares/me");
+  } catch (error) {
+    console.warn("Unable to delete profile key shares:", error);
+  }
 };
 
 export const getFriendProfileKey = async (

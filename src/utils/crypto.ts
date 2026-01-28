@@ -58,6 +58,9 @@ export const getStoredKey = async <T>(key: string) =>
 export const setStoredKey = async (key: string, value: unknown) =>
   withStore("readwrite", (store) => store.put(value, key));
 
+export const removeStoredKey = async (key: string) =>
+  withStore("readwrite", (store) => store.delete(key));
+
 export const getOrCreateIdentityKeyPair = async () => {
   const storedPublic = await getStoredKey<CryptoKey>("identity-public");
   const storedPrivate = await getStoredKey<CryptoKey>("identity-private");
@@ -174,3 +177,6 @@ export const getStoredText = async (key: string) =>
 
 export const setStoredText = async (key: string, value: string) =>
   withStore("readwrite", (store) => store.put(value, key));
+
+export const removeStoredText = async (key: string) =>
+  withStore("readwrite", (store) => store.delete(key));

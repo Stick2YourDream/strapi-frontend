@@ -7,6 +7,7 @@ import Sidebar from "../components/Sidebar";
 import TopbarSearch from "../components/TopbarSearch";
 import { useAuth } from "../context/AuthContext";
 import { usePageMeta } from "../hooks/usePageMeta";
+import { pickMediaUrl } from "../utils/media";
 
 type GroupSummary = {
   id: number | string;
@@ -37,24 +38,6 @@ type GroupUpdate = {
 
 const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
 const getEntity = (entry: any) => entry?.data ?? entry ?? null;
-const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
-
-const pickMediaUrl = (mediaField: any): string | undefined => {
-  if (!mediaField) return undefined;
-  const candidate =
-    (Array.isArray(mediaField?.data) ? mediaField.data[0] : mediaField?.data) ??
-    (Array.isArray(mediaField) ? mediaField[0] : mediaField);
-  if (!candidate) return undefined;
-  const attrs = normalize(candidate);
-  let url =
-    attrs.url ||
-    attrs.formats?.large?.url ||
-    attrs.formats?.medium?.url ||
-    attrs.formats?.small?.url ||
-    attrs.formats?.thumbnail?.url;
-  if (!url) return undefined;
-  return url.startsWith("/") ? `${apiBase}${url}` : url;
-};
 
 const hexToRgba = (value: string, alpha: number) => {
   const hex = (value || "").replace("#", "");
@@ -81,7 +64,7 @@ const toGroupSummary = (entry: any): GroupSummary => {
     name: attrs.name || "Group",
     description: attrs.description || "",
     visibility: attrs.visibility === "public" ? "public" : "private",
-    backgroundImage: pickMediaUrl(attrs.backgroundImage),
+    backgroundImage: pickMediaUrl(attrs.backgroundImage, { kind: "cover" }),
     gradientStart: attrs.gradientStart || "",
     gradientEnd: attrs.gradientEnd || "",
     gradientAngle: Number(attrs.gradientAngle ?? 135),
@@ -257,9 +240,7 @@ export default function Groups() {
       if (useImage && backgroundFile) {
         const fd = new FormData();
         fd.append("files", backgroundFile);
-        const uploadRes = await api.post("/upload", fd, {
-          headers: { "Content-Type": "multipart/form-data" },
-        });
+        const uploadRes = await api.post("/upload", fd);
         backgroundId = uploadRes.data?.[0]?.id;
       }
 

@@ -11,6 +11,7 @@ import {
   type ProfilePayload,
   type VisibilityLevel,
 } from "../utils/profile-e2ee";
+import { pickMediaUrl } from "../utils/media";
 
 type DirectoryProfile = {
   id: number | string;
@@ -60,23 +61,6 @@ const getEntityId = (entry: any) => {
   const rawId = data?.id ?? (typeof data === "number" ? data : data?.attributes?.id);
   const num = Number(rawId);
   return Number.isFinite(num) ? num : undefined;
-};
-const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
-const pickMediaUrl = (mediaField: any): string | undefined => {
-  if (!mediaField) return undefined;
-  const candidate =
-    (Array.isArray(mediaField?.data) ? mediaField.data[0] : mediaField?.data) ??
-    (Array.isArray(mediaField) ? mediaField[0] : mediaField);
-  if (!candidate) return undefined;
-  const attrs = normalize(candidate);
-  let url =
-    attrs.url ||
-    attrs.formats?.large?.url ||
-    attrs.formats?.medium?.url ||
-    attrs.formats?.small?.url ||
-    attrs.formats?.thumbnail?.url;
-  if (!url) return undefined;
-  return url.startsWith("/") ? `${apiBase}${url}` : url;
 };
 
 const normalizeText = (value: string) => value.trim().toLowerCase();
@@ -298,7 +282,7 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
               firstName: profileFirstName,
               lastName: profileLastName,
               displayName,
-              avatarUrl: pickMediaUrl(attrs.avatar),
+              avatarUrl: pickMediaUrl(attrs.avatar, { kind: "avatar" }),
               country: canShowLocation ? resolvedPayload.country || "" : "",
               state: canShowLocation ? resolvedPayload.state || "" : "",
               city: canShowLocation ? resolvedPayload.city || "" : "",
@@ -907,6 +891,7 @@ export default function TopbarSearch({ value, onChange }: TopbarSearchProps) {
                           alt={profile.handle || "Profile"}
                           className="topbar-avatar"
                           loading="lazy"
+                          decoding="async"
                         />
                       ) : (
                         <div className="topbar-avatar fallback" aria-hidden="true">

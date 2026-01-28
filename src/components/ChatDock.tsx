@@ -14,6 +14,7 @@ import {
   type ProfilePayload,
 } from "../utils/profile-e2ee";
 import { sanitizePostText } from "../utils/emoji";
+import { pickMediaUrl } from "../utils/media";
 import VideoCallModal from "./VideoCallModal";
 import SuggestionWidget from "./SuggestionWidget";
 
@@ -110,23 +111,6 @@ export default function ChatDock() {
     const rawId = data?.id ?? (typeof data === "number" ? data : data?.attributes?.id);
     const num = Number(rawId);
     return Number.isFinite(num) ? num : undefined;
-  };
-  const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
-  const pickMediaUrl = (mediaField: any): string | undefined => {
-    if (!mediaField) return undefined;
-    const candidate =
-      (Array.isArray(mediaField?.data) ? mediaField.data[0] : mediaField?.data) ??
-      (Array.isArray(mediaField) ? mediaField[0] : mediaField);
-    if (!candidate) return undefined;
-    const attrs = normalize(candidate);
-    let url =
-      attrs.url ||
-      attrs.formats?.large?.url ||
-      attrs.formats?.medium?.url ||
-      attrs.formats?.small?.url ||
-      attrs.formats?.thumbnail?.url;
-    if (!url) return undefined;
-    return url.startsWith("/") ? `${apiBase}${url}` : url;
   };
 
   useEffect(() => {
@@ -292,7 +276,7 @@ export default function ChatDock() {
               handle: attrs.handle || userAttrs?.email || "",
               firstName: payload.firstName || "",
               lastName: payload.lastName || "",
-              avatarUrl: pickMediaUrl(attrs.avatar),
+              avatarUrl: pickMediaUrl(attrs.avatar, { kind: "avatar" }),
             } as ChatFriend;
           })
         );
@@ -685,6 +669,7 @@ export default function ChatDock() {
                                 alt={title}
                                 style={{ width: "100%", height: "auto", display: "block" }}
                                 loading="lazy"
+                                decoding="async"
                               />
                             </a>
                           )}

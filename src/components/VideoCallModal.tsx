@@ -51,7 +51,10 @@ import {
   faSliders,
   faStop,
   faTableColumns,
+  faTrash,
   faUpRightFromSquare,
+  faUserPlus,
+  faUsers,
   faVideo,
   faVideoSlash,
   faWaveSquare,
@@ -562,6 +565,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     selectedInvitees,
     incomingCall,
     activeRoomId,
+    isCallHost,
     localStream,
     localScreenStream,
     remoteStreams,
@@ -613,6 +617,8 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     sendScreenControlEvent,
     sendMessage,
     toggleHold,
+    muteAllParticipants,
+    stopAllScreenShares,
   } = useVideoCall();
   const { user, profile } = useAuth();
 
@@ -667,6 +673,9 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const [fullscreenChatOverlay, setFullscreenChatOverlay] = useState(false);
   const [fullscreenVideoOverlay, setFullscreenVideoOverlay] = useState(false);
   const [activeScreenSettingsId, setActiveScreenSettingsId] = useState<string | null>(null);
+  const [demoParticipants, setDemoParticipants] = useState<VideoCallParticipant[]>([]);
+  const [demoStreams, setDemoStreams] = useState<Record<string, MediaStream>>({});
+  const [demoScreenStreams, setDemoScreenStreams] = useState<Record<string, MediaStream>>({});
   const gifGridRef = useRef<HTMLDivElement | null>(null);
   const ringtoneRef = useRef<{ audio: HTMLAudioElement | null }>({
     audio: null,
@@ -711,6 +720,8 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     maxY: number;
   } | null>(null);
   const pipDragRef = useRef({ active: false, offsetX: 0, offsetY: 0 });
+  const demoCleanupRef = useRef<Record<string, () => void>>({});
+  const demoCounterRef = useRef(1);
 
   const showModal = isOpen || status === "incoming";
   const showCallUi = status === "in-call" || status === "connecting";
@@ -823,24 +834,54 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   }, [showGifPicker]);
 
 
+  const demoParticipantRecord = useMemo(() => {
+    const record: Record<string, VideoCallParticipant> = {};
+    demoParticipants.forEach((participant) => {
+      record[participant.socketId] = participant;
+    });
+    return record;
+  }, [demoParticipants]);
+
+  const mergedRemoteParticipants = useMemo(
+    () =>
+      demoParticipants.length
+        ? { ...remoteParticipants, ...demoParticipantRecord }
+        : remoteParticipants,
+    [demoParticipantRecord, demoParticipants.length, remoteParticipants]
+  );
+
+  const mergedRemoteStreams = useMemo(
+    () =>
+      demoParticipants.length ? { ...remoteStreams, ...demoStreams } : remoteStreams,
+    [demoParticipants.length, demoStreams, remoteStreams]
+  );
+
+  const mergedRemoteScreenStreams = useMemo(
+    () =>
+      demoParticipants.length
+        ? { ...remoteScreenStreams, ...demoScreenStreams }
+        : remoteScreenStreams,
+    [demoParticipants.length, demoScreenStreams, remoteScreenStreams]
+  );
+
   const remoteList = useMemo(
-    () => Object.values(remoteParticipants),
-    [remoteParticipants]
+    () => Object.values(mergedRemoteParticipants),
+    [mergedRemoteParticipants]
   );
   const remoteAudioStreams = useMemo(
     () =>
-      Object.entries(remoteStreams)
+      Object.entries(mergedRemoteStreams)
         .filter(([, stream]) =>
           stream
             .getAudioTracks()
             .some((track) => track.enabled && track.readyState === "live")
         )
         .map(([socketId, stream]) => ({ socketId, stream })),
-    [remoteStreams]
+    [mergedRemoteStreams]
   );
   const participantNameById = useMemo(() => {
     const map = new Map<number, string>();
-    Object.values(remoteParticipants).forEach((participant) => {
+    Object.values(mergedRemoteParticipants).forEach((participant) => {
       if (participant.userId && participant.displayName) {
         map.set(participant.userId, participant.displayName);
       }
@@ -856,7 +897,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
       }
     });
     return map;
-  }, [friends, remoteParticipants, selectedInvitees]);
+  }, [friends, mergedRemoteParticipants, selectedInvitees]);
   const resolveParticipantLabel = useCallback(
     (options: {
       userId?: number;
@@ -885,7 +926,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     () =>
       remoteList.map((participant) => ({
         id: participant.socketId,
-        stream: remoteStreams[participant.socketId] || null,
+        stream: mergedRemoteStreams[participant.socketId] || null,
         label: resolveParticipantLabel({
           userId: participant.userId,
           displayName: participant.displayName,
@@ -893,9 +934,9 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
         }),
         avatarUrl: participant.avatarUrl,
         isLocal: false,
-        status: remoteStreams[participant.socketId] ? "" : "Waiting for video",
+        status: mergedRemoteStreams[participant.socketId] ? "" : "Waiting for video",
       })),
-    [remoteList, remoteStreams, resolveParticipantLabel]
+    [mergedRemoteStreams, remoteList, resolveParticipantLabel]
   );
 
   const localVideoParticipant = useMemo<VideoParticipantEntry>(
@@ -972,7 +1013,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     };
 
     attachAnalyser("local", localStream);
-    Object.entries(remoteStreams).forEach(([socketId, stream]) => {
+    Object.entries(mergedRemoteStreams).forEach(([socketId, stream]) => {
       attachAnalyser(socketId, stream);
     });
 
@@ -1023,7 +1064,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
       active = false;
       window.clearInterval(interval);
     };
-  }, [localStream, remoteStreams, showCallUi]);
+  }, [localStream, mergedRemoteStreams, showCallUi]);
   const resolveMessageName = useCallback(
     (message: VideoCallMessage) => {
       if (user?.id && message.from.userId === user.id) {
@@ -1090,11 +1131,18 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
       handle: incomingCall.hostHandle,
     });
   }, [incomingCall, resolveParticipantLabel]);
+  const localDisplayName = useMemo(() => {
+    const first = String(profile?.firstName || "").trim();
+    const last = String(profile?.lastName || "").trim();
+    const combined = [first, last].filter(Boolean).join(" ").trim();
+    if (combined) return combined;
+    return "You";
+  }, [profile?.firstName, profile?.lastName]);
   const hasRemoteMedia = useMemo(() => {
     if (remoteList.length > 0) return true;
-    if (Object.keys(remoteStreams).length > 0) return true;
-    return Object.keys(remoteScreenStreams).length > 0;
-  }, [remoteList.length, remoteScreenStreams, remoteStreams]);
+    if (Object.keys(mergedRemoteStreams).length > 0) return true;
+    return Object.keys(mergedRemoteScreenStreams).length > 0;
+  }, [mergedRemoteScreenStreams, mergedRemoteStreams, remoteList.length]);
 
   const screenShareEntries = useMemo(() => {
     const entries: Array<{
@@ -1105,15 +1153,17 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
       socketId?: string;
     }> = [];
     if (localScreenStream) {
+      const localScreenLabel =
+        localDisplayName === "You" ? "Your screen" : `${localDisplayName}'s screen`;
       entries.push({
         id: "local",
         stream: localScreenStream,
-        label: "My screen",
+        label: localScreenLabel,
         isLocal: true,
       });
     }
-    Object.entries(remoteScreenStreams).forEach(([socketId, stream]) => {
-      const participant = remoteParticipants[socketId];
+    Object.entries(mergedRemoteScreenStreams).forEach(([socketId, stream]) => {
+      const participant = mergedRemoteParticipants[socketId];
       const name = resolveParticipantLabel({
         userId: participant?.userId,
         displayName: participant?.displayName,
@@ -1128,7 +1178,13 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
       });
     });
     return entries;
-  }, [localScreenStream, remoteParticipants, remoteScreenStreams, resolveParticipantLabel]);
+  }, [
+    localScreenStream,
+    localDisplayName,
+    mergedRemoteParticipants,
+    mergedRemoteScreenStreams,
+    resolveParticipantLabel,
+  ]);
 
   const getScreenFocusKey = useCallback(
     (entry: { id: string; socketId?: string; isLocal: boolean }) =>
@@ -1142,6 +1198,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   );
 
   const hasScreenShares = screenShareEntries.length > 0;
+  const hasRemoteScreenShares = screenShareEntries.some((entry) => !entry.isLocal);
   const effectiveViewMode = hasScreenShares ? screenViewMode : "video";
   const showScreenTiles = effectiveViewMode !== "video";
   const showVideoTiles = effectiveViewMode !== "screen";
@@ -1161,15 +1218,21 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const focusedRemoteMissing = Boolean(
     focusedVideoKey &&
       focusedVideoKey !== "local" &&
-      !remoteParticipants[focusedVideoKey]
+      !mergedRemoteParticipants[focusedVideoKey]
   );
   const visibleVideoParticipants = useMemo(() => {
     if (presenterMode) return remoteList;
     if (!focusedVideoKey || focusedRemoteMissing) return remoteList;
     if (focusedVideoKey === "local") return [];
-    const participant = remoteParticipants[focusedVideoKey];
+    const participant = mergedRemoteParticipants[focusedVideoKey];
     return participant ? [participant] : [];
-  }, [focusedRemoteMissing, focusedVideoKey, presenterMode, remoteList, remoteParticipants]);
+  }, [
+    focusedRemoteMissing,
+    focusedVideoKey,
+    mergedRemoteParticipants,
+    presenterMode,
+    remoteList,
+  ]);
   const showLocalVideo =
     !focusedVideoKey || focusedVideoKey === "local" || focusedRemoteMissing;
   const isLocalFocused = focusedVideoKey === "local";
@@ -1187,14 +1250,33 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const presenterOthers = presenterMode
     ? videoParticipants.filter((participant) => participant.id !== presenterParticipant?.id)
     : [];
+  const isSplitView = effectiveViewMode === "split";
+  const splitScreenEntry = useMemo(() => {
+    if (!isSplitView || !showScreenTiles) return null;
+    if (!screenShareEntries.length) return null;
+    if (focusedScreenId) {
+      const focused = screenShareEntries.find(
+        (entry) => getScreenFocusKey(entry) === focusedScreenId
+      );
+      if (focused) return focused;
+    }
+    const remoteEntry = screenShareEntries.find((entry) => !entry.isLocal);
+    return remoteEntry || screenShareEntries[0] || null;
+  }, [
+    focusedScreenId,
+    getScreenFocusKey,
+    isSplitView,
+    screenShareEntries,
+    showScreenTiles,
+  ]);
   const primaryScreenTileId = useMemo(() => {
-    if (!showScreenTiles || visibleScreenShareEntries.length === 0) return null;
-    const remoteEntry = visibleScreenShareEntries.find((entry) => !entry.isLocal);
-    const entry = remoteEntry || visibleScreenShareEntries[0];
+    const entries = isSplitView && splitScreenEntry ? [splitScreenEntry] : visibleScreenShareEntries;
+    if (!showScreenTiles || entries.length === 0) return null;
+    const remoteEntry = entries.find((entry) => !entry.isLocal);
+    const entry = remoteEntry || entries[0];
     if (!entry) return null;
     return entry.isLocal ? "screen-local" : `screen-${entry.socketId || entry.id}`;
-  }, [showScreenTiles, visibleScreenShareEntries]);
-  const isSplitView = effectiveViewMode === "split";
+  }, [isSplitView, showScreenTiles, splitScreenEntry, visibleScreenShareEntries]);
   const gridClassName = `video-call-grid${
     effectiveViewMode === "screen"
       ? " is-screen-only"
@@ -1204,21 +1286,30 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   }${presenterMode ? " is-presenter" : ""}${
     isScreenBorderless ? " is-borderless" : ""
   }`;
+  const screenEntriesToRender =
+    isSplitView && splitScreenEntry ? [splitScreenEntry] : visibleScreenShareEntries;
 
-  const splitPairs = useMemo(() => {
-    if (!isSplitView) {
-      return { pairs: [], remaining: [] };
+  const splitCameraParticipants = useMemo(() => {
+    if (!isSplitView || !showVideoTiles) return [];
+    const ordered = [...videoParticipants];
+    if (focusedVideoId) {
+      const focusIndex = ordered.findIndex((entry) => entry.id === focusedVideoId);
+      if (focusIndex > -1) {
+        const [focused] = ordered.splice(focusIndex, 1);
+        ordered.unshift(focused);
+      }
     }
-    const pairedIds = new Set<string>();
-    const pairs = visibleScreenShareEntries.map((entry) => {
-      const videoId = entry.isLocal ? "local" : entry.socketId || entry.id;
-      const videoParticipant = videoId ? videoParticipantById.get(videoId) : undefined;
-      if (videoParticipant) pairedIds.add(videoParticipant.id);
-      return { entry, videoParticipant };
-    });
-    const remaining = videoParticipants.filter((participant) => !pairedIds.has(participant.id));
-    return { pairs, remaining };
-  }, [isSplitView, videoParticipantById, videoParticipants, visibleScreenShareEntries]);
+    const top = ordered.slice(0, 3);
+    const localParticipant = ordered.find((entry) => entry.isLocal);
+    if (localParticipant && !top.some((entry) => entry.isLocal)) {
+      if (top.length < 3) {
+        top.push(localParticipant);
+      } else {
+        top[top.length - 1] = localParticipant;
+      }
+    }
+    return top;
+  }, [focusedVideoId, isSplitView, showVideoTiles, videoParticipants]);
 
   useEffect(() => {
     if (hasScreenShares && !prevHasScreenSharesRef.current && screenViewMode === "video") {
@@ -1226,13 +1317,6 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     }
     prevHasScreenSharesRef.current = hasScreenShares;
   }, [hasScreenShares, screenViewMode]);
-
-  useEffect(() => {
-    if (screenViewMode === "split") {
-      setFocusedScreenId(null);
-      setFocusedVideoId(null);
-    }
-  }, [screenViewMode]);
 
   useEffect(() => {
     if (!focusedScreenId) return;
@@ -1247,10 +1331,10 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   useEffect(() => {
     if (!focusedVideoId) return;
     if (focusedVideoId === "local") return;
-    if (!remoteParticipants[focusedVideoId]) {
+    if (!mergedRemoteParticipants[focusedVideoId]) {
       setFocusedVideoId(null);
     }
-  }, [focusedVideoId, remoteParticipants]);
+  }, [focusedVideoId, mergedRemoteParticipants]);
 
   useEffect(() => {
     if (!activeScreenSettingsId) return;
@@ -1285,6 +1369,14 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     setScreenViewMode("video");
     setFocusedScreenId(null);
     setFocusedVideoId((prev) => (prev === targetId ? null : targetId));
+  }, []);
+
+  const selectScreenShareFocus = useCallback((key: string | null) => {
+    setFocusedScreenId(key);
+  }, []);
+
+  const selectVideoFeedFocus = useCallback((targetId: string | null) => {
+    setFocusedVideoId(targetId);
   }, []);
 
   const handleToggleChatVisibility = useCallback(() => {
@@ -1578,6 +1670,16 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
 
   const totalParticipants = 1 + remoteList.length;
   const maxInvitees = maxParticipants - 1;
+  const demoSlotsAvailable = Math.max(
+    0,
+    maxParticipants - 1 - Object.keys(remoteParticipants).length - demoParticipants.length
+  );
+  const demoStatusLabel =
+    demoParticipants.length > 0
+      ? `${demoParticipants.length} demo ${
+          demoParticipants.length === 1 ? "user" : "users"
+        } active`
+      : "No demo users";
 
   const toggleInvitee = (invitee: VideoCallInvitee) => {
     const exists = selectedInvitees.some((entry) => entry.userId === invitee.userId);
@@ -1728,6 +1830,106 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     remoteAudioStreams.length,
     shouldRenderRemoteAudio,
   ]);
+
+  const isAdmin = user?.appRole === "admin";
+  const isCallAdmin = Boolean(isCallHost);
+
+  const createDemoCanvasStream = useCallback(
+    (label: string, type: "camera" | "screen") => {
+      if (typeof document === "undefined") return null;
+      const canvas = document.createElement("canvas");
+      const isScreen = type === "screen";
+      canvas.width = isScreen ? 1280 : 640;
+      canvas.height = isScreen ? 720 : 360;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return null;
+      let rafId = 0;
+      const baseHue = Math.floor(Math.random() * 360);
+      const draw = () => {
+        const now = new Date();
+        ctx.fillStyle = `hsl(${baseHue}, 35%, 12%)`;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = `hsla(${baseHue + 40}, 70%, 35%, 0.25)`;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#e2e8f0";
+        ctx.font = `${isScreen ? 42 : 28}px "Inter", system-ui, sans-serif`;
+        ctx.fillText(label, 30, 70);
+        ctx.font = `${isScreen ? 28 : 18}px "Inter", system-ui, sans-serif`;
+        ctx.fillStyle = "#94a3b8";
+        ctx.fillText(now.toLocaleTimeString(), 30, 110);
+        ctx.fillStyle = "rgba(255,255,255,0.08)";
+        ctx.strokeStyle = "rgba(255,255,255,0.12)";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(12, 12, canvas.width - 24, canvas.height - 24);
+        rafId = window.requestAnimationFrame(draw);
+      };
+      draw();
+      const stream = canvas.captureStream(15);
+      const cleanup = () => {
+        window.cancelAnimationFrame(rafId);
+        stream.getTracks().forEach((track) => track.stop());
+      };
+      return { stream, cleanup };
+    },
+    []
+  );
+
+  const clearDemoParticipants = useCallback(() => {
+    Object.values(demoCleanupRef.current).forEach((cleanup) => cleanup());
+    demoCleanupRef.current = {};
+    setDemoParticipants([]);
+    setDemoStreams({});
+    setDemoScreenStreams({});
+  }, []);
+
+  const addDemoParticipants = useCallback(
+    (count: number) => {
+      if (count <= 0) return;
+      const additions: VideoCallParticipant[] = [];
+      const nextStreams: Record<string, MediaStream> = {};
+      const nextScreenStreams: Record<string, MediaStream> = {};
+      const nextCleanups: Record<string, () => void> = {};
+
+      for (let i = 0; i < count; i += 1) {
+        const index = demoCounterRef.current;
+        demoCounterRef.current += 1;
+        const socketId = `demo-${index}`;
+        const displayName = `Demo ${index}`;
+        const cameraStream = createDemoCanvasStream(displayName, "camera");
+        const screenStream = createDemoCanvasStream(`${displayName} Screen`, "screen");
+        if (!cameraStream && !screenStream) continue;
+        additions.push({
+          socketId,
+          userId: 900000 + index,
+          displayName,
+          handle: `demo${index}`,
+        });
+        if (cameraStream) {
+          nextStreams[socketId] = cameraStream.stream;
+        }
+        if (screenStream) {
+          nextScreenStreams[socketId] = screenStream.stream;
+        }
+        nextCleanups[socketId] = () => {
+          cameraStream?.cleanup();
+          screenStream?.cleanup();
+        };
+      }
+
+      if (!additions.length) return;
+      setDemoParticipants((prev) => [...prev, ...additions]);
+      setDemoStreams((prev) => ({ ...prev, ...nextStreams }));
+      setDemoScreenStreams((prev) => ({ ...prev, ...nextScreenStreams }));
+      demoCleanupRef.current = { ...demoCleanupRef.current, ...nextCleanups };
+    },
+    [createDemoCanvasStream]
+  );
+
+  useEffect(() => {
+    return () => {
+      clearDemoParticipants();
+    };
+  }, [clearDemoParticipants]);
 
   const getScreenZoom = useCallback(
     (targetId: string) => screenZoomLevels[targetId] ?? 1,
@@ -2241,27 +2443,31 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                         {noiseSuppressionEnabled ? "On" : "Off"}
                       </span>
                     </button>
-                  </div>
-                  {showMicSelector && (
-                    <label className="video-settings-select">
-                      <span>Microphone</span>
-                      <select
-                        value={micSelectionValue}
-                        onChange={(e) => void setAudioInputDevice(e.target.value)}
-                        title="Select microphone"
-                      >
-                        <option value="default">Default mic</option>
-                        {audioInputs.map((device, index) => (
-                          <option
-                            key={device.deviceId || String(index)}
-                            value={device.deviceId}
+                    {showMicSelector && (
+                      <div className="video-settings-tile is-static is-select">
+                        <FontAwesomeIcon icon={faMicrophone} aria-hidden="true" />
+                        <span className="video-settings-label">Microphone</span>
+                        <label className="video-settings-select">
+                          <span className="sr-only">Microphone</span>
+                          <select
+                            value={micSelectionValue}
+                            onChange={(e) => void setAudioInputDevice(e.target.value)}
+                            title="Select microphone"
                           >
-                            {device.label || `Microphone ${index + 1}`}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
+                            <option value="default">Default mic</option>
+                            {audioInputs.map((device, index) => (
+                              <option
+                                key={device.deviceId || String(index)}
+                                value={device.deviceId}
+                              >
+                                {device.label || `Microphone ${index + 1}`}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                    )}
+                  </div>
                 </section>
                 <section className="video-settings-section">
                   <h4>Video</h4>
@@ -2294,12 +2500,11 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                         {videoEffects.mirror ? "On" : "Off"}
                       </span>
                     </button>
-                    <div className="video-settings-tile is-static">
+                    <div className="video-settings-tile is-static is-select">
                       <FontAwesomeIcon icon={faSliders} aria-hidden="true" />
                       <span className="video-settings-label">Camera filter</span>
-                      <span className="video-settings-status">{activeFilterOption.label}</span>
                       <label className="video-settings-select">
-                        <span>Filter</span>
+                        <span className="sr-only">Filter</span>
                         <select
                           value={videoEffects.filter}
                           onChange={(event) =>
@@ -2316,14 +2521,11 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                         </select>
                       </label>
                     </div>
-                    <div className="video-settings-tile is-static">
+                    <div className="video-settings-tile is-static is-select">
                       <FontAwesomeIcon icon={faDisplay} aria-hidden="true" />
                       <span className="video-settings-label">Background</span>
-                      <span className="video-settings-status">
-                        {activeBackgroundOption.label}
-                      </span>
                       <label className="video-settings-select">
-                        <span>Background</span>
+                        <span className="sr-only">Background</span>
                         <select
                           value={videoEffects.background}
                           onChange={(event) =>
@@ -2340,27 +2542,31 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                         </select>
                       </label>
                     </div>
-                  </div>
-                  {showCameraSelector && (
-                    <label className="video-settings-select">
-                      <span>Camera</span>
-                      <select
-                        value={cameraSelectionValue}
-                        onChange={(e) => void setVideoInputDevice(e.target.value)}
-                        title="Select camera"
-                      >
-                        <option value="default">Default camera</option>
-                        {videoInputs.map((device, index) => (
-                          <option
-                            key={device.deviceId || String(index)}
-                            value={device.deviceId}
+                    {showCameraSelector && (
+                      <div className="video-settings-tile is-static is-select">
+                        <FontAwesomeIcon icon={faVideo} aria-hidden="true" />
+                        <span className="video-settings-label">Camera</span>
+                        <label className="video-settings-select">
+                          <span className="sr-only">Camera</span>
+                          <select
+                            value={cameraSelectionValue}
+                            onChange={(e) => void setVideoInputDevice(e.target.value)}
+                            title="Select camera"
                           >
-                            {device.label || `Camera ${index + 1}`}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
+                            <option value="default">Default camera</option>
+                            {videoInputs.map((device, index) => (
+                              <option
+                                key={device.deviceId || String(index)}
+                                value={device.deviceId}
+                              >
+                                {device.label || `Camera ${index + 1}`}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                    )}
+                  </div>
                 </section>
                 <section className="video-settings-section">
                   <h4>Performance</h4>
@@ -2387,6 +2593,55 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                     </p>
                   )}
                 </section>
+                {isAdmin && (
+                  <section className="video-settings-section">
+                    <h4>Admin tools</h4>
+                    <div className="video-settings-grid">
+                      <button
+                        type="button"
+                        className="video-settings-tile"
+                        onClick={() => addDemoParticipants(1)}
+                        disabled={!showCallUi || demoSlotsAvailable === 0}
+                      >
+                        <FontAwesomeIcon icon={faUserPlus} aria-hidden="true" />
+                        <span className="video-settings-label">Add demo user</span>
+                        <span className="video-settings-status">
+                          {demoSlotsAvailable > 0
+                            ? `${demoSlotsAvailable} slots left`
+                            : "Max reached"}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="video-settings-tile"
+                        onClick={() => addDemoParticipants(demoSlotsAvailable)}
+                        disabled={!showCallUi || demoSlotsAvailable === 0}
+                      >
+                        <FontAwesomeIcon icon={faUsers} aria-hidden="true" />
+                        <span className="video-settings-label">Fill to max</span>
+                        <span className="video-settings-status">
+                          {demoSlotsAvailable > 0
+                            ? `Add ${demoSlotsAvailable}`
+                            : "Max reached"}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="video-settings-tile"
+                        onClick={clearDemoParticipants}
+                        disabled={demoParticipants.length === 0}
+                      >
+                        <FontAwesomeIcon icon={faTrash} aria-hidden="true" />
+                        <span className="video-settings-label">Clear demos</span>
+                        <span className="video-settings-status">{demoStatusLabel}</span>
+                      </button>
+                    </div>
+                    <p className="video-settings-note">
+                      Admin only. Adds local dummy camera + screen share streams for
+                      layout testing.
+                    </p>
+                  </section>
+                )}
                 {isScreenSharing && (
                   <section className="video-settings-section">
                     <h4>Screen share</h4>
@@ -2484,6 +2739,32 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                     aria-hidden="true"
                   />
                 </button>
+                {isCallAdmin && (
+                  <>
+                    <button
+                      type="button"
+                      className="video-control video-control-icon ghost"
+                      onClick={muteAllParticipants}
+                      data-hint="Mute everyone"
+                      aria-label="Mute everyone"
+                      title="Mute everyone"
+                      disabled={remoteList.length === 0}
+                    >
+                      <FontAwesomeIcon icon={faMicrophoneSlash} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="video-control video-control-icon ghost"
+                      onClick={stopAllScreenShares}
+                      data-hint="Stop all screens"
+                      aria-label="Stop all screens"
+                      title="Stop all screens"
+                      disabled={!hasRemoteScreenShares}
+                    >
+                      <FontAwesomeIcon icon={faDisplay} aria-hidden="true" />
+                    </button>
+                  </>
+                )}
                 <button
                   type="button"
                   className="video-control video-control-settings"
@@ -2620,6 +2901,63 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   <FontAwesomeIcon icon={faVideo} aria-hidden="true" />
                 </button>
               </div>
+              {hasScreenShares && (
+                <div className="video-call-toolbar-group is-selector">
+                  <button
+                    type="button"
+                    className="video-view-button is-icon is-passive"
+                    data-hint="Screen share"
+                    aria-label="Screen share"
+                    title="Screen share"
+                  >
+                    <FontAwesomeIcon icon={faDisplay} aria-hidden="true" />
+                  </button>
+                  <select
+                    className="video-call-selector-select"
+                    value={focusedScreenId || ""}
+                    onChange={(event) =>
+                      selectScreenShareFocus(event.target.value || null)
+                    }
+                    aria-label="Choose a screen share"
+                  >
+                    <option value="">All screens</option>
+                    {screenShareEntries.map((entry) => {
+                      const entryKey = getScreenFocusKey(entry);
+                      return (
+                        <option key={entryKey} value={entryKey}>
+                          {entry.label}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              )}
+              {videoParticipants.length > 0 && (
+                <div className="video-call-toolbar-group is-selector">
+                  <button
+                    type="button"
+                    className="video-view-button is-icon is-passive"
+                    data-hint="Camera feed"
+                    aria-label="Camera feed"
+                    title="Camera feed"
+                  >
+                    <FontAwesomeIcon icon={faVideo} aria-hidden="true" />
+                  </button>
+                  <select
+                    className="video-call-selector-select"
+                    value={focusedVideoId || ""}
+                    onChange={(event) => selectVideoFeedFocus(event.target.value || null)}
+                    aria-label="Choose a camera feed"
+                  >
+                    <option value="">All cameras</option>
+                    {videoParticipants.map((participant) => (
+                      <option key={participant.id} value={participant.id}>
+                        {participant.isLocal ? localDisplayName : participant.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div className="video-call-toolbar-group">
                 {hasScreenShares && (
                   <button
@@ -2933,9 +3271,9 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                 ) : (
                   <>
                 {showScreenTiles &&
-                  visibleScreenShareEntries.map((entry, index) => {
+                  screenEntriesToRender.map((entry, index) => {
                     const gridPlacementStyle = isSplitView
-                      ? { gridColumn: 1, gridRow: index + 1 }
+                      ? { gridColumn: 1, gridRow: 1 }
                       : undefined;
                     const tileId = getScreenTileId(entry);
                     const isFullscreen = fullscreenTargetId === tileId;
@@ -3619,20 +3957,21 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   </div>
                 )}
                 {showVideoTiles && isSplitView && (
-                  <>
-                    {splitPairs.pairs.map((pair, index) =>
-                      pair.videoParticipant
-                        ? renderCompactVideoTile(pair.videoParticipant, {
-                            style: { gridColumn: 2, gridRow: index + 1 },
-                          })
-                        : null
+                  <div className="video-call-camera-stack" style={{ gridColumn: 2, gridRow: 1 }}>
+                    {splitCameraParticipants.length > 0 ? (
+                      splitCameraParticipants.map((participant) =>
+                        renderCompactVideoTile(participant, {
+                          className: "is-camera-stack",
+                        })
+                      )
+                    ) : (
+                      <div className="video-tile is-skeleton is-camera-stack">
+                        <div className="video-tile__placeholder">
+                          <span className="video-tile__status">No cameras yet</span>
+                        </div>
+                      </div>
                     )}
-                    {splitPairs.remaining.map((participant, index) =>
-                      renderCompactVideoTile(participant, {
-                        style: { gridColumn: 2, gridRow: splitPairs.pairs.length + index + 1 },
-                      })
-                    )}
-                  </>
+                  </div>
                 )}
                 {showVideoTiles && !isSplitView && (
                   <>
@@ -3672,7 +4011,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                       return (
                         <VideoTile
                           key={participant.socketId}
-                          stream={remoteStreams[participant.socketId] || null}
+                          stream={mergedRemoteStreams[participant.socketId] || null}
                           label={resolveParticipantLabel({
                             userId: participant.userId,
                             displayName: participant.displayName,
@@ -3681,7 +4020,9 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                           avatarUrl={participant.avatarUrl}
                           muted={isRenderingInPopout}
                           status={
-                            remoteStreams[participant.socketId] ? "" : "Waiting for video"
+                            mergedRemoteStreams[participant.socketId]
+                              ? ""
+                              : "Waiting for video"
                           }
                           className={
                             participant.socketId === primaryVideoSocketId ? "is-primary" : undefined

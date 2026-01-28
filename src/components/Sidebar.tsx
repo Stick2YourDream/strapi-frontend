@@ -12,7 +12,9 @@ import {
   decryptOwnProfilePayload,
   type ProfilePayload,
 } from "../utils/profile-e2ee";
+import { pickMediaUrl } from "../utils/media";
 import "../css/sidebar.css";
+import AvatarImage from "./AvatarImage";
 
 type ProfileSummary = {
   displayName: string;
@@ -92,23 +94,6 @@ export default function Sidebar({
   const [birthdaySending, setBirthdaySending] = useState<Record<string, boolean>>({});
 
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
-  const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
-  const pickMediaUrl = (mediaField: any): string | undefined => {
-    if (!mediaField) return undefined;
-    const candidate =
-      (Array.isArray(mediaField?.data) ? mediaField.data[0] : mediaField?.data) ??
-      (Array.isArray(mediaField) ? mediaField[0] : mediaField);
-    if (!candidate) return undefined;
-    const attrs = normalize(candidate);
-    let url =
-      attrs.url ||
-      attrs.formats?.large?.url ||
-      attrs.formats?.medium?.url ||
-      attrs.formats?.small?.url ||
-      attrs.formats?.thumbnail?.url;
-    if (!url) return undefined;
-    return url.startsWith("/") ? `${apiBase}${url}` : url;
-  };
 
   useEffect(() => {
     const load = async () => {
@@ -156,7 +141,7 @@ export default function Sidebar({
         setProfileSummary({
           displayName,
           handle: attrs.handle || user.email,
-          avatarUrl: pickMediaUrl(attrs.avatar),
+          avatarUrl: pickMediaUrl(attrs.avatar, { kind: "avatar" }),
           age: payload.age || "",
           hobbies: payload.hobbies || "",
           bio: payload.bio || "",
@@ -637,10 +622,12 @@ export default function Sidebar({
             aria-label={`Open profile menu for ${nameForDisplay}`}
           >
             {profileCard?.avatarUrl ? (
-              <img
+              <AvatarImage
                 src={profileCard.avatarUrl}
                 alt={nameForDisplay}
                 className="mobile-avatar-image"
+                loading="lazy"
+                decoding="async"
               />
             ) : (
               <span className="mobile-avatar-fallback" aria-hidden="true">
@@ -863,11 +850,13 @@ export default function Sidebar({
                   }}
                 >
                   {profileCard.avatarUrl ? (
-                    <img
+                    <AvatarImage
                       src={profileCard.avatarUrl}
                       alt={nameForDisplay}
                       className="avatar-octagon"
                       style={{ width: 48, height: 48, borderRadius: "50%" }}
+                      loading="lazy"
+                      decoding="async"
                     />
                   ) : (
                     <div
@@ -926,31 +915,18 @@ export default function Sidebar({
               {showProfileMenu && (
                 <div
                   id="sidebar-profile-menu"
-                  style={{
-                    position: "absolute",
-                    top: "110%",
-                    left: 0,
-                    right: 0,
-                    background: "#0f172a",
-                    border: "1px solid rgba(255,255,255,0.08)",
-                    borderRadius: "10px",
-                    boxShadow: "0 12px 40px rgba(0,0,0,0.35)",
-                    overflow: "hidden",
-                    zIndex: 15,
-                  }}
+                  className="sidebar-profile-menu"
                 >
                   <button
-                    className="btn ghost nav-btn"
+                    className="btn ghost nav-btn sidebar-profile-menu-button"
                     type="button"
-                    style={{ width: "100%", border: "none", borderRadius: 0, justifyContent: "flex-start" }}
                     onClick={() => handleProfileAction("/landing")}
                   >
                     Return Home
                   </button>
                   <button
-                    className="btn ghost nav-btn"
+                    className="btn ghost nav-btn sidebar-profile-menu-button"
                     type="button"
-                    style={{ width: "100%", border: "none", borderRadius: 0, justifyContent: "flex-start" }}
                     onClick={() => {
                       logout();
                       navigate("/login");

@@ -13,6 +13,7 @@ import type { SignalTag } from "../constants/signalTags";
 import { sanitizePostText } from "../utils/emoji";
 import ReactionPicker from "../components/ReactionPicker";
 import { formatPostUpdateLabel } from "../utils/time";
+import { pickMediaUrl } from "../utils/media";
 // import NewsWidget from "../components/NewsWidget";
 import "../css/news-widget.css";
 
@@ -61,18 +62,6 @@ type FriendOption = {
 };
 
 type UnknownRecord = Record<string, unknown>;
-
-type MediaFormats = {
-  large?: { url?: string };
-  medium?: { url?: string };
-  small?: { url?: string };
-  thumbnail?: { url?: string };
-};
-
-type MediaAttributes = {
-  url?: string;
-  formats?: MediaFormats;
-};
 
 type PostsState = {
   user: unknown[];
@@ -128,24 +117,6 @@ const firstNameFromLabel = (value?: string) => {
   const text = String(value || "").trim();
   if (!text) return "";
   return text.split(/\s+/)[0] || "";
-};
-const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
-const pickMediaUrl = (mediaField: unknown): string | undefined => {
-  if (!mediaField) return undefined;
-  const data = getEntity(mediaField);
-  const candidate =
-    (Array.isArray(data) ? data[0] : data) ??
-    (Array.isArray(mediaField) ? mediaField[0] : mediaField);
-  if (!candidate) return undefined;
-  const attrs = normalize(candidate) as MediaAttributes;
-  const url =
-    attrs.url ||
-    attrs.formats?.large?.url ||
-    attrs.formats?.medium?.url ||
-    attrs.formats?.small?.url ||
-    attrs.formats?.thumbnail?.url;
-  if (!url) return undefined;
-  return url.startsWith("/") ? `${apiBase}${url}` : url;
 };
 
 const PREVIEW_DEBOUNCE_MS = 450;
@@ -491,7 +462,9 @@ export default function Dashboard() {
       try {
         const res = await api.get(`/profiles?filters[user][id][$eq]=${user.id}&populate=avatar`);
         const entry = res.data?.data?.[0];
-        const avatarUrl = entry ? pickMediaUrl(normalize(entry).avatar) : undefined;
+        const avatarUrl = entry
+          ? pickMediaUrl(normalize(entry).avatar, { kind: "avatar" })
+          : undefined;
         if (active) setProfileAvatarUrl(avatarUrl || null);
       } catch {
         if (active) setProfileAvatarUrl(null);
@@ -926,7 +899,6 @@ export default function Dashboard() {
   );
 
   const categorizedPosts = useMemo(() => {
-    const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
     const allComments = posts.comments ?? [];
     const resolveOwnerName = (ownerId?: number, fallback?: string) => {
       const mapped = ownerId ? profileNameMap[ownerId] : undefined;
@@ -958,17 +930,7 @@ export default function Dashboard() {
 
       const picturesRaw = getEntity(attributes.Users_Pictures) ?? getEntity(attributes.pictures);
       const mediaItem = Array.isArray(picturesRaw) ? picturesRaw[0] : picturesRaw;
-      const mediaAttr = normalize(mediaItem) as MediaAttributes;
-      const formats = mediaAttr.formats;
-      let imageUrl =
-        mediaAttr.url ||
-        formats?.large?.url ||
-        formats?.medium?.url ||
-        formats?.small?.url ||
-        formats?.thumbnail?.url;
-      if (imageUrl && imageUrl.startsWith("/")) {
-        imageUrl = `${apiBase}${imageUrl}`;
-      }
+      const imageUrl = pickMediaUrl(mediaItem, { kind: "post" });
 
       const postRecord = asRecord(post);
       const rawPostId = postRecord.id ?? postRecord.documentId;
@@ -1062,18 +1024,7 @@ export default function Dashboard() {
         getString(attributes.title) ?? getString(attributes.Title) ?? "Group update";
       const content = getString(attributes.body) ?? getString(attributes.content) ?? "";
       const mediaItem = getEntity(attributes.media);
-      const mediaAttr = normalize(Array.isArray(mediaItem) ? mediaItem[0] : mediaItem) as
-        MediaAttributes;
-      const formats = mediaAttr.formats;
-      let imageUrl =
-        mediaAttr.url ||
-        formats?.large?.url ||
-        formats?.medium?.url ||
-        formats?.small?.url ||
-        formats?.thumbnail?.url;
-      if (imageUrl && imageUrl.startsWith("/")) {
-        imageUrl = `${apiBase}${imageUrl}`;
-      }
+      const imageUrl = pickMediaUrl(mediaItem, { kind: "post" });
 
       const ownerData = getEntity(attributes.owner);
       const ownerAttrs = normalize(ownerData) as { email?: string };
@@ -1150,17 +1101,7 @@ export default function Dashboard() {
 
       const picturesRaw = getEntity(attributes.Pictures);
       const mediaItem = Array.isArray(picturesRaw) ? picturesRaw[0] : picturesRaw;
-      const mediaAttr = normalize(mediaItem) as MediaAttributes;
-      const formats = mediaAttr.formats;
-      let imageUrl =
-        mediaAttr.url ||
-        formats?.large?.url ||
-        formats?.medium?.url ||
-        formats?.small?.url ||
-        formats?.thumbnail?.url;
-      if (imageUrl && imageUrl.startsWith("/")) {
-        imageUrl = `${apiBase}${imageUrl}`;
-      }
+      const imageUrl = pickMediaUrl(mediaItem, { kind: "post" });
 
       const postRecord = asRecord(post);
       const rawPostId = postRecord.id ?? postRecord.documentId;
@@ -1461,9 +1402,7 @@ export default function Dashboard() {
       if (formFile) {
         const fd = new FormData();
         fd.append("files", formFile);
-        const uploadRes = await api.post("/upload", fd, {
-          headers: { "Content-Type": "multipart/form-data" },
-        });
+        const uploadRes = await api.post("/upload", fd);
         const uploaded = uploadRes.data?.[0];
         uploadedId = uploaded?.id;
       }
@@ -1920,6 +1859,8 @@ export default function Dashboard() {
                     <img
                       src={profileAvatarUrl}
                       alt={`${userLabel} avatar`}
+                      loading="lazy"
+                      decoding="async"
                       onError={() => setProfileAvatarUrl(null)}
                     />
                   ) : (
@@ -1958,7 +1899,12 @@ export default function Dashboard() {
                       <source src={formFilePreviewUrl} />
                     </video>
                   ) : (
-                    <img src={formFilePreviewUrl} alt="Upload preview" />
+                    <img
+                      src={formFilePreviewUrl}
+                      alt="Upload preview"
+                      loading="lazy"
+                      decoding="async"
+                    />
                   )}
                 </div>
               )}
@@ -2171,11 +2117,21 @@ export default function Dashboard() {
                   {post.imageUrl ? (
                     <div className="post-media">
                       {isVideoUrl(post.imageUrl) ? (
-                        <video controls style={{ width: "100%", height: "100%", objectFit: "cover" }}>
+                        <video
+                          controls
+                          playsInline
+                          preload="metadata"
+                          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                        >
                           <source src={post.imageUrl} />
                         </video>
                       ) : (
-                        <img src={post.imageUrl} alt={post.title} loading="lazy" />
+                        <img
+                          src={post.imageUrl}
+                          alt={post.title}
+                          loading="lazy"
+                          decoding="async"
+                        />
                       )}
                     </div>
                   ) : showPreviewMedia ? (
@@ -2184,6 +2140,7 @@ export default function Dashboard() {
                         src={previewImage}
                         alt={preview?.title || post.title}
                         loading="lazy"
+                        decoding="async"
                       />
                     </div>
                   ) : showPlaceholder ? (
@@ -2566,11 +2523,21 @@ export default function Dashboard() {
               {activePost.imageUrl ? (
                 <div className="post-media post-modal__media">
                   {isVideoUrl(activePost.imageUrl) ? (
-                    <video controls style={{ width: "100%", height: "100%", objectFit: "cover" }}>
+                    <video
+                      controls
+                      playsInline
+                      preload="metadata"
+                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                    >
                       <source src={activePost.imageUrl} />
                     </video>
                   ) : (
-                    <img src={activePost.imageUrl} alt={activePost.title} loading="lazy" />
+                    <img
+                      src={activePost.imageUrl}
+                      alt={activePost.title}
+                      loading="lazy"
+                      decoding="async"
+                    />
                   )}
                 </div>
               ) : showActivePreviewMedia ? (
@@ -2579,6 +2546,7 @@ export default function Dashboard() {
                     src={activePreviewImage}
                     alt={activePreview?.title || activePost.title}
                     loading="lazy"
+                    decoding="async"
                   />
                 </div>
               ) : showActivePlaceholder ? (

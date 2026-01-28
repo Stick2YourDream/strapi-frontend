@@ -20,6 +20,7 @@ import {
   type ProfileVisibility,
   type VisibilityLevel,
 } from "../utils/profile-e2ee";
+import { pickMediaUrl } from "../utils/media";
 
 type FriendPost = {
   id: number | string;
@@ -225,7 +226,7 @@ const LinkPreviewCard = ({
     >
       <div className="link-preview-media">
         {safePreview.image ? (
-          <img src={safePreview.image} alt={title} loading="lazy" />
+          <img src={safePreview.image} alt={title} loading="lazy" decoding="async" />
         ) : (
           <div className="link-preview-placeholder">LINK</div>
         )}
@@ -305,23 +306,6 @@ export default function Friends() {
     const rawId = data?.id ?? (typeof data === "number" ? data : data?.attributes?.id);
     const num = Number(rawId);
     return Number.isFinite(num) ? num : undefined;
-  };
-  const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
-  const pickMediaUrl = (mediaField: any): string | undefined => {
-    if (!mediaField) return undefined;
-    const candidate =
-      (Array.isArray(mediaField?.data) ? mediaField.data[0] : mediaField?.data) ??
-      (Array.isArray(mediaField) ? mediaField[0] : mediaField);
-    if (!candidate) return undefined;
-    const attrs = normalize(candidate);
-    let url =
-      attrs.url ||
-      attrs.formats?.large?.url ||
-      attrs.formats?.medium?.url ||
-      attrs.formats?.small?.url ||
-      attrs.formats?.thumbnail?.url;
-    if (!url) return undefined;
-    return url.startsWith("/") ? `${apiBase}${url}` : url;
   };
   const getEntryId = (entry: any, attrs: any) =>
     entry?.id ?? attrs?.documentId ?? entry?.documentId;
@@ -563,7 +547,7 @@ export default function Friends() {
               lastName: payload.lastName || "",
               handle: attrs.handle || `user-${p.id ?? attrs.documentId}`,
               bio: payload.bio || "",
-              avatarUrl: pickMediaUrl(attrs.avatar),
+              avatarUrl: pickMediaUrl(attrs.avatar, { kind: "avatar" }),
               profileVisibility,
               privacySettings,
               activityVisibility,
@@ -591,7 +575,7 @@ export default function Friends() {
           const attrs = normalize(p);
           const ownerId = getEntityId(attrs.owner);
           if (!ownerId) return;
-          const imageUrl = pickMediaUrl(attrs.Users_Pictures);
+          const imageUrl = pickMediaUrl(attrs.Users_Pictures, { kind: "post" });
           const content = attrs.Users_Content || "";
           const feedbackTargetId = getEntityId(attrs.feedbackTarget);
           const feedbackTargetAttrs = getEntityAttrs(attrs.feedbackTarget);
@@ -783,6 +767,7 @@ export default function Friends() {
         className="friend-avatar"
         style={{ width: size, height: size }}
         loading="lazy"
+        decoding="async"
       />
     ) : (
       <div
@@ -1054,7 +1039,15 @@ export default function Friends() {
               }
             }}
           >
-            {post.imageUrl && <img src={post.imageUrl} alt={post.title} className="avatar" />}
+            {post.imageUrl && (
+              <img
+                src={post.imageUrl}
+                alt={post.title}
+                className="avatar"
+                loading="lazy"
+                decoding="async"
+              />
+            )}
             <div className="comment-body">
               <div className="friend-post-title">
                 <strong>{post.title}</strong>
@@ -1368,11 +1361,21 @@ export default function Friends() {
               {activePost.imageUrl ? (
                 <div className="post-media post-modal__media">
                   {isVideoUrl(activePost.imageUrl) ? (
-                    <video controls style={{ width: "100%", height: "100%", objectFit: "cover" }}>
+                    <video
+                      controls
+                      playsInline
+                      preload="metadata"
+                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                    >
                       <source src={activePost.imageUrl} />
                     </video>
                   ) : (
-                    <img src={activePost.imageUrl} alt={activePost.title} loading="lazy" />
+                    <img
+                      src={activePost.imageUrl}
+                      alt={activePost.title}
+                      loading="lazy"
+                      decoding="async"
+                    />
                   )}
                 </div>
               ) : showActivePreviewMedia ? (
@@ -1381,6 +1384,7 @@ export default function Friends() {
                     src={activePreviewImage}
                     alt={activePreview?.title || activePost.title}
                     loading="lazy"
+                    decoding="async"
                   />
                 </div>
               ) : showActivePlaceholder ? (

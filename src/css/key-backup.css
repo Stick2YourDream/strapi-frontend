@@ -2,10 +2,14 @@
   position: fixed;
   inset: 0;
   background: rgba(3, 6, 12, 0.7);
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 20px;
-  z-index: 60;
+  z-index: 1200;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .key-backup-modal {
@@ -13,9 +17,11 @@
   background: rgba(12, 16, 26, 0.96);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 18px;
-  display: grid;
-  grid-template-rows: auto 1fr auto;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
+  height: min(90dvh, 760px);
+  max-height: 90dvh;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
   color: #e9ecf5;
 }
@@ -49,6 +55,12 @@
   color: #cbd5e1;
   display: grid;
   gap: 14px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
 }
 
 .key-backup-body p {
@@ -69,6 +81,38 @@
   border-radius: 14px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(10, 16, 28, 0.5);
+}
+
+.key-backup-danger {
+  border-color: rgba(255, 115, 115, 0.45);
+  background: rgba(40, 12, 18, 0.45);
+}
+
+.key-backup-danger .key-backup-hint {
+  color: #f2b9b9;
+}
+
+.key-backup-danger .btn.danger {
+  border-radius: 999px;
+  border: 1px solid rgba(255, 115, 115, 0.6);
+  background: rgba(255, 115, 115, 0.15);
+  color: #ffe2e2;
+  font-weight: 600;
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+
+.key-backup-danger .btn.danger:hover {
+  background: rgba(255, 115, 115, 0.25);
+  border-color: rgba(255, 160, 160, 0.7);
+  transform: translateY(-1px);
+}
+
+.key-backup-danger .btn.danger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .key-backup-device h4 {
@@ -94,6 +138,24 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.key-backup-code-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.key-backup-code {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.6);
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #e2e8f0;
+  text-align: center;
 }
 
 .key-backup-field {
@@ -141,4 +203,16 @@
   gap: 10px;
   padding: 14px 18px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+@media (max-height: 680px) {
+  .key-backup-overlay {
+    align-items: flex-start;
+    padding: 12px 16px 24px;
+  }
+
+  .key-backup-modal {
+    height: 96dvh;
+    max-height: 96dvh;
+  }
 }
