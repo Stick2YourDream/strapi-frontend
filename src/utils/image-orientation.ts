@@ -19,7 +19,6 @@ const readExifOrientation = (buffer: ArrayBuffer) => {
     const marker = view.getUint16(offset, false);
     offset += 2;
     if (marker === 0xffe1) {
-      const appLength = view.getUint16(offset, false);
       offset += 2;
       if (view.getUint32(offset, false) !== 0x45786966) return null;
       offset += 6;
@@ -159,4 +158,3 @@ export const releaseOrientedImage = (url: string) => {
     ORIENTATION_CACHE.delete(url);
   }
 };
-

@@ -20,6 +20,7 @@ import {
   useVideoCall,
   type VideoCallInvitee,
   type VideoCallMessage,
+  type VideoCallParticipant,
 } from "../context/VideoCallContext";
 import { Grid } from "@giphy/react-components";
 import { GiphyFetch } from "@giphy/js-fetch-api";
@@ -1094,18 +1095,6 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const activeGifCategory =
     GIF_CATEGORIES.find((category) => category.id === gifCategoryId) ||
     GIF_CATEGORIES[0];
-  const activeFilterOption = useMemo(
-    () =>
-      FILTER_OPTIONS.find((option) => option.id === videoEffects.filter) ||
-      FILTER_OPTIONS[0],
-    [videoEffects.filter]
-  );
-  const activeBackgroundOption = useMemo(
-    () =>
-      BACKGROUND_OPTIONS.find((option) => option.id === videoEffects.background) ||
-      BACKGROUND_OPTIONS[0],
-    [videoEffects.background]
-  );
   const gifQuery = useMemo(() => {
     const trimmed = gifSearch.trim();
     if (trimmed) return trimmed;
@@ -3271,7 +3260,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                 ) : (
                   <>
                 {showScreenTiles &&
-                  screenEntriesToRender.map((entry, index) => {
+                  screenEntriesToRender.map((entry) => {
                     const gridPlacementStyle = isSplitView
                       ? { gridColumn: 1, gridRow: 1 }
                       : undefined;
