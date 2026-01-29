@@ -102,6 +102,24 @@ const routes = [
       robots: "noindex, nofollow",
     },
   },
+  {
+    path: "/apps",
+    meta: {
+      title: "Apps & Downloads | Your Social Place",
+      description:
+        "Download YSP Live, the Windows control helper, or install the Your Social Place PWA on any device.",
+      url: "https://yoursocialplace.com/apps",
+    },
+  },
+  {
+    path: "/downloads",
+    meta: {
+      title: "Apps & Downloads | Your Social Place",
+      description:
+        "Download YSP Live, the Windows control helper, or install the Your Social Place PWA on any device.",
+      url: "https://yoursocialplace.com/apps",
+    },
+  },
 ];
 
 const escapeHtml = (value) =>

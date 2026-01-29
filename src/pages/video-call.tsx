@@ -21,7 +21,7 @@ const formatName = (displayName?: string, email?: string) => {
 export default function VideoCallHome() {
   const navigate = useNavigate();
   const { user, profile, logout } = useAuth();
-  const { openCallComposer, setSelectedInvitees, status, onlineUserIds } = useVideoCall();
+  const { openCallComposer, status, onlineUserIds } = useVideoCall();
   const { friends, loading, error } = useVideoInvitees();
   const brandName = String(import.meta.env.VITE_APP_NAME || "").trim() || "Your Social Place";
   const {
@@ -70,8 +70,7 @@ export default function VideoCallHome() {
     if (!group) return;
     const invitees = friends.filter((friend) => group.memberIds.includes(friend.userId));
     if (!invitees.length) return;
-    setSelectedInvitees(invitees);
-    openCallComposer();
+    openCallComposer(invitees);
   };
 
   useEffect(() => {

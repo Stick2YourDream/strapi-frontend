@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import "../css/pwa.css";
-import "../css/apps.css";
+import "../css/downloads-page.css";
 import { usePageMeta } from "../hooks/usePageMeta";
 
 type BeforeInstallPromptEvent = Event & {
@@ -33,7 +31,6 @@ const detectPlatform = () => {
 };
 
 export default function Apps() {
-  const navigate = useNavigate();
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(
     null
   );
@@ -50,13 +47,13 @@ export default function Apps() {
   const msixUrl = (import.meta.env.VITE_DESKTOP_MSIX_URL as string | undefined) || "";
 
   usePageMeta({
-    title: "Install the App | Your Social Place",
+    title: "Apps & Downloads | Your Social Place",
     description:
-      "Install Your Social Place on Android, Windows, macOS, or iOS with the official PWA or Android download. Get the Windows video call desktop app and helper in the downloads section.",
+      "Download YSP Live, the Windows control helper, or install the Your Social Place PWA on any device.",
     type: "website",
     canonical: "https://yoursocialplace.com/apps",
     keywords:
-      "Your Social Place app, PWA install, Android app download, Windows PWA, iOS install, macOS install",
+      "Your Social Place downloads, YSP Live, Windows helper, Android APK, PWA install, iOS install, macOS install",
   });
 
   useEffect(() => {
@@ -83,13 +80,13 @@ export default function Apps() {
 
   const installHint = useMemo(() => {
     if (isStandalone) {
-      return "You're already running the installed app on this device.";
+      return "You're already running the installed web app on this device.";
     }
     if (platform.isIos) {
       return "On iPhone or iPad, open in Safari and tap Share → Add to Home Screen.";
     }
     if (installPrompt) {
-      return "Tap Install to add the app to your device.";
+      return "Tap Install to add the web app to your device.";
     }
     return "Open in Chrome or Edge to see the install button in the address bar.";
   }, [installPrompt, isStandalone, platform.isIos]);
@@ -111,197 +108,265 @@ export default function Apps() {
     return `${versionPart}${codePart}`;
   }, [apkCode, apkVersion]);
 
+  const installButtonLabel = isStandalone ? "Web app installed" : "Install web app";
+
   return (
-    <div className="pwa-shell apps-shell">
-      <div className="pwa-card apps-card">
-        <header className="pwa-header">
-          <span className="pwa-eyebrow">Install the App</span>
-          <h1>Get Your Social Place on every device</h1>
-          <p className="pwa-subhead">
-            Install the official PWA on Windows, macOS, or iOS—or download the Android
-            app package. Updates for the web and PWA roll out automatically when you
-            reopen the app.
-          </p>
-        </header>
-
-        <section className="pwa-section apps-primary">
-          <p className="pwa-label">Quick install</p>
-          <p className="apps-copy">{installHint}</p>
-          <div className="apps-actions">
-            <button
-              className="pwa-button"
-              type="button"
-              onClick={handleInstall}
-              disabled={!installPrompt || isStandalone}
-            >
-              {isStandalone ? "App installed" : "Install app"}
-            </button>
-            <a className="pwa-button secondary" href={apkUrl} download>
-              Download Android APK
-            </a>
-            <button
-              className="pwa-button secondary"
-              type="button"
-              onClick={() => navigate("/")}
-            >
-              Back home
-            </button>
+    <div className="downloads-page">
+      <div className="downloads-shell">
+        <section className="downloads-hero">
+          <div className="downloads-hero__content">
+            <span className="downloads-eyebrow">Apps & Downloads</span>
+            <h1>Everything you need to stay focused and connected.</h1>
+            <p>
+              Get YSP Live for distraction-free video calls, install the web app on any
+              device, or grab the Android APK when you need a manual install.
+            </p>
+            <div className="downloads-hero__actions">
+              <a className="downloads-button primary" href={desktopAppUrl} download>
+                Download YSP Live
+              </a>
+              <button
+                className="downloads-button ghost"
+                type="button"
+                onClick={handleInstall}
+                disabled={!installPrompt || isStandalone}
+              >
+                {installButtonLabel}
+              </button>
+            </div>
+            <p className="downloads-hint">{installHint}</p>
+            <div className="downloads-hero__meta">
+              <div>
+                <span className="downloads-meta-label">Best for</span>
+                <strong>Windows 10/11</strong>
+              </div>
+              <div>
+                <span className="downloads-meta-label">Web app</span>
+                <strong>PWA on desktop & mobile</strong>
+              </div>
+              <div>
+                <span className="downloads-meta-label">Android APK</span>
+                <strong>{apkLabel}</strong>
+              </div>
+            </div>
           </div>
-          <div className="apps-apk-meta">
-            <span className="apps-apk-label">Android APK</span>
-            <span className="apps-apk-version">{apkLabel}</span>
-          </div>
-          <p className="apps-muted">
-            Android installs may require enabling “Install unknown apps” for your browser.
-          </p>
-        </section>
 
-        <section className="pwa-section apps-downloads" id="downloads">
-          <p className="pwa-label">Downloads</p>
-          <div className="apps-download-grid">
-            <article className="apps-download-card">
-              <div>
-                <h3>Windows video call app</h3>
-                <p>
-                  Standalone video call app for Windows (video only) with auto-updates built
-                  in.
-                </p>
-              </div>
-              <div className="apps-download-actions">
-                <a className="pwa-button secondary" href={desktopAppUrl} download>
-                  Download .exe
+          <div className="downloads-hero__panel">
+            <div className="downloads-panel">
+              <h3>Quick start</h3>
+              <ol className="downloads-steps">
+                <li>
+                  <span>1</span>
+                  Download YSP Live for Windows.
+                </li>
+                <li>
+                  <span>2</span>
+                  Log in with your Your Social Place account.
+                </li>
+                <li>
+                  <span>3</span>
+                  Start a call or invite your group instantly.
+                </li>
+              </ol>
+            </div>
+            <div className="downloads-panel downloads-panel--accent">
+              <h3>Install the web app</h3>
+              <p>{installHint}</p>
+              <div className="downloads-panel__actions">
+                <button
+                  className="downloads-button primary"
+                  type="button"
+                  onClick={handleInstall}
+                  disabled={!installPrompt || isStandalone}
+                >
+                  {installButtonLabel}
+                </button>
+                <a className="downloads-button secondary" href={apkUrl} download>
+                  Download Android APK
                 </a>
-                <span className="apps-download-meta">Best for Windows 10/11</span>
               </div>
-            </article>
-
-            <article className="apps-download-card">
-              <div>
-                <h3>Windows control helper</h3>
-                <p>
-                  Enables approved screen control during calls. Only needed for screen
-                  control sessions.
-                </p>
-              </div>
-              <div className="apps-download-actions">
-                <a className="pwa-button secondary" href={windowsHelperUrl} download>
-                  Download helper
-                </a>
-                <span className="apps-download-meta">Required for Windows control</span>
-              </div>
-            </article>
-
-            <article className="apps-download-card">
-              <div>
-                <h3>Android APK</h3>
-                <p>Manual install package for Android devices.</p>
-              </div>
-              <div className="apps-download-actions">
-                <a className="pwa-button secondary" href={apkUrl} download>
-                  Download APK
-                </a>
-                <span className="apps-download-meta">{apkLabel}</span>
-              </div>
-            </article>
-
-            {msixUrl ? (
-              <article className="apps-download-card">
-                <div>
-                  <h3>Windows MSIX</h3>
-                  <p>Install the Windows app package for managed devices or Store.</p>
-                </div>
-                <div className="apps-download-actions">
-                  <a className="pwa-button secondary" href={msixUrl} download>
-                    Download MSIX
-                  </a>
-                  <span className="apps-download-meta">Managed deployment</span>
-                </div>
-              </article>
-            ) : null}
+              <p className="downloads-panel__hint">
+                Android installs may require enabling “Install unknown apps” for your
+                browser.
+              </p>
+            </div>
           </div>
         </section>
 
-        <div className="apps-grid">
-          <section className="pwa-section apps-panel">
-            <p className="pwa-label">Android</p>
-            <ul className="apps-steps">
-              <li>
-                <span className="apps-step-number">1.</span>
-                <span>Open the site in Chrome or Samsung Internet.</span>
-              </li>
-              <li>
-                <span className="apps-step-number">2.</span>
-                <span>Tap “Install app” or the browser install prompt.</span>
-              </li>
-              <li>
-                <span className="apps-step-number">3.</span>
-                <span>Prefer APK? Use the download link above.</span>
-              </li>
-            </ul>
-          </section>
+        <section id="downloads" className="downloads-grid">
+          <article className="downloads-card downloads-card--featured">
+            <div>
+              <div className="downloads-card__title">
+                <h2>YSP Live (Windows)</h2>
+                <span className="downloads-chip">Recommended</span>
+              </div>
+              <p>
+                Standalone Windows app focused on video calls and screen sharing without the
+                rest of the social feed.
+              </p>
+              <ul className="downloads-list">
+                <li>Video-only experience</li>
+                <li>Optimized for accountability calls</li>
+                <li>Works with Your Social Place login</li>
+              </ul>
+            </div>
+            <div className="downloads-card__actions">
+              <a className="downloads-button primary" href={desktopAppUrl} download>
+                Download
+              </a>
+              <span className="downloads-meta-note">Windows 10/11</span>
+            </div>
+          </article>
 
-          <section className="pwa-section apps-panel">
-            <p className="pwa-label">Windows</p>
-            <ul className="apps-steps">
-              <li>
-                <span className="apps-step-number">1.</span>
-                <span>Open the site in Edge or Chrome.</span>
-              </li>
-              <li>
-                <span className="apps-step-number">2.</span>
-                <span>Click the install icon in the address bar.</span>
-              </li>
-              <li>
-                <span className="apps-step-number">3.</span>
-                <span>The app will appear in the Start menu.</span>
-              </li>
-            </ul>
-          </section>
+          <article className="downloads-card">
+            <div>
+              <h2>Windows control helper</h2>
+              <p>
+                Enables approved screen control during calls. Only install if you plan to
+                use screen control sessions.
+              </p>
+              <ul className="downloads-list">
+                <li>Required for remote control</li>
+                <li>Works alongside YSP Live</li>
+              </ul>
+            </div>
+            <div className="downloads-card__actions">
+              <a className="downloads-button secondary" href={windowsHelperUrl} download>
+                Download helper
+              </a>
+              <span className="downloads-meta-note">Optional add-on</span>
+            </div>
+          </article>
 
-          <section className="pwa-section apps-panel">
-            <p className="pwa-label">macOS</p>
-            <ul className="apps-steps">
-              <li>
-                <span className="apps-step-number">1.</span>
-                <span>Open the site in Safari 17+ or Chrome.</span>
-              </li>
-              <li>
-                <span className="apps-step-number">2.</span>
-                <span>Safari: File → Add to Dock.</span>
-              </li>
-              <li>
-                <span className="apps-step-number">3.</span>
-                <span>Chrome: use the install icon in the address bar.</span>
-              </li>
-            </ul>
-          </section>
+          <article className="downloads-card">
+            <div>
+              <h2>Android APK</h2>
+              <p>Manual install package for Android devices.</p>
+              <ul className="downloads-list">
+                <li>Install directly on Android</li>
+                <li>Manual updates</li>
+              </ul>
+            </div>
+            <div className="downloads-card__actions">
+              <a className="downloads-button secondary" href={apkUrl} download>
+                Download APK
+              </a>
+              <span className="downloads-meta-note">{apkLabel}</span>
+            </div>
+          </article>
 
-          <section className="pwa-section apps-panel">
-            <p className="pwa-label">iOS & iPadOS</p>
-            <ul className="apps-steps">
-              <li>
-                <span className="apps-step-number">1.</span>
-                <span>Open the site in Safari.</span>
-              </li>
-              <li>
-                <span className="apps-step-number">2.</span>
-                <span>Tap Share → Add to Home Screen.</span>
-              </li>
-              <li>
-                <span className="apps-step-number">3.</span>
-                <span>Launch from your home screen like a native app.</span>
-              </li>
-            </ul>
-          </section>
-        </div>
+          {msixUrl ? (
+            <article className="downloads-card">
+              <div>
+                <h2>Windows MSIX</h2>
+                <p>Install the Windows app package for managed devices or Store use.</p>
+                <ul className="downloads-list">
+                  <li>Managed deployments</li>
+                  <li>Enterprise-ready packaging</li>
+                </ul>
+              </div>
+              <div className="downloads-card__actions">
+                <a className="downloads-button secondary" href={msixUrl} download>
+                  Download MSIX
+                </a>
+                <span className="downloads-meta-note">Managed installs</span>
+              </div>
+            </article>
+          ) : null}
+        </section>
 
-        <section className="pwa-section apps-update">
-          <p className="pwa-label">Updates</p>
-          <div className="pwa-value">
-            Web and PWA updates ship automatically whenever we deploy. Android APK
-            installs require a fresh download unless distributed through Google Play
-            or managed device tools.
+        <section className="downloads-guides">
+          <header className="downloads-guides__header">
+            <h2>Install guides</h2>
+            <p>Step-by-step help for installing the Your Social Place web app.</p>
+          </header>
+          <div className="downloads-guides__grid">
+            <article className="downloads-guide-card">
+              <h3>Windows (PWA)</h3>
+              <ol className="downloads-steps">
+                <li>
+                  <span>1</span>
+                  Open the site in Edge or Chrome.
+                </li>
+                <li>
+                  <span>2</span>
+                  Click the install icon in the address bar.
+                </li>
+                <li>
+                  <span>3</span>
+                  Launch from the Start menu.
+                </li>
+              </ol>
+            </article>
+
+            <article className="downloads-guide-card">
+              <h3>macOS</h3>
+              <ol className="downloads-steps">
+                <li>
+                  <span>1</span>
+                  Open in Safari 17+ or Chrome.
+                </li>
+                <li>
+                  <span>2</span>
+                  Safari: File → Add to Dock.
+                </li>
+                <li>
+                  <span>3</span>
+                  Chrome: use the install icon in the address bar.
+                </li>
+              </ol>
+            </article>
+
+            <article className="downloads-guide-card">
+              <h3>iOS & iPadOS</h3>
+              <ol className="downloads-steps">
+                <li>
+                  <span>1</span>
+                  Open the site in Safari.
+                </li>
+                <li>
+                  <span>2</span>
+                  Tap Share → Add to Home Screen.
+                </li>
+                <li>
+                  <span>3</span>
+                  Launch from your home screen like a native app.
+                </li>
+              </ol>
+            </article>
+
+            <article className="downloads-guide-card">
+              <h3>Android</h3>
+              <ol className="downloads-steps">
+                <li>
+                  <span>1</span>
+                  Open the site in Chrome or Samsung Internet.
+                </li>
+                <li>
+                  <span>2</span>
+                  Tap “Install app” or the browser install prompt.
+                </li>
+                <li>
+                  <span>3</span>
+                  Prefer APK? Use the download button above.
+                </li>
+              </ol>
+            </article>
           </div>
+        </section>
+
+        <section className="downloads-support">
+          <div>
+            <h2>Updates & deployment</h2>
+            <p>
+              Web and PWA updates ship automatically whenever we deploy. Android APK installs
+              require a fresh download unless distributed through Google Play or managed
+              device tools.
+            </p>
+          </div>
+          <a className="downloads-button secondary" href="/">
+            Back home
+          </a>
         </section>
       </div>
     </div>
