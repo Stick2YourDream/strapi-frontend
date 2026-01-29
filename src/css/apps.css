@@ -54,6 +54,49 @@
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
 }
 
+.apps-downloads {
+  gap: 14px;
+}
+
+.apps-download-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.apps-download-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 16px;
+  background: rgba(10, 20, 40, 0.6);
+  border: 1px solid rgba(148, 197, 255, 0.15);
+  box-shadow: 0 18px 35px rgba(3, 9, 23, 0.35);
+}
+
+.apps-download-card h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  color: #eef3ff;
+}
+
+.apps-download-card p {
+  margin: 0;
+  color: #c8d0e2;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.apps-download-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.apps-download-meta {
+  font-size: 12px;
+  color: #9aa3b5;
+}
+
 .apps-panel {
   display: grid;
   gap: 10px;

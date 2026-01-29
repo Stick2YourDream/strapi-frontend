@@ -24,17 +24,66 @@ export default function Login() {
   const [verifying, setVerifying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [debugDetails, setDebugDetails] = useState<string | null>(null);
+  const { login } = useAuth();
+  const navigate = useNavigate();
+  const appMode = String(import.meta.env.VITE_APP_MODE || "").toLowerCase();
+  const isVideoApp = appMode === "video";
+  const showDebug = isVideoApp || import.meta.env.DEV;
+  const brandName = String(import.meta.env.VITE_APP_NAME || "").trim() || "Your Social Place";
   usePageMeta({
-    title: "Login | Your Social Place",
-    description:
-      "Log in to Your Social Place to share progress updates and stay accountable with your support network.",
+    title: `Login | ${isVideoApp ? brandName : "Your Social Place"}`,
+    description: isVideoApp
+      ? `Log in to start your ${brandName} video calls.`
+      : "Log in to Your Social Place to share progress updates and stay accountable with your support network.",
     type: "website",
     robots: "noindex, nofollow",
   });
-
-  const { login } = useAuth();
-  const navigate = useNavigate();
+  const postLoginPath = isVideoApp ? "/call" : "/dashboard";
   const isVerificationStep = Boolean(challengeId);
+
+  const buildDebugDetails = (err: unknown) => {
+    if (!axios.isAxiosError(err)) {
+      return String(err || "Unknown error");
+    }
+
+    const status = err.response?.status ?? "n/a";
+    const method = String(err.config?.method || "").toUpperCase() || "n/a";
+    const baseURL = err.config?.baseURL || "";
+    const url = err.config?.url || "";
+    let fullUrl = url || baseURL || "";
+    if (baseURL && url) {
+      try {
+        fullUrl = new URL(url, baseURL).toString();
+      } catch {
+        fullUrl = `${baseURL}${url}`;
+      }
+    }
+    const origin = typeof window !== "undefined" ? window.location.origin : "n/a";
+    const apiBase = String(import.meta.env.VITE_API_URL || "");
+    const responseData = err.response?.data;
+    const responseText =
+      typeof responseData === "string"
+        ? responseData
+        : responseData
+        ? JSON.stringify(responseData)
+        : "";
+    const hasResponse = Boolean(err.response);
+    const hint = hasResponse
+      ? ""
+      : "No response received (network/CORS/offline or server down).";
+
+    return [
+      `Status: ${status}`,
+      `Request: ${method} ${fullUrl}`,
+      apiBase ? `VITE_API_URL: ${apiBase}` : "VITE_API_URL: (not set)",
+      `App Origin: ${origin}`,
+      hint ? `Hint: ${hint}` : "",
+      responseText ? `Response: ${responseText.slice(0, 600)}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  };
 
   const resetVerificationState = () => {
     setChallengeId(null);
@@ -49,6 +98,7 @@ export default function Login() {
     e.preventDefault();
     setError(null);
     setInfo(null);
+    setDebugDetails(null);
     resetVerificationState();
 
     try {
@@ -94,7 +144,7 @@ export default function Login() {
 
       if ("jwt" in res.data && res.data.jwt) {
         login(res.data.user, res.data.jwt);
-        navigate("/dashboard");
+        navigate(postLoginPath);
         return;
       }
 
@@ -102,6 +152,7 @@ export default function Login() {
     } catch (err: unknown) {
       if (!axios.isAxiosError(err)) {
         setError("Login failed");
+        setDebugDetails(buildDebugDetails(err));
         return;
       }
 
@@ -115,11 +166,13 @@ export default function Login() {
       if (msgLower.includes("not confirmed") || msgLower.includes("confirm your email")) {
         setError("Please confirm your email before logging in.");
         setInfo("Check your inbox (and spam), then try again.");
+        setDebugDetails(buildDebugDetails(err));
         return;
       }
 
       if (msgLower.includes("invalid identifier") || msgLower.includes("invalid password")) {
         setError("Invalid email, phone number, or password.");
+        setDebugDetails(buildDebugDetails(err));
         return;
       }
 
@@ -127,20 +180,24 @@ export default function Login() {
         setError(
           "Phone number required for SMS verification. Update your login phone number in profile settings."
         );
+        setDebugDetails(buildDebugDetails(err));
         return;
       }
 
       if (status === 401) {
         setError("Unauthorized. Please try again.");
+        setDebugDetails(buildDebugDetails(err));
         return;
       }
 
       if (status === 403) {
         setError("Access denied. Your account may be blocked.");
+        setDebugDetails(buildDebugDetails(err));
         return;
       }
 
       setError(msg);
+      setDebugDetails(buildDebugDetails(err));
     } finally {
       setLoginLoading(false);
     }
@@ -150,6 +207,7 @@ export default function Login() {
     e.preventDefault();
     setError(null);
     setInfo(null);
+    setDebugDetails(null);
 
     if (!challengeId) {
       setError("Verification expired. Please log in again.");
@@ -174,10 +232,11 @@ export default function Login() {
       }
 
       login(res.data.user, res.data.jwt);
-      navigate("/dashboard");
+      navigate(postLoginPath);
     } catch (err: unknown) {
       if (!axios.isAxiosError(err)) {
         setError("Verification failed");
+        setDebugDetails(buildDebugDetails(err));
         return;
       }
 
@@ -189,16 +248,19 @@ export default function Login() {
       if (msgLower.includes("expired")) {
         resetVerificationState();
         setError("Verification expired. Please log in again.");
+        setDebugDetails(buildDebugDetails(err));
         return;
       }
 
       if (msgLower.includes("too many")) {
         resetVerificationState();
         setError("Too many attempts. Please log in again.");
+        setDebugDetails(buildDebugDetails(err));
         return;
       }
 
       setError(msg);
+      setDebugDetails(buildDebugDetails(err));
     } finally {
       setVerifying(false);
     }
@@ -208,10 +270,12 @@ export default function Login() {
     if (!challengeId) return;
     if (challengeMethod === "totp") {
       setError("Authenticator codes cannot be resent.");
+      setDebugDetails(null);
       return;
     }
     setError(null);
     setInfo(null);
+    setDebugDetails(null);
     try {
       setResending(true);
       await api.post("/auth/login/resend", { challengeId });
@@ -223,10 +287,12 @@ export default function Login() {
     } catch (err: unknown) {
       if (!axios.isAxiosError(err)) {
         setError("Unable to resend code.");
+        setDebugDetails(buildDebugDetails(err));
         return;
       }
       const data: any = err.response?.data;
       setError(data?.error?.message || data?.message || "Unable to resend code.");
+      setDebugDetails(buildDebugDetails(err));
     } finally {
       setResending(false);
     }
@@ -247,9 +313,11 @@ export default function Login() {
           onClick={() => navigate("/")}
         >
           <span className="auth-brand-mark" aria-hidden="true">
-            <img src="/logo.png" alt="" />
+            <img src="/logo2.png" alt="" />
           </span>
-          <span className="auth-brand-text">Your Social Place</span>
+          <span className="auth-brand-text">
+            {isVideoApp ? brandName : "Your Social Place"}
+          </span>
         </button>
         <h1 className="subhead-top">Welcome back!</h1>
         <p className="subhead">
@@ -338,6 +406,12 @@ export default function Login() {
 
         {error && <p className="auth-message error">{error}</p>}
         {info && <p className="auth-message info">{info}</p>}
+        {showDebug && debugDetails && (
+          <details className="auth-debug">
+            <summary>Show error details</summary>
+            <pre>{debugDetails}</pre>
+          </details>
+        )}
 
         <div className="auth-actions">
           <button
@@ -355,13 +429,24 @@ export default function Login() {
           </button>
           {!isVerificationStep && (
             <>
-              <button
-                type="button"
-                className="btn ghost"
-                onClick={() => navigate("/register")}
-              >
-                Register with Your Social Place
-              </button>
+              {!isVideoApp ? (
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={() => navigate("/register")}
+                >
+                  Register with Your Social Place
+                </button>
+              ) : (
+                <a
+                  className="btn ghost"
+                  href="https://yoursocialplace.com/register"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Create a new account online
+                </a>
+              )}
               <button
                 type="button"
                 className="btn ghost"

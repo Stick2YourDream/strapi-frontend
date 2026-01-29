@@ -29,7 +29,7 @@ import { sanitizePostText } from "../utils/emoji";
 import api from "../api/strapi";
 import callRingtoneUrl from "../assets/call.mp3";
 import holdMusicUrl from "../assets/on_hold.mp3";
-import messageSoundUrl from "../assets/notificationsoundeffect.mp3";
+import messageSoundUrl from "../assets/notification_sound.mp3";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faBolt,
@@ -746,6 +746,9 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     const resolved = override || apiBase;
     return resolved.replace(/\/$/, "");
   }, [apiBase]);
+  const desktopBridge =
+    typeof window !== "undefined" ? window.yspDesktop ?? null : null;
+  const isDesktopApp = Boolean(desktopBridge?.isAvailable);
   const isWindows = useMemo(() => {
     if (typeof navigator === "undefined") return false;
     return /Win/i.test(navigator.userAgent || "");
@@ -1590,8 +1593,29 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
       }
       document.exitFullscreen().catch(() => undefined);
     }
-    node.requestFullscreen?.().catch(() => undefined);
-  }, []);
+    const requestFullscreen =
+      (node as any).requestFullscreen ||
+      (node as any).webkitRequestFullscreen ||
+      (node as any).mozRequestFullScreen ||
+      (node as any).msRequestFullscreen;
+    if (requestFullscreen) {
+      try {
+        const result = requestFullscreen.call(node);
+        if (result && typeof result.catch === "function") {
+          result.catch(() => {
+            document.documentElement.requestFullscreen?.().catch(() => undefined);
+            desktopBridge?.toggleFullScreen?.();
+          });
+        }
+        return;
+      } catch {
+        // fall through to fallback
+      }
+    }
+
+    document.documentElement.requestFullscreen?.().catch(() => undefined);
+    desktopBridge?.toggleFullScreen?.();
+  }, [desktopBridge]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -2097,11 +2121,11 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     return fallback;
   };
 
-  const generateControlHelperCode = useCallback(async () => {
+  const generateControlHelperCode = useCallback(async (): Promise<string | null> => {
     if (!activeRoomId) {
       setControlHelperStatus("error");
       setControlHelperError("Start a call before enabling Windows control.");
-      return;
+      return null;
     }
     setControlHelperStatus("loading");
     setControlHelperError(null);
@@ -2117,12 +2141,15 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
         apiUrl: controlHelperApiBase,
       });
       const encoded = window.btoa(payload);
-      setControlHelperCode(`YSP-CTRL:${encoded}`);
+      const nextCode = `YSP-CTRL:${encoded}`;
+      setControlHelperCode(nextCode);
       setControlHelperStatus("ready");
+      return nextCode;
     } catch (err) {
       setControlHelperStatus("error");
       setControlHelperError(getControlHelperErrorMessage(err));
       console.warn("Failed to generate control helper code.", err);
+      return null;
     }
   }, [activeRoomId, controlHelperApiBase]);
 
@@ -2136,6 +2163,18 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
       setControlHelperCopied(false);
     }
   }, [controlHelperCode]);
+
+  const handleOpenHelper = useCallback(async () => {
+    if (!desktopBridge?.openHelper) return;
+    let code = controlHelperCode;
+    if (!code) {
+      code = (await generateControlHelperCode()) || "";
+    }
+    await desktopBridge.openHelper({
+      code,
+      autoConnect: Boolean(code),
+    });
+  }, [controlHelperCode, desktopBridge, generateControlHelperCode]);
 
   const closeControlHelper = useCallback(() => {
     setShowControlHelper(false);
@@ -4437,14 +4476,24 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                 your PC so approved controllers can move the real mouse and type.
               </p>
               <div className="video-control-helper-actions">
-                <a
-                  className="btn ghost"
-                  href={windowsHelperDownloadUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Download helper
-                </a>
+                {isDesktopApp ? (
+                  <button
+                    type="button"
+                    className="btn ghost"
+                    onClick={() => void handleOpenHelper()}
+                  >
+                    Open helper
+                  </button>
+                ) : (
+                  <a
+                    className="btn ghost"
+                    href={windowsHelperDownloadUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Download helper
+                  </a>
+                )}
                 <button
                   type="button"
                   className="btn ghost"
@@ -4472,8 +4521,16 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                 <p className="video-control-helper-error">{controlHelperError}</p>
               )}
               <div className="video-control-helper-steps">
-                <span>1. Download the Your Social Place Windows Helper.</span>
-                <span>2. Paste this code into the helper and connect.</span>
+                <span>
+                  {isDesktopApp
+                    ? "1. Open the Windows Helper from the desktop app."
+                    : "1. Download the Your Social Place Windows Helper."}
+                </span>
+                <span>
+                  {isDesktopApp
+                    ? "2. The connection code will be sent to the helper."
+                    : "2. Paste this code into the helper and connect."}
+                </span>
                 <span>3. Approve control requests inside the call.</span>
                 <span>Tip: Share your full screen for the most accurate control.</span>
               </div>

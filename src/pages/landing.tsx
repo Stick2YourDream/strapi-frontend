@@ -668,6 +668,13 @@ export default function Landing() {
                     <button
                       type="button"
                       className="landing-profile-item"
+                      onClick={() => handleProfileAction("/downloads")}
+                    >
+                      Downloads
+                    </button>
+                    <button
+                      type="button"
+                      className="landing-profile-item"
                       onClick={() => {
                         logout();
                         setProfileMenuOpen(false);

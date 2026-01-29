@@ -9,6 +9,13 @@ const api = axios.create({
 });
 
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+  const baseUrl = String(config.baseURL || "").trim();
+  const rawUrl = String(config.url || "").trim();
+  if (baseUrl && /\/api\/?$/i.test(baseUrl) && rawUrl.startsWith("/")) {
+    // Keep /api prefix when callers use leading slashes in endpoints.
+    config.url = rawUrl.replace(/^\/+/, "");
+  }
+
   const token = localStorage.getItem("token");
   const url = config.url || "";
   const path = url.split("?")[0];

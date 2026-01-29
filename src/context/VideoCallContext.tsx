@@ -1333,7 +1333,15 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         setError(null);
         return;
       }
-      setError("Unable to start screen sharing.");
+      const message = (error as Error)?.message;
+      const detail = [name, message].filter(Boolean).join(": ");
+      const isDesktop =
+        typeof window !== "undefined" && Boolean((window as any).yspDesktop?.isAvailable);
+      setError(
+        isDesktop && detail
+          ? `Unable to start screen sharing (${detail}).`
+          : "Unable to start screen sharing."
+      );
     }
   }, [attachScreenShareTrack, stopScreenShare]);
 

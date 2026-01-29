@@ -927,6 +927,13 @@ export default function Sidebar({
                   <button
                     className="btn ghost nav-btn sidebar-profile-menu-button"
                     type="button"
+                    onClick={() => handleProfileAction("/downloads")}
+                  >
+                    Downloads
+                  </button>
+                  <button
+                    className="btn ghost nav-btn sidebar-profile-menu-button"
+                    type="button"
                     onClick={() => {
                       logout();
                       navigate("/login");

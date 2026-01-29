@@ -10,7 +10,12 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+dist-ssg
+dist-video
 *.local
+
+# Downloaded/packaged installers
+public/downloads/**/*.exe
 
 # Editor directories and files
 .vscode/*

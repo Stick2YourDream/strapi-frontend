@@ -29,6 +29,7 @@ import WhatMakesUsDifferent from "../pages/what-makes-us-different";
 import Moderation from "../pages/moderation";
 import News from "../pages/news";
 import Apps from "../pages/apps";
+import Downloads from "../pages/downloads";
 
 export default function AppRoutes(): JSX.Element {
   const { user, appSettings } = useAuth();
@@ -57,6 +58,7 @@ export default function AppRoutes(): JSX.Element {
       <Route path="/report" element={<Report />} />
       <Route path="/what-makes-us-different" element={<WhatMakesUsDifferent />} />
       <Route path="/apps" element={<Apps />} />
+      <Route path="/downloads" element={<Downloads />} />
       <Route path="/share" element={<ShareTarget />} />
       <Route path="/protocol" element={<ProtocolHandler />} />
       <Route path="/notes/new" element={<NewNote />} />

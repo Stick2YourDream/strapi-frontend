@@ -9,7 +9,7 @@ import {
   type ProfileVisibility,
   type VisibilityLevel,
 } from "../utils/profile-e2ee";
-import notificationSoundUrl from "../assets/notificationsoundeffect.mp3";
+import notificationSoundUrl from "../assets/notification_sound.mp3";
 import { syncPushSubscription } from "../utils/push-notifications";
 
 type NotificationCounts = {

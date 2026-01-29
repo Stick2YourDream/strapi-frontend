@@ -46,15 +46,8 @@ export default function SiteFooter() {
         </div>
         <div className="footer-column footer-apps">
           <span className="footer-title">Apps</span>
-          <a className="footer-app-badge" href="/apps">
-            Install the Web App
-          </a>
-          <a
-            className="footer-app-badge secondary"
-            href="/downloads/yoursocialplace-android.apk"
-            download
-          >
-            Get Android App
+          <a className="footer-app-badge" href="/downloads">
+            Downloads
           </a>
         </div>
         <div className="footer-column footer-contact">
