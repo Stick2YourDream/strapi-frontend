@@ -1,5 +1,6 @@
 // src/pages/Friends.tsx
 import { useEffect, useMemo, useState, useRef, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import "../css/dashboard.css";
 import "../css/friends.css";
@@ -63,11 +64,17 @@ type FriendProfile = {
   userId?: number;
   firstName?: string;
   lastName?: string;
+  age?: string;
+  birthday?: string;
+  gender?: string;
   religion?: string;
   hobbies?: string;
   country?: string;
   state?: string;
   city?: string;
+  occupation?: string;
+  phone?: string;
+  showPhoneOnProfile?: boolean;
   avatarUrl?: string;
   profileVisibility?: ProfileVisibility;
   privacySettings?: PrivacySettings;
@@ -106,8 +113,6 @@ type UserActionEntry = {
   recordId: number | string;
 };
 
-type ReportReason = "spam" | "harassment" | "hate" | "impersonation" | "other";
-
 const extractFirstUrl = (text: string) => {
   const match = String(text || "").match(/(https?:\/\/[^\s]+|www\.[^\s]+)/i);
   if (!match) return "";
@@ -121,6 +126,14 @@ const hostnameFor = (value: string) => {
     return new URL(value).hostname.replace(/^www\./, "");
   } catch {
     return value;
+  }
+};
+const faviconFor = (value: string) => {
+  try {
+    const host = new URL(value).hostname.replace(/^www\./, "");
+    return `https://www.google.com/s2/favicons?domain=${host}&sz=128`;
+  } catch {
+    return "";
   }
 };
 
@@ -242,6 +255,8 @@ const LinkPreviewCard = ({
     safePreview.title || safePreview.siteName || hostnameFor(url);
   const meta = safePreview.siteName || hostnameFor(url);
   const showBadge = safePreview.type === "video" || isYoutubeUrl(url);
+  const fallbackImage = safePreview.image || faviconFor(url);
+  const hasImage = Boolean(fallbackImage);
   return (
     <a
       className={`link-preview-card${compact ? " is-compact" : ""}`}
@@ -250,8 +265,14 @@ const LinkPreviewCard = ({
       rel="noreferrer"
     >
       <div className="link-preview-media">
-        {safePreview.image ? (
-          <img src={safePreview.image} alt={title} loading="lazy" decoding="async" />
+        {hasImage ? (
+          <img
+            src={fallbackImage}
+            alt={title}
+            loading="lazy"
+            decoding="async"
+            className={safePreview.image ? "" : "is-favicon"}
+          />
         ) : (
           <div className="link-preview-placeholder">LINK</div>
         )}
@@ -284,6 +305,7 @@ export default function Friends() {
   const { openChat } = useChat();
   const { openCallComposer, onlineUserIds, setPresenceTargets } = useVideoCall();
   const { getBackgroundStyle } = useUserPreferences();
+  const navigate = useNavigate();
   usePageMeta({
     title: "Friends | Your Social Place",
     description:
@@ -328,15 +350,10 @@ export default function Friends() {
   const [error, setError] = useState<string | null>(null);
   const [blockEntries, setBlockEntries] = useState<UserActionEntry[]>([]);
   const [muteEntries, setMuteEntries] = useState<UserActionEntry[]>([]);
-  const [actionBusy, setActionBusy] = useState<"block" | "mute" | "report" | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [activePost, setActivePost] = useState<FriendPost | null>(null);
   const [copyToast, setCopyToast] = useState<string | null>(null);
-  const [reportOpen, setReportOpen] = useState(false);
-  const [reportReason, setReportReason] = useState<ReportReason>("other");
-  const [reportDetails, setReportDetails] = useState("");
-  const [reportError, setReportError] = useState<string | null>(null);
   const [trustedCircles, setTrustedCircles] = useState<TrustedCircle[]>([]);
   const [activeTrustedCircleId, setActiveTrustedCircleId] = useState<number | null>(
     null
@@ -988,6 +1005,8 @@ export default function Friends() {
               payload.activityVisibility,
               "public"
             );
+            const showPhoneOnProfile =
+              typeof attrs.showPhoneOnProfile === "boolean" ? attrs.showPhoneOnProfile : false;
             const relation = relationByUserId.get(friendUserId);
             const isFavorite =
               relation?.requesterId === user.id
@@ -998,6 +1017,17 @@ export default function Friends() {
               userId: friendUserId,
               firstName: payload.firstName || "",
               lastName: payload.lastName || "",
+              age: payload.age || "",
+              birthday: payload.birthday || "",
+              gender: payload.gender || "",
+              religion: payload.religion || "",
+              country: payload.country || "",
+              state: payload.state || "",
+              city: payload.city || "",
+              hobbies: payload.hobbies || "",
+              occupation: payload.occupation || "",
+              phone: payload.phone || "",
+              showPhoneOnProfile,
               handle: attrs.handle || `user-${p.id ?? attrs.documentId}`,
               bio: payload.bio || "",
               avatarUrl: pickMediaUrl(attrs.avatar, { kind: "avatar" }),
@@ -1180,8 +1210,6 @@ export default function Friends() {
 
   useEffect(() => {
     setActionNotice(null);
-    setReportError(null);
-    setReportOpen(false);
   }, [selectedFriendId]);
 
   const selectedFriend = useMemo(() => {
@@ -1442,102 +1470,17 @@ export default function Friends() {
     }
   };
 
+  const handleShowProfile = () => {
+    if (!selectedFriend?.userId) return;
+    navigate(`/friends/${selectedFriend.userId}`);
+  };
+
   const handleShowAllPosts = () => {
     if (!selectedFriend?.userId || !canViewPosts) return;
-    setShowAllPosts(true);
-    if (allPostsRef.current) {
+    const shouldOpen = !showAllPosts;
+    setShowAllPosts(shouldOpen);
+    if (shouldOpen && allPostsRef.current) {
       allPostsRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  };
-
-  const handleToggleBlock = async () => {
-    const targetId = selectedFriend?.userId;
-    if (!targetId) return;
-    setActionError(null);
-    setActionNotice(null);
-    setActionBusy("block");
-    try {
-      if (blockedEntry) {
-        await api.delete(`/user-blocks/${blockedEntry.recordId}`);
-        setBlockEntries((prev) => prev.filter((entry) => entry.userId !== targetId));
-        setActionNotice("User unblocked.");
-      } else {
-        const res = await api.post("/user-blocks", {
-          data: { blocked: targetId },
-        });
-        const created = res.data?.data;
-        const recordId = created?.id ?? created?.documentId;
-        if (recordId) {
-          setBlockEntries((prev) => [...prev, { userId: targetId, recordId }]);
-        }
-        setActionNotice("User blocked.");
-      }
-    } catch (err: unknown) {
-      setActionError(getErrorMessage(err, "Failed to update block."));
-    } finally {
-      setActionBusy(null);
-    }
-  };
-
-  const handleToggleMute = async () => {
-    const targetId = selectedFriend?.userId;
-    if (!targetId) return;
-    setActionError(null);
-    setActionNotice(null);
-    setActionBusy("mute");
-    try {
-      if (mutedEntry) {
-        await api.delete(`/user-mutes/${mutedEntry.recordId}`);
-        setMuteEntries((prev) => prev.filter((entry) => entry.userId !== targetId));
-        setActionNotice("User unmuted.");
-      } else {
-        const res = await api.post("/user-mutes", {
-          data: { muted: targetId },
-        });
-        const created = res.data?.data;
-        const recordId = created?.id ?? created?.documentId;
-        if (recordId) {
-          setMuteEntries((prev) => [...prev, { userId: targetId, recordId }]);
-        }
-        setActionNotice("User muted.");
-      }
-    } catch (err: unknown) {
-      setActionError(getErrorMessage(err, "Failed to update mute."));
-    } finally {
-      setActionBusy(null);
-    }
-  };
-
-  const handleOpenReport = () => {
-    if (!selectedFriend?.userId) return;
-    setReportReason("other");
-    setReportDetails("");
-    setReportError(null);
-    setReportOpen(true);
-  };
-
-  const handleSubmitReport = async () => {
-    const targetId = selectedFriend?.userId;
-    if (!targetId) return;
-    setReportError(null);
-    setActionBusy("report");
-    try {
-      await api.post("/reports", {
-        data: {
-          targetType: "user",
-          targetId: String(targetId),
-          reason: reportReason,
-          details: reportDetails.trim(),
-        },
-      });
-      setReportOpen(false);
-      setReportDetails("");
-      setReportReason("other");
-      setActionNotice("Report submitted.");
-    } catch (err: unknown) {
-      setReportError(getErrorMessage(err, "Failed to submit report."));
-    } finally {
-      setActionBusy(null);
     }
   };
 
@@ -1732,23 +1675,37 @@ export default function Friends() {
                             </span>
                           </span>
                         </button>
-                        <button
-                          className={`friend-favorite-toggle${
-                            friend.favorite ? " is-active" : ""
-                          }`}
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            handleToggleFavorite(friend);
-                          }}
-                          aria-label={
-                            friend.favorite ? "Remove favorite" : "Mark as favorite"
-                          }
-                        >
-                          <span aria-hidden="true">
-                            {friend.favorite ? "★" : "☆"}
-                          </span>
-                        </button>
+                        <div className="friend-mini-actions">
+                          <button
+                            className="friend-profile-btn"
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              if (friend.userId) {
+                                navigate(`/friends/${friend.userId}`);
+                              }
+                            }}
+                          >
+                            Profile
+                          </button>
+                          <button
+                            className={`friend-favorite-toggle${
+                              friend.favorite ? " is-active" : ""
+                            }`}
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleToggleFavorite(friend);
+                            }}
+                            aria-label={
+                              friend.favorite ? "Remove favorite" : "Mark as favorite"
+                            }
+                          >
+                            <span aria-hidden="true">
+                              {friend.favorite ? "★" : "☆"}
+                            </span>
+                          </button>
+                        </div>
                       </div>
                     </li>
                   );
@@ -1860,10 +1817,10 @@ export default function Friends() {
                   <button
                     className="btn ghost"
                     type="button"
-                    onClick={handleShowAllPosts}
-                    disabled={!selectedPosts.length || !canViewPosts}
+                    onClick={handleShowProfile}
+                    disabled={!selectedFriend?.userId}
                   >
-                    See All
+                    Show Profile
                   </button>
                 </div>
                 <div className="friend-media">
@@ -1985,36 +1942,21 @@ export default function Friends() {
                     </div>
                   )}
                 </div>
-                <div className="friend-safety-actions">
-                  <button
-                    className="btn ghost friend-action-muted"
-                    type="button"
-                    onClick={handleToggleMute}
-                    disabled={actionBusy === "mute"}
-                  >
-                    {isMuted ? "Unmute" : "Mute"}
-                  </button>
-                  <button
-                    className="btn ghost friend-action-danger"
-                    type="button"
-                    onClick={handleToggleBlock}
-                    disabled={actionBusy === "block"}
-                  >
-                    {isBlocked ? "Unblock" : "Block"}
-                  </button>
-                  <button
-                    className="btn ghost"
-                    type="button"
-                    onClick={handleOpenReport}
-                    disabled={actionBusy === "report"}
-                  >
-                    Report
-                  </button>
-                </div>
                 {actionError && <p className="status status-error">{actionError}</p>}
                 {actionNotice && <p className="status">{actionNotice}</p>}
                 <div className="comments">
-                  <p className="eyebrow">Most recent posts</p>
+                  <div className="friend-posts-header">
+                    <p className="eyebrow">Most recent posts</p>
+                    {canViewPosts && selectedPosts.length > recentPosts.length && (
+                      <button
+                        className="btn ghost friend-posts-toggle"
+                        type="button"
+                        onClick={handleShowAllPosts}
+                      >
+                        {showAllPosts ? "Hide posts" : "Show all posts"}
+                      </button>
+                    )}
+                  </div>
                   {!canViewPosts ? (
                     <p className="status">
                       {isBlocked
@@ -2478,75 +2420,6 @@ export default function Friends() {
       )}
       {copyToast && <div className="toast success-toast">{copyToast}</div>}
 
-      {reportOpen && selectedFriend && (
-        <div className="friend-report-overlay" role="dialog" aria-modal="true">
-          <div className="friend-report-modal">
-            <div className="friend-report-header">
-              <div>
-                <p className="eyebrow">Report</p>
-                <h3>Report {selectedFriendLabel}</h3>
-                <p className="friend-report-sub">
-                  Help us keep the community safe by sharing the reason.
-                </p>
-              </div>
-              <button
-                className="friend-report-close"
-                type="button"
-                onClick={() => setReportOpen(false)}
-                aria-label="Close report"
-              >
-                Close
-              </button>
-            </div>
-            <div className="friend-report-body">
-              <label className="friend-report-label" htmlFor="report-reason">
-                Reason
-              </label>
-              <select
-                id="report-reason"
-                className="auth-input"
-                value={reportReason}
-                onChange={(e) => setReportReason(e.target.value as ReportReason)}
-              >
-                <option value="spam">Spam</option>
-                <option value="harassment">Harassment</option>
-                <option value="hate">Hate</option>
-                <option value="impersonation">Impersonation</option>
-                <option value="other">Other</option>
-              </select>
-              <label className="friend-report-label" htmlFor="report-details">
-                Details (optional)
-              </label>
-              <textarea
-                id="report-details"
-                className="auth-input friend-report-textarea"
-                rows={4}
-                value={reportDetails}
-                onChange={(e) => setReportDetails(e.target.value)}
-                placeholder="Share context that helps reviewers."
-              />
-              {reportError && <p className="status status-error">{reportError}</p>}
-            </div>
-            <div className="friend-report-actions">
-              <button
-                className="btn ghost"
-                type="button"
-                onClick={() => setReportOpen(false)}
-              >
-                Cancel
-              </button>
-              <button
-                className="btn primary"
-                type="button"
-                onClick={handleSubmitReport}
-                disabled={actionBusy === "report"}
-              >
-                {actionBusy === "report" ? "Sending..." : "Submit report"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       {trustedCircleDeleteOpen && trustedCircleDeleteTarget && (
         <div
           className="trusted-circle-modal__backdrop"

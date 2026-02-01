@@ -252,6 +252,14 @@ const hostnameFor = (value: string) => {
     return value;
   }
 };
+const faviconFor = (value: string) => {
+  try {
+    const host = new URL(value).hostname.replace(/^www\./, "");
+    return `https://www.google.com/s2/favicons?domain=${host}&sz=128`;
+  } catch {
+    return "";
+  }
+};
 
 const isYoutubeUrl = (value: string) => {
   try {
@@ -334,6 +342,8 @@ const LinkPreviewCard = ({
     safePreview.title || safePreview.siteName || hostnameFor(url);
   const meta = safePreview.siteName || hostnameFor(url);
   const showBadge = safePreview.type === "video" || isYoutubeUrl(url);
+  const fallbackImage = safePreview.image || faviconFor(url);
+  const hasImage = Boolean(fallbackImage);
   return (
     <a
       className={`link-preview-card${compact ? " is-compact" : ""}`}
@@ -342,8 +352,14 @@ const LinkPreviewCard = ({
       rel="noreferrer"
     >
       <div className="link-preview-media">
-        {safePreview.image ? (
-          <img src={safePreview.image} alt={title} loading="lazy" decoding="async" />
+        {hasImage ? (
+          <img
+            src={fallbackImage}
+            alt={title}
+            loading="lazy"
+            decoding="async"
+            className={safePreview.image ? "" : "is-favicon"}
+          />
         ) : (
           <div className="link-preview-placeholder">LINK</div>
         )}

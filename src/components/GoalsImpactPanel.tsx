@@ -521,33 +521,6 @@ export default function GoalsImpactPanel({
             {orderedCheckIns.length === 0 && (
               <p className="goals-empty">Your recent check-ins will appear here.</p>
             )}
-            {orderedCheckIns.length > 1 && (
-              <div className="goals-history-controls">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setCheckInIndex(
-                      (prev) => (prev - 1 + orderedCheckIns.length) % orderedCheckIns.length
-                    )
-                  }
-                  aria-label="Previous check-in"
-                >
-                  Prev
-                </button>
-                <span className="goals-history-count">
-                  {checkInIndex + 1} / {orderedCheckIns.length}
-                </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setCheckInIndex((prev) => (prev + 1) % orderedCheckIns.length)
-                  }
-                  aria-label="Next check-in"
-                >
-                  Next
-                </button>
-              </div>
-            )}
             {orderedCheckIns.length > 0 && (
               <div className="goals-panel__history">
                 {orderedCheckIns[checkInIndex] && (
@@ -575,6 +548,34 @@ export default function GoalsImpactPanel({
                       </span>
                       <span>{formatDate(orderedCheckIns[checkInIndex].createdAt)}</span>
                     </div>
+                    {orderedCheckIns.length > 1 && (
+                      <div className="goals-history-controls goals-history-controls--overlay">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCheckInIndex(
+                              (prev) =>
+                                (prev - 1 + orderedCheckIns.length) % orderedCheckIns.length
+                            )
+                          }
+                          aria-label="Previous check-in"
+                        >
+                          Prev
+                        </button>
+                        <span className="goals-history-count">
+                          {checkInIndex + 1} / {orderedCheckIns.length}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCheckInIndex((prev) => (prev + 1) % orderedCheckIns.length)
+                          }
+                          aria-label="Next check-in"
+                        >
+                          Next
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

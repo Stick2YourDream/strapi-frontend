@@ -43,6 +43,15 @@ const parseYouTubeId = (url: string) => {
   return null;
 };
 
+const faviconFor = (value: string) => {
+  try {
+    const host = new URL(value).hostname.replace(/^www\./, "");
+    return `https://www.google.com/s2/favicons?domain=${host}&sz=128`;
+  } catch {
+    return "";
+  }
+};
+
 const getDisplayName = (handle?: string, firstName?: string, lastName?: string) => {
   const name = `${firstName || ""} ${lastName || ""}`.trim();
   return name || (handle ? `@${handle}` : "Friend");
@@ -649,7 +658,9 @@ export default function ChatDock() {
                     </div>
                     {extractLinks(m.body).map((url) => {
                       const meta = linkMeta[url];
-                      const thumb = meta?.thumb;
+                      const fallbackIcon = faviconFor(url);
+                      const image = meta?.thumb || fallbackIcon;
+                      const isFavicon = !meta?.thumb && Boolean(image);
                       const title = meta?.title || url.replace(/^https?:\/\//, "");
                       return (
                         <div
@@ -662,16 +673,41 @@ export default function ChatDock() {
                             background: "rgba(255,255,255,0.03)",
                           }}
                         >
-                          {thumb && (
-                            <a href={url} target="_blank" rel="noreferrer" style={{ display: "block" }}>
+                          {image ? (
+                            <a
+                              href={url}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{ display: "block" }}
+                            >
                               <img
-                                src={thumb}
+                                src={image}
                                 alt={title}
-                                style={{ width: "100%", height: "auto", display: "block" }}
+                                style={{
+                                  width: "100%",
+                                  height: isFavicon ? "120px" : "auto",
+                                  objectFit: isFavicon ? "contain" : "cover",
+                                  display: "block",
+                                  padding: isFavicon ? "16px" : undefined,
+                                  background: isFavicon ? "rgba(8,12,20,0.45)" : undefined,
+                                }}
                                 loading="lazy"
                                 decoding="async"
                               />
                             </a>
+                          ) : (
+                            <div
+                              style={{
+                                height: "120px",
+                                display: "grid",
+                                placeItems: "center",
+                                color: "#94a3b8",
+                                fontWeight: 700,
+                                letterSpacing: "0.2em",
+                              }}
+                            >
+                              LINK
+                            </div>
                           )}
                           <div style={{ padding: "8px 10px" }}>
                             <a

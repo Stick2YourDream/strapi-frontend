@@ -264,6 +264,49 @@
   flex: 1;
 }
 
+.register-contact-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.register-phone-code {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: #e9ecf5;
+  font-weight: 600;
+}
+
+.register-phone-code-value {
+  min-width: 44px;
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+
+.register-code-edit {
+  padding: 6px 10px;
+  font-size: 12px;
+  border-radius: 999px;
+}
+
+.register-phone-input {
+  min-width: 0;
+}
+
+.register-code-select {
+  margin-top: 8px;
+}
+
+.register-code-select .auth-input {
+  width: 100%;
+}
+
 .sms-send {
   white-space: nowrap;
 }
@@ -614,6 +657,14 @@ select.auth-input option {
   .field-row {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .register-contact-row {
+    grid-template-columns: 1fr;
+  }
+
+  .register-phone-code {
+    justify-content: space-between;
   }
 
   .sms-send {

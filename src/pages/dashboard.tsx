@@ -359,18 +359,91 @@ const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
 const MAX_UPLOAD_LABEL = "1 GB";
 const MAX_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024;
 const MAX_VIDEO_UPLOAD_LABEL = "100 MB";
+const URL_REGEX =
+  /\b((?:https?:\/\/)?(?:www\.)?(?:(?:[a-z0-9-]+\.)+[a-z]{2,}|localhost|\d{1,3}(?:\.\d{1,3}){3})(?::\d{2,5})?)(?:\/[^\s]*)?/gi;
+const TRAILING_PUNCTUATION = /[),.!?]+$/;
+const normalizeLink = (raw: string) => {
+  const cleaned = raw.replace(TRAILING_PUNCTUATION, "");
+  const hasProtocol = /^https?:\/\//i.test(cleaned);
+  if (hasProtocol) {
+    return { cleaned, href: cleaned };
+  }
+  const isLocalhost = /^(?:www\.)?localhost(?::\d+)?(?:\/|$)/i.test(cleaned);
+  const isIpv4 = /^(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?(?:\/|$)/.test(cleaned);
+  const protocol = isLocalhost || isIpv4 ? "http" : "https";
+  const href = cleaned.startsWith("www.")
+    ? `${protocol}://${cleaned}`
+    : `${protocol}://${cleaned}`;
+  return { cleaned, href };
+};
 const extractFirstUrl = (text: string) => {
-  const match = text.match(/(https?:\/\/[^\s]+|www\.[^\s]+)/i);
-  if (!match) return "";
-  let url = match[0].replace(/[),.!?]+$/, "");
-  if (url.startsWith("www.")) url = `https://${url}`;
-  return url;
+  const safeText = String(text || "");
+  if (!safeText) return "";
+  const matches = Array.from(safeText.matchAll(URL_REGEX));
+  for (const match of matches) {
+    const raw = match[0];
+    const start = match.index ?? 0;
+    const prevChar = start > 0 ? safeText[start - 1] : "";
+    if (prevChar === "@") continue;
+    return normalizeLink(raw).href;
+  }
+  return "";
+};
+const linkifyText = (text: string) => {
+  const safeText = String(text || "");
+  if (!safeText) return "";
+  const matches = Array.from(safeText.matchAll(URL_REGEX));
+  if (!matches.length) return safeText;
+  const nodes: Array<string | JSX.Element> = [];
+  let lastIndex = 0;
+  matches.forEach((match, index) => {
+    const raw = match[0];
+    const start = match.index ?? 0;
+    if (start > lastIndex) {
+      nodes.push(safeText.slice(lastIndex, start));
+    }
+    const prevChar = start > 0 ? safeText[start - 1] : "";
+    if (prevChar === "@") {
+      nodes.push(raw);
+      lastIndex = start + raw.length;
+      return;
+    }
+    const { cleaned, href } = normalizeLink(raw);
+    const suffix = raw.slice(cleaned.length);
+    nodes.push(
+      <a
+        key={`${href}-${start}-${index}`}
+        href={href}
+        target="_blank"
+        rel="noreferrer noopener"
+        onClick={(event) => event.stopPropagation()}
+      >
+        {cleaned}
+      </a>
+    );
+    if (suffix) {
+      nodes.push(suffix);
+    }
+    lastIndex = start + raw.length;
+  });
+  if (lastIndex < safeText.length) {
+    nodes.push(safeText.slice(lastIndex));
+  }
+  return nodes;
 };
 const hostnameFor = (value: string) => {
   try {
     return new URL(value).hostname.replace(/^www\./, "");
   } catch {
     return value;
+  }
+};
+const faviconFor = (value: string) => {
+  try {
+    const host = new URL(value).hostname.replace(/^www\./, "");
+    return `https://www.google.com/s2/favicons?domain=${host}&sz=128`;
+  } catch {
+    return "";
   }
 };
 const isYoutubeUrl = (value: string) => {
@@ -604,6 +677,8 @@ const LinkPreviewCard = ({
   const title = preview.title || preview.siteName || hostnameFor(url);
   const meta = preview.siteName || hostnameFor(url);
   const showBadge = preview.type === "video" || isYoutubeUrl(url);
+  const fallbackImage = preview.image || faviconFor(url);
+  const hasImage = Boolean(fallbackImage);
   return (
     <a
       className={`link-preview-card${compact ? " is-compact" : ""}`}
@@ -612,8 +687,13 @@ const LinkPreviewCard = ({
       rel="noreferrer"
     >
       <div className="link-preview-media">
-        {preview.image ? (
-          <img src={preview.image} alt={title} loading="lazy" />
+        {hasImage ? (
+          <img
+            src={fallbackImage}
+            alt={title}
+            loading="lazy"
+            className={preview.image ? "" : "is-favicon"}
+          />
         ) : (
           <div className="link-preview-placeholder">LINK</div>
         )}
@@ -3330,7 +3410,7 @@ export default function Dashboard() {
                     {(() => {
                       const structured = parseStructuredPost(post.content, post.signalTag);
                       if (!structured) {
-                        return <p>{post.content}</p>;
+                        return <p className="post-body-text">{linkifyText(post.content)}</p>;
                       }
                       return (
                         <div className="post-structured">
@@ -3531,7 +3611,7 @@ export default function Dashboard() {
                     {(() => {
                       const structured = parseStructuredPost(post.content, post.signalTag);
                       if (!structured) {
-                        return <p>{post.content}</p>;
+                        return <p className="post-body-text">{linkifyText(post.content)}</p>;
                       }
                       return (
                         <div className="post-structured">
@@ -4244,7 +4324,9 @@ export default function Dashboard() {
                     activePost.signalTag
                   );
                   if (!structured) {
-                    return <p>{activePost.content}</p>;
+                    return (
+                      <p className="post-body-text">{linkifyText(activePost.content)}</p>
+                    );
                   }
                   return (
                     <div className="post-structured">

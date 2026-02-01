@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
   type CSSProperties,
   type KeyboardEvent,
   type KeyboardEventHandler,
@@ -12,6 +13,7 @@ import {
   type PointerEvent,
   type PointerEventHandler,
   type Ref,
+  type ReactNode,
   type WheelEvent,
   type WheelEventHandler,
 } from "react";
@@ -33,9 +35,9 @@ import messageSoundUrl from "../assets/notification_sound.mp3";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faBolt,
+  faCamera,
   faCommentSlash,
   faComments,
-  faChevronDown,
   faCompress,
   faDesktop,
   faDisplay,
@@ -62,12 +64,24 @@ import {
   faVolumeHigh,
   faVolumeXmark,
   faWaveSquare,
+  faWindowMaximize,
+  faWindowRestore,
   faXmark,
 } from "@fortawesome/free-solid-svg-icons";
 import { faFaceSmile as faFaceSmileRegular } from "@fortawesome/free-regular-svg-icons";
 
 type VideoCallModalProps = {
   friends: VideoCallInvitee[];
+  appSettings?: VideoAppSettings;
+  onSettingsChange?: (next: VideoAppSettings) => void;
+};
+
+type VideoAppSettings = {
+  theme: "dark" | "light";
+  backgroundColor: string;
+  backgroundImage: string;
+  backgroundImageName: string;
+  boxColor: string;
 };
 
 type PanOffset = {
@@ -110,6 +124,9 @@ type GifCategory = {
 };
 
 const EMOJI_3D_BASE_URL = "https://fonts.gstatic.com/s/e/notoemoji/latest";
+const EMOJI_3D_TOKEN_PREFIX = "[[3d:";
+const EMOJI_3D_TOKEN_SUFFIX = "]]";
+const EMOJI_3D_TOKEN_REGEX = /\[\[3d:([a-z0-9_-]+)\]\]/gi;
 
 type LinkMeta = {
   title?: string;
@@ -139,7 +156,140 @@ const parseYouTubeId = (url: string) => {
 };
 
 const formatUrlLabel = (url: string) => url.replace(/^https?:\/\//, "");
+const faviconFor = (value: string) => {
+  try {
+    const host = new URL(value).hostname.replace(/^www\./, "");
+    return `https://www.google.com/s2/favicons?domain=${host}&sz=128`;
+  } catch {
+    return "";
+  }
+};
 const getEmoji3dUrl = (code: string) => `${EMOJI_3D_BASE_URL}/${code}/512.gif`;
+
+const formatScreenShareLabel = (rawLabel: string, fallbackLabel: string) => {
+  const trimmed = rawLabel.trim();
+  if (!trimmed) return fallbackLabel;
+  const lower = trimmed.toLowerCase();
+  const knownApps: Array<[string, string]> = [
+    ["visual studio code", "Visual Studio Code"],
+    ["microsoft edge", "Microsoft Edge"],
+    ["google chrome", "Google Chrome"],
+    ["chrome", "Google Chrome"],
+    ["firefox", "Firefox"],
+    ["safari", "Safari"],
+    ["figma", "Figma"],
+    ["slack", "Slack"],
+    ["discord", "Discord"],
+    ["zoom", "Zoom"],
+  ];
+  for (const [match, label] of knownApps) {
+    if (lower.includes(match)) return label;
+  }
+  const screenMatch = trimmed.match(/screen\s*\d+/i);
+  if (screenMatch) return screenMatch[0].replace(/\s+/g, " ");
+  const normalized = trimmed.replace(/^(window|screen)\s*[:\-]\s*/i, "");
+  return normalized || fallbackLabel;
+};
+
+type FileWithPath = File & { path?: string };
+type RgbaColor = { r: number; g: number; b: number; a: number };
+
+const getFileDisplayName = (file: File) => {
+  if (file.name) return file.name;
+  const fileWithPath = file as FileWithPath;
+  if (typeof fileWithPath.path === "string" && fileWithPath.path) {
+    const parts = fileWithPath.path.split(/[/\\]+/);
+    return parts[parts.length - 1] || "";
+  }
+  return "";
+};
+
+const clampValue = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value));
+
+const parseRgbChannel = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.endsWith("%")) {
+    const percent = Number.parseFloat(trimmed);
+    if (Number.isNaN(percent)) return null;
+    return clampValue(Math.round((percent / 100) * 255), 0, 255);
+  }
+  const numeric = Number.parseFloat(trimmed);
+  if (Number.isNaN(numeric)) return null;
+  return clampValue(Math.round(numeric), 0, 255);
+};
+
+const parseAlphaChannel = (value?: string) => {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.endsWith("%")) {
+    const percent = Number.parseFloat(trimmed);
+    if (Number.isNaN(percent)) return null;
+    return clampValue(percent / 100, 0, 1);
+  }
+  const numeric = Number.parseFloat(trimmed);
+  if (Number.isNaN(numeric)) return null;
+  return clampValue(numeric, 0, 1);
+};
+
+const parseHexColor = (value: string) => {
+  const hex = value.replace("#", "").trim();
+  if (hex.length === 3) {
+    const r = Number.parseInt(hex[0] + hex[0], 16);
+    const g = Number.parseInt(hex[1] + hex[1], 16);
+    const b = Number.parseInt(hex[2] + hex[2], 16);
+    if ([r, g, b].some(Number.isNaN)) return null;
+    return { r, g, b };
+  }
+  if (hex.length === 6) {
+    const r = Number.parseInt(hex.slice(0, 2), 16);
+    const g = Number.parseInt(hex.slice(2, 4), 16);
+    const b = Number.parseInt(hex.slice(4, 6), 16);
+    if ([r, g, b].some(Number.isNaN)) return null;
+    return { r, g, b };
+  }
+  return null;
+};
+
+const parseRgbaColor = (value: string, fallback: RgbaColor): RgbaColor => {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (normalized === "transparent") {
+    return { r: 0, g: 0, b: 0, a: 0 };
+  }
+  if (normalized.startsWith("#")) {
+    const hex = parseHexColor(normalized);
+    if (hex) return { ...hex, a: 1 };
+    return fallback;
+  }
+  if (normalized.startsWith("rgb")) {
+    const parts = normalized.replace(/rgba?\(|\)/g, "").split(",");
+    const r = parseRgbChannel(parts[0] || "");
+    const g = parseRgbChannel(parts[1] || "");
+    const b = parseRgbChannel(parts[2] || "");
+    const a = parseAlphaChannel(parts[3]);
+    if ([r, g, b].some((channel) => channel === null)) return fallback;
+    return {
+      r: r ?? fallback.r,
+      g: g ?? fallback.g,
+      b: b ?? fallback.b,
+      a: a ?? 1,
+    };
+  }
+  return fallback;
+};
+
+const toHex = (value: number) =>
+  clampValue(Math.round(value), 0, 255).toString(16).padStart(2, "0");
+
+const rgbaToHex = (color: RgbaColor) => `#${toHex(color.r)}${toHex(color.g)}${toHex(color.b)}`;
+
+const rgbaToString = (color: RgbaColor) => {
+  const alpha = clampValue(Number(color.a.toFixed(2)), 0, 1);
+  return `rgba(${color.r}, ${color.g}, ${color.b}, ${alpha})`;
+};
 
 const EMOJI_CATEGORIES: EmojiCategory[] = [
   {
@@ -333,6 +483,15 @@ const EMOJI_3D_CATEGORIES: Emoji3dCategory[] = [
   },
 ];
 
+const EMOJI_3D_ITEM_MAP = new Map<string, Emoji3dItem>();
+EMOJI_3D_CATEGORIES.forEach((category) => {
+  category.items.forEach((item) => {
+    EMOJI_3D_ITEM_MAP.set(item.id, item);
+  });
+});
+
+const buildEmoji3dToken = (id: string) => `${EMOJI_3D_TOKEN_PREFIX}${id}${EMOJI_3D_TOKEN_SUFFIX}`;
+
 const REACTION_EMOJIS = [
   "\u{1F44D}",
   "\u2764",
@@ -434,23 +593,27 @@ const GIF_CATEGORIES: GifCategory[] = [
 
 const BACKGROUND_OPTIONS = [
   { id: "none", label: "None" },
-  { id: "backdrop1", label: "Valley" },
-  { id: "backdrop2", label: "Autumn Forest" },
-  { id: "backdrop3", label: "River Valley" },
-  { id: "backdrop4", label: "Mountain Lake" },
-  { id: "backdrop5", label: "Grass Meadow" },
-  { id: "backdrop6", label: "Lavender Lake" },
-  { id: "backdrop7", label: "Misty River" },
-  { id: "backdrop8", label: "Stormy Sea" },
-  { id: "backdrop9", label: "Floral Essence" },
-  { id: "backdrop10", label: "Overlooking Valley" },
+  { id: "backdrop1", label: "Bedroom" },
+  { id: "backdrop2", label: "Dots" },
+  { id: "backdrop3", label: "Futuristic Home" },
+  { id: "backdrop4", label: "Home" },
+  { id: "backdrop5", label: "Lakeside" },
+  { id: "backdrop6", label: "Lilies" },
+  { id: "backdrop7", label: "Nighttime City" },
+  { id: "backdrop8", label: "Stunning" },
+  { id: "backdrop9", label: "Tech Lab" },
+  { id: "backdrop10", label: "Wavy" },
 ];
 
 const FILTER_OPTIONS = [
   { id: "none", label: "Clean" },
+  { id: "neon", label: "Neon Pop" },
+  { id: "sunset", label: "Sunset" },
+  { id: "ice", label: "Ice Blue" },
   { id: "vivid", label: "Vivid" },
   { id: "crisp", label: "Crisp" },
   { id: "cinema", label: "Cinema" },
+  { id: "vintage", label: "Vintage" },
   { id: "matte", label: "Matte" },
   { id: "soft", label: "Soft" },
   { id: "warm", label: "Warm" },
@@ -462,15 +625,40 @@ const FILTER_OPTIONS = [
   { id: "midnight", label: "Midnight" },
 ];
 
+const SETTINGS_STORAGE_PREFIX = "video-call-settings";
+const SETTINGS_GLOBAL_KEY = `${SETTINGS_STORAGE_PREFIX}:global`;
+const DEFAULT_SETTINGS: VideoAppSettings = {
+  theme: "dark",
+  backgroundColor: "",
+  backgroundImage: "",
+  backgroundImageName: "",
+  boxColor: "",
+};
+
+const loadSettings = (raw: string | null): VideoAppSettings => {
+  if (!raw) return { ...DEFAULT_SETTINGS };
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return { ...DEFAULT_SETTINGS };
+    return {
+      theme: parsed.theme === "light" ? "light" : "dark",
+      backgroundColor: typeof parsed.backgroundColor === "string" ? parsed.backgroundColor : "",
+      backgroundImage: typeof parsed.backgroundImage === "string" ? parsed.backgroundImage : "",
+      backgroundImageName:
+        typeof parsed.backgroundImageName === "string" ? parsed.backgroundImageName : "",
+      boxColor: typeof parsed.boxColor === "string" ? parsed.boxColor : "",
+    };
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
+};
+
 const getInitials = (value: string) => {
   const parts = String(value || "").trim().split(/\s+/);
   if (!parts.length) return "?";
   if (parts.length === 1) return parts[0].charAt(0).toUpperCase();
   return `${parts[0].charAt(0)}${parts[parts.length - 1].charAt(0)}`.toUpperCase();
 };
-
-const clampValue = (value: number, min: number, max: number) =>
-  Math.min(max, Math.max(min, value));
 
 const VideoTile = ({
   stream,
@@ -585,13 +773,62 @@ const VideoTile = ({
   );
 };
 
-const formatMessage = (message: VideoCallMessage) => {
-  if (message.kind === "emoji") return message.body;
-  if (message.kind === "gif") return "GIF";
-  return message.body;
+const renderEmoji3dTokens = (text: string): ReactNode => {
+  if (!text) return "";
+  const parts: ReactNode[] = [];
+  let lastIndex = 0;
+  text.replace(EMOJI_3D_TOKEN_REGEX, (match, id, offset) => {
+    if (offset > lastIndex) {
+      parts.push(text.slice(lastIndex, offset));
+    }
+    const item = EMOJI_3D_ITEM_MAP.get(String(id).toLowerCase());
+    if (item) {
+      parts.push(
+        <img
+          key={`emoji3d-${offset}-${id}`}
+          className="video-chat-emoji-inline is-3d"
+          src={item.url}
+          alt={item.label}
+          loading="lazy"
+        />
+      );
+    } else {
+      parts.push(match);
+    }
+    lastIndex = offset + match.length;
+    return match;
+  });
+  if (parts.length === 0) return text;
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+  return parts;
 };
 
-export default function VideoCallModal({ friends }: VideoCallModalProps) {
+const renderMessageContent = (message: VideoCallMessage): ReactNode => {
+  if (message.kind === "gif" && message.gifUrl) {
+    const isEmojiGif = message.gifUrl.startsWith(EMOJI_3D_BASE_URL);
+    return (
+      <img
+        className={isEmojiGif ? "video-chat-emoji-inline is-3d" : undefined}
+        src={message.gifUrl}
+        alt={isEmojiGif ? "3D emoji" : "GIF"}
+        loading="lazy"
+      />
+    );
+  }
+  return (
+    <span className="video-chat-inline-content">
+      {renderEmoji3dTokens(message.body || "")}
+    </span>
+  );
+};
+
+export default function VideoCallModal({
+  friends,
+  appSettings,
+  onSettingsChange,
+}: VideoCallModalProps) {
   const {
     isOpen,
     status,
@@ -654,6 +891,115 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     stopAllScreenShares,
   } = useVideoCall();
   const { user, profile } = useAuth();
+  const settingsStorageKey = useMemo(
+    () => `${SETTINGS_STORAGE_PREFIX}:${user?.id ?? "anon"}`,
+    [user?.id]
+  );
+  const [localSettings, setLocalSettings] = useState<VideoAppSettings>(() => {
+    if (typeof window === "undefined") return { ...DEFAULT_SETTINGS };
+    return loadSettings(localStorage.getItem(settingsStorageKey));
+  });
+  const effectiveSettings = appSettings ?? localSettings;
+  const backgroundColorRgba = useMemo(
+    () => parseRgbaColor(effectiveSettings.backgroundColor, { r: 5, g: 7, b: 15, a: 1 }),
+    [effectiveSettings.backgroundColor]
+  );
+  const boxColorRgba = useMemo(
+    () => parseRgbaColor(effectiveSettings.boxColor, { r: 15, g: 23, b: 42, a: 1 }),
+    [effectiveSettings.boxColor]
+  );
+  const updateAppSettings = useCallback(
+    (updater: (prev: VideoAppSettings) => VideoAppSettings) => {
+      const current = appSettings ?? localSettings;
+      const next = updater(current);
+      if (appSettings && onSettingsChange) {
+        onSettingsChange(next);
+        return;
+      }
+      setLocalSettings(next);
+      if (typeof window !== "undefined") {
+        localStorage.setItem(settingsStorageKey, JSON.stringify(next));
+        localStorage.setItem(SETTINGS_GLOBAL_KEY, JSON.stringify(next));
+      }
+    },
+    [appSettings, localSettings, onSettingsChange, settingsStorageKey]
+  );
+  const handleModalBackgroundImageFile = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      if (!file || !file.type.startsWith("image/")) {
+        return;
+      }
+      const fileName = getFileDisplayName(file);
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = typeof reader.result === "string" ? reader.result : "";
+        if (!result) return;
+        updateAppSettings((prev) => ({
+          ...prev,
+          backgroundImage: result,
+          backgroundImageName: fileName,
+        }));
+      };
+      reader.readAsDataURL(file);
+      event.target.value = "";
+    },
+    [updateAppSettings]
+  );
+  const overlayStyle = useMemo(() => {
+    const style: CSSProperties = {};
+    const vars = style as Record<string, string>;
+    const backgroundColor = effectiveSettings.backgroundColor.trim();
+    const backgroundImage = effectiveSettings.backgroundImage.trim();
+    const boxColor = effectiveSettings.boxColor.trim();
+    if (backgroundColor) {
+      vars["--video-app-bg-color"] = backgroundColor;
+      if (!boxColor) {
+        vars["--video-hero-bg"] = "var(--video-surface-solid)";
+        vars["--video-surface"] = "var(--video-surface-solid)";
+        vars["--video-surface-alt"] = "var(--video-surface-alt-solid)";
+        vars["--video-card"] = "var(--video-card-solid)";
+        vars["--video-input-bg"] = "var(--video-input-solid)";
+      }
+    }
+    if (backgroundImage) {
+      vars["--video-app-bg-image"] = `url("${backgroundImage}")`;
+      vars["--video-modal-bg"] = "rgba(10, 14, 26, 0.65)";
+      vars["--video-ghost-bg"] = "rgba(15, 23, 42, 0.72)";
+      vars["--video-ghost-border"] = "rgba(148, 163, 184, 0.4)";
+      if (!boxColor) {
+        vars["--video-surface"] = "rgba(12, 18, 32, 0.7)";
+        vars["--video-surface-alt"] = "rgba(10, 16, 28, 0.76)";
+        vars["--video-card"] = "rgba(10, 16, 30, 0.78)";
+        vars["--video-input-bg"] = "rgba(12, 18, 32, 0.8)";
+      }
+    } else if (backgroundColor) {
+      vars["--video-app-bg-image"] = "none";
+    }
+    if (boxColor) {
+      vars["--video-box-bg"] = boxColor;
+    }
+    return style;
+  }, [
+    effectiveSettings.backgroundColor,
+    effectiveSettings.backgroundImage,
+    effectiveSettings.boxColor,
+  ]);
+
+  useEffect(() => {
+    if (appSettings || typeof window === "undefined") return;
+    setLocalSettings(loadSettings(localStorage.getItem(settingsStorageKey)));
+  }, [appSettings, settingsStorageKey]);
+
+  useEffect(() => {
+    if (appSettings || typeof window === "undefined") return;
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== settingsStorageKey) return;
+      setLocalSettings(loadSettings(event.newValue));
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, [appSettings, settingsStorageKey]);
 
   const [chatInput, setChatInput] = useState("");
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -675,6 +1021,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const linkMetaRef = useRef(linkMeta);
   const [isRemoteMuted, setIsRemoteMuted] = useState(false);
   const [showSettingsPanel, setShowSettingsPanel] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"call" | "theme">("call");
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [screenViewMode, setScreenViewMode] = useState<"split" | "screen" | "video">("split");
   const [focusedScreenId, setFocusedScreenId] = useState<string | null>(null);
@@ -688,6 +1035,12 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const [pipPosition, setPipPosition] = useState<{ x: number; y: number } | null>(null);
   const [isPipDragging, setIsPipDragging] = useState(false);
   const [isMobileLayout, setIsMobileLayout] = useState(false);
+  const [showViewSelect, setShowViewSelect] = useState(false);
+  const [showScreenSelect, setShowScreenSelect] = useState(false);
+  const [showCameraSelect, setShowCameraSelect] = useState(false);
+  const viewSelectRef = useRef<HTMLDivElement | null>(null);
+  const screenSelectRef = useRef<HTMLDivElement | null>(null);
+  const cameraSelectRef = useRef<HTMLDivElement | null>(null);
   const [screenZoomLevels, setScreenZoomLevels] = useState<Record<string, number>>({});
   const [screenPanOffsets, setScreenPanOffsets] = useState<Record<string, PanOffset>>({});
   const [activePanTarget, setActivePanTarget] = useState<string | null>(null);
@@ -764,7 +1117,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const showChat = showCallUi && (isChatVisible || mobilePanel === "chat");
   const isChatHidden = showCallUi && !isChatVisible && mobilePanel !== "chat";
   const isRenderingInPopout = Boolean(isPopout && popoutContainer);
-  const overlayClassName = `video-call-overlay${
+  const overlayClassName = `video-call-overlay video-theme${
     isRenderingInPopout ? " is-popout" : ""
   }`;
   const modalClassName = `video-call-modal${showCallUi ? "" : " is-setup"}${
@@ -1175,8 +1528,10 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
       socketId?: string;
     }> = [];
     if (localScreenStream) {
-      const localScreenLabel =
+      const trackLabel = localScreenStream.getVideoTracks()?.[0]?.label || "";
+      const defaultLabel =
         localDisplayName === "You" ? "Your screen" : `${localDisplayName}'s screen`;
+      const localScreenLabel = formatScreenShareLabel(trackLabel, defaultLabel);
       entries.push({
         id: "local",
         stream: localScreenStream,
@@ -1222,6 +1577,18 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   const hasScreenShares = screenShareEntries.length > 0;
   const hasRemoteScreenShares = screenShareEntries.some((entry) => !entry.isLocal);
   const effectiveViewMode = hasScreenShares ? screenViewMode : "video";
+  const screenShareStatusLabel = useMemo(() => {
+    if (!showCallUi) return "";
+    if (localScreenStream && screenShareEntries[0]?.isLocal) {
+      return `Sharing ${screenShareEntries[0].label}`;
+    }
+    if (hasScreenShares) {
+      const activeEntry =
+        screenShareEntries.find((entry) => !entry.isLocal) || screenShareEntries[0];
+      return activeEntry ? `Viewing ${activeEntry.label}` : "";
+    }
+    return "";
+  }, [hasScreenShares, localScreenStream, screenShareEntries, showCallUi]);
   const showScreenTiles = effectiveViewMode !== "video";
   const showVideoTiles = effectiveViewMode !== "screen";
   const shouldRenderRemoteAudio =
@@ -1783,7 +2150,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
   };
 
   const handleAnimatedEmojiPick = (item: Emoji3dItem) => {
-    sendMessage(item.url, "gif", item.url);
+    setChatInput((prev) => `${prev}${buildEmoji3dToken(item.id)}`);
     setShowEmojiPicker(false);
   };
 
@@ -2464,10 +2831,51 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [showSettingsPanel]);
 
+  useEffect(() => {
+    if (showSettingsPanel) {
+      setSettingsTab("call");
+    }
+  }, [showSettingsPanel]);
+
+  useEffect(() => {
+    if (!showViewSelect && !showScreenSelect && !showCameraSelect) return;
+    const handleClick = (event: globalThis.MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (
+        viewSelectRef.current?.contains(target) ||
+        screenSelectRef.current?.contains(target) ||
+        cameraSelectRef.current?.contains(target)
+      ) {
+        return;
+      }
+      setShowViewSelect(false);
+      setShowScreenSelect(false);
+      setShowCameraSelect(false);
+    };
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setShowViewSelect(false);
+        setShowScreenSelect(false);
+        setShowCameraSelect(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [showCameraSelect, showScreenSelect, showViewSelect]);
+
   if (!showModal) return null;
 
   const modalContent = (
-    <div className={overlayClassName}>
+    <div
+      className={overlayClassName}
+      data-theme={effectiveSettings.theme}
+      style={overlayStyle}
+    >
       <div className={modalClassName}>
         {isRenderingInPopout && popoutAudioBlocked && (
           <div className="video-popout-unlock" role="presentation">
@@ -2510,8 +2918,30 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   Close
                 </button>
               </div>
+              <div className="video-settings-tabs" role="tablist" aria-label="Settings tabs">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={settingsTab === "call"}
+                  className={`video-settings-tab${settingsTab === "call" ? " is-active" : ""}`}
+                  onClick={() => setSettingsTab("call")}
+                >
+                  Call
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={settingsTab === "theme"}
+                  className={`video-settings-tab${settingsTab === "theme" ? " is-active" : ""}`}
+                  onClick={() => setSettingsTab("theme")}
+                >
+                  Theme
+                </button>
+              </div>
               <div className="video-settings-body">
-                <section className="video-settings-section">
+                {settingsTab === "call" && (
+                  <>
+                    <section className="video-settings-section">
                   <h4>Audio</h4>
                   <div className="video-settings-grid">
                     <button
@@ -2653,8 +3083,178 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                     )}
                   </div>
                 </section>
-                <section className="video-settings-section">
-                  <h4>Performance</h4>
+                </>
+                )}
+                {settingsTab === "theme" && (
+                  <section className="video-settings-section">
+                    <h4>Theme</h4>
+                    <div className="video-settings-stack">
+                      <div className="video-settings-group">
+                      <span className="video-settings-label">Background color</span>
+                      <div className="video-settings-row">
+                        <input
+                          className="video-settings-color"
+                          type="color"
+                          value={rgbaToHex(backgroundColorRgba)}
+                          onChange={(event) =>
+                            updateAppSettings((prev) => {
+                              const rgb = parseHexColor(event.target.value);
+                              if (!rgb) return prev;
+                              return {
+                                ...prev,
+                                backgroundColor: rgbaToString({
+                                  ...rgb,
+                                  a: backgroundColorRgba.a,
+                                }),
+                              };
+                            })
+                          }
+                          aria-label="Background color"
+                        />
+                        <div className="video-settings-alpha">
+                          <input
+                            className="video-settings-range"
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.01"
+                            value={backgroundColorRgba.a}
+                            onChange={(event) =>
+                              updateAppSettings((prev) => ({
+                                ...prev,
+                                backgroundColor: rgbaToString({
+                                  ...backgroundColorRgba,
+                                  a: Number.parseFloat(event.target.value),
+                                }),
+                              }))
+                            }
+                            aria-label="Background color transparency"
+                          />
+                          <span className="video-settings-alpha-value">
+                            {Math.round(backgroundColorRgba.a * 100)}%
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="video-settings-reset"
+                          onClick={() =>
+                            updateAppSettings((prev) => ({ ...prev, backgroundColor: "" }))
+                          }
+                        >
+                          Reset
+                        </button>
+                      </div>
+                    </div>
+                    <div className="video-settings-group">
+                      <span className="video-settings-label">Background image</span>
+                      <div className="video-settings-row">
+                        <label className="video-settings-file">
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleModalBackgroundImageFile}
+                          />
+                          {effectiveSettings.backgroundImage ? "Change Image" : "Choose image"}
+                        </label>
+                        <button
+                          type="button"
+                          className="video-settings-reset"
+                          onClick={() =>
+                            updateAppSettings((prev) => ({
+                              ...prev,
+                              backgroundImage: "",
+                              backgroundImageName: "",
+                            }))
+                          }
+                        >
+                          Clear
+                        </button>
+                      </div>
+                      <span
+                        className={`video-settings-hint${
+                          effectiveSettings.backgroundImage ? " is-file" : ""
+                        }`}
+                      >
+                        {effectiveSettings.backgroundImage ? (
+                          <>
+                            <span className="video-settings-hint-label">Image:</span>
+                            <span
+                              className="video-settings-filename"
+                              title={
+                                effectiveSettings.backgroundImageName || "Selected image"
+                              }
+                            >
+                              {effectiveSettings.backgroundImageName || "Selected image"}
+                            </span>
+                          </>
+                        ) : (
+                          "No image selected"
+                        )}
+                      </span>
+                    </div>
+                    <div className="video-settings-group">
+                      <span className="video-settings-label">Box color</span>
+                      <div className="video-settings-row">
+                        <input
+                          className="video-settings-color"
+                          type="color"
+                          value={rgbaToHex(boxColorRgba)}
+                          onChange={(event) =>
+                            updateAppSettings((prev) => {
+                              const rgb = parseHexColor(event.target.value);
+                              if (!rgb) return prev;
+                              return {
+                                ...prev,
+                                boxColor: rgbaToString({
+                                  ...rgb,
+                                  a: boxColorRgba.a,
+                                }),
+                              };
+                            })
+                          }
+                          aria-label="Box color"
+                        />
+                        <div className="video-settings-alpha">
+                          <input
+                            className="video-settings-range"
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.01"
+                            value={boxColorRgba.a}
+                            onChange={(event) =>
+                              updateAppSettings((prev) => ({
+                                ...prev,
+                                boxColor: rgbaToString({
+                                  ...boxColorRgba,
+                                  a: Number.parseFloat(event.target.value),
+                                }),
+                              }))
+                            }
+                            aria-label="Box color transparency"
+                          />
+                          <span className="video-settings-alpha-value">
+                            {Math.round(boxColorRgba.a * 100)}%
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="video-settings-reset"
+                          onClick={() =>
+                            updateAppSettings((prev) => ({ ...prev, boxColor: "" }))
+                          }
+                        >
+                          Reset
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+                )}
+                {settingsTab === "call" && (
+                  <>
+                    <section className="video-settings-section">
+                      <h4>Performance</h4>
                   <div className="video-settings-grid">
                     <button
                       type="button"
@@ -2756,6 +3356,8 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                     </p>
                   </section>
                 )}
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -2806,21 +3408,6 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                 >
                   <FontAwesomeIcon
                     icon={isScreenSharing ? faStop : faDesktop}
-                    aria-hidden="true"
-                  />
-                </button>
-                <button
-                  type="button"
-                  className={`video-control video-control-icon ghost${
-                    isHolding ? " is-active" : ""
-                  }`}
-                  onClick={toggleHold}
-                  data-hint={isHolding ? "Resume call" : "Hold call"}
-                  aria-label={isHolding ? "Resume call" : "Hold call"}
-                  title={isHolding ? "Resume call" : "Hold call"}
-                >
-                  <FontAwesomeIcon
-                    icon={isHolding ? faPlay : faPause}
                     aria-hidden="true"
                   />
                 </button>
@@ -2881,6 +3468,21 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
               <div className="video-call-controls-group">
                 <button
                   type="button"
+                  className={`video-control video-control-icon ghost${
+                    isHolding ? " is-active" : ""
+                  }`}
+                  onClick={toggleHold}
+                  data-hint={isHolding ? "Resume call" : "Hold call"}
+                  aria-label={isHolding ? "Resume call" : "Hold call"}
+                  title={isHolding ? "Resume call" : "Hold call"}
+                >
+                  <FontAwesomeIcon
+                    icon={isHolding ? faPlay : faPause}
+                    aria-hidden="true"
+                  />
+                </button>
+                <button
+                  type="button"
                   className="video-control video-control-icon ghost"
                   onClick={leaveCall}
                   data-hint="Leave call"
@@ -2935,7 +3537,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
             </div>
           )}
           <div className="video-call-header">
-            <div>
+            <div className="video-call-header-left">
               <p className="video-call-eyebrow">
                 {status === "incoming" ? "Incoming video call" : "Video room"}
               </p>
@@ -2947,7 +3549,282 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                   : "Live video call"}
               </h3>
             </div>
+            {showCallUi && (
+              <div className="video-call-header-controls">
+                <div className="video-call-header-controls-group">
+                  {!isFullscreenUi && (
+                    <div
+                      className={`video-call-toolbar-group is-dropdown${
+                        showViewSelect ? " is-open" : ""
+                      }`}
+                      ref={viewSelectRef}
+                    >
+                      <button
+                        type="button"
+                        className="video-view-button is-icon is-dropdown-trigger"
+                        data-hint="View"
+                        aria-label="View options"
+                        title="View"
+                        aria-expanded={showViewSelect}
+                        onClick={() => {
+                          setShowViewSelect((prev) => !prev);
+                          setShowScreenSelect(false);
+                          setShowCameraSelect(false);
+                        }}
+                      >
+                        <FontAwesomeIcon icon={faTableColumns} aria-hidden="true" />
+                      </button>
+                      {showViewSelect && (
+                        <div className="video-call-dropdown is-open">
+                          <div className="video-call-dropdown-list">
+                            <button
+                              type="button"
+                              className={`video-call-dropdown-option${
+                                effectiveViewMode === "split" ? " is-active" : ""
+                              }`}
+                              onClick={() => {
+                                setScreenViewMode("split");
+                                setShowViewSelect(false);
+                              }}
+                            >
+                              Split view
+                            </button>
+                            {hasScreenShares && (
+                              <button
+                                type="button"
+                                className={`video-call-dropdown-option${
+                                  effectiveViewMode === "screen" ? " is-active" : ""
+                                }`}
+                                onClick={() => {
+                                  setScreenViewMode("screen");
+                                  setShowViewSelect(false);
+                                }}
+                              >
+                                Screen focus
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className={`video-call-dropdown-option${
+                                effectiveViewMode === "video" ? " is-active" : ""
+                              }`}
+                              onClick={() => {
+                                setScreenViewMode("video");
+                                setShowViewSelect(false);
+                              }}
+                            >
+                              All cameras
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {videoParticipants.length > 0 && (
+                    <div
+                      className={`video-call-toolbar-group is-dropdown${
+                        showCameraSelect ? " is-open" : ""
+                      }`}
+                      ref={cameraSelectRef}
+                    >
+                      <button
+                        type="button"
+                        className="video-view-button is-icon is-dropdown-trigger"
+                        data-hint="Camera feed"
+                        aria-label="Camera feed"
+                        title="Camera feed"
+                        aria-expanded={showCameraSelect}
+                        onClick={() => {
+                          setShowCameraSelect((prev) => !prev);
+                          setShowViewSelect(false);
+                          setShowScreenSelect(false);
+                        }}
+                      >
+                        <FontAwesomeIcon icon={faCamera} aria-hidden="true" />
+                      </button>
+                      {showCameraSelect && (
+                        <div className="video-call-dropdown is-open">
+                          <div className="video-call-dropdown-list">
+                            <button
+                              type="button"
+                              className={`video-call-dropdown-option${
+                                !focusedVideoId ? " is-active" : ""
+                              }`}
+                              onClick={() => {
+                                selectVideoFeedFocus(null);
+                                setShowCameraSelect(false);
+                              }}
+                            >
+                              All cameras
+                            </button>
+                            {videoParticipants.map((participant) => (
+                              <button
+                                type="button"
+                                key={participant.id}
+                                className={`video-call-dropdown-option${
+                                  focusedVideoId === participant.id ? " is-active" : ""
+                                }`}
+                                onClick={() => {
+                                  selectVideoFeedFocus(participant.id);
+                                  setShowCameraSelect(false);
+                                }}
+                              >
+                                {participant.isLocal ? localDisplayName : participant.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {hasScreenShares && (
+                    <div
+                      className={`video-call-toolbar-group is-dropdown${
+                        showScreenSelect ? " is-open" : ""
+                      }`}
+                      ref={screenSelectRef}
+                    >
+                      <button
+                        type="button"
+                        className="video-view-button is-icon is-dropdown-trigger"
+                        data-hint="Screen share"
+                        aria-label="Screen share"
+                        title="Screen share"
+                        aria-expanded={showScreenSelect}
+                        onClick={() => {
+                          setShowScreenSelect((prev) => !prev);
+                          setShowViewSelect(false);
+                          setShowCameraSelect(false);
+                        }}
+                      >
+                        <FontAwesomeIcon icon={faDisplay} aria-hidden="true" />
+                      </button>
+                      {showScreenSelect && (
+                        <div className="video-call-dropdown is-open">
+                          <div className="video-call-dropdown-list">
+                            <button
+                              type="button"
+                              className={`video-call-dropdown-option${
+                                !focusedScreenId ? " is-active" : ""
+                              }`}
+                              onClick={() => {
+                                selectScreenShareFocus(null);
+                                setShowScreenSelect(false);
+                              }}
+                            >
+                              All screens
+                            </button>
+                            {screenShareEntries.map((entry) => {
+                              const entryKey = getScreenFocusKey(entry);
+                              return (
+                                <button
+                                  type="button"
+                                  key={entryKey}
+                                  className={`video-call-dropdown-option${
+                                    focusedScreenId === entryKey ? " is-active" : ""
+                                  }`}
+                                  title={entry.label}
+                                  onClick={() => {
+                                    selectScreenShareFocus(entryKey);
+                                    setShowScreenSelect(false);
+                                  }}
+                                >
+                                  {entry.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {hasScreenShares && (
+                    <div className="video-call-toolbar-group">
+                      <button
+                        type="button"
+                        className={`video-view-button is-icon${
+                          isScreenBorderless ? " is-active" : ""
+                        }`}
+                        onClick={() => setIsScreenBorderless((prev) => !prev)}
+                        data-hint={isScreenBorderless ? "Windowed" : "Borderless"}
+                        aria-label={isScreenBorderless ? "Windowed" : "Borderless"}
+                        title={isScreenBorderless ? "Windowed" : "Borderless"}
+                      >
+                        <FontAwesomeIcon
+                          icon={isScreenBorderless ? faWindowRestore : faWindowMaximize}
+                          aria-hidden="true"
+                        />
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <div className="video-call-header-controls-group is-actions">
+                  <button
+                    type="button"
+                    className={`video-view-button is-icon is-chat-toggle${
+                      showChat ? " is-active" : ""
+                    }`}
+                    onClick={handleToggleChatVisibility}
+                    disabled={!showCallUi}
+                    data-hint={showChat ? "Hide chat" : "Show chat"}
+                    aria-label={showChat ? "Hide chat" : "Show chat"}
+                    title={showChat ? "Hide chat" : "Show chat"}
+                  >
+                    <FontAwesomeIcon
+                      icon={showChat ? faCommentSlash : faComments}
+                      aria-hidden="true"
+                    />
+                  </button>
+                  <button
+                    type="button"
+                    className={`video-view-button is-icon${isPopout ? " is-active" : ""}`}
+                    onClick={() => setIsPopout((prev) => !prev)}
+                    aria-pressed={isPopout}
+                    data-hint={isPopout ? "Dock" : "Pop out"}
+                    aria-label={isPopout ? "Dock" : "Pop out"}
+                    title={isPopout ? "Dock" : "Pop out"}
+                  >
+                    <FontAwesomeIcon
+                      icon={isPopout ? faCompress : faUpRightFromSquare}
+                      aria-hidden="true"
+                    />
+                  </button>
+                </div>
+                <div className="video-call-header-controls-group is-mobile-only">
+                  <span className="video-call-toolbar-label">Panel</span>
+                  <button
+                    type="button"
+                    className={`video-view-button is-icon${
+                      mobilePanel === "video" ? " is-active" : ""
+                    }`}
+                    onClick={() => setMobilePanel("video")}
+                    data-hint="Video panel"
+                    aria-label="Video panel"
+                    title="Video panel"
+                  >
+                    <FontAwesomeIcon icon={faVideo} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className={`video-view-button is-icon${
+                      mobilePanel === "chat" ? " is-active" : ""
+                    }`}
+                    onClick={() => setMobilePanel("chat")}
+                    data-hint="Chat panel"
+                    aria-label="Chat panel"
+                    title="Chat panel"
+                  >
+                    <FontAwesomeIcon icon={faComments} aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="video-call-meta">
+              {screenShareStatusLabel && (
+                <span className="video-call-chip is-screen-share" title={screenShareStatusLabel}>
+                  {screenShareStatusLabel}
+                </span>
+              )}
               <span className="video-call-chip">
                 {showCallUi ? `${totalParticipants}/${maxParticipants}` : `Up to ${maxParticipants}`}
               </span>
@@ -2958,175 +3835,6 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
               )}
             </div>
           </div>
-
-          {showCallUi && (
-            <div className="video-call-toolbar">
-              {!isFullscreenUi && (
-                <div className="video-call-toolbar-group is-view-select">
-                  <button
-                    type="button"
-                    className="video-view-button is-icon is-passive"
-                    data-hint="View"
-                    aria-label="View options"
-                    title="View"
-                  >
-                    <FontAwesomeIcon icon={faTableColumns} aria-hidden="true" />
-                  </button>
-                  <div className="video-call-view-select">
-                    <select
-                      value={effectiveViewMode}
-                      onChange={(event) =>
-                        setScreenViewMode(event.target.value as typeof screenViewMode)
-                      }
-                      aria-label="Select view mode"
-                    >
-                      <option value="split">Split view</option>
-                      {hasScreenShares && <option value="screen">Screen focus</option>}
-                      <option value="video">All cameras</option>
-                    </select>
-                    <span className="video-call-view-caret" aria-hidden="true">
-                      <FontAwesomeIcon icon={faChevronDown} />
-                    </span>
-                  </div>
-                </div>
-              )}
-              {hasScreenShares && (
-                <div className="video-call-toolbar-group is-selector">
-                  <button
-                    type="button"
-                    className="video-view-button is-icon is-passive"
-                    data-hint="Screen share"
-                    aria-label="Screen share"
-                    title="Screen share"
-                  >
-                    <FontAwesomeIcon icon={faDisplay} aria-hidden="true" />
-                  </button>
-                  <select
-                    className="video-call-selector-select"
-                    value={focusedScreenId || ""}
-                    onChange={(event) =>
-                      selectScreenShareFocus(event.target.value || null)
-                    }
-                    aria-label="Choose a screen share"
-                  >
-                    <option value="">All screens</option>
-                    {screenShareEntries.map((entry) => {
-                      const entryKey = getScreenFocusKey(entry);
-                      return (
-                        <option key={entryKey} value={entryKey}>
-                          {entry.label}
-                        </option>
-                      );
-                    })}
-                  </select>
-                </div>
-              )}
-              {videoParticipants.length > 0 && (
-                <div className="video-call-toolbar-group is-selector">
-                  <button
-                    type="button"
-                    className="video-view-button is-icon is-passive"
-                    data-hint="Camera feed"
-                    aria-label="Camera feed"
-                    title="Camera feed"
-                  >
-                    <FontAwesomeIcon icon={faVideo} aria-hidden="true" />
-                  </button>
-                  <select
-                    className="video-call-selector-select"
-                    value={focusedVideoId || ""}
-                    onChange={(event) => selectVideoFeedFocus(event.target.value || null)}
-                    aria-label="Choose a camera feed"
-                  >
-                    <option value="">All cameras</option>
-                    {videoParticipants.map((participant) => (
-                      <option key={participant.id} value={participant.id}>
-                        {participant.isLocal ? localDisplayName : participant.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-              <div className="video-call-toolbar-group">
-                {hasScreenShares && (
-                  <button
-                    type="button"
-                    className={`video-view-button is-icon${
-                      isScreenBorderless ? " is-active" : ""
-                    }`}
-                    onClick={() => setIsScreenBorderless((prev) => !prev)}
-                    data-hint={isScreenBorderless ? "Windowed" : "Borderless"}
-                    aria-label={isScreenBorderless ? "Windowed" : "Borderless"}
-                    title={isScreenBorderless ? "Windowed" : "Borderless"}
-                  >
-                    <FontAwesomeIcon
-                      icon={isScreenBorderless ? faCompress : faExpand}
-                      aria-hidden="true"
-                    />
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className={`video-view-button is-icon is-chat-toggle${
-                    showChat ? " is-active" : ""
-                  }`}
-                  onClick={handleToggleChatVisibility}
-                  disabled={!showCallUi}
-                  data-hint={showChat ? "Hide chat" : "Show chat"}
-                  aria-label={showChat ? "Hide chat" : "Show chat"}
-                  title={showChat ? "Hide chat" : "Show chat"}
-                >
-                  <FontAwesomeIcon
-                    icon={showChat ? faCommentSlash : faComments}
-                    aria-hidden="true"
-                  />
-                </button>
-              </div>
-              <div className="video-call-toolbar-group is-mobile-only">
-                <span className="video-call-toolbar-label">Panel</span>
-                <button
-                  type="button"
-                  className={`video-view-button is-icon${
-                    mobilePanel === "video" ? " is-active" : ""
-                  }`}
-                  onClick={() => setMobilePanel("video")}
-                  data-hint="Video panel"
-                  aria-label="Video panel"
-                  title="Video panel"
-                >
-                  <FontAwesomeIcon icon={faVideo} aria-hidden="true" />
-                </button>
-                <button
-                  type="button"
-                  className={`video-view-button is-icon${
-                    mobilePanel === "chat" ? " is-active" : ""
-                  }`}
-                  onClick={() => setMobilePanel("chat")}
-                  data-hint="Chat panel"
-                  aria-label="Chat panel"
-                  title="Chat panel"
-                >
-                  <FontAwesomeIcon icon={faComments} aria-hidden="true" />
-                </button>
-              </div>
-              <div className="video-call-toolbar-group">
-                <button
-                  type="button"
-                  className={`video-view-button is-icon${isPopout ? " is-active" : ""}`}
-                  onClick={() => setIsPopout((prev) => !prev)}
-                  aria-pressed={isPopout}
-                  data-hint={isPopout ? "Dock" : "Pop out"}
-                  aria-label={isPopout ? "Dock" : "Pop out"}
-                  title={isPopout ? "Dock" : "Pop out"}
-                >
-                  <FontAwesomeIcon
-                    icon={isPopout ? faCompress : faUpRightFromSquare}
-                    aria-hidden="true"
-                  />
-                </button>
-              </div>
-            </div>
-          )}
 
           {shouldRenderRemoteAudio && remoteAudioStreams.length > 0 && (
             <div className="video-call-audio" aria-hidden="true">
@@ -3171,7 +3879,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                 <div className="video-preview-controls">
                   <div className="video-preview-row">
                     <div className="video-preview-group">
-                      <span className="video-preview-label">Mic</span>
+                      <span className="video-preview-label">Microphone</span>
                       <button
                         type="button"
                         className={`video-preview-toggle${isAudioEnabled ? " is-active" : ""}`}
@@ -3395,6 +4103,14 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                         })}
                       </span>
                     ) : null;
+                    const screenShareTag = (
+                      <span
+                        className="screen-share-status is-label"
+                        title={entry.label}
+                      >
+                        {entry.isLocal ? `Sharing ${entry.label}` : entry.label}
+                      </span>
+                    );
                     const localScreenSettingsButtons = (
                       <>
                         <button
@@ -3525,12 +4241,14 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                             isPannable ? (event) => endScreenPan(event, zoomKey) : undefined
                           }
                         >
-                          <div
-                            className={`screen-share-actions${
-                              isFullscreen ? " is-fullscreen" : " is-compact"
-                            }`}
-                          >
-                            {isMobileLayout ? (
+                        <div
+                          className={`screen-share-actions${
+                            isFullscreen ? " is-fullscreen" : " is-compact"
+                          }`}
+                        >
+                          {isMobileLayout ? (
+                            <>
+                              {screenShareTag}
                               <button
                                 type="button"
                                 className="screen-share-control is-icon is-settings-trigger"
@@ -3540,13 +4258,15 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                                 <FontAwesomeIcon icon={faSliders} aria-hidden="true" />
                                 <span className="screen-share-label">Screen Settings</span>
                               </button>
-                            ) : (
-                              <>
-                                {localScreenStatus}
-                                {localScreenSettingsButtons}
-                              </>
-                            )}
-                          </div>
+                            </>
+                          ) : (
+                            <>
+                              {screenShareTag}
+                              {localScreenStatus}
+                              {localScreenSettingsButtons}
+                            </>
+                          )}
+                        </div>
                           {localIsScreenSettingsOpen && (
                             <div
                               className="screen-settings-overlay"
@@ -3611,15 +4331,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                                               </span>
                                             </div>
                                             <div className="screen-share-overlay-text">
-                                              {message.kind === "gif" && message.gifUrl ? (
-                                                <img
-                                                  src={message.gifUrl}
-                                                  alt="GIF"
-                                                  loading="lazy"
-                                                />
-                                              ) : (
-                                                <span>{formatMessage(message)}</span>
-                                              )}
+                                              {renderMessageContent(message)}
                                             </div>
                                           </div>
                                         ))
@@ -3693,6 +4405,14 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                       ) : isPending ? (
                         <span className="screen-share-status">Control requested</span>
                       ) : null;
+                    const remoteScreenTag = (
+                      <span
+                        className="screen-share-status is-label"
+                        title={entry.label}
+                      >
+                        {entry.label}
+                      </span>
+                    );
                     const remoteScreenSettingsButtons = (
                       <>
                         <button
@@ -3870,17 +4590,21 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                           }`}
                         >
                           {isMobileLayout ? (
-                            <button
-                              type="button"
-                              className="screen-share-control is-icon is-settings-trigger"
-                              onClick={() => toggleScreenSettings(tileId)}
-                              aria-expanded={remoteIsScreenSettingsOpen}
-                            >
-                              <FontAwesomeIcon icon={faSliders} aria-hidden="true" />
-                              <span className="screen-share-label">Screen Settings</span>
-                            </button>
+                            <>
+                              {remoteScreenTag}
+                              <button
+                                type="button"
+                                className="screen-share-control is-icon is-settings-trigger"
+                                onClick={() => toggleScreenSettings(tileId)}
+                                aria-expanded={remoteIsScreenSettingsOpen}
+                              >
+                                <FontAwesomeIcon icon={faSliders} aria-hidden="true" />
+                                <span className="screen-share-label">Screen Settings</span>
+                              </button>
+                            </>
                           ) : (
                             <>
+                              {remoteScreenTag}
                               {remoteScreenStatus}
                               {remoteScreenSettingsButtons}
                             </>
@@ -3950,15 +4674,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                                             </span>
                                           </div>
                                           <div className="screen-share-overlay-text">
-                                            {message.kind === "gif" && message.gifUrl ? (
-                                              <img
-                                                src={message.gifUrl}
-                                                alt="GIF"
-                                                loading="lazy"
-                                              />
-                                            ) : (
-                                              <span>{formatMessage(message)}</span>
-                                            )}
+                                            {renderMessageContent(message)}
                                           </div>
                                         </div>
                                       ))
@@ -4177,11 +4893,7 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                         message.kind === "emoji" ? " is-emoji" : ""
                       }`}
                     >
-                      {message.kind === "gif" && message.gifUrl ? (
-                        <img src={message.gifUrl} alt="GIF" loading="lazy" />
-                      ) : (
-                        <span>{formatMessage(message)}</span>
-                      )}
+                      {renderMessageContent(message)}
                     </div>
                     {messageLinks.length > 0 && (
                       <div className="video-chat-link-list">
@@ -4189,7 +4901,9 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                           const meta = linkMeta[url];
                           const title = meta?.title || meta?.siteName || formatUrlLabel(url);
                           const description = meta?.description || "";
-                          const image = meta?.image;
+                          const image = meta?.image || faviconFor(url);
+                          const hasImage = Boolean(image);
+                          const isFavicon = !meta?.image && hasImage;
                           const siteLabel = meta?.siteName || formatUrlLabel(url);
                           return (
                             <a
@@ -4199,9 +4913,14 @@ export default function VideoCallModal({ friends }: VideoCallModalProps) {
                               target="_blank"
                               rel="noreferrer"
                             >
-                              {image ? (
+                              {hasImage ? (
                                 <div className="video-chat-link-media">
-                                  <img src={image} alt={title} loading="lazy" />
+                                  <img
+                                    src={image}
+                                    alt={title}
+                                    loading="lazy"
+                                    className={isFavicon ? "is-favicon" : ""}
+                                  />
                                 </div>
                               ) : (
                                 <div className="video-chat-link-media is-placeholder">LINK</div>

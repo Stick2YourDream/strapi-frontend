@@ -33,11 +33,25 @@ const BLOCKED_EMOJI_PATTERNS: RegExp[] = [
 
 export const sanitizePostText = (value: string) => {
   let text = value;
+  const tokenRegex = /\[\[3d:[a-z0-9_-]+]]/gi;
+  const tokenMap = new Map<string, string>();
+  let tokenIndex = 0;
+  text = text.replace(tokenRegex, (match) => {
+    const key = `__3d_token_${tokenIndex}__`;
+    tokenMap.set(key, match);
+    tokenIndex += 1;
+    return key;
+  });
   EMOTICON_RULES.forEach((rule) => {
     text = text.replace(rule.pattern, rule.emoji);
   });
   BLOCKED_EMOJI_PATTERNS.forEach((pattern) => {
     text = text.replace(pattern, "");
   });
+  if (tokenMap.size > 0) {
+    tokenMap.forEach((token, key) => {
+      text = text.replace(key, token);
+    });
+  }
   return text;
 };

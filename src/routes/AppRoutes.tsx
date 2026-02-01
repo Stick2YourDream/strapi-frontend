@@ -10,6 +10,7 @@ import ResetPassword from "../pages/reset-password";
 import Dashboard from "../pages/dashboard";
 import ProtectedRoute from "../components/ProtectedRoute";
 import Friends from "../pages/friends";
+import FriendProfile from "../pages/friend-profile";
 import Me from "../pages/me";
 import Groups from "../pages/groups";
 import GroupDetail from "../pages/group";
@@ -85,6 +86,14 @@ export default function AppRoutes(): JSX.Element {
         element={
           <ProtectedRoute>
             <Friends />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/friends/:friendId"
+        element={
+          <ProtectedRoute>
+            <FriendProfile />
           </ProtectedRoute>
         }
       />

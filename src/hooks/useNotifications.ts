@@ -487,16 +487,50 @@ export const useNotifications = (
         (f: any) => f.status === "pending" && f.targetId === currentUserId
       );
       const pendingRequestCount = pendingRequests.length;
+
+      const requesterIds = pendingRequests
+        .map((request: any) => Number(request.requesterId))
+        .filter((id: number) => Number.isFinite(id) && id !== currentUserId);
+      const missingRequesterIds = requesterIds.filter(
+        (id: number) => !profileNameCacheRef.current[id]
+      );
+      if (missingRequesterIds.length) {
+        const requesterFilter = missingRequesterIds
+          .map((id: number, index: number) => `filters[user][id][$in][${index}]=${id}`)
+          .join("&");
+        const profileRes = await api
+          .get(
+            `/profiles?${requesterFilter}&populate=user&pagination[pageSize]=${missingRequesterIds.length}`
+          )
+          .catch(() => null);
+        (profileRes?.data?.data ?? []).forEach((entry: any) => {
+          const label = getProfileLabel(entry);
+          const attrs = normalize(entry);
+          const userData = attrs.user?.data ?? attrs.user;
+          const rawId = userData?.id ?? userData?.data?.id;
+          const numeric = Number(rawId);
+          if (label && Number.isFinite(numeric)) {
+            profileNameCacheRef.current[numeric] = label;
+          }
+        });
+      }
+
       const requestPreviews = pendingRequests
         .slice(0, MAX_PREVIEW_ITEMS)
-        .map((f: any) => ({
-          id: f.id,
-          idNumber: f.idNumber,
-          docId: f.docId,
-          requesterId: f.requesterId,
-          requesterName: f.requesterName || "User",
-          createdAt: f.createdAt,
-        }));
+        .map((f: any) => {
+          const cachedName =
+            f.requesterId && profileNameCacheRef.current[f.requesterId]
+              ? profileNameCacheRef.current[f.requesterId]
+              : null;
+          return {
+            id: f.id,
+            idNumber: f.idNumber,
+            docId: f.docId,
+            requesterId: f.requesterId,
+            requesterName: cachedName || f.requesterName || "User",
+            createdAt: f.createdAt,
+          };
+        });
 
       const acceptedFriendIds = relations
         .filter((f: any) => f.status === "accepted")
@@ -638,10 +672,15 @@ export const useNotifications = (
         const commentsRes = await api
           .get(
             `/comments?filters[target_type][$eq]=user` +
+              `&filters[owner][id][$ne]=${currentUserId}` +
               `&${commentFilter}${afterFilter}&populate=owner&sort=createdAt:desc&pagination[pageSize]=50`
           )
           .catch(() => null);
-        const comments = commentsRes?.data?.data ?? [];
+        const comments = (commentsRes?.data?.data ?? []).filter((entry: any) => {
+          const attrs = normalize(entry);
+          const ownerId = getEntityId(attrs.owner);
+          return ownerId !== currentUserId;
+        });
         commentCount = comments.length ?? 0;
         if (comments.length) {
           const first = comments[0];
@@ -885,6 +924,24 @@ export const useNotifications = (
         if (likes > prev) likeCount += likes - prev;
       });
       latestLikeSnapshotRef.current = nextSnapshot;
+
+      if (likeCount > 0 && myPostIds.length && lastSeenIso) {
+        const targetFilter = myPostIds
+          .map((id: number, index: number) => `filters[target_id][$in][${index}]=${id}`)
+          .join("&");
+        const selfReactionsRes = await api
+          .get(
+            `/post-reactions?filters[target_type][$eq]=user` +
+              `&filters[owner][id][$eq]=${currentUserId}` +
+              `&${targetFilter}${afterFilter}&pagination[pageSize]=200`
+          )
+          .catch(() => null);
+        const selfReactions = selfReactionsRes?.data?.data ?? [];
+        const selfLikeCount = selfReactions.length ?? 0;
+        if (selfLikeCount > 0) {
+          likeCount = Math.max(0, likeCount - selfLikeCount);
+        }
+      }
 
       setCounts({
         messages: messageCount,

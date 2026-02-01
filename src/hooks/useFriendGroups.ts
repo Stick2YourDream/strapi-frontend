@@ -6,9 +6,11 @@ export type FriendGroup = {
   name: string;
   memberIds: number[];
   createdAt: string;
+  isDraft?: boolean;
 };
 
 const STORAGE_PREFIX = "video-call-groups";
+export const MAX_GROUP_NAME_LENGTH = 30;
 
 const safeParse = (value: string | null) => {
   if (!value) return null;
@@ -22,7 +24,11 @@ const safeParse = (value: string | null) => {
 const normalizeGroup = (entry: any): FriendGroup | null => {
   if (!entry || typeof entry !== "object") return null;
   const id = String(entry.id || "").trim();
-  const name = String(entry.name || "").trim() || "New group";
+  const rawName = String(entry.name ?? "");
+  const trimmedName = rawName.trim();
+  const clampedName = trimmedName.slice(0, MAX_GROUP_NAME_LENGTH);
+  const isDraft = Boolean(entry.isDraft) || !clampedName;
+  const name = (isDraft ? rawName : clampedName).slice(0, MAX_GROUP_NAME_LENGTH);
   const createdAt = String(entry.createdAt || new Date().toISOString());
   const memberIds = Array.isArray(entry.memberIds)
     ? entry.memberIds
@@ -30,7 +36,13 @@ const normalizeGroup = (entry: any): FriendGroup | null => {
         .filter((id: number) => Number.isFinite(id))
     : [];
   if (!id) return null;
-  return { id, name, memberIds: Array.from(new Set(memberIds)), createdAt };
+  return {
+    id,
+    name,
+    memberIds: Array.from(new Set(memberIds)),
+    createdAt,
+    isDraft,
+  };
 };
 
 const buildId = () => {
@@ -69,18 +81,20 @@ export const useFriendGroups = () => {
     (next: FriendGroup[]) => {
       setGroups(next);
       if (typeof window === "undefined" || !userId) return;
-      localStorage.setItem(storageKey, JSON.stringify(next));
+      const savedOnly = next.filter((group) => !group.isDraft);
+      localStorage.setItem(storageKey, JSON.stringify(savedOnly));
     },
     [storageKey, userId]
   );
 
   const createGroup = useCallback(
-    (name = "New group") => {
+    (name = "") => {
       const next: FriendGroup = {
         id: buildId(),
-        name: name.trim() || "New group",
+        name: String(name ?? "").slice(0, MAX_GROUP_NAME_LENGTH),
         memberIds: [],
         createdAt: new Date().toISOString(),
+        isDraft: true,
       };
       const updated = [...groups, next].sort((a, b) => a.name.localeCompare(b.name));
       persist(updated);
@@ -102,7 +116,27 @@ export const useFriendGroups = () => {
 
   const renameGroup = useCallback(
     (id: string, name: string) => {
-      updateGroup(id, (group) => ({ ...group, name: name.trim() || "New group" }));
+      const nextName = String(name ?? "").slice(0, MAX_GROUP_NAME_LENGTH);
+      updateGroup(id, (group) => {
+        const trimmed = nextName.trim();
+        const isDraft = Boolean(group.isDraft) || !trimmed;
+        return { ...group, name: nextName, isDraft };
+      });
+    },
+    [updateGroup]
+  );
+
+  const saveGroup = useCallback(
+    (id: string) => {
+      updateGroup(id, (group) => {
+        const trimmed = String(group.name ?? "")
+          .trim()
+          .slice(0, MAX_GROUP_NAME_LENGTH);
+        if (!trimmed) {
+          return { ...group, isDraft: true };
+        }
+        return { ...group, name: trimmed, isDraft: false };
+      });
     },
     [updateGroup]
   );
@@ -142,6 +176,7 @@ export const useFriendGroups = () => {
     groups,
     createGroup,
     renameGroup,
+    saveGroup,
     toggleMember,
     setMembers,
     removeGroup,

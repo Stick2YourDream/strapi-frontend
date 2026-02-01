@@ -692,24 +692,50 @@ html.key-backup-active .chat-toggle-icon {
 }
 
 .video-call-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
   gap: 16px;
-  padding: 16px 20px;
+  padding: 14px 20px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(10, 14, 24, 0.7);
 }
 
-.video-call-toolbar {
+.video-call-header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.video-call-header-controls {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 20px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(8, 12, 22, 0.7);
-  flex-wrap: wrap;
+  justify-content: center;
+  gap: 18px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(8, 12, 22, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.video-call-header-controls-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.video-call-header-controls-group.is-actions {
+  padding-left: 8px;
+  border-left: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.video-call-header-controls-group.is-mobile-only {
+  display: none;
+}
+
+.video-call-toolbar {
+  display: none;
 }
 
 .video-call-audio {
@@ -723,6 +749,22 @@ html.key-backup-active .chat-toggle-icon {
   flex-wrap: wrap;
 }
 
+.video-call-toolbar-cluster {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.video-call-toolbar-cluster.is-right {
+  margin-left: auto;
+}
+
+.video-call-toolbar-group.is-dropdown {
+  position: relative;
+  flex: 0 0 auto;
+}
+
 .video-call-toolbar-group.is-view-select {
   flex: 0 1 240px;
   gap: 10px;
@@ -731,6 +773,105 @@ html.key-backup-active .chat-toggle-icon {
 .video-call-toolbar-group.is-selector {
   flex: 1 1 280px;
   min-width: 220px;
+}
+
+.video-call-toolbar-group.is-view-select.is-collapsed,
+.video-call-toolbar-group.is-selector.is-collapsed {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.video-call-dropdown {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 50%;
+  min-width: 210px;
+  padding: 10px;
+  border-radius: 14px;
+  border: 1px solid var(--video-border, rgba(148, 163, 184, 0.2));
+  background: linear-gradient(
+    160deg,
+    rgba(10, 16, 30, 0.96),
+    rgba(7, 10, 22, 0.98)
+  );
+  box-shadow: 0 18px 40px rgba(3, 6, 16, 0.45),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -6px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  z-index: 12;
+}
+
+.video-call-dropdown.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, 0);
+}
+
+.video-call-dropdown .video-call-view-select,
+.video-call-dropdown .video-call-selector-select {
+  width: 220px;
+  min-width: 220px;
+}
+
+.video-call-dropdown .video-call-view-select {
+  min-width: 220px;
+}
+
+.video-call-toolbar-group.is-dropdown.is-open .video-view-button::after {
+  opacity: 0;
+}
+
+.video-call-dropdown-list {
+  display: grid;
+  gap: 6px;
+  min-width: 220px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.video-call-dropdown-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.video-call-dropdown-list::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 999px;
+}
+
+.video-call-dropdown-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(9, 14, 26, 0.7);
+  color: var(--video-text, #e2e8f0);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.video-call-dropdown-option:hover {
+  transform: translateY(-1px);
+  border-color: rgba(125, 211, 252, 0.6);
+  box-shadow: 0 10px 18px rgba(5, 10, 20, 0.45);
+}
+
+.video-call-dropdown-option.is-active {
+  border-color: rgba(92, 240, 199, 0.65);
+  background: linear-gradient(
+    135deg,
+    rgba(92, 240, 199, 0.18),
+    rgba(56, 189, 248, 0.16)
+  );
+  color: #f8fafc;
 }
 
 .video-view-button.is-passive {
@@ -856,10 +997,71 @@ html.key-backup-active .chat-toggle-icon {
   padding: 4px;
 }
 
+.video-view-button.is-dropdown-trigger {
+  width: 52px;
+  min-height: 42px;
+  padding: 8px;
+}
+
+.video-view-button.is-dropdown-trigger i,
+.video-view-button.is-dropdown-trigger svg {
+  font-size: 1.25rem;
+}
+
+.video-call-header-controls .video-view-button.is-icon {
+  width: 52px;
+  min-height: 42px;
+  padding: 8px;
+}
+
+.video-call-header-controls .video-view-button {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.06);
+  color: #e2e8f0;
+}
+
+.video-call-header-controls .video-view-button.is-icon i,
+.video-call-header-controls .video-view-button.is-icon svg {
+  font-size: 1.25rem;
+}
+
+.video-view-button.is-icon.is-passive {
+  width: 48px;
+  min-height: 40px;
+  padding: 8px;
+}
+
+.video-call-toolbar .video-view-button.is-icon {
+  width: 40px;
+  min-height: 34px;
+  padding: 6px;
+}
+
+.video-call-toolbar .video-view-button.is-icon.is-passive {
+  width: 56px;
+  min-height: 46px;
+  padding: 10px;
+}
+
+.video-call-toolbar .video-view-button.is-icon i,
+.video-call-toolbar .video-view-button.is-icon svg {
+  font-size: 1rem;
+}
+
+.video-call-toolbar .video-view-button.is-icon.is-passive i,
+.video-call-toolbar .video-view-button.is-icon.is-passive svg {
+  font-size: 1.35rem;
+}
+
 .video-view-button.is-icon i,
 .video-view-button.is-icon svg {
   font-size: 0.85rem;
   line-height: 1;
+}
+
+.video-view-button.is-icon.is-passive i,
+.video-view-button.is-icon.is-passive svg {
+  font-size: 1.2rem;
 }
 
 .video-view-button[data-hint] {
@@ -921,6 +1123,7 @@ html.key-backup-active .chat-toggle-icon {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  justify-self: end;
 }
 
 .video-call-chip {
@@ -931,6 +1134,16 @@ html.key-backup-active .chat-toggle-icon {
   background: rgba(59, 130, 246, 0.18);
   border: 1px solid rgba(59, 130, 246, 0.35);
   color: #e2e8f0;
+}
+
+.video-call-chip.is-screen-share {
+  max-width: min(42vw, 260px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: rgba(16, 185, 129, 0.16);
+  border-color: rgba(16, 185, 129, 0.35);
+  color: #ecfdf3;
 }
 
 .video-call-chip.is-warm {
@@ -1151,8 +1364,8 @@ html.key-backup-active .chat-toggle-icon {
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: rgba(15, 23, 42, 0.7);
   color: #e2e8f0;
-  padding: 4px 10px;
-  font-size: 0.72rem;
+  padding: 8px 20px;
+  font-size: 1.0rem;
   cursor: pointer;
   transition: border-color 0.2s ease, background 0.2s ease;
 }
@@ -1851,6 +2064,17 @@ html.key-backup-active .chat-toggle-icon {
   border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
+.screen-share-overlay-text img.video-chat-emoji-inline {
+  width: 1.1em;
+  height: 1.1em;
+  max-width: none;
+  display: inline-block;
+  vertical-align: -0.18em;
+  margin: 0 2px;
+  border-radius: 6px;
+  border: none;
+}
+
 .screen-share-overlay-empty {
   margin: 0;
   font-size: 0.7rem;
@@ -1926,6 +2150,16 @@ html.key-backup-active .chat-toggle-icon {
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(15, 23, 42, 0.7);
+}
+
+.screen-share-status.is-label {
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #f8fafc;
+  border-color: rgba(56, 189, 248, 0.35);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.22), rgba(14, 116, 144, 0.2));
 }
 
 .screen-control-cursor {
@@ -2259,6 +2493,40 @@ html.key-backup-active .chat-toggle-icon {
   cursor: pointer;
 }
 
+.video-settings-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 20px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(6, 10, 22, 0.6);
+}
+
+.video-settings-tab {
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(15, 23, 42, 0.6);
+  color: #cbd5f5;
+  padding: 7px 16px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease,
+    transform 0.2s ease;
+}
+
+.video-settings-tab:hover {
+  border-color: rgba(148, 163, 184, 0.55);
+  transform: translateY(-1px);
+}
+
+.video-settings-tab.is-active {
+  border-color: rgba(96, 165, 250, 0.75);
+  color: #f8fafc;
+  background: rgba(59, 130, 246, 0.22);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
 .video-settings-body {
   padding: 18px 20px 20px;
   display: grid;
@@ -2283,6 +2551,121 @@ html.key-backup-active .chat-toggle-icon {
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px;
   align-items: stretch;
+}
+
+.video-settings-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.video-settings-group {
+  display: grid;
+  gap: 8px;
+}
+
+.video-settings-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.video-settings-color {
+  width: 44px;
+  height: 36px;
+  border: none;
+  padding: 0;
+  background: transparent;
+}
+
+.video-settings-alpha {
+  flex: 1 1 auto;
+  min-width: 140px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.video-settings-range {
+  flex: 1 1 auto;
+  min-width: 120px;
+  accent-color: #60a5fa;
+}
+
+.video-settings-alpha-value {
+  flex: 0 0 auto;
+  width: 36px;
+  text-align: right;
+  font-size: 11px;
+  color: #9fb0cc;
+}
+
+.video-settings-reset {
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: #e2e8f0;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.video-settings-reset:hover {
+  border-color: rgba(125, 211, 252, 0.6);
+  transform: translateY(-1px);
+}
+
+.video-settings-file {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(15, 23, 42, 0.6);
+  color: #e2e8f0;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.video-settings-file:hover {
+  border-color: rgba(125, 211, 252, 0.7);
+}
+
+.video-settings-file input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.video-settings-hint {
+  font-size: 12px;
+  color: #9fb0cc;
+}
+
+.video-settings-hint.is-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.video-settings-hint-label {
+  flex: 0 0 auto;
+}
+
+.video-settings-filename {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .video-settings-tile {
@@ -2473,6 +2856,11 @@ html.key-backup-active .chat-toggle-icon {
   width: 100%;
 }
 
+.video-chat-meta span:first-child {
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+}
+
 .video-chat-body {
   font-size: var(--video-chat-text-size, 0.85rem);
   color: #e2e8f0;
@@ -2492,6 +2880,13 @@ html.key-backup-active .chat-toggle-icon {
   -webkit-backdrop-filter: blur(6px);
 }
 
+.video-chat-inline-content {
+  display: inline;
+  line-height: inherit;
+  max-width: 100%;
+  word-break: break-word;
+}
+
 .video-chat-body.is-emoji {
   font-size: 1.35rem;
   line-height: 1.1;
@@ -2502,6 +2897,21 @@ html.key-backup-active .chat-toggle-icon {
   width: 100%;
   border-radius: 10px;
   display: block;
+}
+
+.video-chat-body img.video-chat-emoji-inline {
+  width: 1.2em;
+  height: 1.2em;
+  display: inline-block;
+  vertical-align: -0.2em;
+  margin: 0 2px;
+  border-radius: 6px;
+  border: none;
+  box-shadow: none;
+}
+
+.video-chat-emoji-inline.is-3d {
+  filter: drop-shadow(0 4px 6px rgba(4, 8, 20, 0.35));
 }
 
 .video-chat-link-list {
@@ -2546,6 +2956,12 @@ html.key-backup-active .chat-toggle-icon {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+.video-chat-link-media img.is-favicon {
+  object-fit: contain;
+  padding: 16px;
+  background: rgba(10, 14, 24, 0.55);
 }
 
 .video-chat-link-body {
@@ -3187,6 +3603,15 @@ html.key-backup-active .chat-toggle-icon {
     border-radius: 0;
   }
 
+  .video-settings-tabs {
+    padding: 12px 22px 10px;
+  }
+
+  .video-settings-tab {
+    flex: 1 1 0;
+    text-align: center;
+  }
+
   .video-settings-body {
     padding: 22px;
   }
@@ -3338,29 +3763,23 @@ html.key-backup-active .chat-toggle-icon {
   }
 
   .video-call-header {
+    grid-template-columns: 1fr;
     padding: 12px 14px;
-    flex-direction: column;
-    align-items: flex-start;
+    gap: 12px;
   }
 
   .video-call-title {
     font-size: 1.05rem;
   }
 
-  .video-call-toolbar {
-    padding: 8px 14px;
+  .video-call-header-controls {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    padding: 8px 10px;
+    border-radius: 16px;
   }
 
-  .video-call-toolbar-group.is-view-select {
-    flex: 1 1 100%;
-  }
-
-  .video-call-view-select {
-    min-width: 0;
-    width: 100%;
-  }
-
-  .video-call-toolbar-group.is-mobile-only {
+  .video-call-header-controls-group.is-mobile-only {
     display: flex;
   }
 
@@ -3773,4 +4192,140 @@ html.key-backup-active .chat-toggle-icon {
     width: min(980px, 92vw);
     height: min(1080px, 92vh);
   }
+}
+
+/* Video app theme overrides */
+.video-theme.video-call-overlay {
+  background-color: var(--video-app-bg-color);
+  background-image: var(--video-app-bg-image);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+.video-theme .video-call-modal {
+  border-color: var(--video-border);
+  background: var(--video-modal-bg);
+  color: var(--video-text);
+}
+
+.video-theme .video-call-modal::before {
+  background: none;
+}
+
+.video-theme .video-call-header,
+.video-theme .video-call-toolbar {
+  background: var(--video-box-bg, var(--video-surface));
+  border-color: var(--video-border);
+  color: var(--video-text);
+}
+
+.video-theme .video-call-header-controls {
+  background: var(--video-ghost-bg);
+  border-color: var(--video-border);
+}
+
+.video-theme .video-call-header-controls-group.is-actions {
+  border-color: var(--video-border);
+}
+
+.video-theme .video-call-sidebar {
+  background: var(--video-box-bg, var(--video-surface-alt));
+  border-color: var(--video-border);
+  color: var(--video-text);
+}
+
+.video-theme .video-call-toolbar-label,
+.video-theme .video-preview-label,
+.video-theme .video-call-view-caret,
+.video-theme .video-call-meta,
+.video-theme .video-chat-meta {
+  color: var(--video-text-muted);
+}
+
+.video-theme .video-call-selector-select,
+.video-theme .video-call-view-select select,
+.video-theme .video-preview-select select {
+  border-color: var(--video-input-border);
+  background: var(--video-input-bg);
+  color: var(--video-text);
+}
+
+.video-theme .video-view-button,
+.video-theme .video-preview-toggle,
+.video-theme .video-preview-bg,
+.video-theme .video-control.ghost {
+  border-color: var(--video-ghost-border);
+  background: var(--video-ghost-bg);
+  color: var(--video-ghost-text);
+}
+
+.video-theme .video-call-header-controls .video-view-button,
+.video-theme .video-call-toolbar .video-view-button {
+  border-color: var(--video-ghost-border, rgba(148, 163, 184, 0.35));
+  background: var(--video-ghost-bg, rgba(15, 23, 42, 0.7));
+  color: var(--video-ghost-text, #e2e8f0);
+}
+
+.video-theme .video-setup-preview,
+.video-theme .video-call-hold-card {
+  border-color: var(--video-border);
+  background: var(--video-box-bg, var(--video-card));
+}
+
+.video-theme .video-tile {
+  border-color: var(--video-border);
+  background: var(--video-card);
+}
+
+.video-theme .video-chat-body,
+.video-theme .video-chat-header,
+.video-theme .video-chat-list,
+.video-theme .video-chat-input {
+  color: var(--video-text);
+}
+
+.video-theme .video-chat-header,
+.video-theme .video-chat-input {
+  background: var(--video-surface);
+  border-color: var(--video-border);
+}
+
+.video-theme .video-chat-body {
+  background: var(--video-ghost-bg, rgba(15, 23, 42, 0.86));
+  border-color: var(--video-ghost-border, rgba(148, 163, 184, 0.5));
+  color: var(--video-ghost-text, #f8fafc);
+  box-shadow: 0 12px 24px rgba(3, 6, 16, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.video-theme .video-chat-link-card {
+  background: var(--video-surface);
+  border-color: var(--video-border);
+}
+
+.video-theme .video-chat-reaction-chip,
+.video-theme .video-chat-reaction-picker,
+.video-theme .video-chat-reaction-add {
+  background: var(--video-surface);
+  border-color: var(--video-border);
+  color: var(--video-text);
+}
+
+.video-theme .video-call-dropdown {
+  border-color: var(--video-border);
+  background: var(--video-surface);
+}
+
+.video-theme .video-control.ghost {
+  background: rgba(15, 23, 42, 0.86);
+  border-color: rgba(148, 163, 184, 0.5);
+  color: #f8fafc;
+  box-shadow: 0 12px 22px rgba(2, 6, 23, 0.35);
+}
+
+.video-theme .video-control.end {
+  background: linear-gradient(135deg, rgba(248, 113, 113, 0.95), rgba(239, 68, 68, 0.9));
+  border-color: rgba(248, 113, 113, 0.75);
+  box-shadow: 0 12px 22px rgba(120, 4, 18, 0.35);
 }

@@ -1,5 +1,5 @@
 // src/pages/Login.tsx
-import { useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api/strapi";
 import type { AuthResponse, LoginStartResponse } from "../types/auth";
@@ -8,6 +8,26 @@ import axios from "axios";
 import "../css/login.css";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { getOrCreateDeviceId } from "../utils/device-id";
+
+const SETTINGS_GLOBAL_KEY = "video-call-settings:global";
+
+const loadBackgroundSettings = (raw: string | null) => {
+  if (!raw) return { backgroundImage: "", backgroundColor: "" };
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      return { backgroundImage: "", backgroundColor: "" };
+    }
+    return {
+      backgroundImage:
+        typeof parsed.backgroundImage === "string" ? parsed.backgroundImage : "",
+      backgroundColor:
+        typeof parsed.backgroundColor === "string" ? parsed.backgroundColor : "",
+    };
+  } catch {
+    return { backgroundImage: "", backgroundColor: "" };
+  }
+};
 
 type VerificationMethod = "sms" | "email" | "totp";
 
@@ -39,8 +59,41 @@ export default function Login() {
     type: "website",
     robots: "noindex, nofollow",
   });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setBackgroundSettings(loadBackgroundSettings(localStorage.getItem(SETTINGS_GLOBAL_KEY)));
+  }, []);
+
+  useEffect(() => {
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== SETTINGS_GLOBAL_KEY) return;
+      setBackgroundSettings(loadBackgroundSettings(event.newValue));
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
   const postLoginPath = isVideoApp ? "/call" : "/dashboard";
   const isVerificationStep = Boolean(challengeId);
+  const [backgroundSettings, setBackgroundSettings] = useState(() => {
+    if (typeof window === "undefined") return { backgroundImage: "", backgroundColor: "" };
+    return loadBackgroundSettings(localStorage.getItem(SETTINGS_GLOBAL_KEY));
+  });
+  const authShellStyle = useMemo(() => {
+    const style: CSSProperties = {};
+    const vars = style as Record<string, string>;
+    const backgroundImage = backgroundSettings.backgroundImage.trim();
+    const backgroundColor = backgroundSettings.backgroundColor.trim();
+    if (backgroundColor) {
+      vars["--auth-bg-color"] = backgroundColor;
+    }
+    if (backgroundImage) {
+      vars["--auth-bg-image"] = `url(\"${backgroundImage}\")`;
+    } else if (backgroundColor) {
+      vars["--auth-bg-image"] = "none";
+    }
+    return style;
+  }, [backgroundSettings.backgroundColor, backgroundSettings.backgroundImage]);
 
   const buildDebugDetails = (err: unknown) => {
     if (!axios.isAxiosError(err)) {
@@ -305,7 +358,7 @@ export default function Login() {
   };
 
   return (
-    <div className="auth-shell">
+    <div className="auth-shell" style={authShellStyle}>
       <div className="auth-hero">
         <button
           type="button"
@@ -355,7 +408,7 @@ export default function Login() {
             </div>
 
             <p className="auth-hint">
-              If you have 2FA enabled, we will send a code or prompt your authenticator app.
+              If you have 2FA enabled, you will need to enter the code from your authenticator app.
             </p>
 
             <label className="auth-check">

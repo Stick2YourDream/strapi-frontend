@@ -28,6 +28,7 @@ export type ProfilePayload = {
   occupation?: string;
   bio?: string;
   phone?: string;
+  phoneDialCode?: string;
   backgrounds?: Record<string, { color?: string; image?: string }>;
   intent?: string;
   onboardingComplete?: boolean;
@@ -113,6 +114,7 @@ export const buildProfilePayloadFromAttrs = (attrs: any): ProfilePayload => ({
   occupation: attrs?.occupation || "",
   bio: attrs?.bio || "",
   phone: attrs?.phone || "",
+  phoneDialCode: attrs?.phoneDialCode || "",
   backgrounds: attrs?.backgrounds || undefined,
   intent: attrs?.intent || undefined,
   onboardingComplete:

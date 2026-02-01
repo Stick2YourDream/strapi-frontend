@@ -123,6 +123,10 @@ type VideoCallEffects = {
     | "cinema"
     | "matte"
     | "soft"
+    | "neon"
+    | "sunset"
+    | "ice"
+    | "vintage"
     | "warm"
     | "cool"
     | "amber"
@@ -322,16 +326,16 @@ const mediapipeBase =
   String(import.meta.env.VITE_MEDIAPIPE_ASSETS_URL || "").trim() ||
   "https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation";
 const BACKDROP_ASSETS = {
-  backdrop1: "/backdrops/backdrop1.jpg",
-  backdrop2: "/backdrops/backdrop2.jpg",
-  backdrop3: "/backdrops/backdrop3.jpg",
-  backdrop4: "/backdrops/backdrop4.jpg",
-  backdrop5: "/backdrops/backdrop5.jpg",
-  backdrop6: "/backdrops/backdrop6.jpg",
-  backdrop7: "/backdrops/backdrop7.jpg",
-  backdrop8: "/backdrops/backdrop8.jpeg",
-  backdrop9: "/backdrops/backdrop9.jpeg",
-  backdrop10: "/backdrops/backdrop10.jpg",
+  backdrop1: "/backdropsAI/bedroom.png",
+  backdrop2: "/backdropsAI/dots.png",
+  backdrop3: "/backdropsAI/futuristic_home.png",
+  backdrop4: "/backdropsAI/home.png",
+  backdrop5: "/backdropsAI/lakeside.png",
+  backdrop6: "/backdropsAI/lillies.png",
+  backdrop7: "/backdropsAI/nightime_city.png",
+  backdrop8: "/backdropsAI/stunning.png",
+  backdrop9: "/backdropsAI/tech_lab.png",
+  backdrop10: "/backdropsAI/wavy.png",
 } as const;
 const backdropImageCache = new Map<string, HTMLImageElement>();
 const getBackdropImage = (src: string) => {
@@ -1453,20 +1457,27 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         video: videoConstraints,
         audio: true,
       };
-      let stream: MediaStream;
-      try {
-        stream = await mediaDevices.getDisplayMedia(displayOptions);
-      } catch {
+      let lastError: Error | null = null;
+      const attemptGetDisplayMedia = async (
+        params: DisplayMediaStreamOptions
+      ): Promise<MediaStream | null> => {
         try {
-          stream = await mediaDevices.getDisplayMedia({
-            video: true,
-            audio: true,
-          });
-        } catch {
-          stream = await mediaDevices.getDisplayMedia({
-            video: true,
-          });
+          return await mediaDevices.getDisplayMedia(params);
+        } catch (error) {
+          lastError = error as Error;
+          const name = lastError?.name;
+          if (name === "NotAllowedError" || name === "AbortError") {
+            throw lastError;
+          }
+          return null;
         }
+      };
+      let stream =
+        (await attemptGetDisplayMedia(displayOptions)) ||
+        (await attemptGetDisplayMedia({ video: true, audio: true })) ||
+        (await attemptGetDisplayMedia({ video: true }));
+      if (!stream) {
+        throw lastError || new Error("Unable to start screen sharing.");
       }
       const [track] = stream.getVideoTracks();
       if (!track) return;
@@ -1535,29 +1546,37 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const getCameraFilter = useCallback((filter: VideoCallEffects["filter"]) => {
     switch (filter) {
       case "vivid":
-        return "contrast(1.12) saturate(1.25)";
+        return "contrast(1.3) saturate(1.5) brightness(1.08)";
       case "crisp":
-        return "contrast(1.18) saturate(1.08) brightness(1.02)";
+        return "contrast(1.35) saturate(1.15) brightness(1.06)";
       case "cinema":
-        return "contrast(1.15) saturate(0.9) brightness(0.98)";
+        return "contrast(1.2) saturate(0.85) brightness(0.95) sepia(0.08)";
       case "matte":
-        return "contrast(0.92) saturate(0.95) brightness(1.06)";
+        return "contrast(0.85) saturate(0.9) brightness(1.12)";
       case "soft":
-        return "contrast(0.95) saturate(0.9) brightness(1.05)";
+        return "contrast(0.9) saturate(0.85) brightness(1.12)";
+      case "neon":
+        return "contrast(1.35) saturate(1.8) hue-rotate(25deg)";
+      case "sunset":
+        return "sepia(0.5) saturate(1.35) hue-rotate(-10deg) brightness(1.05)";
+      case "ice":
+        return "saturate(1.3) hue-rotate(200deg) brightness(1.08)";
+      case "vintage":
+        return "sepia(0.45) saturate(0.9) contrast(0.9) brightness(1.05)";
       case "noir":
-        return "grayscale(1) contrast(1.2)";
+        return "grayscale(1) contrast(1.35) brightness(0.95)";
       case "warm":
-        return "saturate(1.1) sepia(0.25)";
+        return "saturate(1.25) sepia(0.35) brightness(1.04)";
       case "cool":
-        return "saturate(1.05) hue-rotate(190deg)";
+        return "saturate(1.2) hue-rotate(200deg) brightness(1.02)";
       case "amber":
-        return "sepia(0.35) saturate(1.1) contrast(1.03)";
+        return "sepia(0.55) saturate(1.2) contrast(1.05) brightness(1.05)";
       case "teal":
-        return "hue-rotate(160deg) saturate(1.08) contrast(1.05)";
+        return "hue-rotate(160deg) saturate(1.2) contrast(1.1)";
       case "rose":
-        return "hue-rotate(-15deg) saturate(1.12) brightness(1.02)";
+        return "hue-rotate(-20deg) saturate(1.3) brightness(1.05)";
       case "midnight":
-        return "brightness(0.85) contrast(1.1) saturate(0.9)";
+        return "brightness(0.75) contrast(1.2) saturate(0.8)";
       default:
         return "none";
     }
@@ -1705,15 +1724,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         }
         const cameraFilter = getCameraFilter(effects.filter);
         const mirror = effects.mirror;
-        const shouldBlur = effects.blur && effects.background === "none";
-        const filterParts = [];
-        if (cameraFilter !== "none") {
-          filterParts.push(cameraFilter);
-        }
-        if (shouldBlur) {
-          filterParts.push("blur(10px)");
-        }
-        const baseFilter = filterParts.length ? filterParts.join(" ") : "none";
+        const shouldBlurBackground = effects.blur && effects.background === "none";
+        const blurFilter = shouldBlurBackground ? "blur(10px)" : "none";
+        const baseFilter = cameraFilter !== "none" ? cameraFilter : "none";
 
         if (!needsSegmentation) {
           ctx.clearRect(0, 0, width, height);
@@ -1791,7 +1804,11 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           }
         } else {
           ctx.clearRect(0, 0, width, height);
-          ctx.filter = baseFilter;
+          if (blurFilter !== "none") {
+            ctx.filter = `${baseFilter} ${blurFilter}`.trim();
+          } else {
+            ctx.filter = baseFilter;
+          }
           drawCover(ctx, width, height, mirror);
           ctx.filter = "none";
         }

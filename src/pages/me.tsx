@@ -37,6 +37,13 @@ import {
 } from "../utils/device-approval";
 import { syncPushSubscription, type PushSyncStatus } from "../utils/push-notifications";
 import { formatPostUpdateLabel } from "../utils/time";
+import {
+  buildTelLink,
+  extractNationalDigits,
+  formatPhoneDisplay,
+  formatPhoneInput,
+  normalizeDialCode,
+} from "../utils/phone";
 
 type VerificationMethod = "email" | "sms";
 type TwoFactorMethod = "email" | "sms" | "totp";
@@ -69,6 +76,7 @@ type Profile = {
   occupation: string;
   bio: string;
   phone?: string;
+  phoneDialCode?: string;
   preferredVerificationMethod: VerificationMethod;
   showPhoneOnProfile: boolean;
   profileVisibility: ProfileVisibility;
@@ -86,6 +94,7 @@ type LocationOption = {
   name: string;
   code: string;
   countryCode?: string;
+  phoneCode?: string;
 };
 
 type ReactionCounts = {
@@ -267,13 +276,32 @@ const normalizeReactionValue = (value: unknown): string | null => {
   return null;
 };
 
-const phoneDigits = (value?: string) => (value || "").replace(/\D/g, "").slice(0, 10);
-const formatPhone = (value?: string) => {
-  const digits = phoneDigits(value);
-  if (!digits) return "";
-  if (digits.length <= 3) return `(${digits}`;
-  if (digits.length <= 6) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
-  return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+const resolveDialCodeForCountry = (
+  countryCode: string,
+  countryName: string,
+  options: LocationOption[]
+) => {
+  if (!options.length) return "";
+  const matchByCode = options.find(
+    (option) => option.code && option.code.toUpperCase() === countryCode.toUpperCase()
+  );
+  const matchByCountry = !matchByCode ? matchByName(options, countryName) : null;
+  const phoneCode = matchByCode?.phoneCode || matchByCountry?.phoneCode || "";
+  return normalizeDialCode(phoneCode);
+};
+
+const deriveDialCodeFromPhone = (
+  digits: string,
+  options: LocationOption[],
+  fallback: string
+) => {
+  if (!digits) return fallback;
+  const codes = options
+    .map((option) => normalizeDialCode(option.phoneCode || ""))
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+  const match = codes.find((code) => digits.startsWith(code));
+  return match || fallback;
 };
 
 const normalizeRegistrationLocks = (value: any): RegistrationLocks | null => {
@@ -357,6 +385,14 @@ const hostnameFor = (value: string) => {
     return value;
   }
 };
+const faviconFor = (value: string) => {
+  try {
+    const host = new URL(value).hostname.replace(/^www\./, "");
+    return `https://www.google.com/s2/favicons?domain=${host}&sz=128`;
+  } catch {
+    return "";
+  }
+};
 const isYoutubeUrl = (value: string) => {
   try {
     const host = new URL(value).hostname.toLowerCase();
@@ -424,6 +460,8 @@ const LinkPreviewCard = ({
   const title = preview.title || preview.siteName || hostnameFor(url);
   const meta = preview.siteName || hostnameFor(url);
   const showBadge = preview.type === "video" || isYoutubeUrl(url);
+  const fallbackImage = preview.image || faviconFor(url);
+  const hasImage = Boolean(fallbackImage);
   return (
     <a
       className={`link-preview-card${compact ? " is-compact" : ""}`}
@@ -432,8 +470,13 @@ const LinkPreviewCard = ({
       rel="noreferrer"
     >
       <div className="link-preview-media">
-        {preview.image ? (
-          <img src={preview.image} alt={title} loading="lazy" />
+        {hasImage ? (
+          <img
+            src={fallbackImage}
+            alt={title}
+            loading="lazy"
+            className={preview.image ? "" : "is-favicon"}
+          />
         ) : (
           <div className="link-preview-placeholder">LINK</div>
         )}
@@ -651,6 +694,7 @@ export default function Me() {
     occupation: "",
     bio: "",
     phone: "",
+    phoneDialCode: "",
     preferredVerificationMethod: "email",
     showPhoneOnProfile: false,
     profileVisibility: "public",
@@ -669,6 +713,7 @@ export default function Me() {
   const hobbyBlurTimeoutRef = useRef<number | null>(null);
   const profileIdRef = useRef<string | number | null>(null);
   const handleFixAttemptedRef = useRef(false);
+  const phoneRepairAttemptedRef = useRef(false);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
   const [avatarRotateBusy, setAvatarRotateBusy] = useState(false);
@@ -1538,6 +1583,18 @@ export default function Me() {
         ? nextProfile.searchIndexingEnabled
         : true;
     const externalIndexingEnabled = Boolean(nextProfile.externalIndexingEnabled);
+    const resolvedPhoneDialCode = normalizeDialCode(
+      nextProfile.phoneDialCode ||
+        resolveDialCodeForCountry(
+          nextProfile.countryCode || "",
+          nextProfile.country || "",
+          countryOptions
+        )
+    );
+    const normalizedPhone = extractNationalDigits(
+      nextProfile.phone || "",
+      resolvedPhoneDialCode
+    );
     const basePayload =
       profilePayloadRef.current ||
       buildProfilePayloadFromAttrs({
@@ -1546,6 +1603,8 @@ export default function Me() {
       });
     const updatedPayload: ProfilePayload = {
       ...basePayload,
+      phone: normalizedPhone,
+      phoneDialCode: resolvedPhoneDialCode,
       profileVisibility: normalizedProfileVisibility,
       privacySettings: normalizedPrivacySettings,
       searchIndexingEnabled,
@@ -1565,6 +1624,7 @@ export default function Me() {
         activityVisibility: normalizedActivityVisibility,
         notificationSettings: normalizedNotificationSettings,
         showPhoneOnProfile: nextProfile.showPhoneOnProfile,
+        phone: normalizedPhone,
       },
     });
     profilePayloadRef.current = updatedPayload;
@@ -1848,7 +1908,18 @@ export default function Me() {
         challengeId: phoneChangeChallengeId,
         code: phoneChangeCode.trim(),
       });
-      const updatedPhone = phoneDigits(loginPhone);
+      const resolvedPhoneDialCode = normalizeDialCode(
+        profile.phoneDialCode ||
+          resolveDialCodeForCountry(
+            profile.countryCode || "",
+            profile.country || "",
+            countryOptions
+          )
+      );
+      const updatedPhone = extractNationalDigits(
+        loginPhone,
+        resolvedPhoneDialCode
+      );
       if (updatedPhone && user?.id) {
         try {
           const current = await fetchMyProfileByUser();
@@ -1865,9 +1936,12 @@ export default function Me() {
             if (!payload) {
               payload = buildProfilePayloadFromAttrs(attrs);
             }
+            const nextPhoneDialCode =
+              resolvedPhoneDialCode || normalizeDialCode(payload.phoneDialCode || "");
             const nextPayload: ProfilePayload = {
               ...payload,
               phone: updatedPhone,
+              phoneDialCode: nextPhoneDialCode,
             };
             const encryptedProfile = await encryptProfilePayload(user.id, nextPayload);
             const nextLocks: RegistrationLocks = {
@@ -1884,7 +1958,11 @@ export default function Me() {
             });
             profilePayloadRef.current = nextPayload;
             registrationLocksRef.current = nextLocks;
-            setProfile((prev) => ({ ...prev, phone: formatPhone(updatedPhone) }));
+            setProfile((prev) => ({
+              ...prev,
+              phone: formatPhoneInput(updatedPhone, nextPhoneDialCode),
+              phoneDialCode: nextPhoneDialCode || prev.phoneDialCode,
+            }));
           }
         } catch {
           // ignore profile sync failures
@@ -2196,6 +2274,7 @@ export default function Me() {
       ...prev,
       country: value,
       countryCode: match?.code || "",
+      phoneDialCode: prev.phoneDialCode || normalizeDialCode(match?.phoneCode || ""),
       state: "",
       stateCode: "",
       city: "",
@@ -2225,9 +2304,16 @@ export default function Me() {
       try {
         const res = await api.get("/locations/countries");
         const list = (res.data?.data ?? []).map(
-          (country: { name?: string; code?: string; isoCode?: string }) => ({
+          (country: {
+            name?: string;
+            code?: string;
+            isoCode?: string;
+            phoneCode?: string;
+            phonecode?: string;
+          }) => ({
             name: country.name,
             code: country.code || country.isoCode || "",
+            phoneCode: country.phoneCode || country.phonecode || "",
           })
         );
         const usIndex = list.findIndex(
@@ -2263,6 +2349,20 @@ export default function Me() {
       if (prev.countryCode || !prev.country) return prev;
       const match = matchByName(countryOptions, prev.country);
       return match ? { ...prev, countryCode: match.code } : prev;
+    });
+  }, [countryOptions]);
+
+  useEffect(() => {
+    if (!countryOptions.length) return;
+    setProfile((prev) => {
+      if (prev.phoneDialCode) return prev;
+      const dialCode = resolveDialCodeForCountry(
+        prev.countryCode || "",
+        prev.country || "",
+        countryOptions
+      );
+      if (!dialCode) return prev;
+      return { ...prev, phoneDialCode: dialCode };
     });
   }, [countryOptions]);
 
@@ -2373,6 +2473,51 @@ export default function Me() {
       });
   }, [loading, lockedUniqueHandle, profile.handle, user]);
 
+  useEffect(() => {
+    if (!user || !countryOptions.length) return;
+    if (phoneRepairAttemptedRef.current) return;
+    const fallbackDialCode = resolveDialCodeForCountry(
+      profile.countryCode || "",
+      profile.country || "",
+      countryOptions
+    );
+    const effectiveDialCode = fallbackDialCode || normalizeDialCode(profile.phoneDialCode);
+    const currentDigits = extractNationalDigits(
+      profile.phone,
+      effectiveDialCode
+    ).length;
+    if (currentDigits >= 10) return;
+    phoneRepairAttemptedRef.current = true;
+    api
+      .get("/auth/phone/me")
+      .then((res) => {
+        const rawPhone = String(res.data?.phoneNumber || "").trim();
+        const rawDigits = normalizeDialCode(rawPhone);
+        if (!rawDigits) return;
+        const dialCode = deriveDialCodeFromPhone(
+          rawDigits,
+          countryOptions,
+          effectiveDialCode
+        );
+        if (!dialCode) return;
+        const national = rawDigits.startsWith(dialCode)
+          ? rawDigits.slice(dialCode.length)
+          : rawDigits.slice(-10);
+        applyPhoneRepair(national, dialCode);
+        void syncPhoneFromLogin(national, dialCode);
+      })
+      .catch(() => {
+        phoneRepairAttemptedRef.current = false;
+      });
+  }, [
+    countryOptions,
+    profile.country,
+    profile.countryCode,
+    profile.phone,
+    profile.phoneDialCode,
+    user,
+  ]);
+
 const setProfileFromEntry = async (entry: any) => {
     if (!entry) return;
     const attrs = normalize(entry);
@@ -2438,6 +2583,7 @@ const setProfileFromEntry = async (entry: any) => {
     const notificationSettings = normalizeNotificationSettings(
       payload.notificationSettings
     );
+    const phoneDialCode = normalizeDialCode(payload.phoneDialCode || "");
     const nextProfile: Profile = {
       firstName: payload.firstName || "",
       lastName: payload.lastName || "",
@@ -2453,7 +2599,8 @@ const setProfileFromEntry = async (entry: any) => {
       hobbies: parsedHobbies.join(", "),
       occupation: payload.occupation || "",
       bio: payload.bio || "",
-      phone: formatPhone(payload.phone || ""),
+      phone: formatPhoneInput(payload.phone || "", phoneDialCode),
+      phoneDialCode,
       preferredVerificationMethod,
       showPhoneOnProfile,
       profileVisibility,
@@ -2470,6 +2617,59 @@ const setProfileFromEntry = async (entry: any) => {
     profileSnapshotRef.current = nextProfile;
     hobbySnapshotRef.current = parsedHobbies;
     setOnboardingActive(!onboardingComplete);
+  };
+
+  const applyPhoneRepair = (nationalDigits: string, dialCode: string) => {
+    const cleaned = extractNationalDigits(nationalDigits, dialCode);
+    if (cleaned.length < 10) return;
+    const formatted = formatPhoneInput(cleaned, dialCode);
+    setProfile((prev) => ({
+      ...prev,
+      phone: formatted,
+      phoneDialCode: dialCode,
+    }));
+    if (profileSnapshotRef.current) {
+      profileSnapshotRef.current = {
+        ...profileSnapshotRef.current,
+        phone: formatted,
+        phoneDialCode: dialCode,
+      };
+    }
+  };
+
+  const syncPhoneFromLogin = async (nationalDigits: string, dialCode: string) => {
+    if (!user) return;
+    const cleaned = extractNationalDigits(nationalDigits, dialCode);
+    if (cleaned.length < 10) return;
+    const basePayload =
+      profilePayloadRef.current ||
+      buildProfilePayloadFromAttrs({
+        ...profile,
+        phone: cleaned,
+        phoneDialCode: dialCode,
+      });
+    const updatedPayload: ProfilePayload = {
+      ...basePayload,
+      phone: cleaned,
+      phoneDialCode: dialCode,
+    };
+    const encryptedProfile = await encryptProfilePayload(user.id, updatedPayload);
+    await api.put("/profiles/me", {
+      data: {
+        encryptedProfile,
+        profileKeyVersion: 1,
+        phone: cleaned,
+        showPhoneOnProfile: profile.showPhoneOnProfile,
+      },
+    });
+    profilePayloadRef.current = updatedPayload;
+    if (profileSnapshotRef.current) {
+      profileSnapshotRef.current = {
+        ...profileSnapshotRef.current,
+        phone: formatPhoneInput(cleaned, dialCode),
+        phoneDialCode: dialCode,
+      };
+    }
   };
 
   const fetchMyProfileByUser = async () => {
@@ -3305,7 +3505,18 @@ const setProfileFromEntry = async (entry: any) => {
       const buildUniqueHandle = () =>
         `${baseHandle}-${user.id}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-      const phoneClean = phoneDigits(mergedProfile.phone);
+      const resolvedPhoneDialCode = normalizeDialCode(
+        mergedProfile.phoneDialCode ||
+          resolveDialCodeForCountry(
+            mergedProfile.countryCode || "",
+            mergedProfile.country || "",
+            countryOptions
+          )
+      );
+      const phoneClean = extractNationalDigits(
+        mergedProfile.phone,
+        resolvedPhoneDialCode
+      );
 
       let avatarId: number | undefined;
       let uploadedAvatarUrl: string | undefined;
@@ -3379,6 +3590,7 @@ const setProfileFromEntry = async (entry: any) => {
       const existingCity = String(existingPayload.city || "");
       const existingBirthday = normalizeBirthdayInput(existingPayload.birthday);
       const existingPhone = String(existingPayload.phone || "");
+      const existingPhoneDialCode = String(existingPayload.phoneDialCode || "");
 
       const effectiveFirstName = lockFirstName ? existingFirstName : rawFirstName;
       const effectiveLastName = lockLastName ? existingLastName : rawLastName;
@@ -3393,6 +3605,11 @@ const setProfileFromEntry = async (entry: any) => {
       );
       const normalizedBirthday = normalizeBirthdayInput(effectiveBirthday);
       const effectivePhone = resolveLockedValue(lockPhone, existingPhone, phoneClean || "");
+      const effectivePhoneDialCode = resolveLockedValue(
+        lockPhone,
+        existingPhoneDialCode,
+        resolvedPhoneDialCode
+      );
       const normalizedProfileVisibility = normalizeProfileVisibility(
         mergedProfile.profileVisibility
       );
@@ -3451,6 +3668,7 @@ const setProfileFromEntry = async (entry: any) => {
         occupation: mergedProfile.occupation,
         bio: mergedProfile.bio,
         phone: effectivePhone,
+        phoneDialCode: effectivePhoneDialCode,
         profileVisibility: normalizedProfileVisibility,
         privacySettings: normalizedPrivacySettings,
         searchIndexingEnabled: normalizedSearchIndexingEnabled,
@@ -3613,6 +3831,18 @@ const setProfileFromEntry = async (entry: any) => {
     }
   };
 
+  const dialCodeOptions = useMemo(
+    () =>
+      countryOptions
+        .map((country) => {
+          const dial = normalizeDialCode(country.phoneCode || "");
+          if (!dial) return null;
+          return { value: dial, label: `+${dial} ${country.name}` };
+        })
+        .filter((entry): entry is { value: string; label: string } => Boolean(entry)),
+    [countryOptions]
+  );
+
   if (!user) return null;
 
   const displayName =
@@ -3631,9 +3861,21 @@ const setProfileFromEntry = async (entry: any) => {
       .join("")
       .slice(0, 2)
       .toUpperCase() || "ME";
-  const phoneLink = phoneDigits(profile.phone);
-  const phoneDisplay = formatPhone(profile.phone);
-  const canDial = phoneLink.length === 10;
+  const effectivePhoneDialCode = normalizeDialCode(
+    profile.phoneDialCode ||
+      resolveDialCodeForCountry(
+        profile.countryCode || "",
+        profile.country || "",
+        countryOptions
+      )
+  );
+  const phoneDigitsCount = extractNationalDigits(
+    profile.phone,
+    effectivePhoneDialCode
+  ).length;
+  const phoneLink = buildTelLink(profile.phone, effectivePhoneDialCode);
+  const phoneDisplay = formatPhoneDisplay(profile.phone, effectivePhoneDialCode);
+  const canDial = phoneDigitsCount === 10;
   const hobbiesDisplay = parseHobbies(profile.hobbies || "");
   const stateLabel = profile.countryCode === "US" ? "State" : "Province/Region";
   const locationDisplay = [profile.city, profile.state, profile.country]
@@ -3752,7 +3994,7 @@ const setProfileFromEntry = async (entry: any) => {
     ["Gender", profile.gender],
   ] as const;
   const phoneInfo: Array<[string, string | undefined]> = profile.showPhoneOnProfile
-    ? [["Phone", profile.phone]]
+    ? [["Phone", phoneDisplay || profile.phone]]
     : [];
   const rightInfo: Array<[string, string | undefined]> = [
     ["Handle", displayHandle],
@@ -3942,39 +4184,151 @@ const setProfileFromEntry = async (entry: any) => {
       </section>
     </div>
   );
+  const iconStrokeProps = {
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.6,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+  };
+
+  const ProfileInfoIcon = ({ label }: { label: string }) => {
+    switch (label) {
+      case "First Name":
+      case "Last Name":
+        return (
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="8" r="4" {...iconStrokeProps} />
+            <path d="M4 20c1.6-4 14.4-4 16 0" {...iconStrokeProps} />
+          </svg>
+        );
+      case "Handle":
+        return (
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M8 12h8" {...iconStrokeProps} />
+            <path d="M6 7h6a4 4 0 0 1 0 8H6" {...iconStrokeProps} />
+            <path d="M18 17h-6a4 4 0 0 1 0-8h6" {...iconStrokeProps} />
+          </svg>
+        );
+      case "Age":
+        return (
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="8" r="4" {...iconStrokeProps} />
+            <path d="M4 20c1.6-4 14.4-4 16 0" {...iconStrokeProps} />
+          </svg>
+        );
+      case "Birthday":
+        return (
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 10h16v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-9z" {...iconStrokeProps} />
+            <path d="M7 10V8a2 2 0 0 1 4 0v2" {...iconStrokeProps} />
+            <path d="M13 10V8a2 2 0 0 1 4 0v2" {...iconStrokeProps} />
+            <path d="M4 14h16" {...iconStrokeProps} />
+          </svg>
+        );
+      case "Religion":
+        return (
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3v18" {...iconStrokeProps} />
+            <path d="M7 8h10" {...iconStrokeProps} />
+            <path d="M6 21h12" {...iconStrokeProps} />
+          </svg>
+        );
+      case "Gender":
+        return (
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="9" cy="10" r="4" {...iconStrokeProps} />
+            <path d="M13 6l5-5m0 0h-4m4 0v4" {...iconStrokeProps} />
+            <path d="M9 14v6m-3-3h6" {...iconStrokeProps} />
+          </svg>
+        );
+      case "Phone":
+        return (
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 3h6l1 4-3 1c1 2 3 4 5 5l1-3 4 1v6c-8 0-14-6-14-14z" {...iconStrokeProps} />
+          </svg>
+        );
+      case "Location":
+      case "Country":
+      case "State":
+      case "City":
+        return (
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M12 3c-3.3 0-6 2.7-6 6 0 4.2 6 12 6 12s6-7.8 6-12c0-3.3-2.7-6-6-6z"
+              {...iconStrokeProps}
+            />
+            <circle cx="12" cy="9" r="2.2" {...iconStrokeProps} />
+          </svg>
+        );
+      case "Hobbies":
+        return (
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M12 3l2.5 5 5.5.8-4 3.9.9 5.5-4.9-2.6-4.9 2.6.9-5.5-4-3.9 5.5-.8z"
+              {...iconStrokeProps}
+            />
+          </svg>
+        );
+      case "Occupation":
+        return (
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3" y="7" width="18" height="12" rx="2" {...iconStrokeProps} />
+            <path d="M9 7V5h6v2" {...iconStrokeProps} />
+            <path d="M3 13h18" {...iconStrokeProps} />
+          </svg>
+        );
+      case "Bio":
+        return (
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 6h16M4 12h12M4 18h8" {...iconStrokeProps} />
+          </svg>
+        );
+      default:
+        return (
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" {...iconStrokeProps} />
+            <path d="M12 8v4m0 4h.01" {...iconStrokeProps} />
+          </svg>
+        );
+    }
+  };
+
   const renderInfoCard = (label: string, value?: string) => (
     <div className="profile-card" key={label}>
-      <p className="profile-card-label">{label}</p>
-      {label === "Phone" ? (
-        <p className="profile-card-value">
-          {phoneLink ? (
-            canDial ? (
-              <a
-                href={`tel:${phoneLink}`}
-                style={{ color: "inherit", textDecoration: "underline" }}
-              >
-                {phoneDisplay || value}
-              </a>
+      <div className="profile-card-icon">
+        <ProfileInfoIcon label={label} />
+      </div>
+      <div className="profile-card-content">
+        <p className="profile-card-label">{label}</p>
+        {label === "Phone" ? (
+          <p className="profile-card-value">
+            {phoneLink ? (
+              canDial ? (
+                <a href={`tel:${phoneLink}`} className="profile-card-link">
+                  {phoneDisplay || value}
+                </a>
+              ) : (
+                phoneDisplay || value
+              )
             ) : (
-              phoneDisplay || value
-            )
+              "-"
+            )}
+          </p>
+        ) : label === "Hobbies" ? (
+          hobbiesDisplay.length ? (
+            <ul className="profile-list">
+              {hobbiesDisplay.map((hobby) => (
+                <li key={hobby}>{hobby}</li>
+              ))}
+            </ul>
           ) : (
-            "-"
-          )}
-        </p>
-      ) : label === "Hobbies" ? (
-        hobbiesDisplay.length ? (
-          <ul className="profile-list">
-            {hobbiesDisplay.map((hobby) => (
-              <li key={hobby}>{hobby}</li>
-            ))}
-          </ul>
+            <p className="profile-card-value">-</p>
+          )
         ) : (
-          <p className="profile-card-value">-</p>
-        )
-      ) : (
-        <p className="profile-card-value">{value || "-"}</p>
-      )}
+          <p className="profile-card-value">{value || "-"}</p>
+        )}
+      </div>
     </div>
   );
 
@@ -4194,15 +4548,40 @@ const setProfileFromEntry = async (entry: any) => {
             </label>
             <label className="profile-field">
               <span className="profile-field-label">Phone</span>
-              <input
-                className="auth-input"
-                type="tel"
-                maxLength={14}
-                placeholder="(555) 123-4567"
-                value={profile.phone || ""}
-                onChange={(e) => setProfile({ ...profile, phone: formatPhone(e.target.value) })}
-                disabled={isPhoneLocked}
-              />
+              <div className="profile-phone-row">
+                <select
+                  className="auth-input profile-phone-code"
+                  value={effectivePhoneDialCode}
+                  onChange={(e) =>
+                    setProfile({
+                      ...profile,
+                      phoneDialCode: normalizeDialCode(e.target.value),
+                    })
+                  }
+                  disabled={isPhoneLocked}
+                >
+                  <option value="">Code</option>
+                  {dialCodeOptions.map((option) => (
+                    <option key={`${option.value}-${option.label}`} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  className="auth-input profile-phone-number"
+                  type="tel"
+                  maxLength={14}
+                  placeholder="(555) 123-4567"
+                  value={profile.phone || ""}
+                  onChange={(e) =>
+                    setProfile({
+                      ...profile,
+                      phone: formatPhoneInput(e.target.value, effectivePhoneDialCode),
+                    })
+                  }
+                  disabled={isPhoneLocked}
+                />
+              </div>
               {isPhoneLocked && (
                 <small className="profile-lock-note">
                   Set during registration. Use Login phone number settings to update.
@@ -4732,15 +5111,40 @@ const setProfileFromEntry = async (entry: any) => {
 
                   <label className="profile-field">
                     <span className="profile-field-label">Phone</span>
-                    <input
-                      className="auth-input"
-                      type="tel"
-                      maxLength={14}
-                      placeholder="(555) 123-4567"
-                      value={profile.phone || ""}
-                      onChange={(e) => setProfile({ ...profile, phone: formatPhone(e.target.value) })}
-                      disabled={isPhoneLocked}
-                    />
+                    <div className="profile-phone-row">
+                      <select
+                        className="auth-input profile-phone-code"
+                        value={effectivePhoneDialCode}
+                        onChange={(e) =>
+                          setProfile({
+                            ...profile,
+                            phoneDialCode: normalizeDialCode(e.target.value),
+                          })
+                        }
+                        disabled={isPhoneLocked}
+                      >
+                        <option value="">Code</option>
+                        {dialCodeOptions.map((option) => (
+                          <option key={`${option.value}-${option.label}`} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        className="auth-input profile-phone-number"
+                        type="tel"
+                        maxLength={14}
+                        placeholder="(555) 123-4567"
+                        value={profile.phone || ""}
+                        onChange={(e) =>
+                          setProfile({
+                            ...profile,
+                            phone: formatPhoneInput(e.target.value, effectivePhoneDialCode),
+                          })
+                        }
+                        disabled={isPhoneLocked}
+                      />
+                    </div>
                     {isPhoneLocked && (
                       <small className="profile-lock-note">
                         Set during registration. Use Login phone number settings to update.

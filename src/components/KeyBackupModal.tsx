@@ -17,7 +17,7 @@ import {
 } from "../utils/crypto-recovery";
 import "../css/key-backup.css";
 
-const MIN_PASSPHRASE_LENGTH = 12;
+const MIN_PASSPHRASE_LENGTH = 8;
 const MAX_RESTORE_ATTEMPTS = 5;
 
 export default function KeyBackupModal() {

@@ -1,6 +1,6 @@
 // src/pages/Register.tsx
 import { CheckCircle2 } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import api from "../api/strapi";
 import type { RegisterResponse } from "../types/auth";
@@ -8,6 +8,11 @@ import { TERMS_SECTIONS, TERMS_TITLE, TERMS_UPDATED } from "../content/terms";
 import axios from "axios";
 import "../css/register.css";
 import { usePageMeta } from "../hooks/usePageMeta";
+import {
+  extractNationalDigits,
+  formatPhoneInput,
+  normalizeDialCode,
+} from "../utils/phone";
 
 const slugifyHandle = (value: string) =>
   value
@@ -124,13 +129,15 @@ const normalizeIntent = (value?: string | null): IntentKey | null => {
 
 type ContactType = "email" | "phone";
 
-const phoneDigits = (value: string) => String(value || "").replace(/\D/g, "").slice(-10);
-const normalizePhone = (value: string) => {
-  const digits = String(value || "").replace(/\D/g, "");
-  if (!digits) return null;
-  if (digits.length < 10 || digits.length > 15) return null;
-  return `+${digits}`;
+type LocationOption = {
+  name: string;
+  code: string;
+  phoneCode?: string;
 };
+
+type ParsedContact =
+  | { type: "email"; email: string }
+  | { type: "phone"; phone: string; national: string; dialCode: string };
 
 const isValidEmail = (value: string) => {
   const trimmed = value.trim();
@@ -139,15 +146,36 @@ const isValidEmail = (value: string) => {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed);
 };
 
-const parseContact = (value: string) => {
+const detectContactMode = (value: string, fallback: ContactType) => {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return fallback;
+  if (/[a-zA-Z]/.test(trimmed) || trimmed.includes("@")) return "email";
+  return "phone";
+};
+
+const parsePhoneContact = (value: string, dialCode: string) => {
+  const dial = normalizeDialCode(dialCode || "");
+  const national = extractNationalDigits(value, dial);
+  if (!national) return null;
+  const combinedDigits = `${dial}${national}`;
+  if (combinedDigits.length < 10 || combinedDigits.length > 15) return null;
+  return {
+    phone: `+${combinedDigits}`,
+    national,
+    dialCode: dial,
+  };
+};
+
+const parseContact = (value: string, dialCode: string): ParsedContact | null => {
   const trimmed = String(value || "").trim();
   if (!trimmed) return null;
   if (isValidEmail(trimmed)) {
     return { type: "email" as const, email: trimmed.toLowerCase() };
   }
-  const normalizedPhone = normalizePhone(trimmed);
+  if (/[a-zA-Z]/.test(trimmed)) return null;
+  const normalizedPhone = parsePhoneContact(trimmed, dialCode);
   if (normalizedPhone) {
-    return { type: "phone" as const, phone: normalizedPhone };
+    return { type: "phone" as const, ...normalizedPhone };
   }
   return null;
 };
@@ -163,6 +191,12 @@ export default function Register() {
     confirmPassword: "",
     botField: "",
   });
+  const [contactMode, setContactMode] = useState<ContactType>("phone");
+  const [phoneDialCode, setPhoneDialCode] = useState("1");
+  const [dialCodeEditing, setDialCodeEditing] = useState(false);
+  const [countryOptions, setCountryOptions] = useState<LocationOption[]>([]);
+  const [selectedCountryCode, setSelectedCountryCode] = useState("US");
+  const [countryError, setCountryError] = useState<string | null>(null);
   const [termsOpen, setTermsOpen] = useState(false);
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [termsRead, setTermsRead] = useState(false);
@@ -188,7 +222,10 @@ export default function Register() {
 
   const navigate = useNavigate();
   const maxBirthdate = useMemo(() => getMaxBirthdate(), []);
-  const contactDetails = useMemo(() => parseContact(form.contact), [form.contact]);
+  const contactDetails = useMemo(
+    () => parseContact(form.contact, phoneDialCode),
+    [form.contact, phoneDialCode]
+  );
   const successMessage = useMemo(() => {
     const method = registeredMethod ?? contactDetails?.type;
     if (method === "phone") {
@@ -197,23 +234,113 @@ export default function Register() {
     return "Thank you for registering with Your Social Place. Enter the 6-digit code sent to your email to finish setup.";
   }, [registeredMethod, contactDetails?.type]);
 
+  useEffect(() => {
+    let active = true;
+    const loadCountries = async () => {
+      try {
+        const res = await api.get("/locations/countries");
+        const list = (res.data?.data ?? []).map(
+          (country: {
+            name?: string;
+            code?: string;
+            isoCode?: string;
+            phoneCode?: string;
+            phonecode?: string;
+          }) => ({
+            name: country.name,
+            code: country.code || country.isoCode || "",
+            phoneCode: country.phoneCode || country.phonecode || "",
+          })
+        );
+        const usIndex = list.findIndex(
+          (country: { name?: string; code?: string; isoCode?: string }) => {
+            const name = String(country.name || "").trim().toLowerCase();
+            return (
+              String(country.code || "").toUpperCase() === "US" ||
+              name === "united states" ||
+              name === "united states of america"
+            );
+          }
+        );
+        const ordered =
+          usIndex > 0
+            ? [list[usIndex], ...list.slice(0, usIndex), ...list.slice(usIndex + 1)]
+            : list;
+        if (active) {
+          setCountryOptions(ordered);
+          setCountryError(null);
+          const defaultCountry =
+            ordered.find(
+              (country: LocationOption) =>
+                String(country.code || "").toUpperCase() === "US"
+            ) ||
+            ordered[0];
+          if (defaultCountry?.code) {
+            setSelectedCountryCode(defaultCountry.code);
+          }
+          if (defaultCountry?.phoneCode) {
+            setPhoneDialCode(normalizeDialCode(defaultCountry.phoneCode) || "1");
+          }
+        }
+      } catch {
+        if (active) setCountryError("Unable to load country list.");
+      }
+    };
+    loadCountries();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleContactChange = (value: string) => {
+    const nextMode = detectContactMode(value, contactMode);
+    setContactMode(nextMode);
+    setForm((prev) => {
+      const nextContact =
+        nextMode === "phone"
+          ? formatPhoneInput(extractNationalDigits(value, phoneDialCode), phoneDialCode)
+          : value;
+      return {
+        ...prev,
+        contact: nextContact,
+        ...(nextMode !== "phone" ? { smsCode: "" } : {}),
+      };
+    });
+    setSmsSent(false);
+    setSmsError(null);
+  };
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
+    if (name === "contact") {
+      handleContactChange(value);
+      return;
+    }
     setForm((prev) => ({
       ...prev,
       [name]: value,
-      ...(name === "contact" && parseContact(value)?.type !== "phone"
-        ? { smsCode: "" }
-        : {}),
     }));
-    if (name === "contact") {
-      setSmsSent(false);
-      setSmsError(null);
-    }
   };
 
+  useEffect(() => {
+    if (contactMode !== "phone") return;
+    setForm((prev) => {
+      const formatted = formatPhoneInput(
+        extractNationalDigits(prev.contact, phoneDialCode),
+        phoneDialCode
+      );
+      if (formatted === prev.contact) return prev;
+      return { ...prev, contact: formatted };
+    });
+  }, [contactMode, phoneDialCode]);
+
+  useEffect(() => {
+    if (contactMode === "phone") return;
+    if (dialCodeEditing) setDialCodeEditing(false);
+  }, [contactMode, dialCodeEditing]);
+
   const handleSendSms = async () => {
-    const contact = parseContact(form.contact);
+    const contact = parseContact(form.contact, phoneDialCode);
     if (!contact || contact.type !== "phone" || !contact.phone) {
       setSmsError("Enter a valid phone number to send a code.");
       return;
@@ -238,6 +365,18 @@ export default function Register() {
     }
   };
 
+  const handleDialCodeSelect = (countryCode: string) => {
+    setSelectedCountryCode(countryCode);
+    const match = countryOptions.find(
+      (country) => String(country.code || "").toUpperCase() === countryCode.toUpperCase()
+    );
+    const nextDial = normalizeDialCode(match?.phoneCode || "");
+    if (nextDial) {
+      setPhoneDialCode(nextDial);
+    }
+    setDialCodeEditing(false);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -253,15 +392,16 @@ export default function Register() {
       return;
     }
 
-    const contact = parseContact(form.contact);
+    const contact = parseContact(form.contact, phoneDialCode);
     if (!contact) {
       setError("Please enter a valid phone number or email.");
       return;
     }
     const hasSmsCode = Boolean(form.smsCode.trim());
-    const registrationPhone =
-      contact.type === "phone" ? phoneDigits(contact.phone) : "";
+    const registrationPhone = contact.type === "phone" ? contact.national : "";
     const normalizedEmail = contact.type === "email" ? contact.email : "";
+    const contactPayload =
+      contact.type === "phone" ? contact.phone : normalizedEmail || form.contact.trim();
 
     if (!termsAccepted) {
       setError("Please accept the Terms and Conditions and Privacy Policy.");
@@ -297,7 +437,7 @@ export default function Register() {
     try {
       // ✅ custom route POST /api/register
       const res = await api.post<RegisterResponse>("/register", {
-        contact: form.contact.trim(),
+        contact: contactPayload,
         contactType: contact.type,
         firstName: form.firstName.trim(),
         lastName: form.lastName.trim(),
@@ -479,31 +619,84 @@ export default function Register() {
 
         <div className="field">
           <label>Phone number or email</label>
-          <div className="field-row">
-            <input
-              className="auth-input"
-              name="contact"
-              type="text"
-              placeholder="you@example.com or +1 555 555 1234"
-              onChange={handleChange}
-              value={form.contact}
-              autoComplete="username"
-              required
-            />
-            {contactDetails?.type === "phone" && (
-              <button
-                type="button"
-                className="btn ghost sms-send"
-                onClick={handleSendSms}
-                disabled={smsSending || !form.contact.trim()}
-              >
-                {smsSending ? "Sending..." : smsSent ? "Resend code" : "Send code"}
-              </button>
-            )}
-          </div>
+          {contactMode === "phone" ? (
+            <>
+              <div className="register-contact-row">
+                <div className="register-phone-code">
+                  <span className="register-phone-code-value">
+                    +{phoneDialCode || "1"}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn ghost register-code-edit"
+                    onClick={() => setDialCodeEditing((prev) => !prev)}
+                    disabled={!countryOptions.length}
+                  >
+                    {dialCodeEditing ? "Done" : "Edit"}
+                  </button>
+                </div>
+                <input
+                  className="auth-input register-phone-input"
+                  name="contact"
+                  type="text"
+                  inputMode="tel"
+                  placeholder="(555) 555-1234"
+                  onChange={handleChange}
+                  value={form.contact}
+                  autoComplete="tel"
+                  required
+                />
+                {contactDetails?.type === "phone" && (
+                  <button
+                    type="button"
+                    className="btn ghost sms-send"
+                    onClick={handleSendSms}
+                    disabled={smsSending || !form.contact.trim()}
+                  >
+                    {smsSending ? "Sending..." : smsSent ? "Resend code" : "Send code"}
+                  </button>
+                )}
+              </div>
+              {dialCodeEditing && (
+                <div className="register-code-select">
+                  <select
+                    className="auth-input"
+                    value={selectedCountryCode}
+                    onChange={(event) => handleDialCodeSelect(event.target.value)}
+                  >
+                    {countryOptions.map((country) => {
+                      const dial = normalizeDialCode(country.phoneCode || "");
+                      const label = country.name || country.code || "Unknown";
+                      return (
+                        <option key={`${country.code}-${dial}`} value={country.code}>
+                          {label} {dial ? `(+${dial})` : ""}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="field-row">
+              <input
+                className="auth-input"
+                name="contact"
+                type="email"
+                inputMode="email"
+                placeholder="you@example.com"
+                onChange={handleChange}
+                value={form.contact}
+                autoComplete="email"
+                required
+              />
+            </div>
+          )}
           <small className="auth-hint">
-            Enter a valid phone number or email. This becomes your default verification method.
+            Enter a valid phone number or email. Phone numbers default to +1 unless you change the
+            country code.
           </small>
+          {countryError && <small className="auth-hint">{countryError}</small>}
           {contactDetails?.type === "email" && (
             <small className="auth-hint">
               We will email a confirmation link after sign up.

@@ -690,6 +690,12 @@
   display: block;
 }
 
+.link-preview-media img.is-favicon {
+  object-fit: contain;
+  padding: 18px;
+  background: rgba(10, 14, 24, 0.5);
+}
+
 .link-preview-placeholder {
   display: grid;
   place-items: center;
@@ -1402,6 +1408,20 @@
   margin: 0;
   color: #c7cede;
   line-height: 1.55;
+}
+
+.post-body-text a,
+.post-modal__body a,
+.featured-wins__card a {
+  color: #8fb5ff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.post-body-text a:hover,
+.post-modal__body a:hover,
+.featured-wins__card a:hover {
+  color: #c7ddff;
 }
 
 .date {
