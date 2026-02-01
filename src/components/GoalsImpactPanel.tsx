@@ -221,10 +221,10 @@ export default function GoalsImpactPanel({
   onStateChange,
 }: GoalsImpactPanelProps) {
   const storageKey = useMemo(() => storageKeyFor(userId), [userId]);
-  const [goalSearch, setGoalSearch] = useState("");
   const [goalPicker, setGoalPicker] = useState("");
   const [customGoalInput, setCustomGoalInput] = useState("");
   const [lastAddedGoal, setLastAddedGoal] = useState<string | null>(null);
+  const [checkInIndex, setCheckInIndex] = useState(0);
 
   const [state, setState] = useState<GoalsState>(() => loadState(storageKey));
 
@@ -248,16 +248,26 @@ export default function GoalsImpactPanel({
   const customGoals = state.customGoals;
   const achievedGoals = state.achievedGoals;
   const checkIns = state.checkIns;
+  const orderedCheckIns = useMemo(
+    () =>
+      [...checkIns].sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      ),
+    [checkIns]
+  );
+  useEffect(() => {
+    if (orderedCheckIns.length === 0) {
+      setCheckInIndex(0);
+      return;
+    }
+    setCheckInIndex((prev) => Math.min(prev, orderedCheckIns.length - 1));
+  }, [orderedCheckIns.length]);
   const activeGoals = useMemo(
     () => Array.from(new Set([...(selectedGoals || []), ...(customGoals || [])])),
     [customGoals, selectedGoals]
   );
 
-  const filteredGoals = useMemo(() => {
-    const search = goalSearch.trim().toLowerCase();
-    if (!search) return GOAL_LIBRARY;
-    return GOAL_LIBRARY.filter((goal) => goal.toLowerCase().includes(search));
-  }, [goalSearch]);
+  const filteredGoals = useMemo(() => GOAL_LIBRARY, []);
 
   const toggleGoal = (goal: string) => {
     setState((prev) => {
@@ -393,14 +403,6 @@ export default function GoalsImpactPanel({
                 </p>
               )}
             </div>
-            <div className="goals-panel__search">
-              <input
-                className="auth-input"
-                placeholder="Search goals"
-                value={goalSearch}
-                onChange={(event) => setGoalSearch(event.target.value)}
-              />
-            </div>
             <div className="goals-panel__picker">
               <div className="goals-panel__steps">
                 <span className="goals-step">1. Choose a goal</span>
@@ -516,30 +518,65 @@ export default function GoalsImpactPanel({
               <h4>Recent check-ins</h4>
               <span>Your private log</span>
             </div>
-            {checkIns.length === 0 && (
+            {orderedCheckIns.length === 0 && (
               <p className="goals-empty">Your recent check-ins will appear here.</p>
             )}
-            {checkIns.length > 0 && (
+            {orderedCheckIns.length > 1 && (
+              <div className="goals-history-controls">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setCheckInIndex(
+                      (prev) => (prev - 1 + orderedCheckIns.length) % orderedCheckIns.length
+                    )
+                  }
+                  aria-label="Previous check-in"
+                >
+                  Prev
+                </button>
+                <span className="goals-history-count">
+                  {checkInIndex + 1} / {orderedCheckIns.length}
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setCheckInIndex((prev) => (prev + 1) % orderedCheckIns.length)
+                  }
+                  aria-label="Next check-in"
+                >
+                  Next
+                </button>
+              </div>
+            )}
+            {orderedCheckIns.length > 0 && (
               <div className="goals-panel__history">
-                {checkIns.slice(0, 4).map((entry) => (
-                  <div key={entry.id} className="goals-history-item">
+                {orderedCheckIns[checkInIndex] && (
+                  <div
+                    key={orderedCheckIns[checkInIndex].id}
+                    className="goals-history-item"
+                  >
                     <div>
-                      <strong>{entry.goal}</strong>
-                      <p>{entry.note}</p>
+                      <strong>{orderedCheckIns[checkInIndex].goal}</strong>
+                      <p>{orderedCheckIns[checkInIndex].note}</p>
                     </div>
                     <div className="goals-history-meta">
-                      <span>{entry.type === "support-request" ? "Support" : "Check-in"}</span>
                       <span>
-                        {entry.target === "trusted" && entry.groupName
-                          ? entry.groupName
-                          : entry.target === "feed"
+                        {orderedCheckIns[checkInIndex].type === "support-request"
+                          ? "Support"
+                          : "Check-in"}
+                      </span>
+                      <span>
+                        {orderedCheckIns[checkInIndex].target === "trusted" &&
+                        orderedCheckIns[checkInIndex].groupName
+                          ? orderedCheckIns[checkInIndex].groupName
+                          : orderedCheckIns[checkInIndex].target === "feed"
                           ? "My feed"
                           : "Only me"}
                       </span>
-                      <span>{formatDate(entry.createdAt)}</span>
+                      <span>{formatDate(orderedCheckIns[checkInIndex].createdAt)}</span>
                     </div>
                   </div>
-                ))}
+                )}
               </div>
             )}
           </div>

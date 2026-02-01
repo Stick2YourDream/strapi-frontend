@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import "../css/dashboard.css";
 import "../css/groups.css";
 import api from "../api/strapi";
+import axios from "axios";
 import Sidebar from "../components/Sidebar";
 import TopbarSearch from "../components/TopbarSearch";
 import { useAuth } from "../context/AuthContext";
@@ -59,9 +60,12 @@ type GroupPost = {
 
 type CommentItem = {
   id: number | string;
+  numericId?: number;
+  documentId?: string;
   body: string;
   owner?: string;
   ownerId?: number | string;
+  createdAt?: string;
 };
 
 type LinkPreview = {
@@ -227,6 +231,8 @@ export default function GroupDetail() {
   const [posts, setPosts] = useState<GroupPost[]>([]);
   const [postComments, setPostComments] = useState<Record<string, CommentItem[]>>({});
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
+  const [commentEdits, setCommentEdits] = useState<Record<string, string>>({});
+  const [editingComments, setEditingComments] = useState<Record<string, boolean>>({});
   const [openCommentsFor, setOpenCommentsFor] = useState<Record<string, boolean>>({});
   const [shareMenuFor, setShareMenuFor] = useState<string | null>(null);
   const [shareNotice, setShareNotice] = useState<Record<string, string>>({});
@@ -292,14 +298,21 @@ export default function GroupDetail() {
       const ownerEntry = getEntity(attrs.owner ?? entry?.owner);
       const ownerName = getUserDisplayName(ownerEntry, "Member");
       const ownerId = getEntityId(ownerEntry);
-      const commentId = entry?.id ?? attrs?.documentId ?? attrs?.id ?? String(targetId);
+      const rawId = entry?.id ?? attrs?.id;
+      const numericId = Number(rawId);
+      const documentId = entry?.documentId ?? attrs?.documentId;
+      const commentId = rawId ?? documentId ?? String(targetId);
       const body = String(attrs.body ?? entry?.body ?? "").trim();
+      const createdAt = String(attrs.createdAt ?? entry?.createdAt ?? "");
       if (!body) return;
       (next[key] = next[key] || []).push({
         id: commentId,
+        numericId: Number.isFinite(numericId) ? numericId : undefined,
+        documentId,
         body,
         owner: ownerName,
         ownerId,
+        createdAt: createdAt || undefined,
       });
     });
     return next;
@@ -544,7 +557,14 @@ export default function GroupDetail() {
 
   const buildShareUrl = useCallback((postKey: string) => {
     if (typeof window === "undefined") return "";
-    return `${window.location.origin}${window.location.pathname}#post-${postKey}`;
+    const fallbackOrigin = String(import.meta.env.VITE_PUBLIC_SITE_URL || "").trim();
+    const origin = window.location.origin;
+    const base = origin.startsWith("http") ? origin : fallbackOrigin;
+    if (!base) return "";
+    const path = window.location.pathname?.startsWith("/")
+      ? window.location.pathname
+      : "/dashboard";
+    return `${base}${path}#post-${postKey}`;
   }, []);
 
   const updatePostMetric = useCallback((postKey: string, field: "likes" | "shares", value: number) => {
@@ -629,6 +649,74 @@ export default function GroupDetail() {
       }
     },
     [pushShareNotice, trackShare]
+  );
+
+  const updateCommentBody = useCallback(
+    async (comment: CommentItem, postKey: string, nextBody: string) => {
+      const trimmed = nextBody.trim();
+      if (!trimmed) {
+        setError("Comment cannot be empty.");
+        return false;
+      }
+      setError(null);
+      const numericId =
+        comment.numericId ??
+        (typeof comment.id === "number" ? comment.id : Number(comment.id));
+      const attempts: string[] = [];
+      if (comment.documentId) {
+        attempts.push(`/comments/${comment.documentId}`);
+      }
+      if (Number.isFinite(numericId)) {
+        attempts.push(`/comments/${numericId}`);
+      }
+      attempts.push(`/comments/${comment.id}`);
+
+      let updated = false;
+      for (const path of attempts) {
+        try {
+          await api.put(path, { data: { body: trimmed } });
+          updated = true;
+          break;
+        } catch (err: unknown) {
+          if (axios.isAxiosError(err) && err.response?.status === 404) {
+            continue;
+          }
+          throw err;
+        }
+      }
+
+      if (!updated) {
+        setError("Failed to update comment.");
+        return false;
+      }
+
+      const matchIds = new Set<string>();
+      matchIds.add(String(comment.id));
+      if (comment.documentId) {
+        matchIds.add(String(comment.documentId));
+      }
+      if (Number.isFinite(numericId)) {
+        matchIds.add(String(numericId));
+      }
+
+      setPostComments((prev) => {
+        const list = prev[postKey] ?? [];
+        return {
+          ...prev,
+          [postKey]: list.map((entry) =>
+            matchIds.has(String(entry.id)) ||
+            (entry.documentId && matchIds.has(String(entry.documentId))) ||
+            (entry.numericId !== undefined && matchIds.has(String(entry.numericId)))
+              ? { ...entry, body: trimmed }
+              : entry
+          ),
+        };
+      });
+
+      pushShareNotice(postKey, "Comment updated.");
+      return true;
+    },
+    [pushShareNotice]
   );
 
   const handleReaction = useCallback(
@@ -1313,68 +1401,96 @@ export default function GroupDetail() {
                               <div className="post-action-popover is-wide">
                                 <div className="post-share-grid">
                                   <button
-                                    className="post-share-btn"
+                                    className="post-share-btn is-icon"
                                     type="button"
                                     onClick={() => handleCopyShare(post, postKey, shareUrl)}
+                                    aria-label="Copy link"
                                   >
-                                    Copy link
+                                    <span className="post-share-icon" aria-hidden="true">
+                                      🔗
+                                    </span>
+                                    <span className="post-share-label">Copy link</span>
                                   </button>
                                   {typeof navigator !== "undefined" &&
                                     typeof navigator.share === "function" && (
                                       <button
-                                        className="post-share-btn"
+                                        className="post-share-btn is-icon"
                                         type="button"
                                         onClick={() =>
                                           handleNativeShare(post, postKey, shareUrl, shareText)
                                         }
+                                        aria-label="Share"
                                       >
-                                        Share...
+                                        <span className="post-share-icon" aria-hidden="true">
+                                          📤
+                                        </span>
+                                        <span className="post-share-label">Share</span>
                                       </button>
                                     )}
                                   <a
-                                    className="post-share-link"
-                                    href={`https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`}
+                                    className="post-share-link is-icon post-share-link--facebook"
+                                    href={`https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}&quote=${encodedText}`}
                                     onClick={() => void trackShare(post, postKey)}
                                     target="_blank"
                                     rel="noreferrer"
+                                    aria-label="Share to Facebook"
                                   >
-                                    Facebook
+                                    <span className="post-share-icon" aria-hidden="true">
+                                      f
+                                    </span>
+                                    <span className="post-share-label">Facebook</span>
                                   </a>
                                   <a
-                                    className="post-share-link"
-                                    href={`https://twitter.com/intent/tweet?url=${encodedUrl}&text=${encodedText}`}
+                                    className="post-share-link is-icon post-share-link--x"
+                                    href={`https://twitter.com/intent/tweet?text=${encodedText}&url=${encodedUrl}`}
                                     onClick={() => void trackShare(post, postKey)}
                                     target="_blank"
                                     rel="noreferrer"
+                                    aria-label="Share to X"
                                   >
-                                    X
+                                    <span className="post-share-icon" aria-hidden="true">
+                                      X
+                                    </span>
+                                    <span className="post-share-label">X</span>
                                   </a>
                                   <a
-                                    className="post-share-link"
-                                    href={`https://www.linkedin.com/shareArticle?mini=true&url=${encodedUrl}&title=${encodedText}`}
+                                    className="post-share-link is-icon post-share-link--linkedin"
+                                    href={`https://www.linkedin.com/sharing/share-offsite/?url=${encodedUrl}`}
                                     onClick={() => void trackShare(post, postKey)}
                                     target="_blank"
                                     rel="noreferrer"
+                                    aria-label="Share to LinkedIn"
                                   >
-                                    LinkedIn
+                                    <span className="post-share-icon" aria-hidden="true">
+                                      in
+                                    </span>
+                                    <span className="post-share-label">LinkedIn</span>
                                   </a>
                                   <a
-                                    className="post-share-link"
+                                    className="post-share-link is-icon post-share-link--reddit"
                                     href={`https://www.reddit.com/submit?url=${encodedUrl}&title=${encodedText}`}
                                     onClick={() => void trackShare(post, postKey)}
                                     target="_blank"
                                     rel="noreferrer"
+                                    aria-label="Share to Reddit"
                                   >
-                                    Reddit
+                                    <span className="post-share-icon" aria-hidden="true">
+                                      r
+                                    </span>
+                                    <span className="post-share-label">Reddit</span>
                                   </a>
                                   <a
-                                    className="post-share-link"
+                                    className="post-share-link is-icon post-share-link--whatsapp"
                                     href={`https://wa.me/?text=${encodedText}%20${encodedUrl}`}
                                     onClick={() => void trackShare(post, postKey)}
                                     target="_blank"
                                     rel="noreferrer"
+                                    aria-label="Share to WhatsApp"
                                   >
-                                    WhatsApp
+                                    <span className="post-share-icon" aria-hidden="true">
+                                      🟢
+                                    </span>
+                                    <span className="post-share-label">WhatsApp</span>
                                   </a>
                                 </div>
                               </div>
@@ -1390,34 +1506,188 @@ export default function GroupDetail() {
                             <p className="eyebrow">Comments</p>
                             {comments.length > 0 ? (
                               <ul className="comment-list">
-                                {comments.map((c) => (
+                                {comments.map((c) => {
+                                  const commentIdKey = String(
+                                    c.documentId ?? c.numericId ?? c.id
+                                  );
+                                  const isEditing = Boolean(editingComments[commentIdKey]);
+                                  const editValue = commentEdits[commentIdKey] ?? c.body;
+                                  return (
                                   <li key={c.id} className="comment-item">
                                     <div className="comment-author">{c.owner || "Member"}</div>
-                                    <div className="comment-body">{c.body}</div>
-                                    {user?.id === c.ownerId && (
-                                      <button
-                                        className="btn ghost comment-delete"
-                                        type="button"
-                                        onClick={async () => {
-                                          try {
-                                            await api.delete(`/comments/${c.id}`);
-                                            setPostComments((prev) => ({
+                                    {isEditing ? (
+                                      <div className="comment-edit">
+                                        <textarea
+                                          className="auth-input comment-edit-input"
+                                          value={editValue}
+                                          onChange={(event) =>
+                                            setCommentEdits((prev) => ({
                                               ...prev,
-                                              [commentKey]: (prev[commentKey] || []).filter(
-                                                (comment) => comment.id !== c.id
-                                              ),
-                                            }));
-                                          } catch (err) {
-                                            console.error("Delete comment failed", err);
-                                            setError("Failed to delete comment");
+                                              [commentIdKey]: sanitizePostText(event.target.value),
+                                            }))
                                           }
-                                        }}
-                                      >
-                                        Delete
-                                      </button>
+                                        />
+                                        <div className="comment-edit-actions">
+                                          <button
+                                            className="btn ghost"
+                                            type="button"
+                                            onClick={() => {
+                                              setEditingComments((prev) => {
+                                                const next = { ...prev };
+                                                delete next[commentIdKey];
+                                                return next;
+                                              });
+                                              setCommentEdits((prev) => {
+                                                const next = { ...prev };
+                                                delete next[commentIdKey];
+                                                return next;
+                                              });
+                                            }}
+                                          >
+                                            Cancel
+                                          </button>
+                                          <button
+                                            className="btn primary"
+                                            type="button"
+                                            onClick={async () => {
+                                              try {
+                                                const updated = await updateCommentBody(
+                                                  c,
+                                                  commentKey,
+                                                  editValue
+                                                );
+                                                if (!updated) return;
+                                                setEditingComments((prev) => {
+                                                  const next = { ...prev };
+                                                  delete next[commentIdKey];
+                                                  return next;
+                                                });
+                                                setCommentEdits((prev) => {
+                                                  const next = { ...prev };
+                                                  delete next[commentIdKey];
+                                                  return next;
+                                                });
+                                              } catch (err: unknown) {
+                                                const msg = axios.isAxiosError(err)
+                                                  ? err.response?.data?.error?.message ||
+                                                    err.response?.data?.message ||
+                                                    "Failed to update comment."
+                                                  : "Failed to update comment.";
+                                                setError(String(msg));
+                                              }
+                                            }}
+                                          >
+                                            Save
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <div className="comment-body">{c.body}</div>
+                                    )}
+                                    {user?.id === c.ownerId && (
+                                      <div className="comment-actions">
+                                        <button
+                                          className="btn ghost"
+                                          type="button"
+                                          onClick={() => {
+                                            setEditingComments((prev) => ({
+                                              ...prev,
+                                              [commentIdKey]: true,
+                                            }));
+                                            setCommentEdits((prev) => ({
+                                              ...prev,
+                                              [commentIdKey]: c.body,
+                                            }));
+                                          }}
+                                        >
+                                          Edit
+                                        </button>
+                                        <button
+                                          className="btn ghost comment-delete"
+                                          type="button"
+                                          onClick={async () => {
+                                            const numericId =
+                                              c.numericId ??
+                                              (typeof c.id === "number"
+                                                ? c.id
+                                                : Number(c.id));
+                                            const removeIds = new Set<string>();
+                                            removeIds.add(String(c.id));
+                                            if (c.documentId) {
+                                              removeIds.add(String(c.documentId));
+                                            }
+                                            if (Number.isFinite(numericId)) {
+                                              removeIds.add(String(numericId));
+                                            }
+                                            try {
+                                              setError(null);
+                                              const attempts: string[] = [];
+                                              if (c.documentId) {
+                                                attempts.push(`/comments/${c.documentId}`);
+                                              }
+                                              if (Number.isFinite(numericId)) {
+                                                attempts.push(`/comments/${numericId}`);
+                                              }
+                                              attempts.push(`/comments/${c.id}`);
+
+                                              let removed = false;
+                                              for (const path of attempts) {
+                                                try {
+                                                  await api.delete(path);
+                                                  removed = true;
+                                                  break;
+                                                } catch (err: unknown) {
+                                                  if (
+                                                    axios.isAxiosError(err) &&
+                                                    err.response?.status === 404
+                                                  ) {
+                                                    continue;
+                                                  }
+                                                  throw err;
+                                                }
+                                              }
+
+                                              if (!removed) {
+                                                setError("Failed to delete comment.");
+                                                return;
+                                              }
+
+                                              setPostComments((prev) => ({
+                                                ...prev,
+                                                [commentKey]: (prev[commentKey] || []).filter(
+                                                  (comment) => {
+                                                    if (removeIds.has(String(comment.id))) {
+                                                      return false;
+                                                    }
+                                                    if (
+                                                      comment.documentId &&
+                                                      removeIds.has(String(comment.documentId))
+                                                    ) {
+                                                      return false;
+                                                    }
+                                                    if (
+                                                      Number.isFinite(comment.numericId) &&
+                                                      removeIds.has(String(comment.numericId))
+                                                    ) {
+                                                      return false;
+                                                    }
+                                                    return true;
+                                                  }
+                                                ),
+                                              }));
+                                            } catch (err) {
+                                              console.error("Delete comment failed", err);
+                                              setError("Failed to delete comment");
+                                            }
+                                          }}
+                                        >
+                                          Delete
+                                        </button>
+                                      </div>
                                     )}
                                   </li>
-                                ))}
+                                );
+                                })}
                               </ul>
                             ) : (
                               <p className="status">No comments yet.</p>
@@ -1453,7 +1723,15 @@ export default function GroupDetail() {
                                     setCommentInputs((prev) => ({ ...prev, [commentKey]: "" }));
                                   } catch (err) {
                                     console.error("Add comment failed", err);
-                                    setError("Failed to add comment");
+                                    if (axios.isAxiosError(err)) {
+                                      const msg =
+                                        err.response?.data?.error?.message ||
+                                        err.response?.data?.message ||
+                                        "Failed to add comment";
+                                      setError(String(msg));
+                                    } else {
+                                      setError("Failed to add comment");
+                                    }
                                   }
                                 }}
                               >
