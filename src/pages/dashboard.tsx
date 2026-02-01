@@ -9,23 +9,65 @@ import Sidebar from "../components/Sidebar";
 import TopbarSearch from "../components/TopbarSearch";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { useUserPreferences } from "../context/UserPreferencesContext";
-import type { SignalTag } from "../constants/signalTags";
+import { SIGNAL_TAGS, formatSignalTag, type SignalTag } from "../constants/signalTags";
 import { sanitizePostText } from "../utils/emoji";
-import ReactionPicker from "../components/ReactionPicker";
 import { formatPostUpdateLabel } from "../utils/time";
 import { pickMediaUrl } from "../utils/media";
+import GoalsImpactPanel from "../components/GoalsImpactPanel";
+import { useImpactStats } from "../hooks/useImpactStats";
+import { useNewsPreference } from "../hooks/useNewsPreference";
 // import NewsWidget from "../components/NewsWidget";
 import "../css/news-widget.css";
 
 type CommentItem = {
   id: string | number;
+  numericId?: number;
+  documentId?: string;
   body: string;
   owner?: string;
   ownerId?: string | number;
 };
 
+type GroupOption = {
+  id: number;
+  name: string;
+  kind?: string;
+};
+
+type TrustedCircleOption = {
+  id: number;
+  name: string;
+};
+
+type CheckInEntry = {
+  id: string;
+  createdAt: string;
+  type: "check-in" | "support-request";
+  goal: string;
+  note: string;
+  target: "private" | "trusted" | "feed";
+  groupId?: number;
+  groupName?: string;
+};
+
+type GoalsState = {
+  selectedGoals: string[];
+  customGoals: string[];
+  achievedGoals: string[];
+  trustedFriendIds: number[];
+  reminder: "daily" | "weekly" | "off";
+  trustedCircleIds: number[];
+  checkIns: CheckInEntry[];
+};
+
+type ReactionCounts = {
+  thumbsUp: number;
+  heart: number;
+};
+
 type NormalizedPost = {
   id: string | number;
+  numericId?: number;
   title: string;
   content: string;
   imageUrl?: string;
@@ -34,6 +76,8 @@ type NormalizedPost = {
   ownerName?: string;
   ownerId?: number;
   likes?: number;
+  reactionCounts?: ReactionCounts;
+  myReaction?: string | null;
   shares?: number;
   comments: CommentItem[];
   groupName?: string;
@@ -43,6 +87,8 @@ type NormalizedPost = {
   feedbackTargetId?: number;
   feedbackTargetName?: string;
   visibility?: string;
+  trustedCircleId?: number;
+  trustedCircleName?: string;
 };
 
 type PostFilter = "all" | "admin" | "friends" | "private" | "public";
@@ -70,11 +116,195 @@ type PostsState = {
   admin: unknown[];
 };
 
+const goalsStorageKeyFor = (userId?: number | null) =>
+  userId ? `ysp-goals-${userId}` : "ysp-goals-guest";
+
+const loadGoalsState = (key: string): GoalsState => {
+  if (typeof window === "undefined") {
+    return {
+      selectedGoals: [],
+      customGoals: [],
+      achievedGoals: [],
+      trustedFriendIds: [],
+      reminder: "weekly",
+      trustedCircleIds: [],
+      checkIns: [],
+    };
+  }
+  const raw = window.localStorage.getItem(key);
+  if (!raw) {
+    return {
+      selectedGoals: [],
+      customGoals: [],
+      achievedGoals: [],
+      trustedFriendIds: [],
+      reminder: "weekly",
+      trustedCircleIds: [],
+      checkIns: [],
+    };
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<
+      GoalsState & { trustedGroupIds?: number[] }
+    > | null;
+    return {
+      selectedGoals: parsed?.selectedGoals ?? [],
+      customGoals: parsed?.customGoals ?? [],
+      achievedGoals: parsed?.achievedGoals ?? [],
+      trustedFriendIds: parsed?.trustedFriendIds ?? [],
+      reminder: parsed?.reminder ?? "weekly",
+      trustedCircleIds: parsed?.trustedCircleIds ?? parsed?.trustedGroupIds ?? [],
+      checkIns: parsed?.checkIns ?? [],
+    };
+  } catch {
+    return {
+      selectedGoals: [],
+      customGoals: [],
+      achievedGoals: [],
+      trustedFriendIds: [],
+      reminder: "weekly",
+      trustedCircleIds: [],
+      checkIns: [],
+    };
+  }
+};
+
+const saveGoalsState = (key: string, state: GoalsState) => {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(key, JSON.stringify(state));
+  window.dispatchEvent(new Event("ysp-goals-updated"));
+};
+
+const computeCheckInStreak = (entries: CheckInEntry[]) => {
+  const byDay = new Set(entries.map((entry) => new Date(entry.createdAt).toDateString()));
+  let streak = 0;
+  for (let i = 0; i < 60; i += 1) {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+    if (byDay.has(date.toDateString())) {
+      streak += 1;
+    } else {
+      break;
+    }
+  }
+  return streak;
+};
+
+const SUPPORT_REQUEST_QUICK_REPLIES = [
+  "Thanks for sharing this. I'm here for you.",
+  "You are not alone in this. Want to talk about it?",
+  "That sounds really tough. What would help most right now?",
+  "I'm cheering you on. One step at a time.",
+  "I'm proud of you for asking for support.",
+  "If you want, we can break this into a smaller next step.",
+  "Sending support. You've got this.",
+  "I'm here to listen if you want to share more.",
+];
+
+const WIN_SUPPORT_REPLIES = [
+  "Congrats on the win!",
+  "Proud of you for this.",
+  "Celebrate this moment!",
+  "Huge progress. Well done.",
+  "You earned this.",
+];
+
+const BLOCKER_SUPPORT_REPLIES = [
+  "Want to brainstorm a workaround?",
+  "What's the biggest blocker right now?",
+  "Happy to help you tackle this.",
+  "Want a quick plan together?",
+  "Let's break it down step by step.",
+];
+
+const FEEDBACK_SUPPORT_REPLIES = [
+  "Happy to give feedback. What should I focus on?",
+  "I can review this if you want.",
+  "Want detailed or high-level feedback?",
+  "Here's a quick thought if helpful.",
+  "I can test or review it for you.",
+];
+
+const CHECKIN_SUPPORT_REPLIES = [
+  "Cheering you on today.",
+  "How are you feeling right now?",
+  "You've got this.",
+  "Proud of your consistency.",
+  "Need anything to stay on track?",
+];
+
+const STRUCTURED_POST_SECTIONS: Partial<Record<SignalTag, string[]>> = {
+  "check-in": ["Today I'm focused on", "Next step", "Support I need"],
+  "support-request": ["I'm stuck on", "What I've tried", "What would help me most"],
+  win: ["Win", "What helped", "Next goal"],
+};
+
+const supportRepliesForTag = (tag?: SignalTag) => {
+  if (!tag || tag === "none") return [];
+  if (tag === "support-request") return SUPPORT_REQUEST_QUICK_REPLIES;
+  if (tag === "win") return WIN_SUPPORT_REPLIES;
+  if (tag === "blocker") return BLOCKER_SUPPORT_REPLIES;
+  if (tag === "feedback") return FEEDBACK_SUPPORT_REPLIES;
+  if (tag === "check-in") return CHECKIN_SUPPORT_REPLIES;
+  return [];
+};
+
 const isRecord = (value: unknown): value is UnknownRecord =>
   typeof value === "object" && value !== null;
 const asRecord = (value: unknown): UnknownRecord => (isRecord(value) ? value : {});
 const getString = (value: unknown): string | undefined =>
   typeof value === "string" ? value : undefined;
+const normalizeReactionCounts = (
+  value: unknown,
+  fallbackLikes?: number
+): ReactionCounts => {
+  const record = isRecord(value) ? value : {};
+  const thumbsRaw = record.thumbsUp ?? record.thumbs_up;
+  const heartRaw = record.heart;
+  const thumbsUp = Number(thumbsRaw);
+  const heart = Number(heartRaw);
+  const hasCounts = Number.isFinite(thumbsUp) || Number.isFinite(heart);
+  return {
+    thumbsUp: Number.isFinite(thumbsUp)
+      ? thumbsUp
+      : hasCounts
+      ? 0
+      : Number(fallbackLikes ?? 0),
+    heart: Number.isFinite(heart) ? heart : 0,
+  };
+};
+const normalizeReactionValue = (value: unknown): string | null => {
+  const trimmed = String(value || "").trim();
+  if (trimmed === "👍" || trimmed === "❤️") return trimmed;
+  return null;
+};
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const parseStructuredPost = (content: string, tag?: SignalTag) => {
+  if (!content || !tag) return null;
+  const labels = STRUCTURED_POST_SECTIONS[tag];
+  if (!labels) return null;
+  const raw = String(content || "").replace(/\s+/g, " ").trim();
+  if (!raw) return null;
+  const lower = raw.toLowerCase();
+  const hits = labels
+    .map((label) => ({ label, idx: lower.indexOf(label.toLowerCase()) }))
+    .filter((entry) => entry.idx >= 0)
+    .sort((a, b) => a.idx - b.idx);
+  if (!hits.length) return null;
+  const rows = hits.map((entry, index) => {
+    const end = hits[index + 1]?.idx ?? raw.length;
+    let segment = raw.slice(entry.idx, end).trim();
+    const labelPattern = new RegExp(
+      `^${escapeRegExp(entry.label)}\\s*(?:[:\\-]|\\.{3})?\\s*`,
+      "i"
+    );
+    segment = segment.replace(labelPattern, "").trim();
+    return { label: entry.label, value: segment };
+  });
+  return { rows };
+};
 const normalize = (entry: unknown): UnknownRecord => {
   if (!isRecord(entry)) return {};
   const attrs = entry.attributes;
@@ -122,8 +352,11 @@ const firstNameFromLabel = (value?: string) => {
 const PREVIEW_DEBOUNCE_MS = 450;
 const PREVIEW_MAX_CONCURRENT = 3;
 const POSTS_PAGE_SIZE = 20;
+const MAX_TRUSTED_CIRCLES = 5;
 const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
 const MAX_UPLOAD_LABEL = "1 GB";
+const MAX_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024;
+const MAX_VIDEO_UPLOAD_LABEL = "100 MB";
 const extractFirstUrl = (text: string) => {
   const match = text.match(/(https?:\/\/[^\s]+|www\.[^\s]+)/i);
   if (!match) return "";
@@ -146,7 +379,12 @@ const isYoutubeUrl = (value: string) => {
     return false;
   }
 };
-const isVideoUrl = (value?: string) => !!value && /\.(mp4|webm|mov|m4v|mkv)$/i.test(value);
+const isVideoUrl = (value?: string) =>
+  !!value && /\.(mp4|webm|mov|m4v|mkv)$/i.test(value);
+const isPreviewableUrl = (value?: string) =>
+  !!value && (isYoutubeUrl(value) || isVideoUrl(value));
+const isImageUrl = (value?: string) =>
+  !!value && /\.(png|jpe?g|gif|webp|avif|bmp|svg)$/i.test(value);
 const isVideoFile = (file: File) => {
   if (file.type && file.type.startsWith("video/")) return true;
   return /\.(mp4|webm|mov|m4v|mkv)$/i.test(file.name);
@@ -318,6 +556,31 @@ const MOTIVATIONAL_PHRASES = [
   "You are doing something meaningful today.",
   "Keep going. Your momentum is real.",
 ];
+const POST_TEMPLATES: Array<{
+  id: string;
+  label: string;
+  body: string;
+  signalTag?: SignalTag;
+}> = [
+  {
+    id: "check-in",
+    label: "New check-in",
+    body: "Today I'm focused on...\n\nNext step:\n\nSupport I need:",
+    signalTag: "check-in",
+  },
+  {
+    id: "win",
+    label: "Share a win",
+    body: "Win:\n\nWhat helped:\n\nNext goal:",
+    signalTag: "win",
+  },
+  {
+    id: "support",
+    label: "Support request",
+    body: "I'm stuck on...\n\nWhat I've tried:\n\nWhat would help me most:",
+    signalTag: "support-request",
+  },
+];
 
 const LinkPreviewCard = ({
   preview,
@@ -370,7 +633,14 @@ export default function Dashboard() {
   const [formFile, setFormFile] = useState<File | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [composerExpanded, setComposerExpanded] = useState(false);
   const [postVisibility, setPostVisibility] = useState("friends");
+  const [postTrustedCircleId, setPostTrustedCircleId] = useState<number | "">("");
+  const [postSignalTag, setPostSignalTag] = useState<SignalTag>("none");
+  const [postTemplateId, setPostTemplateId] = useState("");
+  const [checkInGoal, setCheckInGoal] = useState("");
+  const [checkInTarget, setCheckInTarget] = useState<"feed" | "trusted">("feed");
+  const [checkInGroupId, setCheckInGroupId] = useState<number | "">("");
   const [feedbackAudience, setFeedbackAudience] = useState("none");
   const [feedbackTargetId, setFeedbackTargetId] = useState<number | null>(null);
   const [postFilter, setPostFilter] = useState<PostFilter>("all");
@@ -378,14 +648,15 @@ export default function Dashboard() {
   const [friendIds, setFriendIds] = useState<number[]>([]);
   const [, setFavoriteFriendIds] = useState<number[]>([]);
   const [groupIds, setGroupIds] = useState<number[]>([]);
+  const [trustedCircleOptions, setTrustedCircleOptions] = useState<TrustedCircleOption[]>([]);
   const [commentInputs, setCommentInputs] = useState<Record<string | number, string>>({});
   const [openCommentsFor, setOpenCommentsFor] = useState<Record<string | number, boolean>>(
     {}
   );
-  const [reactionPickerFor, setReactionPickerFor] = useState<string | number | null>(null);
   const [shareMenuFor, setShareMenuFor] = useState<string | number | null>(null);
   const [shareNotice, setShareNotice] = useState<Record<string | number, string>>({});
   const [copyToast, setCopyToast] = useState<string | null>(null);
+  const [impactNotice, setImpactNotice] = useState<string | null>(null);
   const [activePostKey, setActivePostKey] = useState<string | null>(null);
   const [formFilePreviewUrl, setFormFilePreviewUrl] = useState<string | null>(null);
   const [linkPreview, setLinkPreview] = useState<LinkPreview | null>(null);
@@ -396,6 +667,7 @@ export default function Dashboard() {
   const previewInFlightRef = useRef(0);
   const previewPendingRef = useRef<Set<string>>(new Set());
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const impactTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [profileAvatarUrl, setProfileAvatarUrl] = useState<string | null>(null);
   const [profileNameMap, setProfileNameMap] = useState<Record<number, string>>({});
   const [userPostsPage, setUserPostsPage] = useState(1);
@@ -413,6 +685,13 @@ export default function Dashboard() {
   const hashHandledRef = useRef<string | null>(null);
   const { user, profile } = useAuth();
   const { getBackgroundStyle } = useUserPreferences();
+  const userId = user?.id;
+  const goalsStorageKey = useMemo(() => goalsStorageKeyFor(userId), [userId]);
+  const [goalsState, setGoalsState] = useState<GoalsState>(() =>
+    loadGoalsState(goalsStorageKey)
+  );
+  const { override: newsOverride } = useNewsPreference(userId);
+  const { stats: impactStats, bumpStat } = useImpactStats(userId);
   usePageMeta({
     title: "Dashboard | Your Social Place",
     description:
@@ -423,8 +702,261 @@ export default function Dashboard() {
   const nameFromProfile = `${profile?.firstName || ""} ${profile?.lastName || ""}`.trim();
   const userLabel = nameFromProfile || user?.email || "Friend";
   const userInitial = userLabel.charAt(0).toUpperCase();
-  const userId = user?.id;
   const formFileIsVideo = formFile ? isVideoFile(formFile) : false;
+
+  useEffect(() => {
+    setGoalsState(loadGoalsState(goalsStorageKey));
+  }, [goalsStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleSync = () => setGoalsState(loadGoalsState(goalsStorageKey));
+    window.addEventListener("ysp-goals-updated", handleSync);
+    return () => window.removeEventListener("ysp-goals-updated", handleSync);
+  }, [goalsStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleStartCheckIn = (event: Event) => {
+      const detail = (event as CustomEvent<{ goal?: string }>).detail;
+      setComposerExpanded(true);
+      setPostSignalTag("check-in");
+      if (detail?.goal) {
+        setCheckInGoal(detail.goal);
+      }
+      const target = document.getElementById("post-composer");
+      target?.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
+    window.addEventListener("ysp-goals-start-checkin", handleStartCheckIn as EventListener);
+    return () =>
+      window.removeEventListener("ysp-goals-start-checkin", handleStartCheckIn as EventListener);
+  }, []);
+
+  const applyTemplate = useCallback(
+    (template: (typeof POST_TEMPLATES)[number]) => {
+      setFormContent(template.body);
+      if (template.signalTag) {
+        setPostSignalTag(template.signalTag);
+      }
+      setFormError(null);
+    },
+    []
+  );
+
+  const handleTemplateSelect = useCallback(
+    (templateId: string) => {
+      setPostTemplateId(templateId);
+      const template = POST_TEMPLATES.find((item) => item.id === templateId);
+      if (template) {
+        applyTemplate(template);
+      }
+    },
+    [applyTemplate]
+  );
+
+  const availableGoals = useMemo(
+    () =>
+      Array.from(
+        new Set([...(goalsState.selectedGoals || []), ...(goalsState.customGoals || [])])
+      ).filter(Boolean),
+    [goalsState.customGoals, goalsState.selectedGoals]
+  );
+
+  const trustedCircles = useMemo(
+    () => trustedCircleOptions,
+    [trustedCircleOptions]
+  );
+
+  const showCheckInOptions =
+    postSignalTag === "check-in" || postSignalTag === "support-request";
+  const showFeedOptions = !showCheckInOptions || checkInTarget === "feed";
+  const dashboardNewsEnabled =
+    (newsOverride ?? profile?.notificationSettings?.newsEnabled) !== false;
+  const showComposerAdvanced = composerExpanded;
+
+  const selectedTemplateLabel = useMemo(() => {
+    if (!postTemplateId) return "No template";
+    const match = POST_TEMPLATES.find((template) => template.id === postTemplateId);
+    return match?.label ?? "No template";
+  }, [postTemplateId]);
+
+  const selectedSignalLabel = useMemo(() => {
+    const match = SIGNAL_TAGS.find((tag) => tag.value === postSignalTag);
+    return match?.label ?? "None";
+  }, [postSignalTag]);
+
+  const visibilityLabel = useMemo(() => {
+    if (postVisibility === "public") return "Public";
+    if (postVisibility === "private") return "Private";
+    if (postVisibility === "trusted") return "Trusted circle";
+    return "Friends";
+  }, [postVisibility]);
+
+  const feedbackTargetLabel = useMemo(() => {
+    if (!feedbackTargetId) return "Specific friend";
+    return (
+      friendOptions.find((option) => option.id === feedbackTargetId)?.label ||
+      "Specific friend"
+    );
+  }, [feedbackTargetId, friendOptions]);
+
+  const feedbackLabel = useMemo(() => {
+    if (feedbackAudience === "public") return "Public feedback";
+    if (feedbackAudience === "friends") return "Friends feedback";
+    if (feedbackAudience === "specific") return `Ask ${feedbackTargetLabel}`;
+    return "No feedback";
+  }, [feedbackAudience, feedbackTargetLabel]);
+
+  const reminderLabel = useMemo(() => {
+    if (goalsState.reminder === "daily") return "Daily reminders";
+    if (goalsState.reminder === "weekly") return "Weekly recap";
+    return "No reminders";
+  }, [goalsState.reminder]);
+
+  const summaryChips = useMemo(() => {
+    const chips: Array<{ key: string; label: string }> = [];
+
+    if (postTemplateId) {
+      chips.unshift({ key: "template", label: `Template: ${selectedTemplateLabel}` });
+    }
+    if (postSignalTag !== "none") {
+      chips.unshift({ key: "type", label: `Post type: ${selectedSignalLabel}` });
+    }
+    if (showCheckInOptions) {
+      const shareLabel =
+        checkInTarget === "trusted" ? "Trusted circle" : "My feed";
+      chips.push({ key: "share", label: `Share: ${shareLabel}` });
+      if (checkInGoal) {
+        chips.push({ key: "goal", label: `Goal: ${checkInGoal}` });
+      }
+      if (checkInTarget === "trusted" && checkInGroupId) {
+        const groupName =
+          trustedCircles.find((group) => group.id === checkInGroupId)?.name ||
+          "Trusted circle";
+        chips.push({ key: "circle", label: `Circle: ${groupName}` });
+      }
+    }
+    if (showFeedOptions) {
+      chips.push({ key: "visibility", label: `Visibility: ${visibilityLabel}` });
+      chips.push({ key: "feedback", label: `Feedback: ${feedbackLabel}` });
+      if (postVisibility === "trusted" && postTrustedCircleId) {
+        const groupName =
+          trustedCircleOptions.find((group) => group.id === Number(postTrustedCircleId))
+            ?.name || "Trusted circle";
+        chips.push({ key: "circle", label: `Circle: ${groupName}` });
+      }
+    }
+
+    chips.push({ key: "reminders", label: `Reminders: ${reminderLabel}` });
+    chips.push({
+      key: "news",
+      label: dashboardNewsEnabled ? "Newsroom: On" : "Newsroom: Off",
+    });
+
+    return chips;
+  }, [
+    checkInGoal,
+    checkInGroupId,
+    checkInTarget,
+    dashboardNewsEnabled,
+    feedbackLabel,
+    trustedCircleOptions,
+    postSignalTag,
+    postTrustedCircleId,
+    postTemplateId,
+    reminderLabel,
+    selectedSignalLabel,
+    selectedTemplateLabel,
+    showCheckInOptions,
+    showFeedOptions,
+    trustedCircles,
+    postVisibility,
+    visibilityLabel,
+  ]);
+  const visibilityChipKeys = new Set(["visibility", "feedback", "reminders", "news"]);
+  const visibilityChips = useMemo(
+    () => summaryChips.filter((chip) => visibilityChipKeys.has(chip.key)),
+    [summaryChips]
+  );
+  const detailChips = useMemo(
+    () => summaryChips.filter((chip) => !visibilityChipKeys.has(chip.key)),
+    [summaryChips]
+  );
+
+  const composerToggleLabel = showComposerAdvanced ? "Hide options" : "Customize post";
+  const composerToggleDisabled = false;
+
+  useEffect(() => {
+    if (checkInTarget !== "trusted") {
+      setCheckInGroupId("");
+    }
+  }, [checkInTarget]);
+
+  useEffect(() => {
+    if (postVisibility !== "trusted") {
+      setPostTrustedCircleId("");
+    }
+  }, [postVisibility]);
+
+  useEffect(() => {
+    if (showCheckInOptions) {
+      setComposerExpanded(true);
+    }
+  }, [showCheckInOptions]);
+
+  useEffect(() => {
+    if (!showCheckInOptions) {
+      setCheckInGoal("");
+      setCheckInTarget("feed");
+      setCheckInGroupId("");
+    }
+  }, [showCheckInOptions]);
+
+  const recap = useMemo(() => {
+    const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const recent = (goalsState.checkIns || []).filter(
+      (entry) => new Date(entry.createdAt).getTime() >= weekAgo
+    );
+    const checkInCount = recent.filter((entry) => entry.type === "check-in").length;
+    const supportCount = recent.filter((entry) => entry.type === "support-request").length;
+    return {
+      checkInCount,
+      supportCount,
+      streak: computeCheckInStreak(goalsState.checkIns || []),
+      lastEntry: goalsState.checkIns?.[0],
+    };
+  }, [goalsState.checkIns]);
+
+  const heroBadges = useMemo(() => {
+    const badges = [
+      {
+        id: "consistency",
+        label: "Consistency",
+        detail: "5+ check-ins",
+        achieved: impactStats.checkIns >= 5,
+      },
+      {
+        id: "encourager",
+        label: "Encourager",
+        detail: "10+ uplift reactions",
+        achieved: impactStats.encouragements >= 10,
+      },
+      {
+        id: "helper",
+        label: "Support Ally",
+        detail: "5+ support replies",
+        achieved: impactStats.supportReplies >= 5,
+      },
+      {
+        id: "beacon",
+        label: "Beacon",
+        detail: "3+ support requests",
+        achieved: impactStats.supportRequests >= 3,
+      },
+    ];
+    const achieved = badges.filter((badge) => badge.achieved);
+    return (achieved.length ? achieved : badges.slice(0, 1)).slice(0, 2);
+  }, [impactStats]);
 
   useEffect(() => {
     if (!formFile) {
@@ -554,22 +1086,35 @@ export default function Dashboard() {
         const groupMembersRes = await api.get(
           `/group-members?filters[user][id][$eq]=${userId}&populate=group&pagination[pageSize]=200`
         );
-        const memberGroups: number[] = (groupMembersRes.data?.data ?? [])
+        const groupEntries = groupMembersRes.data?.data ?? [];
+        const resolvedGroups = groupEntries
           .map((entry: unknown) => {
             const attrs = normalize(entry) as { group?: unknown };
-            return getEntityId(attrs.group);
+            const groupEntity = getEntity(attrs.group);
+            const groupId = getEntityId(groupEntity);
+            if (!groupId) return null;
+            const groupAttrs = normalize(groupEntity) as { name?: unknown; kind?: unknown };
+            return {
+              id: groupId,
+              name: getString(groupAttrs.name) ?? `Group ${groupId}`,
+              kind: getString(groupAttrs.kind) ?? undefined,
+            } as GroupOption;
           })
-          .filter((id: unknown): id is number => typeof id === "number" && Number.isFinite(id));
+          .filter(Boolean) as GroupOption[];
+        const uniqueGroupOptions = Array.from(
+          new Map(resolvedGroups.map((group) => [group.id, group])).values()
+        );
+        const memberGroups = uniqueGroupOptions.map((group) => group.id);
         setGroupIds(memberGroups);
 
         const userFilterIds = Array.from(new Set([userId, ...nextFriendIds]));
         const userQuery = buildUserPostsQuery(userFilterIds);
         const groupFilter = memberGroups.length ? buildIdFilter("group", memberGroups) : "";
 
-        const [adminRes, userRes, groupRes, commentsRes] = await Promise.all([
+        const [adminRes, userRes, groupRes, commentsRes, circlesRes] = await Promise.all([
           api.get(`/posts?populate=Pictures&pagination[pageSize]=${POSTS_PAGE_SIZE}`),
           api.get(
-            `/users-posts?${userQuery}&populate=Users_Pictures&populate=owner&populate=feedbackTarget` +
+            `/users-posts?${userQuery}&populate=Users_Pictures&populate=owner&populate=feedbackTarget&populate=trustedCircle` +
               `&sort=createdAt:desc&pagination[pageSize]=${POSTS_PAGE_SIZE}&pagination[page]=1`
           ),
           memberGroups.length
@@ -578,12 +1123,30 @@ export default function Dashboard() {
                   `&sort=createdAt:desc&pagination[pageSize]=${POSTS_PAGE_SIZE}&pagination[page]=1`
               )
             : Promise.resolve({ data: { data: [], meta: {} } }),
-          api.get("/comments?populate=owner"),
+          api.get(
+            "/comments?populate=owner&sort=createdAt:desc&pagination[pageSize]=500"
+          ),
+          api.get(
+            `/trusted-circles?sort=name:asc&pagination[pageSize]=${MAX_TRUSTED_CIRCLES}`
+          ),
         ]);
 
         if (loadId !== loadIdRef.current) return;
 
         const allComments = commentsRes.data?.data ?? [];
+        const trustedCircleRows = circlesRes.data?.data ?? [];
+        const nextTrustedCircles = (trustedCircleRows || [])
+          .map((entry: any) => {
+            const attrs = normalize(entry);
+            const circleId = Number(entry?.id ?? attrs?.documentId ?? attrs?.id);
+            if (!Number.isFinite(circleId)) return null;
+            return {
+              id: circleId,
+              name: String(attrs?.name || `Circle ${circleId}`),
+            } as TrustedCircleOption;
+          })
+          .filter(Boolean) as TrustedCircleOption[];
+        setTrustedCircleOptions(nextTrustedCircles);
         const userPostsData = userRes.data?.data ?? [];
         const groupPostsData = groupRes.data?.data ?? [];
         const profileIds = new Set<number>();
@@ -745,7 +1308,7 @@ export default function Dashboard() {
       const [userRes, groupRes] = await Promise.all([
         shouldLoadUser
           ? api.get(
-              `/users-posts?${userQuery}&populate=Users_Pictures&populate=owner&populate=feedbackTarget` +
+              `/users-posts?${userQuery}&populate=Users_Pictures&populate=owner&populate=feedbackTarget&populate=trustedCircle` +
                 `&sort=createdAt:desc&pagination[pageSize]=${POSTS_PAGE_SIZE}&pagination[page]=${nextUserPage}`
             )
           : Promise.resolve({ data: { data: [], meta: {} } }),
@@ -898,6 +1461,20 @@ export default function Dashboard() {
     [previewCache, processPreviewQueue]
   );
 
+  useEffect(() => {
+    const allComments = posts.comments ?? [];
+    const urls = new Set<string>();
+    allComments.forEach((entry) => {
+      const attrs = normalize(entry);
+      const body = String(attrs.body ?? "").trim();
+      const url = extractFirstUrl(body);
+      if (isPreviewableUrl(url)) {
+        urls.add(url);
+      }
+    });
+    urls.forEach((url) => enqueuePreview(url));
+  }, [enqueuePreview, posts.comments]);
+
   const categorizedPosts = useMemo(() => {
     const allComments = posts.comments ?? [];
     const resolveOwnerName = (ownerId?: number, fallback?: string) => {
@@ -909,6 +1486,8 @@ export default function Dashboard() {
 
     const normalizeUserPost = (post: unknown): NormalizedPost => {
       const attributes = normalize(post) as {
+        id?: number | string;
+        documentId?: string;
         Title?: string;
         title?: string;
         Users_Content?: string;
@@ -920,7 +1499,10 @@ export default function Dashboard() {
         signalTag?: SignalTag;
         feedbackAudience?: string;
         feedbackTarget?: unknown;
+        trustedCircle?: unknown;
         likes?: number;
+        reactionCounts?: ReactionCounts;
+        myReaction?: string | null;
         shares?: number;
         visibility?: string;
       };
@@ -934,29 +1516,54 @@ export default function Dashboard() {
 
       const postRecord = asRecord(post);
       const rawPostId = postRecord.id ?? postRecord.documentId;
-      const targetIdStr = rawPostId === undefined ? "" : String(rawPostId);
+      const targetIdSet = new Set<string>();
+      const addTargetId = (value: unknown) => {
+        if (value === undefined || value === null) return;
+        targetIdSet.add(String(value));
+      };
+      addTargetId(rawPostId);
+      addTargetId(postRecord.id);
+      addTargetId(postRecord.documentId);
+      addTargetId(attributes.id);
+      addTargetId(attributes.documentId);
       const matchedComments = allComments
         .filter((comment) => {
           const commentRecord = asRecord(comment);
-          const targetType = String(commentRecord.target_type ?? "").toLowerCase();
-          const targetId =
-            commentRecord.target_id === undefined ? "" : String(commentRecord.target_id);
+          const commentAttrs = normalize(comment);
+          const targetType = String(
+            commentAttrs.target_type ?? commentRecord.target_type ?? ""
+          ).toLowerCase();
+          const targetIdRaw = commentAttrs.target_id ?? commentRecord.target_id;
+          const targetId = targetIdRaw === undefined ? "" : String(targetIdRaw);
           return (
             (targetType === "user" || targetType === "users-post") &&
-            targetId === targetIdStr
+            targetIdSet.has(targetId)
           );
         })
         .map((comment) => {
           const commentRecord = asRecord(comment);
-          const commentAttrs = asRecord(commentRecord.attributes);
+          const commentAttrs = normalize(comment);
           const ownerSource = commentAttrs.owner ?? commentRecord.owner;
           const commentId =
             typeof commentRecord.id === "string" || typeof commentRecord.id === "number"
               ? commentRecord.id
               : String(commentRecord.id ?? "");
+          const numericIdRaw =
+            typeof commentRecord.id === "number" || typeof commentRecord.id === "string"
+              ? commentRecord.id
+              : commentAttrs.id;
+          const numericId = Number(numericIdRaw);
+          const documentId =
+            typeof commentRecord.documentId === "string"
+              ? commentRecord.documentId
+              : typeof commentAttrs.documentId === "string"
+              ? commentAttrs.documentId
+              : undefined;
           return {
             id: commentId,
-            body: getString(commentRecord.body) ?? "",
+            numericId: Number.isFinite(numericId) ? numericId : undefined,
+            documentId,
+            body: getString(commentAttrs.body) ?? getString(commentRecord.body) ?? "",
             owner: resolveOwnerName(
               getEntityId(ownerSource),
               getOwnerName(ownerSource, "User")
@@ -981,13 +1588,26 @@ export default function Dashboard() {
             getString(feedbackTargetAttrs.email) ?? `User ${feedbackTargetId}`
           )
         : undefined;
+      const trustedCircleData = getEntity(attributes.trustedCircle);
+      const trustedCircleId = getEntityId(trustedCircleData);
+      const trustedCircleAttrs = normalize(trustedCircleData) as { name?: string };
+      const trustedCircleName = trustedCircleId
+        ? getString(trustedCircleAttrs.name) ?? `Circle ${trustedCircleId}`
+        : undefined;
       const postId =
         typeof rawPostId === "string" || typeof rawPostId === "number" ? rawPostId : title;
+      const numericId = Number(postRecord.id ?? rawPostId ?? attributes.id);
+      const normalizedNumericId = Number.isFinite(numericId) ? numericId : undefined;
       const likes = Number(attributes.likes ?? 0);
+      const reactionCounts = normalizeReactionCounts(attributes.reactionCounts, likes);
+      const myReaction = normalizeReactionValue(
+        attributes.myReaction ?? postRecord.myReaction
+      );
       const shares = Number(attributes.shares ?? 0);
 
       return {
         id: postId,
+        numericId: normalizedNumericId,
         title,
         content,
         imageUrl,
@@ -996,18 +1616,24 @@ export default function Dashboard() {
         ownerName,
         ownerId,
         likes,
+        reactionCounts,
+        myReaction,
         shares,
         comments: matchedComments,
         visibility,
-        signalTag: attributes.signalTag || "check-in",
+        signalTag: getString(attributes.signalTag) as SignalTag | undefined,
         feedbackAudience: getString(attributes.feedbackAudience),
         feedbackTargetId,
         feedbackTargetName,
+        trustedCircleId,
+        trustedCircleName,
       };
     };
 
     const normalizeGroupPost = (post: unknown): NormalizedPost => {
       const attributes = normalize(post) as {
+        id?: number | string;
+        documentId?: string;
         title?: string;
         Title?: string;
         body?: string;
@@ -1018,6 +1644,8 @@ export default function Dashboard() {
         createdAt?: string;
         signalTag?: SignalTag;
         likes?: number;
+        reactionCounts?: ReactionCounts;
+        myReaction?: string | null;
         shares?: number;
       };
       const title =
@@ -1038,29 +1666,56 @@ export default function Dashboard() {
       const rawPostId = postRecord.id ?? postRecord.documentId;
       const postId =
         typeof rawPostId === "string" || typeof rawPostId === "number" ? rawPostId : title;
-      const targetIdStr = rawPostId === undefined ? "" : String(rawPostId);
+      const numericId = Number(postRecord.id ?? rawPostId ?? attributes.id);
+      const normalizedNumericId = Number.isFinite(numericId) ? numericId : undefined;
+      const targetIdSet = new Set<string>();
+      const addTargetId = (value: unknown) => {
+        if (value === undefined || value === null) return;
+        targetIdSet.add(String(value));
+      };
+      addTargetId(rawPostId);
+      addTargetId(postRecord.id);
+      addTargetId(postRecord.documentId);
+      addTargetId(attributes.id);
+      addTargetId(attributes.documentId);
       const matchedComments = allComments
         .filter((comment) => {
           const commentRecord = asRecord(comment);
-          const targetType = String(commentRecord.target_type ?? "").toLowerCase();
-          const targetId =
-            commentRecord.target_id === undefined ? "" : String(commentRecord.target_id);
+          const commentAttrs = normalize(comment);
+          const targetType = String(
+            commentAttrs.target_type ?? commentRecord.target_type ?? ""
+          ).toLowerCase();
+          const targetIdRaw = commentAttrs.target_id ?? commentRecord.target_id;
+          const targetId = targetIdRaw === undefined ? "" : String(targetIdRaw);
           return (
             (targetType === "group-post" || targetType === "group") &&
-            targetId === targetIdStr
+            targetIdSet.has(targetId)
           );
         })
         .map((comment) => {
           const commentRecord = asRecord(comment);
-          const commentAttrs = asRecord(commentRecord.attributes);
+          const commentAttrs = normalize(comment);
           const ownerSource = commentAttrs.owner ?? commentRecord.owner;
           const commentId =
             typeof commentRecord.id === "string" || typeof commentRecord.id === "number"
               ? commentRecord.id
               : String(commentRecord.id ?? "");
+          const numericIdRaw =
+            typeof commentRecord.id === "number" || typeof commentRecord.id === "string"
+              ? commentRecord.id
+              : commentAttrs.id;
+          const numericId = Number(numericIdRaw);
+          const documentId =
+            typeof commentRecord.documentId === "string"
+              ? commentRecord.documentId
+              : typeof commentAttrs.documentId === "string"
+              ? commentAttrs.documentId
+              : undefined;
           return {
             id: commentId,
-            body: getString(commentRecord.body) ?? "",
+            numericId: Number.isFinite(numericId) ? numericId : undefined,
+            documentId,
+            body: getString(commentAttrs.body) ?? getString(commentRecord.body) ?? "",
             owner: resolveOwnerName(
               getEntityId(ownerSource),
               getOwnerName(ownerSource, "User")
@@ -1069,8 +1724,15 @@ export default function Dashboard() {
           };
         });
 
+      const likes = Number(attributes.likes ?? 0);
+      const reactionCounts = normalizeReactionCounts(attributes.reactionCounts, likes);
+      const myReaction = normalizeReactionValue(
+        attributes.myReaction ?? postRecord.myReaction
+      );
+
       return {
         id: postId,
+        numericId: normalizedNumericId,
         title,
         content,
         imageUrl,
@@ -1078,23 +1740,30 @@ export default function Dashboard() {
         source: "group",
         ownerName,
         ownerId,
-        likes: Number(attributes.likes ?? 0),
+        likes,
+        reactionCounts,
+        myReaction,
         shares: Number(attributes.shares ?? 0),
         comments: matchedComments,
         groupName,
         groupId,
-        signalTag: attributes.signalTag || "check-in",
+        signalTag: getString(attributes.signalTag) as SignalTag | undefined,
       };
     };
 
     const normalizeAdminPost = (post: unknown): NormalizedPost => {
       const attributes = normalize(post) as {
+        id?: number | string;
+        documentId?: string;
         Title?: string;
         Posts_Content?: string;
         Pictures?: unknown;
         createdAt?: string;
         likes?: number;
+        reactionCounts?: ReactionCounts;
+        myReaction?: string | null;
         shares?: number;
+        signalTag?: SignalTag;
       };
       const title = getString(attributes.Title) ?? "Announcement";
       const content = getString(attributes.Posts_Content) ?? "";
@@ -1105,26 +1774,51 @@ export default function Dashboard() {
 
       const postRecord = asRecord(post);
       const rawPostId = postRecord.id ?? postRecord.documentId;
-      const targetIdStr = rawPostId === undefined ? "" : String(rawPostId);
+      const targetIdSet = new Set<string>();
+      const addTargetId = (value: unknown) => {
+        if (value === undefined || value === null) return;
+        targetIdSet.add(String(value));
+      };
+      addTargetId(rawPostId);
+      addTargetId(postRecord.id);
+      addTargetId(postRecord.documentId);
+      addTargetId(attributes.id);
+      addTargetId(attributes.documentId);
       const matchedComments = allComments
         .filter((comment) => {
           const commentRecord = asRecord(comment);
-          const targetType = String(commentRecord.target_type ?? "").toLowerCase();
-          const targetId =
-            commentRecord.target_id === undefined ? "" : String(commentRecord.target_id);
-          return targetType === "admin" && targetId === targetIdStr;
+          const commentAttrs = normalize(comment);
+          const targetType = String(
+            commentAttrs.target_type ?? commentRecord.target_type ?? ""
+          ).toLowerCase();
+          const targetIdRaw = commentAttrs.target_id ?? commentRecord.target_id;
+          const targetId = targetIdRaw === undefined ? "" : String(targetIdRaw);
+          return targetType === "admin" && targetIdSet.has(targetId);
         })
         .map((comment) => {
           const commentRecord = asRecord(comment);
-          const commentAttrs = asRecord(commentRecord.attributes);
+          const commentAttrs = normalize(comment);
           const ownerSource = commentAttrs.owner ?? commentRecord.owner;
           const commentId =
             typeof commentRecord.id === "string" || typeof commentRecord.id === "number"
               ? commentRecord.id
               : String(commentRecord.id ?? "");
+          const numericIdRaw =
+            typeof commentRecord.id === "number" || typeof commentRecord.id === "string"
+              ? commentRecord.id
+              : commentAttrs.id;
+          const numericId = Number(numericIdRaw);
+          const documentId =
+            typeof commentRecord.documentId === "string"
+              ? commentRecord.documentId
+              : typeof commentAttrs.documentId === "string"
+              ? commentAttrs.documentId
+              : undefined;
           return {
             id: commentId,
-            body: getString(commentRecord.body) ?? "",
+            numericId: Number.isFinite(numericId) ? numericId : undefined,
+            documentId,
+            body: getString(commentAttrs.body) ?? getString(commentRecord.body) ?? "",
             owner: resolveOwnerName(
               getEntityId(ownerSource),
               getOwnerName(ownerSource, "User")
@@ -1135,19 +1829,29 @@ export default function Dashboard() {
 
       const postId =
         typeof rawPostId === "string" || typeof rawPostId === "number" ? rawPostId : title;
+      const numericId = Number(postRecord.id ?? rawPostId ?? attributes.id);
+      const normalizedNumericId = Number.isFinite(numericId) ? numericId : undefined;
+      const likes = Number(attributes.likes ?? 0);
+      const reactionCounts = normalizeReactionCounts(attributes.reactionCounts, likes);
+      const myReaction = normalizeReactionValue(
+        attributes.myReaction ?? postRecord.myReaction
+      );
 
       return {
         id: postId,
+        numericId: normalizedNumericId,
         title,
         content,
         imageUrl,
         createdAt: getString(attributes.createdAt),
         source: "admin",
         ownerName: "Your Social Place",
-        likes: Number(attributes.likes ?? 0),
+        likes,
+        reactionCounts,
+        myReaction,
         shares: Number(attributes.shares ?? 0),
         comments: matchedComments,
-        signalTag: "check-in",
+        signalTag: getString(attributes.signalTag) as SignalTag | undefined,
       };
     };
 
@@ -1168,6 +1872,7 @@ export default function Dashboard() {
       const feedbackAudience = post.feedbackAudience;
       const isPublic = visibility === "public" || feedbackAudience === "public";
       const isPrivate = visibility === "private";
+      const isTrusted = visibility === "trusted";
       const isFriendScoped =
         isSelf ||
         isFriend ||
@@ -1178,6 +1883,10 @@ export default function Dashboard() {
         if (isSelf) {
           privatePosts.push(post);
         }
+        return;
+      }
+      if (isTrusted) {
+        friendPosts.push(post);
         return;
       }
       if (isFriendScoped) {
@@ -1220,6 +1929,11 @@ export default function Dashboard() {
     }
   }, [categorizedPosts, postFilter]);
 
+  const featuredWins = useMemo(
+    () => visiblePosts.filter((post) => post.signalTag === "win").slice(0, 3),
+    [visiblePosts]
+  );
+
   const activePost = useMemo(() => {
     if (!activePostKey) return null;
     return (
@@ -1231,7 +1945,7 @@ export default function Dashboard() {
     if (!postKey) return false;
     try {
       const res = await api.get(
-        `/users-posts/${postKey}?populate=Users_Pictures&populate=owner&populate=feedbackTarget`
+        `/users-posts/${postKey}?populate=Users_Pictures&populate=owner&populate=feedbackTarget&populate=trustedCircle`
       );
       const entry = res.data?.data;
       if (!entry) return false;
@@ -1372,6 +2086,20 @@ export default function Dashboard() {
     return MOTIVATIONAL_PHRASES[index] || "Keep showing up for yourself.";
   }, []);
 
+  const logCheckInEntry = useCallback(
+    (entry: CheckInEntry) => {
+      setGoalsState((prev) => {
+        const next: GoalsState = {
+          ...prev,
+          checkIns: [entry, ...(prev.checkIns || [])].slice(0, 50),
+        };
+        saveGoalsState(goalsStorageKey, next);
+        return next;
+      });
+    },
+    [goalsStorageKey]
+  );
+
   const createPost = async () => {
     const sanitized = sanitizePostText(formContent);
     const content = sanitized.trim();
@@ -1379,7 +2107,18 @@ export default function Dashboard() {
       setFormError("Add a message or a photo/video to post.");
       return;
     }
-    if (feedbackAudience === "specific" && !feedbackTargetId) {
+    const isCheckInPost =
+      postSignalTag === "check-in" || postSignalTag === "support-request";
+    const postToTrustedCircle = isCheckInPost && checkInTarget === "trusted";
+    if (postToTrustedCircle && !checkInGroupId) {
+      setFormError("Choose a trusted circle for this check-in.");
+      return;
+    }
+    if (!postToTrustedCircle && postVisibility === "trusted" && !postTrustedCircleId) {
+      setFormError("Choose a trusted circle for this post.");
+      return;
+    }
+    if (!postToTrustedCircle && feedbackAudience === "specific" && !feedbackTargetId) {
       setFormError("Choose a friend for a specific feedback request.");
       return;
     }
@@ -1389,9 +2128,14 @@ export default function Dashboard() {
     const derivedTitle =
       previewTitle || (url ? hostnameFor(url) : "") || content || "Post";
 
-    if (formFile && formFile.size > MAX_UPLOAD_BYTES) {
-      setFormError(`Media files must be under ${MAX_UPLOAD_LABEL}.`);
-      return;
+    if (formFile) {
+      const isVideo = isVideoFile(formFile);
+      const maxBytes = isVideo ? MAX_VIDEO_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
+      const maxLabel = isVideo ? MAX_VIDEO_UPLOAD_LABEL : MAX_UPLOAD_LABEL;
+      if (formFile.size > maxBytes) {
+        setFormError(`Media files must be under ${maxLabel}.`);
+        return;
+      }
     }
 
     setFormError(null);
@@ -1407,17 +2151,58 @@ export default function Dashboard() {
         uploadedId = uploaded?.id;
       }
 
+      const resolvedSignalTag = postSignalTag === "none" ? undefined : postSignalTag;
+
+      const effectiveVisibility = postToTrustedCircle ? "trusted" : postVisibility;
+      const trustedCircleSelection = postToTrustedCircle
+        ? checkInGroupId
+        : postTrustedCircleId;
+      const trustedCircleId =
+        effectiveVisibility === "trusted" && trustedCircleSelection !== ""
+          ? Number(trustedCircleSelection)
+          : undefined;
+
       await api.post("/users-posts", {
         data: {
-          Title: String(derivedTitle).slice(0, 80) || "Post",
+          Title: String(derivedTitle).slice(0, 80) || (isCheckInPost ? "Check-in" : "Post"),
           Users_Content: content,
           owner: user?.id,
           Users_Pictures: uploadedId ? [uploadedId] : undefined,
-          visibility: postVisibility,
-          feedbackAudience,
-          feedbackTarget: feedbackAudience === "specific" ? feedbackTargetId : undefined,
+          visibility: effectiveVisibility,
+          trustedCircle: trustedCircleId,
+          signalTag: resolvedSignalTag,
+          feedbackAudience: postToTrustedCircle ? "none" : feedbackAudience,
+          feedbackTarget:
+            !postToTrustedCircle && feedbackAudience === "specific"
+              ? feedbackTargetId
+              : undefined,
         },
       });
+
+      if (isCheckInPost) {
+        const goalLabel = checkInGoal.trim() || "General";
+        const groupName = postToTrustedCircle
+          ? trustedCircleOptions.find(
+              (group) => group.id === Number(checkInGroupId)
+            )?.name
+          : undefined;
+        const entryId =
+          typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : `${Date.now()}`;
+        const feedTarget = postVisibility === "private" ? "private" : "feed";
+        logCheckInEntry({
+          id: entryId,
+          createdAt: new Date().toISOString(),
+          type: postSignalTag === "support-request" ? "support-request" : "check-in",
+          goal: goalLabel,
+          note: content || String(derivedTitle),
+          target: postToTrustedCircle ? "trusted" : feedTarget,
+          groupId: postToTrustedCircle ? Number(checkInGroupId) : undefined,
+          groupName,
+        });
+        bumpStat(postSignalTag === "support-request" ? "supportRequests" : "checkIns", 1);
+      }
 
       setFormContent("");
       setFormFile(null);
@@ -1425,6 +2210,13 @@ export default function Dashboard() {
       setLinkPreviewError(null);
       setFeedbackAudience("none");
       setFeedbackTargetId(null);
+      setPostSignalTag("none");
+      setPostTemplateId("");
+      setCheckInGoal("");
+      setCheckInTarget("feed");
+      setCheckInGroupId("");
+      setPostTrustedCircleId("");
+      pushImpactNotice("Post created successfully.");
       await reloadPosts({ silent: true });
     } catch (err: unknown) {
       if (axios.isAxiosError(err)) {
@@ -1488,6 +2280,38 @@ export default function Dashboard() {
     },
     []
   );
+  const updatePostReactions = useCallback(
+    (
+      source: NormalizedPost["source"],
+      postKey: string,
+      reactionCounts: ReactionCounts,
+      myReaction: string | null
+    ) => {
+      if (source !== "user" && source !== "group" && source !== "admin") return;
+      setPosts((prev) => {
+        const listKey = source === "group" ? "group" : source === "admin" ? "admin" : "user";
+        const nextList = prev[listKey].map((entry) => {
+          const record = asRecord(entry);
+          const attrs = isRecord(record.attributes) ? record.attributes : record;
+          const rawId = record.id ?? record.documentId ?? attrs.id ?? attrs.documentId;
+          if (rawId === undefined || String(rawId) !== postKey) return entry;
+          if (isRecord(record.attributes)) {
+            return {
+              ...record,
+              attributes: {
+                ...record.attributes,
+                reactionCounts,
+                myReaction,
+              },
+            };
+          }
+          return { ...record, reactionCounts, myReaction };
+        });
+        return { ...prev, [listKey]: nextList };
+      });
+    },
+    []
+  );
 
   const pushShareNotice = useCallback((postKey: string, message: string) => {
     setShareNotice((prev) => ({ ...prev, [postKey]: message }));
@@ -1500,6 +2324,19 @@ export default function Dashboard() {
       });
     }, 2400);
   }, []);
+
+  const pushImpactNotice = useCallback(
+    (message: string) => {
+      setImpactNotice(message);
+      if (impactTimeoutRef.current) {
+        window.clearTimeout(impactTimeoutRef.current);
+      }
+      impactTimeoutRef.current = window.setTimeout(() => {
+        setImpactNotice(null);
+      }, 3200);
+    },
+    [setImpactNotice]
+  );
 
   const trackShare = useCallback(
     async (post: NormalizedPost, postKey: string) => {
@@ -1520,7 +2357,7 @@ export default function Dashboard() {
         pushShareNotice(postKey, "Unable to update share count.");
       }
     },
-    [pushShareNotice, updatePostMetric]
+    [bumpStat, pushImpactNotice, pushShareNotice, updatePostMetric, userId]
   );
 
   const handleCopyShare = useCallback(
@@ -1575,8 +2412,16 @@ export default function Dashboard() {
             : `/users-posts/${post.id}/react`;
         const res = await api.post(endpoint, { emoji });
         const payload = res.data?.data;
-        const nextLikes = Number(payload?.likes) || Number(post.likes ?? 0) + 1;
-        updatePostMetric(post.source, postKey, "likes", nextLikes);
+        const payloadLikes = Number(payload?.likes);
+        const nextLikes = Number.isFinite(payloadLikes)
+          ? payloadLikes
+          : Number(post.likes ?? 0) + 1;
+        if (Number.isFinite(payloadLikes)) {
+          updatePostMetric(post.source, postKey, "likes", nextLikes);
+        }
+        const counts = normalizeReactionCounts(payload?.reactionCounts, nextLikes);
+        const reactionValue = normalizeReactionValue(payload?.myReaction ?? emoji);
+        updatePostReactions(post.source, postKey, counts, reactionValue);
         if (payload?.alreadyReacted) {
           pushShareNotice(
             postKey,
@@ -1585,28 +2430,30 @@ export default function Dashboard() {
         } else {
           pushShareNotice(postKey, `You reacted ${emoji}`);
         }
+        if (post.ownerId && post.ownerId !== userId) {
+          bumpStat("encouragements", 1);
+          pushImpactNotice("Thanks for lifting someone up today.");
+        }
       } catch (err) {
         console.error("Reaction failed", err);
         pushShareNotice(postKey, "Unable to react right now.");
       }
     },
-    [pushShareNotice, updatePostMetric]
+    [pushShareNotice, updatePostMetric, updatePostReactions]
   );
 
   const toggleComments = useCallback((postKey: string) => {
     setOpenCommentsFor((prev) => ({ ...prev, [postKey]: !prev[postKey] }));
-    setReactionPickerFor(null);
     setShareMenuFor(null);
   }, []);
 
-  const toggleReactionPicker = useCallback((postKey: string) => {
-    setReactionPickerFor((prev) => (prev === postKey ? null : postKey));
+  const openSupportOptions = useCallback((postKey: string) => {
+    setOpenCommentsFor((prev) => ({ ...prev, [postKey]: true }));
     setShareMenuFor(null);
   }, []);
 
   const toggleShareMenu = useCallback((postKey: string) => {
     setShareMenuFor((prev) => (prev === postKey ? null : postKey));
-    setReactionPickerFor(null);
   }, []);
 
   const showCopyToast = useCallback((message: string) => {
@@ -1678,7 +2525,6 @@ export default function Dashboard() {
 
   const openPostModal = useCallback((postKey: string) => {
     setActivePostKey(postKey);
-    setReactionPickerFor(null);
     setShareMenuFor(null);
   }, []);
 
@@ -1703,7 +2549,7 @@ export default function Dashboard() {
       if (!target) return;
       if (
         target.closest(
-          "button, a, input, textarea, select, label, .post-action-group, .post-action-popover, .comment-form, .comment-list, .post-meta-tag--action"
+          "button, a, input, textarea, select, label, .post-action-group, .post-action-popover, .comment-form, .comment-list, .comment-quick-replies, .post-meta-tag--action"
         )
       ) {
         return;
@@ -1718,7 +2564,6 @@ export default function Dashboard() {
       const target = event.target as HTMLElement | null;
       if (!target) return;
       if (target.closest(".post-action-group")) return;
-      setReactionPickerFor(null);
       setShareMenuFor(null);
     };
     document.addEventListener("pointerdown", handlePointerDown);
@@ -1773,9 +2618,6 @@ export default function Dashboard() {
   const showActivePreviewMedia = Boolean(
     activePost && !activePost.imageUrl && activePreviewImage
   );
-  const showActivePlaceholder = Boolean(
-    activePost && !activePost.imageUrl && !activePreviewImage
-  );
   const modalTitleId = activePostKey ? `post-modal-title-${activePostKey}` : undefined;
 
   return (
@@ -1791,51 +2633,107 @@ export default function Dashboard() {
         )}
         <TopbarSearch />
         <div className="dash-hero">
-        <div className="dash-hero__text">
-          <p className="eyebrow">Your Social Place</p>
-          <h1>Posts</h1>
-          <p className="subhead">
-            See What Our Community Is Doing!
-          </p>
-        </div>
-        <div className="hero-badge" style={{ display: 
-          "flex", alignItems: "center",
-           gap: "10px" }}>
-          <span className="pill" title="Live">Live</span>
-          <div style={{ display: "flex",
-             alignItems: "center", 
-             gap: "10px" }}>
-            <div
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: "50%",
-                background: "linear-gradient(135deg, #60a5fa, #7c3aed)",
-                display: "grid",
-                placeItems: "center",
-                overflow: "hidden",
-                color: "#fff",
-                fontWeight: 700,
-              }}
-            >
-              {profileAvatarUrl ? (
-                <img
-                  src={profileAvatarUrl}
-                  alt={`${userLabel} avatar`}
-                  style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                  onError={() => setProfileAvatarUrl(null)}
-                />
-              ) : (
-                userInitial
-              )}
+          <div className="dash-hero__text">
+            <p className="eyebrow">Your Social Place</p>
+            <h1>Posts</h1>
+            <p className="subhead">See What Our Community Is Doing!</p>
+            <div className="dash-hero__insights">
+              <div className="hero-insight">
+                <span className="hero-insight__icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="M8 12.5l2.5 2.5L16 9.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </span>
+                <div>
+                  <strong>{recap.checkInCount}</strong>
+                  <span>Check-ins (7d)</span>
+                </div>
+              </div>
+              <div className="hero-insight">
+                <span className="hero-insight__icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path
+                      d="M12 21s-7-4.4-9-8.3C1.5 9 3 6 6 6c2 0 3.5 1.2 4 2.6C10.5 7.2 12 6 14 6c3 0 4.5 3 3 6.7C19 16.6 12 21 12 21z"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </span>
+                <div>
+                  <strong>{recap.supportCount}</strong>
+                  <span>Support (7d)</span>
+                </div>
+              </div>
+              <div className="hero-insight">
+                <span className="hero-insight__icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path
+                      d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </span>
+                <div>
+                  <strong>{recap.streak}</strong>
+                  <span>Day streak</span>
+                </div>
+              </div>
             </div>
-            <div style={{ lineHeight: 1.2 }}>
-              <div style={{ fontSize: "12px", color: "#9ca3af" }}>Signed in as</div>
-              <div style={{ fontWeight: 600 }}>{userLabel}</div>
+          </div>
+          <div className="dash-hero__aside">
+            <div className="hero-badge" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <span className="pill" title="Live">
+                Live
+              </span>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <div
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: "50%",
+                    background: "linear-gradient(135deg, #60a5fa, #7c3aed)",
+                    display: "grid",
+                    placeItems: "center",
+                    overflow: "hidden",
+                    color: "#fff",
+                    fontWeight: 700,
+                  }}
+                >
+                  {profileAvatarUrl ? (
+                    <img
+                      src={profileAvatarUrl}
+                      alt={`${userLabel} avatar`}
+                      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+                      onError={() => setProfileAvatarUrl(null)}
+                    />
+                  ) : (
+                    userInitial
+                  )}
+                </div>
+                <div style={{ lineHeight: 1.2 }}>
+                  <div style={{ fontSize: "12px", color: "#9ca3af" }}>Signed in as</div>
+                  <div style={{ fontWeight: 600 }}>{userLabel}</div>
+                </div>
+              </div>
+            </div>
+            <div className="hero-badges">
+              {heroBadges.map((badge) => (
+                <span key={badge.id} className="hero-badge-chip" title={badge.detail}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path
+                      d="M12 17.27 18.18 21 16.54 13.97 22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  {badge.label}
+                </span>
+              ))}
             </div>
           </div>
         </div>
-      </div>
 
       {loading && <p className="status">Loading posts…</p>}
       {error && <p className="status status-error">{error}</p>}
@@ -1843,15 +2741,30 @@ export default function Dashboard() {
       {!loading && !error && (
         <>
           <div className="panel-grid">
-            <section className="panel post-composer">
-              <div className="panel-header">
-                <div>
+            <GoalsImpactPanel
+              userId={userId}
+              groups={trustedCircleOptions}
+              friends={friendOptions}
+              onStateChange={setGoalsState}
+            />
+            <section className="panel post-composer" id="post-composer">
+              <div className="panel-header post-composer__header">
+                <div className="post-composer__header-text">
                   <p className="eyebrow">Create</p>
                   <h3>New Post</h3>
                   <p className="panel-sub">
                     Let Your Friends Know What You're Up To! 
                   </p>
                 </div>
+                {visibilityChips.length > 0 && (
+                  <div className="post-composer__header-chips">
+                    {visibilityChips.map((chip) => (
+                      <span key={chip.key} className="post-composer__summary-chip">
+                        {chip.label}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="post-composer__top">
                 <div className="post-composer__avatar">
@@ -1868,6 +2781,117 @@ export default function Dashboard() {
                   )}
                 </div>
                 <div className="post-composer__input">
+                  {showComposerAdvanced && (
+                    <div className="post-composer__advanced" id="post-composer-advanced">
+                      <div className="post-composer__toolbar">
+                        <div className="post-composer__template">
+                          <span className="post-template-label">Template</span>
+                          <div className="post-composer__select">
+                            <select
+                              className="auth-input post-template-select"
+                              value={postTemplateId}
+                              onChange={(e) => handleTemplateSelect(e.target.value)}
+                            >
+                              <option value="">No template</option>
+                              {POST_TEMPLATES.map((template) => (
+                                <option key={template.id} value={template.id}>
+                                  {template.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                        <div className="post-composer__signal">
+                          <span className="post-template-label">Post type</span>
+                          <div className="post-composer__select post-composer__select--sm">
+                            <select
+                              className="auth-input post-feedback-select"
+                              value={postSignalTag}
+                              onChange={(e) =>
+                                setPostSignalTag(e.target.value as SignalTag)
+                              }
+                            >
+                              {SIGNAL_TAGS.map((tag) => (
+                                <option key={tag.value} value={tag.value}>
+                                  {tag.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+                      {showCheckInOptions && (
+                        <div className="post-composer__checkin">
+                          <div className="post-composer__checkin-field">
+                            <span className="post-template-label">Goal (optional)</span>
+                            <select
+                              className="auth-input post-feedback-select"
+                              value={checkInGoal}
+                              onChange={(e) => setCheckInGoal(e.target.value)}
+                            >
+                              <option value="">No goal selected</option>
+                              {availableGoals.map((goal) => (
+                                <option key={goal} value={goal}>
+                                  {goal}
+                                </option>
+                              ))}
+                            </select>
+                            {availableGoals.length === 0 && (
+                              <span className="post-composer__hint">
+                                Add goals in the Goals panel to pick one here.
+                              </span>
+                            )}
+                          </div>
+                          <div className="post-composer__checkin-field">
+                            <span className="post-template-label">Share</span>
+                            <select
+                              className="auth-input post-feedback-select"
+                              value={checkInTarget}
+                              onChange={(e) =>
+                                setCheckInTarget(e.target.value as "feed" | "trusted")
+                              }
+                            >
+                              <option value="feed">My feed</option>
+                              <option value="trusted">Trusted circle</option>
+                            </select>
+                          </div>
+                          {checkInTarget === "trusted" && (
+                            <div className="post-composer__checkin-field">
+                              <span className="post-template-label">Trusted circle</span>
+                              <select
+                                className="auth-input post-feedback-select"
+                                value={checkInGroupId}
+                                onChange={(e) =>
+                                  setCheckInGroupId(
+                                    e.target.value ? Number(e.target.value) : ""
+                                  )
+                                }
+                              >
+                                <option value="">Select a circle</option>
+                                {trustedCircleOptions.map((group) => (
+                                  <option key={group.id} value={group.id}>
+                                    {group.name}
+                                  </option>
+                                ))}
+                              </select>
+                              <button
+                                type="button"
+                                className="post-composer__hint-link"
+                                onClick={() => navigate("/friends")}
+                              >
+                                Set Trusted Friends
+                              </button>
+                              {trustedCircleOptions.length === 0 && (
+                                <span className="post-composer__hint">
+                                  Create a trusted circle on the Friends page to use it here.
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <textarea
                     className="auth-input"
                     value={formContent}
@@ -1877,8 +2901,46 @@ export default function Dashboard() {
                       setFormError(null);
                     }}
                     placeholder="What's on your mind?"
-                    rows={4}
+                    rows={showComposerAdvanced ? 4 : 3}
                   />
+                  <div className="post-composer__summary">
+                    <button
+                      className="post-composer__toggle"
+                      type="button"
+                      onClick={() => setComposerExpanded((prev) => !prev)}
+                      aria-controls="post-composer-advanced"
+                      aria-expanded={showComposerAdvanced}
+                      disabled={composerToggleDisabled}
+                    >
+                      <span>{composerToggleLabel}</span>
+                      <span
+                        className={`post-composer__chevron${
+                          showComposerAdvanced ? " is-open" : ""
+                        }`}
+                        aria-hidden="true"
+                      >
+                        <svg viewBox="0 0 20 20">
+                          <path
+                            d="M5 7.5 10 12.5 15 7.5"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.6"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </span>
+                    </button>
+                    {detailChips.length > 0 && (
+                      <div className="post-composer__summary-chips">
+                        {detailChips.map((chip) => (
+                          <span key={chip.key} className="post-composer__summary-chip">
+                            {chip.label}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                   {linkPreviewLoading && (
                     <span className="post-composer__hint">Loading preview...</span>
                   )}
@@ -1909,66 +2971,135 @@ export default function Dashboard() {
                 </div>
               )}
 
-              <div className="post-composer__feedback">
-                <span className="post-feedback-label">Post visibility</span>
-                <div className="post-feedback-row">
-                  <select
-                    className="auth-input post-feedback-select"
-                    value={postVisibility}
-                    onChange={(e) => {
-                      setPostVisibility(e.target.value);
-                      setFormError(null);
-                    }}
-                  >
-                    <option value="public">Public</option>
-                    <option value="friends">Friends</option>
-                    <option value="private">Private</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="post-composer__feedback">
-                <span className="post-feedback-label">Request feedback</span>
-                <div className="post-feedback-row">
-                  <select
-                    className="auth-input post-feedback-select"
-                    value={feedbackAudience}
-                    onChange={(e) => {
-                      setFeedbackAudience(e.target.value);
-                      setFormError(null);
-                    }}
-                  >
-                    <option value="none">No feedback request</option>
-                    <option value="public">Public feedback</option>
-                    <option value="friends">Friends only</option>
-                    <option value="specific">Specific friend</option>
-                  </select>
-                  {feedbackAudience === "specific" && (
-                    <select
-                      className="auth-input post-feedback-select"
-                      value={feedbackTargetId ?? ""}
-                      onChange={(e) => {
-                        const nextId = Number(e.target.value);
-                        setFeedbackTargetId(Number.isFinite(nextId) ? nextId : null);
-                        setFormError(null);
-                      }}
-                      disabled={!friendOptions.length}
-                    >
-                      <option value="">Select a friend</option>
-                      {friendOptions.map((option) => (
-                        <option key={option.id} value={option.id}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
+              {showComposerAdvanced && (
+                <div className="post-composer__settings">
+                  {showFeedOptions && (
+                    <div className="post-composer__feedback">
+                      <span className="post-feedback-label">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path
+                            d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6-10-6-10-6Z"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.6"
+                          />
+                          <circle cx="12" cy="12" r="3.2" fill="currentColor" />
+                        </svg>
+                        Post visibility
+                      </span>
+                      <div className="post-feedback-row">
+                        <select
+                          className="auth-input post-feedback-select"
+                          value={postVisibility}
+                          onChange={(e) => {
+                            setPostVisibility(e.target.value);
+                            setFormError(null);
+                          }}
+                        >
+                          <option value="public">Public</option>
+                          <option value="friends">Friends</option>
+                          <option value="trusted">Trusted circle</option>
+                          <option value="private">Private</option>
+                        </select>
+                        {postVisibility === "trusted" && (
+                          <>
+                          <select
+                              className="auth-input post-feedback-select"
+                              value={postTrustedCircleId}
+                              onChange={(e) => {
+                                const next = Number(e.target.value);
+                                setPostTrustedCircleId(
+                                  Number.isFinite(next) ? next : ""
+                                );
+                                setFormError(null);
+                              }}
+                            >
+                              <option value="">Select a trusted circle</option>
+                            {trustedCircleOptions.map((group) => (
+                              <option key={group.id} value={group.id}>
+                                {group.name}
+                              </option>
+                            ))}
+                          </select>
+                            <button
+                              type="button"
+                              className="post-composer__hint-link"
+                              onClick={() => navigate("/friends")}
+                            >
+                              Set Trusted Friends
+                            </button>
+                            {trustedCircleOptions.length === 0 && (
+                              <p className="status">
+                                Create a trusted circle on the Friends page to use this.
+                              </p>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
                   )}
+
+                  {showFeedOptions && (
+                    <div className="post-composer__feedback">
+                      <span className="post-feedback-label">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path
+                            d="M4 5.5h16a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H10l-4 3v-3H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.6"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                        Request feedback
+                      </span>
+                      <div className="post-feedback-row">
+                        <select
+                          className="auth-input post-feedback-select"
+                          value={feedbackAudience}
+                          onChange={(e) => {
+                            setFeedbackAudience(e.target.value);
+                            setFormError(null);
+                          }}
+                        >
+                          <option value="none">No feedback request</option>
+                          <option value="public">Public feedback</option>
+                          <option value="friends">Friends only</option>
+                          <option value="specific">Specific friend</option>
+                        </select>
+                        {feedbackAudience === "specific" && (
+                          <select
+                            className="auth-input post-feedback-select"
+                            value={feedbackTargetId ?? ""}
+                            onChange={(e) => {
+                              const nextId = Number(e.target.value);
+                              setFeedbackTargetId(
+                                Number.isFinite(nextId) ? nextId : null
+                              );
+                              setFormError(null);
+                            }}
+                            disabled={!friendOptions.length}
+                          >
+                            <option value="">Select a friend</option>
+                            {friendOptions.map((option) => (
+                              <option key={option.id} value={option.id}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
+                      {feedbackAudience === "specific" && friendOptions.length === 0 && (
+                        <p className="post-feedback-note">
+                          Add a friend first to request feedback from a specific person.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  
                 </div>
-                {feedbackAudience === "specific" && friendOptions.length === 0 && (
-                  <p className="post-feedback-note">
-                    Add a friend first to request feedback from a specific person.
-                  </p>
-                )}
-              </div>
+              )}
 
               <div className="post-composer__actions">
                 <div className="post-composer__tools">
@@ -1978,8 +3109,15 @@ export default function Dashboard() {
                       accept="image/*,video/*"
                       onChange={(e) => {
                         const file = e.target.files?.[0] || null;
-                        if (file && file.size > MAX_UPLOAD_BYTES) {
-                          setFormError(`Media files must be under ${MAX_UPLOAD_LABEL}.`);
+                        if (!file) {
+                          setFormFile(null);
+                          return;
+                        }
+                        const isVideo = isVideoFile(file);
+                        const maxBytes = isVideo ? MAX_VIDEO_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
+                        const maxLabel = isVideo ? MAX_VIDEO_UPLOAD_LABEL : MAX_UPLOAD_LABEL;
+                        if (file.size > maxBytes) {
+                          setFormError(`Media files must be under ${maxLabel}.`);
                           e.target.value = "";
                           setFormFile(null);
                           return;
@@ -2018,6 +3156,8 @@ export default function Dashboard() {
             {/* <NewsWidget /> */}
           </div>
 
+          {impactNotice && <div className="impact-notice">{impactNotice}</div>}
+
           <div className="posts-toolbar">
             <div>
               <p className="eyebrow">Feed</p>
@@ -2039,7 +3179,84 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="posts-grid posts-grid--two">
+          {featuredWins.length > 0 && (
+            <section className="featured-wins">
+              <div className="featured-wins__header">
+                <h4>Featured wins</h4>
+                <span>Celebrate progress</span>
+              </div>
+              <div className="featured-wins__grid">
+                {featuredWins.map((post) => {
+                  const fallbackUrl = extractFirstUrl(post.content);
+                  const previewImage = fallbackUrl ? previewCache[fallbackUrl]?.image : "";
+                  const mediaUrl =
+                    post.imageUrl ||
+                    (isVideoUrl(fallbackUrl) || isImageUrl(fallbackUrl)
+                      ? fallbackUrl
+                      : previewImage);
+                  return (
+                  <button
+                    key={post.id}
+                    type="button"
+                    className="featured-wins__card"
+                    onClick={() => openPostModal(String(post.id))}
+                  >
+                    {mediaUrl && (
+                      <div className="featured-wins__media">
+                        {isVideoUrl(mediaUrl) ? (
+                          <video
+                            muted
+                            playsInline
+                            preload="metadata"
+                            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                          >
+                            <source src={mediaUrl} />
+                          </video>
+                        ) : (
+                          <img
+                            src={mediaUrl}
+                            alt={post.title}
+                            loading="lazy"
+                            decoding="async"
+                          />
+                        )}
+                      </div>
+                    )}
+                    <span className="featured-wins__badge">Win</span>
+                    <h5>{post.title}</h5>
+                    {(() => {
+                      const structured = parseStructuredPost(post.content, post.signalTag);
+                      if (!structured) {
+                        return <p>{post.content}</p>;
+                      }
+                      return (
+                        <div className="post-structured">
+                          {structured.rows.map((row) => (
+                            <div key={row.label} className="post-structured__row">
+                              <span className="post-structured__label">{row.label}</span>
+                              <span
+                                className={`post-structured__value${
+                                  row.value ? "" : " is-empty"
+                                }`}
+                              >
+                                {row.value || "Not added yet"}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                    <span className="featured-wins__meta">
+                      {post.ownerName || "Member"}
+                    </span>
+                  </button>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
+          <div className="posts-grid">
             {visiblePosts.length === 0 && (
               <div className="empty-state">
                 <p>No posts yet. Add one in Strapi to see it here.</p>
@@ -2053,7 +3270,14 @@ export default function Dashboard() {
               const descriptor = mediaDescriptor(post.imageUrl, hasLink);
               const previewImage = preview?.image;
               const showPreviewMedia = !post.imageUrl && !!previewImage;
-              const showPlaceholder = !post.imageUrl && !previewImage;
+              const supportReplies = supportRepliesForTag(post.signalTag);
+              const supportLabel = formatSignalTag(post.signalTag);
+              const supportLabelText =
+                post.signalTag === "support-request"
+                  ? "Support options"
+                  : supportLabel
+                  ? `${supportLabel} support`
+                  : "Support options";
               const authorLabel = post.ownerName || "User";
               const postId = Number(post.id);
               const canDelete =
@@ -2062,8 +3286,8 @@ export default function Dashboard() {
                 user?.id === post.ownerId;
               const feedbackLabel = feedbackLabelFor(post);
               const postKey = String(post.id);
-              const isCommentsOpen = Boolean(openCommentsFor[postKey]);
-              const showReactionPicker = reactionPickerFor === postKey;
+              const commentKey = String(post.numericId ?? post.id);
+              const isCommentsOpen = Boolean(openCommentsFor[commentKey]);
               const showShareMenu = shareMenuFor === postKey;
               const shareUrl = buildShareUrl(postKey);
               const shareText = post.title
@@ -2072,6 +3296,13 @@ export default function Dashboard() {
               const encodedUrl = encodeURIComponent(shareUrl);
               const encodedText = encodeURIComponent(shareText);
               const likesCount = Number(post.likes ?? 0);
+              const reactionCounts = normalizeReactionCounts(
+                post.reactionCounts,
+                likesCount
+              );
+              const thumbsUpCount = reactionCounts.thumbsUp;
+              const heartCount = reactionCounts.heart;
+              const myReaction = normalizeReactionValue(post.myReaction);
               const sharesCount = Number(post.shares ?? 0);
               const commentsCount = post.comments?.length ?? 0;
               const isDescriptorActionable =
@@ -2081,9 +3312,9 @@ export default function Dashboard() {
                 <article
                   key={post.id}
                   id={`post-${postKey}`}
-                  className={`post-card${
-                    showReactionPicker || showShareMenu ? " is-popover-open" : ""
-                  } post-card--openable`}
+                  className={`post-card${showShareMenu ? " is-popover-open" : ""} post-card--openable${
+                    post.signalTag === "support-request" ? " post-card--support" : ""
+                  }${post.signalTag === "win" ? " post-card--win" : ""}`}
                   onClick={(event) => handlePostCardClick(event, postKey)}
                   aria-haspopup="dialog"
                 >
@@ -2112,6 +3343,36 @@ export default function Dashboard() {
                       ) : (
                         <span className="post-meta-tag">{descriptor}</span>
                       ))}
+                    {post.signalTag && post.signalTag !== "none" && (
+                      <>
+                        {supportReplies.length > 0 ? (
+                          <button
+                            type="button"
+                            className={`post-meta-tag post-meta-tag--signal post-meta-tag--${post.signalTag} post-meta-tag--action`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openSupportOptions(commentKey);
+                            }}
+                            aria-label={`Support ${formatSignalTag(post.signalTag)} post`}
+                          >
+                            {formatSignalTag(post.signalTag)}
+                          </button>
+                        ) : (
+                          <span
+                            className={`post-meta-tag post-meta-tag--signal post-meta-tag--${post.signalTag}`}
+                          >
+                            {formatSignalTag(post.signalTag)}
+                          </span>
+                        )}
+                      </>
+                    )}
+                    {post.visibility === "trusted" && (
+                      <span className="post-meta-tag post-meta-tag--trusted">
+                        {post.trustedCircleName
+                          ? `Circle: ${post.trustedCircleName}`
+                          : "Trusted circle"}
+                      </span>
+                    )}
                   </div>
 
                   {post.imageUrl ? (
@@ -2143,18 +3404,10 @@ export default function Dashboard() {
                         decoding="async"
                       />
                     </div>
-                  ) : showPlaceholder ? (
-                    <div
-                      className={`post-media placeholder${hasLink ? " link-preview-placeholder" : ""}`}
-                    >
-                      <div className="dots" />
-                      <span>No image</span>
-                    </div>
                   ) : null}
 
                   <div className="post-body">
                     <div className="post-meta">
-                      <span className="pill subtle">Feature</span>
                       <div className="post-meta-right">
                         {feedbackLabel && (
                           <span className="post-feedback-tag">{feedbackLabel}</span>
@@ -2174,7 +3427,28 @@ export default function Dashboard() {
                       </div>
                     </div>
                     <h3>{post.title}</h3>
-                    <p>{post.content}</p>
+                    {(() => {
+                      const structured = parseStructuredPost(post.content, post.signalTag);
+                      if (!structured) {
+                        return <p>{post.content}</p>;
+                      }
+                      return (
+                        <div className="post-structured">
+                          {structured.rows.map((row) => (
+                            <div key={row.label} className="post-structured__row">
+                              <span className="post-structured__label">{row.label}</span>
+                              <span
+                                className={`post-structured__value${
+                                  row.value ? "" : " is-empty"
+                                }`}
+                              >
+                                {row.value || "Not added yet"}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
                     {preview && !post.imageUrl && (
                       <LinkPreviewCard
                         preview={preview}
@@ -2184,11 +3458,25 @@ export default function Dashboard() {
                     )}
                     <div className="post-actions">
                       <div className="post-action-counts">
-                        <span className="post-action-count">
+                        <span
+                          className={`post-action-count${
+                            myReaction === "👍" ? " is-selected" : ""
+                          }`}
+                        >
                           <span className="post-action-count-icon" aria-hidden="true">
                             👍
                           </span>
-                          {likesCount}
+                          {thumbsUpCount}
+                        </span>
+                        <span
+                          className={`post-action-count${
+                            myReaction === "❤️" ? " is-selected" : ""
+                          }`}
+                        >
+                          <span className="post-action-count-icon" aria-hidden="true">
+                            ❤️
+                          </span>
+                          {heartCount}
                         </span>
                         <span className="post-action-count">
                           <span className="post-action-count-icon" aria-hidden="true">
@@ -2208,34 +3496,34 @@ export default function Dashboard() {
                         <button
                           className="post-action-btn"
                           type="button"
-                          aria-pressed={showReactionPicker}
-                          onClick={() => toggleReactionPicker(postKey)}
+                          aria-pressed={myReaction === "👍"}
+                          onClick={() => void handleReaction(post, postKey, "👍")}
                         >
                           <span className="post-action-icon" aria-hidden="true">
-                            <svg viewBox="0 0 24 24">
-                              <path d="M2 10.5A1.5 1.5 0 0 1 3.5 9h1A1.5 1.5 0 0 1 6 10.5v9A1.5 1.5 0 0 1 4.5 21h-1A1.5 1.5 0 0 1 2 19.5v-9Z" />
-                              <path d="M6 10.333V5a3 3 0 0 1 3-3h.5a.5.5 0 0 1 .5.5V8h4.65a2.5 2.5 0 0 1 2.453 2.98l-1.2 6A2.5 2.5 0 0 1 13.452 19H8a2 2 0 0 1-2-2v-6.667Z" />
-                            </svg>
+                            👍
                           </span>
                           <span>Like</span>
                         </button>
-                        {showReactionPicker && (
-                          <div className="post-action-popover">
-                            <ReactionPicker
-                              onPick={(emoji) => {
-                                setReactionPickerFor(null);
-                                void handleReaction(post, postKey, emoji);
-                              }}
-                            />
-                          </div>
-                        )}
+                      </div>
+                      <div className="post-action-group">
+                        <button
+                          className="post-action-btn"
+                          type="button"
+                          aria-pressed={myReaction === "❤️"}
+                          onClick={() => void handleReaction(post, postKey, "❤️")}
+                        >
+                          <span className="post-action-icon" aria-hidden="true">
+                            ❤️
+                          </span>
+                          <span>Heart</span>
+                        </button>
                       </div>
                       <div className="post-action-group">
                         <button
                           className="post-action-btn"
                           type="button"
                           aria-pressed={isCommentsOpen}
-                          onClick={() => toggleComments(postKey)}
+                          onClick={() => toggleComments(commentKey)}
                         >
                           <span className="post-action-icon" aria-hidden="true">
                             <svg viewBox="0 0 24 24">
@@ -2344,26 +3632,149 @@ export default function Dashboard() {
                               <li key={c.id} className="comment-item">
                                 <div className="comment-author">{c.owner || "User"}</div>
                                 <div className="comment-body">{c.body}</div>
+                                {(() => {
+                                  const commentUrl = extractFirstUrl(c.body);
+                                  if (!isPreviewableUrl(commentUrl)) return null;
+                                  const preview = previewCache[commentUrl];
+                                  if (!preview) return null;
+                                  return (
+                                    <div className="comment-preview">
+                                      <LinkPreviewCard
+                                        preview={preview}
+                                        url={preview.url || commentUrl}
+                                        compact
+                                      />
+                                    </div>
+                                  );
+                                })()}
                                 {user?.id === c.ownerId && (
                                   <button
                                     className="btn ghost comment-delete"
                                     type="button"
                                     onClick={async () => {
+                                      const numericId =
+                                        c.numericId ??
+                                        (typeof c.id === "number" ? c.id : Number(c.id));
+                                      const removeIds = new Set<string>();
+                                      removeIds.add(String(c.id));
+                                      if (c.documentId) {
+                                        removeIds.add(String(c.documentId));
+                                      }
+                                      if (Number.isFinite(numericId)) {
+                                        removeIds.add(String(numericId));
+                                      }
                                       try {
-                                        await api.delete(`/comments/${c.id}`);
+                                        setError(null);
+                                        const attempts: string[] = [];
+                                        if (c.documentId) {
+                                          attempts.push(`/comments/${c.documentId}`);
+                                        }
+                                        if (Number.isFinite(numericId)) {
+                                          attempts.push(`/comments/${numericId}`);
+                                        }
+                                        attempts.push(`/comments/${c.id}`);
+
+                                        let removed = false;
+                                        for (const path of attempts) {
+                                          try {
+                                            await api.delete(path);
+                                            removed = true;
+                                            break;
+                                          } catch (err: unknown) {
+                                            if (
+                                              axios.isAxiosError(err) &&
+                                              err.response?.status === 404
+                                            ) {
+                                              continue;
+                                            }
+                                            throw err;
+                                          }
+                                        }
+
+                                        if (!removed) {
+                                          setError("Failed to delete comment.");
+                                          return;
+                                        }
+
                                         setPosts((prev) => ({
                                           ...prev,
-                                          comments: prev.comments.filter((comment) => {
-                                            const record = asRecord(comment);
-                                            const commentId =
-                                              typeof record.id === "string" ||
-                                              typeof record.id === "number"
-                                                ? record.id
-                                                : null;
-                                            return commentId !== c.id;
-                                          }),
+                                          comments: (prev.comments ?? []).filter(
+                                            (entry) => {
+                                              const record = asRecord(entry);
+                                              const attrs = normalize(entry);
+                                              const entryId = record.id ?? attrs.id;
+                                              const entryDoc =
+                                                record.documentId ?? attrs.documentId;
+                                              if (entryId !== undefined) {
+                                                if (removeIds.has(String(entryId))) {
+                                                  return false;
+                                                }
+                                              }
+                                              if (entryDoc !== undefined) {
+                                                if (removeIds.has(String(entryDoc))) {
+                                                  return false;
+                                                }
+                                              }
+                                              return true;
+                                            }
+                                          ),
                                         }));
+
+                                        try {
+                                          const res = await api.get(
+                                            "/comments?populate=owner&sort=createdAt:desc&pagination[pageSize]=500"
+                                          );
+                                          setPosts((prev) => ({
+                                            ...prev,
+                                            comments: res.data?.data ?? [],
+                                          }));
+                                        } catch (err: unknown) {
+                                          console.warn(
+                                            "Comment refresh failed after delete",
+                                            err
+                                          );
+                                        }
                                       } catch (err: unknown) {
+                                        const status = axios.isAxiosError(err)
+                                          ? err.response?.status
+                                          : undefined;
+                                        if (status && status >= 500) {
+                                          try {
+                                            const res = await api.get(
+                                              "/comments?populate=owner&sort=createdAt:desc&pagination[pageSize]=500"
+                                            );
+                                            const nextComments = res.data?.data ?? [];
+                                            setPosts((prev) => ({
+                                              ...prev,
+                                              comments: nextComments,
+                                            }));
+                                            const stillThere = nextComments.some(
+                                              (entry: unknown) => {
+                                                const record = asRecord(entry);
+                                                const attrs = normalize(entry);
+                                                const entryId = record.id ?? attrs.id;
+                                                const entryDoc =
+                                                  record.documentId ?? attrs.documentId;
+                                                if (entryId !== undefined) {
+                                                  if (removeIds.has(String(entryId))) {
+                                                    return true;
+                                                  }
+                                                }
+                                                if (entryDoc !== undefined) {
+                                                  if (removeIds.has(String(entryDoc))) {
+                                                    return true;
+                                                  }
+                                                }
+                                                return false;
+                                              }
+                                            );
+                                            if (!stillThere) {
+                                              return;
+                                            }
+                                          } catch {
+                                            // fall through to error message
+                                          }
+                                        }
                                         console.error("Delete comment failed", err);
                                         setError("Failed to delete comment");
                                       }
@@ -2378,24 +3789,53 @@ export default function Dashboard() {
                         ) : (
                           <p className="status">No comments yet.</p>
                         )}
+                        {supportReplies.length > 0 && (
+                          <div className="comment-quick-replies">
+                            <span className="comment-quick-label">
+                              {supportLabelText}
+                            </span>
+                            <div className="comment-quick-grid">
+                              {supportReplies.map((reply) => (
+                                <button
+                                  key={reply}
+                                  className="comment-quick-reply"
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setCommentInputs((prev) => {
+                                      const current = (prev[commentKey] || "").trim();
+                                      const next = current ? `${current} ${reply}` : reply;
+                                      return {
+                                        ...prev,
+                                        [commentKey]: sanitizePostText(next),
+                                      };
+                                    });
+                                  }}
+                                >
+                                  {reply}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                         <div className="comment-form">
                           <input
                             className="auth-input"
                             placeholder="Add a comment..."
-                            value={commentInputs[postKey] || ""}
+                            value={commentInputs[commentKey] || ""}
                             onChange={(e) =>
                               setCommentInputs((prev) => ({
                                 ...prev,
-                                [postKey]: sanitizePostText(e.target.value),
+                                [commentKey]: sanitizePostText(e.target.value),
                               }))
                             }
                           />
                           <button
                             className="btn primary"
                             type="button"
-                            disabled={!commentInputs[postKey]?.trim()}
+                            disabled={!commentInputs[commentKey]?.trim()}
                             onClick={async () => {
-                              const body = (commentInputs[postKey] || "").trim();
+                              const body = (commentInputs[commentKey] || "").trim();
                               if (!body) return;
                               try {
                                 const targetType =
@@ -2408,15 +3848,25 @@ export default function Dashboard() {
                                   data: {
                                     body,
                                     target_type: targetType,
-                                    target_id: post.id,
+                                    target_id: post.numericId ?? post.id,
                                   },
                                 });
-                                const res = await api.get("/comments?populate=owner");
+                                if (
+                                  post.signalTag === "support-request" &&
+                                  post.ownerId &&
+                                  post.ownerId !== userId
+                                ) {
+                                  bumpStat("supportReplies", 1);
+                                  pushImpactNotice("Thanks for supporting someone today.");
+                                }
+                                const res = await api.get(
+                                  "/comments?populate=owner&sort=createdAt:desc&pagination[pageSize]=500"
+                                );
                                 setPosts((prev) => ({
                                   ...prev,
                                   comments: res.data?.data ?? [],
                                 }));
-                                setCommentInputs((prev) => ({ ...prev, [postKey]: "" }));
+                                setCommentInputs((prev) => ({ ...prev, [commentKey]: "" }));
                               } catch (err: unknown) {
                                 console.error("Add comment failed", err);
                                 if (axios.isAxiosError(err)) {
@@ -2514,8 +3964,22 @@ export default function Dashboard() {
                     ) : (
                       <span className="post-meta-tag">{activeDescriptor}</span>
                     ))}
+                  {activePost?.signalTag && activePost.signalTag !== "none" && (
+                    <span
+                      className={`post-meta-tag post-meta-tag--signal post-meta-tag--${activePost.signalTag}`}
+                    >
+                      {formatSignalTag(activePost.signalTag)}
+                    </span>
+                  )}
                   {activeFeedbackLabel && (
                     <span className="post-feedback-tag">{activeFeedbackLabel}</span>
+                  )}
+                  {activePost.visibility === "trusted" && (
+                    <span className="post-meta-tag post-meta-tag--trusted">
+                      {activePost.trustedCircleName
+                        ? `Circle: ${activePost.trustedCircleName}`
+                        : "Trusted circle"}
+                    </span>
                   )}
                 </div>
               </div>
@@ -2549,16 +4013,33 @@ export default function Dashboard() {
                     decoding="async"
                   />
                 </div>
-              ) : showActivePlaceholder ? (
-                <div className="post-media post-modal__media placeholder">
-                  <div className="dots" />
-                  <span>No image</span>
-                </div>
               ) : null}
 
               <div className="post-modal__body">
                 <h2 id={modalTitleId}>{activePost.title}</h2>
-                <p>{activePost.content}</p>
+                {(() => {
+                  const structured = parseStructuredPost(
+                    activePost.content,
+                    activePost.signalTag
+                  );
+                  if (!structured) {
+                    return <p>{activePost.content}</p>;
+                  }
+                  return (
+                    <div className="post-structured">
+                      {structured.rows.map((row) => (
+                        <div key={row.label} className="post-structured__row">
+                          <span className="post-structured__label">{row.label}</span>
+                          <span
+                            className={`post-structured__value${row.value ? "" : " is-empty"}`}
+                          >
+                            {row.value || "Not added yet"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
                 {activePreview && !activePost.imageUrl && (
                   <LinkPreviewCard
                     preview={activePreview}
@@ -2575,6 +4056,21 @@ export default function Dashboard() {
                       <li key={comment.id} className="comment-item">
                         <div className="comment-author">{comment.owner || "User"}</div>
                         <div className="comment-body">{comment.body}</div>
+                        {(() => {
+                          const commentUrl = extractFirstUrl(comment.body);
+                          if (!isPreviewableUrl(commentUrl)) return null;
+                          const preview = previewCache[commentUrl];
+                          if (!preview) return null;
+                          return (
+                            <div className="comment-preview">
+                              <LinkPreviewCard
+                                preview={preview}
+                                url={preview.url || commentUrl}
+                                compact
+                              />
+                            </div>
+                          );
+                        })()}
                       </li>
                     ))}
                   </ul>

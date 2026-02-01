@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import "../css/dashboard.css";
 import "../css/news.css";
 import { useAuth } from "../context/AuthContext";
+import { useNewsPreference } from "../hooks/useNewsPreference";
 import { useUserPreferences } from "../context/UserPreferencesContext";
 import Sidebar from "../components/Sidebar";
 import TopbarSearch from "../components/TopbarSearch";
@@ -152,11 +153,12 @@ const isImageAsset = (asset: NewsAsset) => {
 
 export default function News() {
   const navigate = useNavigate();
-  const { profile, appSettings } = useAuth();
+  const { user, profile, appSettings } = useAuth();
   const { getBackgroundStyle } = useUserPreferences();
+  const { override: newsOverride } = useNewsPreference(user?.id);
   const profileNewsEnabled = profile?.notificationSettings?.newsEnabled !== false;
   const newsroomEnabled = appSettings?.newsroomEnabled !== false;
-  const newsEnabled = profileNewsEnabled && newsroomEnabled;
+  const newsEnabled = (newsOverride ?? profileNewsEnabled) && newsroomEnabled;
 
   const [query, setQuery] = useState("");
   const [provider, setProvider] = useState("");

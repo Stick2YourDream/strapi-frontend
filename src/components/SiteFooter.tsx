@@ -28,6 +28,7 @@ export default function SiteFooter() {
             </>
           )}
           <a href="/what-makes-us-different">What makes us different</a>
+          <a href="/forums">Forums</a>
           <a href="/apps">Apps</a>
           <a href="/guidelines">Community Guidelines</a>
         </div>

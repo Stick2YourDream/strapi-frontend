@@ -47,7 +47,7 @@ const BIRTHDAY_MESSAGES = [
 ];
 
 type SidebarProps = {
-  active: "dashboard" | "friends" | "me" | "groups" | "moderation" | "news";
+  active: "dashboard" | "friends" | "me" | "groups" | "moderation" | "news" | "forums";
   settingsView?: "profile" | "settings";
   onSettingsViewChange?: (view: "profile" | "settings") => void;
   settingsSection?: SettingsSection;
@@ -709,6 +709,13 @@ export default function Sidebar({
                 My Groups
               </button>
               <button
+                className="mobile-profile-item"
+                type="button"
+                onClick={() => handleProfileAction("/forums")}
+              >
+                Forums
+              </button>
+              <button
                 className={`mobile-profile-item${
                   newsroomEnabled ? "" : " mobile-profile-item--disabled"
                 }`}
@@ -983,6 +990,15 @@ export default function Sidebar({
                 onClick={() => handleProfileAction("/groups")}
               >
                 My Groups
+              </button>
+              <button
+                type="button"
+                className={`btn ghost sidebar-nav-link${
+                  active === "forums" ? " is-active" : ""
+                }`}
+                onClick={() => handleProfileAction("/forums")}
+              >
+                Forums
               </button>
               <button
                 type="button"

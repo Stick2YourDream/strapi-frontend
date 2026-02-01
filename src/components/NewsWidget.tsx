@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { useNewsPreference } from "../hooks/useNewsPreference";
 import {
   fetchNewsArticles,
   fetchNewsProviders,
@@ -60,10 +61,11 @@ const isStandaloneMode = () => {
 
 export default function NewsWidget() {
   const navigate = useNavigate();
-  const { profile, appSettings } = useAuth();
+  const { user, profile, appSettings } = useAuth();
+  const { override: newsOverride } = useNewsPreference(user?.id);
   const profileNewsEnabled = profile?.notificationSettings?.newsEnabled !== false;
   const newsroomEnabled = appSettings?.newsroomEnabled !== false;
-  const newsEnabled = profileNewsEnabled && newsroomEnabled;
+  const newsEnabled = (newsOverride ?? profileNewsEnabled) && newsroomEnabled;
 
   const [query, setQuery] = useState("");
   const [provider, setProvider] = useState("");

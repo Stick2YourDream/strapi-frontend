@@ -120,6 +120,15 @@ const routes = [
       url: "https://yoursocialplace.com/apps",
     },
   },
+  {
+    path: "/forums",
+    meta: {
+      title: "Forums | Your Social Place",
+      description:
+        "Uplifting forums built for encouragement, progress, and positive support.",
+      url: "https://yoursocialplace.com/forums",
+    },
+  },
 ];
 
 const escapeHtml = (value) =>

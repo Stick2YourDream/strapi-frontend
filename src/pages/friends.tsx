@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import axios from "axios";
 import "../css/dashboard.css";
 import "../css/friends.css";
+import "../css/media-lightbox.css";
+import "../css/goals-panel.css";
 import { useAuth } from "../context/AuthContext";
 import { useChat } from "../context/ChatContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";
@@ -32,6 +34,26 @@ type FriendPost = {
   feedbackAudience?: string;
   feedbackTargetId?: number;
   feedbackTargetName?: string;
+};
+
+type FriendMediaItem = {
+  id: number | string;
+  title?: string;
+  caption?: string;
+  visibility?: "public" | "friends" | "private" | "trusted";
+  kind?: "photo" | "video";
+  media?: string;
+  createdAt?: string;
+};
+
+type TrustedCircle = {
+  id: number;
+  name: string;
+};
+
+type TrustedCircleMember = {
+  id: number | string;
+  userId: number;
 };
 
 type FriendProfile = {
@@ -174,6 +196,9 @@ const canView = (audience: "public" | "followers", visibility: VisibilityLevel) 
   return false;
 };
 
+const FRIENDS_PAGE_SIZE = 10;
+const MAX_TRUSTED_CIRCLES = 5;
+
 const formatLastSeen = (value?: string) => {
   if (!value) return "Last seen recently";
   const time = new Date(value).getTime();
@@ -271,6 +296,15 @@ export default function Friends() {
   const [friendQuery, setFriendQuery] = useState("");
   const [profiles, setProfiles] = useState<FriendProfile[]>([]);
   const [postsByOwner, setPostsByOwner] = useState<Record<number, FriendPost[]>>({});
+  const [friendMedia, setFriendMedia] = useState<FriendMediaItem[]>([]);
+  const [friendMediaLoading, setFriendMediaLoading] = useState(false);
+  const [friendMediaError, setFriendMediaError] = useState<string | null>(null);
+  const [friendMediaTab, setFriendMediaTab] = useState<"all" | "photo" | "video">(
+    "all"
+  );
+  const [mediaLightboxOpen, setMediaLightboxOpen] = useState(false);
+  const [mediaLightboxItems, setMediaLightboxItems] = useState<FriendMediaItem[]>([]);
+  const [mediaLightboxIndex, setMediaLightboxIndex] = useState(0);
   const [selectedFriendId, setSelectedFriendId] = useState<number | null>(null);
   const [showAllPosts, setShowAllPosts] = useState(false);
   const allPostsRef = useRef<HTMLDivElement | null>(null);
@@ -281,6 +315,15 @@ export default function Friends() {
   useEffect(() => {
     linkPreviewsRef.current = linkPreviews;
   }, [linkPreviews]);
+  const pushTrustedCircleSuccess = useCallback((message: string) => {
+    setTrustedCircleSuccess(message);
+    if (trustedCircleSuccessTimeoutRef.current) {
+      window.clearTimeout(trustedCircleSuccessTimeoutRef.current);
+    }
+    trustedCircleSuccessTimeoutRef.current = window.setTimeout(() => {
+      setTrustedCircleSuccess(null);
+    }, 3000);
+  }, []);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [blockEntries, setBlockEntries] = useState<UserActionEntry[]>([]);
@@ -294,6 +337,36 @@ export default function Friends() {
   const [reportReason, setReportReason] = useState<ReportReason>("other");
   const [reportDetails, setReportDetails] = useState("");
   const [reportError, setReportError] = useState<string | null>(null);
+  const [trustedCircles, setTrustedCircles] = useState<TrustedCircle[]>([]);
+  const [activeTrustedCircleId, setActiveTrustedCircleId] = useState<number | null>(
+    null
+  );
+  const [trustedCircleMembersByGroup, setTrustedCircleMembersByGroup] = useState<
+    Record<number, TrustedCircleMember[]>
+  >({});
+  const [trustedCircleLoading, setTrustedCircleLoading] = useState(false);
+  const [trustedCircleBusy, setTrustedCircleBusy] = useState(false);
+  const [trustedCircleError, setTrustedCircleError] = useState<string | null>(null);
+  const [trustedFriendPicker, setTrustedFriendPicker] = useState("");
+  const [trustedCircleName, setTrustedCircleName] = useState("");
+  const [trustedCircleRename, setTrustedCircleRename] = useState("");
+  const [trustedCircleRenaming, setTrustedCircleRenaming] = useState(false);
+  const [trustedCircleSaving, setTrustedCircleSaving] = useState(false);
+  const [trustedCircleSuccess, setTrustedCircleSuccess] = useState<string | null>(null);
+  const [trustedCircleMenuOpen, setTrustedCircleMenuOpen] = useState(false);
+  const [trustedCircleEditing, setTrustedCircleEditing] = useState(false);
+  const [pendingTrustedAddIds, setPendingTrustedAddIds] = useState<number[]>([]);
+  const [pendingTrustedRemoveIds, setPendingTrustedRemoveIds] = useState<
+    Array<string | number>
+  >([]);
+  const [trustedCircleDeleteOpen, setTrustedCircleDeleteOpen] = useState(false);
+  const [trustedCircleDeleteTarget, setTrustedCircleDeleteTarget] =
+    useState<TrustedCircle | null>(null);
+  const [friendPage, setFriendPage] = useState(1);
+  const trustedCircleLoadRef = useRef<number | null>(null);
+  const trustedCircleSuccessTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
 
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
   const getEntity = (entry: any) => entry?.data ?? entry ?? null;
@@ -309,6 +382,21 @@ export default function Friends() {
   };
   const getEntryId = (entry: any, attrs: any) =>
     entry?.id ?? attrs?.documentId ?? entry?.documentId;
+  const normalizeFriendMedia = (entry: any): FriendMediaItem => {
+    const record = getEntity(entry);
+    const attrs = record?.attributes ?? record ?? {};
+    const mediaItem = attrs?.media ?? record?.media;
+    const mediaUrl = pickMediaUrl(mediaItem, { kind: "post" });
+    return {
+      id: record?.id ?? record?.documentId ?? "",
+      title: String(attrs?.title || "").trim() || undefined,
+      caption: String(attrs?.caption || "").trim() || undefined,
+      visibility: attrs?.visibility as FriendMediaItem["visibility"],
+      kind: attrs?.kind as FriendMediaItem["kind"],
+      media: mediaUrl,
+      createdAt: String(attrs?.createdAt || ""),
+    };
+  };
   const parseActionEntries = (
     rows: any[],
     relationKey: "blocked" | "muted"
@@ -330,6 +418,13 @@ export default function Friends() {
       return data?.error?.message || data?.message || fallback;
     }
     return fallback;
+  };
+
+  const formatFriendLabel = (friend: FriendProfile) => {
+    const name = `${friend.firstName || ""} ${friend.lastName || ""}`.trim();
+    if (name) return name;
+    if (friend.handle) return `@${friend.handle}`;
+    return `Friend ${friend.userId || friend.id}`;
   };
 
   const showCopyToast = useCallback((message: string) => {
@@ -367,6 +462,364 @@ export default function Friends() {
     textarea.remove();
     return copied;
   }, []);
+
+  const activeTrustedCircle = useMemo(() => {
+    if (!trustedCircles.length) return null;
+    if (activeTrustedCircleId) {
+      return trustedCircles.find((circle) => circle.id === activeTrustedCircleId) ?? null;
+    }
+    return trustedCircles[0];
+  }, [activeTrustedCircleId, trustedCircles]);
+
+  useEffect(() => {
+    if (!activeTrustedCircle) {
+      setTrustedCircleRename("");
+      return;
+    }
+    setTrustedCircleRename(activeTrustedCircle.name);
+  }, [activeTrustedCircle]);
+
+  useEffect(() => {
+    setTrustedCircleMenuOpen(false);
+    setTrustedCircleEditing(false);
+    setPendingTrustedAddIds([]);
+    setPendingTrustedRemoveIds([]);
+  }, [activeTrustedCircle?.id]);
+
+  const trustedCircleMembers = useMemo(() => {
+    if (!activeTrustedCircle?.id) return [];
+    return trustedCircleMembersByGroup[activeTrustedCircle.id] ?? [];
+  }, [activeTrustedCircle, trustedCircleMembersByGroup]);
+
+  const trustedMemberIds = useMemo(
+    () => new Set(trustedCircleMembers.map((member) => member.userId)),
+    [trustedCircleMembers]
+  );
+  const pendingTrustedRemoveSet = useMemo(
+    () => new Set(pendingTrustedRemoveIds),
+    [pendingTrustedRemoveIds]
+  );
+  const canEditTrustedCircle =
+    trustedCircleEditing || trustedCircleMembers.length === 0;
+
+  const trustedFriendOptions = useMemo(() => {
+    return profiles
+      .filter((profile) => Number.isFinite(profile.userId ?? NaN))
+      .map((profile) => ({
+        id: profile.userId as number,
+        label: formatFriendLabel(profile),
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [profiles]);
+
+  const pendingTrustedAddOptions = useMemo(() => {
+    if (!pendingTrustedAddIds.length) return [];
+    return trustedFriendOptions.filter(
+      (friend) => pendingTrustedAddIds.includes(friend.id) && !trustedMemberIds.has(friend.id)
+    );
+  }, [pendingTrustedAddIds, trustedFriendOptions, trustedMemberIds]);
+
+  const hasPendingTrustedChanges = useMemo(
+    () =>
+      pendingTrustedAddIds.some((id) => !trustedMemberIds.has(id)) ||
+      pendingTrustedRemoveIds.length > 0,
+    [pendingTrustedAddIds, pendingTrustedRemoveIds, trustedMemberIds]
+  );
+
+  const refreshTrustedCircleMembers = useCallback(
+    async (circleId: number) => {
+      const membersRes = await api.get(
+        `/trusted-circle-members?filters[circle][id][$eq]=${circleId}&populate=user&pagination[pageSize]=200`
+      );
+      const members: TrustedCircleMember[] = (membersRes.data?.data ?? [])
+        .map((entry: any) => {
+          const attrs = normalize(entry);
+          const userId = getEntityId(attrs.user);
+          const recordId = getEntryId(entry, attrs);
+          if (!userId || !recordId) return null;
+          return { id: recordId, userId };
+        })
+        .filter(Boolean) as TrustedCircleMember[];
+      setTrustedCircleMembersByGroup((prev) => ({ ...prev, [circleId]: members }));
+    },
+    [getEntryId, getEntityId]
+  );
+
+  const loadTrustedCircles = useCallback(
+    async (force = false) => {
+      if (!user) {
+        setTrustedCircles([]);
+        setActiveTrustedCircleId(null);
+        setTrustedCircleMembersByGroup({});
+        trustedCircleLoadRef.current = null;
+        return;
+      }
+      if (!force && trustedCircleLoadRef.current === user.id) return;
+      trustedCircleLoadRef.current = user.id;
+      setTrustedCircleLoading(true);
+      setTrustedCircleError(null);
+      try {
+        const circlesRes = await api.get(
+          `/trusted-circles?sort=name:asc&pagination[pageSize]=${MAX_TRUSTED_CIRCLES}`
+        );
+        const entries = circlesRes.data?.data ?? [];
+        const circles = entries
+          .map((entry: any) => {
+            const attrs = normalize(entry);
+            const circleId = Number(entry?.id ?? attrs?.documentId ?? attrs?.id);
+            if (!Number.isFinite(circleId)) return null;
+            return {
+              id: circleId,
+              name: String(attrs?.name || "Trusted circle"),
+            } as TrustedCircle;
+          })
+          .filter(Boolean) as TrustedCircle[];
+        setTrustedCircles(circles);
+        setTrustedCircleMembersByGroup((prev) => {
+          const next: Record<number, TrustedCircleMember[]> = {};
+          circles.forEach((circle) => {
+            if (prev[circle.id]) {
+              next[circle.id] = prev[circle.id];
+            }
+          });
+          return next;
+        });
+        setActiveTrustedCircleId((current) => {
+          if (current && circles.some((circle) => circle.id === current)) {
+            return current;
+          }
+          return circles[0]?.id ?? null;
+        });
+      } catch (err) {
+        setTrustedCircleError(getErrorMessage(err, "Unable to load trusted circles."));
+      } finally {
+        setTrustedCircleLoading(false);
+      }
+    },
+    [getErrorMessage, user]
+  );
+
+  const createTrustedCircle = useCallback(async () => {
+    if (!user) return null;
+    const name = trustedCircleName.trim();
+    if (!name) {
+      setTrustedCircleError("Enter a name for your trusted circle.");
+      return null;
+    }
+    if (trustedCircles.length >= MAX_TRUSTED_CIRCLES) {
+      setTrustedCircleError(`You can create up to ${MAX_TRUSTED_CIRCLES} circles.`);
+      return null;
+    }
+    setTrustedCircleBusy(true);
+    setTrustedCircleError(null);
+    try {
+      const res = await api.post("/trusted-circles", {
+        data: {
+          name,
+        },
+      });
+      const entry = res.data?.data ?? res.data;
+      const attrs = normalize(entry);
+      const circleId = Number(entry?.id ?? attrs?.documentId ?? attrs?.id);
+      if (!Number.isFinite(circleId)) {
+        setTrustedCircleError("Unable to create trusted circle.");
+        return null;
+      }
+      const nextCircle = { id: circleId, name: String(attrs?.name || name) };
+      setTrustedCircles((prev) => [...prev, nextCircle]);
+      setTrustedCircleName("");
+      setActiveTrustedCircleId(circleId);
+      await refreshTrustedCircleMembers(circleId);
+      pushTrustedCircleSuccess(`"${nextCircle.name}" created.`);
+      return circleId;
+    } catch (err) {
+      setTrustedCircleError(getErrorMessage(err, "Unable to create trusted circle."));
+      return null;
+    } finally {
+      setTrustedCircleBusy(false);
+    }
+  }, [
+    getErrorMessage,
+    pushTrustedCircleSuccess,
+    refreshTrustedCircleMembers,
+    trustedCircleName,
+    trustedCircles.length,
+    user,
+  ]);
+
+  const queueTrustedFriend = useCallback(
+    (friendId: number) => {
+      if (!Number.isFinite(friendId)) return;
+      if (trustedMemberIds.has(friendId)) return;
+      setTrustedCircleEditing(true);
+      setPendingTrustedAddIds((prev) =>
+        prev.includes(friendId) ? prev : [...prev, friendId]
+      );
+    },
+    [trustedMemberIds]
+  );
+
+  const togglePendingRemoval = useCallback((member: TrustedCircleMember) => {
+    setPendingTrustedRemoveIds((prev) =>
+      prev.includes(member.id)
+        ? prev.filter((id) => id !== member.id)
+        : [...prev, member.id]
+    );
+  }, []);
+
+  const cancelTrustedCircleEdits = useCallback(() => {
+    setTrustedCircleEditing(false);
+    setPendingTrustedAddIds([]);
+    setPendingTrustedRemoveIds([]);
+  }, []);
+
+  const applyTrustedCircleChanges = useCallback(async () => {
+    if (!activeTrustedCircle?.id) return;
+    const circleId = activeTrustedCircle.id;
+    const additions = pendingTrustedAddIds.filter((id) => !trustedMemberIds.has(id));
+    const removals = trustedCircleMembers.filter((member) =>
+      pendingTrustedRemoveSet.has(member.id)
+    );
+    if (!additions.length && !removals.length) {
+      cancelTrustedCircleEdits();
+      pushTrustedCircleSuccess("No changes to apply.");
+      return;
+    }
+    setTrustedCircleBusy(true);
+    setTrustedCircleError(null);
+    try {
+      await Promise.all([
+        ...additions.map((friendId) =>
+          api.post("/trusted-circle-members", {
+            data: { circle: circleId, user: friendId },
+          })
+        ),
+        ...removals.map((member) =>
+          api.delete(`/trusted-circle-members/${member.id}`)
+        ),
+      ]);
+      await refreshTrustedCircleMembers(circleId);
+      setPendingTrustedAddIds([]);
+      setPendingTrustedRemoveIds([]);
+      setTrustedCircleEditing(false);
+      pushTrustedCircleSuccess("Trusted circle updated.");
+    } catch (err) {
+      const message = getErrorMessage(err, "Unable to update trusted circle.");
+      if (message.toLowerCase().includes("already in this circle")) {
+        await refreshTrustedCircleMembers(circleId);
+        setPendingTrustedAddIds([]);
+        setPendingTrustedRemoveIds([]);
+        setTrustedCircleEditing(false);
+        pushTrustedCircleSuccess("Trusted circle updated.");
+      } else {
+        setTrustedCircleError(message);
+      }
+    } finally {
+      setTrustedCircleBusy(false);
+    }
+  }, [
+    activeTrustedCircle,
+    cancelTrustedCircleEdits,
+    getErrorMessage,
+    pendingTrustedAddIds,
+    pendingTrustedRemoveSet,
+    pushTrustedCircleSuccess,
+    refreshTrustedCircleMembers,
+    trustedCircleMembers,
+    trustedMemberIds,
+  ]);
+
+  const clearTrustedFriends = useCallback(async () => {
+    if (!activeTrustedCircle?.id) return;
+    const membersToRemove = trustedCircleMembers.filter(
+      (member) => member.userId !== user?.id
+    );
+    if (!membersToRemove.length) return;
+    setTrustedCircleBusy(true);
+    setTrustedCircleError(null);
+    try {
+      await Promise.all(
+        membersToRemove.map((member) =>
+          api.delete(`/trusted-circle-members/${member.id}`)
+        )
+      );
+      await refreshTrustedCircleMembers(activeTrustedCircle.id);
+      pushTrustedCircleSuccess("Trusted circle cleared.");
+    } catch (err) {
+      setTrustedCircleError(getErrorMessage(err, "Unable to clear trusted circle."));
+    } finally {
+      setTrustedCircleBusy(false);
+    }
+  }, [
+    getErrorMessage,
+    refreshTrustedCircleMembers,
+    activeTrustedCircle,
+    trustedCircleMembers,
+    user,
+    pushTrustedCircleSuccess,
+  ]);
+
+  const handleRenameTrustedCircle = useCallback(async () => {
+    if (!activeTrustedCircle?.id) return;
+    const name = trustedCircleRename.trim();
+    if (!name) {
+      setTrustedCircleError("Enter a name for this circle.");
+      return;
+    }
+    setTrustedCircleSaving(true);
+    setTrustedCircleError(null);
+    try {
+      await api.put(`/trusted-circles/${activeTrustedCircle.id}`, {
+        data: { name },
+      });
+      setTrustedCircles((prev) =>
+        prev.map((circle) =>
+          circle.id === activeTrustedCircle.id ? { ...circle, name } : circle
+        )
+      );
+      setTrustedCircleRenaming(false);
+      setTrustedCircleEditing(false);
+      pushTrustedCircleSuccess("Trusted circle renamed.");
+    } catch (err) {
+      setTrustedCircleError(getErrorMessage(err, "Unable to rename circle."));
+    } finally {
+      setTrustedCircleSaving(false);
+    }
+  }, [activeTrustedCircle, getErrorMessage, pushTrustedCircleSuccess, trustedCircleRename]);
+
+  const handleDeleteTrustedCircle = useCallback(async () => {
+    if (!activeTrustedCircle?.id) return;
+    setTrustedCircleSaving(true);
+    setTrustedCircleError(null);
+    try {
+      await api.delete(`/trusted-circles/${activeTrustedCircle.id}`);
+      setTrustedCircles((prev) =>
+        prev.filter((circle) => circle.id !== activeTrustedCircle.id)
+      );
+      setTrustedCircleMembersByGroup((prev) => {
+        const next = { ...prev };
+        delete next[activeTrustedCircle.id];
+        return next;
+      });
+      setActiveTrustedCircleId((current) => {
+        if (current !== activeTrustedCircle.id) return current;
+        const remaining = trustedCircles.filter(
+          (circle) => circle.id !== activeTrustedCircle.id
+        );
+        return remaining[0]?.id ?? null;
+      });
+      setPendingTrustedAddIds([]);
+      setPendingTrustedRemoveIds([]);
+      setTrustedCircleEditing(false);
+      setTrustedCircleDeleteOpen(false);
+      setTrustedCircleDeleteTarget(null);
+      pushTrustedCircleSuccess("Trusted circle deleted.");
+    } catch (err) {
+      setTrustedCircleError(getErrorMessage(err, "Unable to delete circle."));
+    } finally {
+      setTrustedCircleSaving(false);
+    }
+  }, [activeTrustedCircle, getErrorMessage, pushTrustedCircleSuccess, trustedCircles]);
 
   const getPostDescriptor = useCallback((post: FriendPost) => {
     if (post.imageUrl) return isVideoUrl(post.imageUrl) ? "with a video" : "with a picture";
@@ -616,6 +1069,20 @@ export default function Friends() {
     load();
   }, [fetchLinkPreview, user]);
 
+  useEffect(() => {
+    void loadTrustedCircles();
+  }, [loadTrustedCircles]);
+
+  useEffect(() => {
+    if (!activeTrustedCircle?.id) return;
+    if (trustedCircleMembersByGroup[activeTrustedCircle.id]) return;
+    void refreshTrustedCircleMembers(activeTrustedCircle.id);
+  }, [
+    activeTrustedCircle,
+    refreshTrustedCircleMembers,
+    trustedCircleMembersByGroup,
+  ]);
+
   const presenceIds = useMemo(
     () =>
       Array.from(
@@ -666,6 +1133,40 @@ export default function Friends() {
     });
   }, [profiles, friendQuery]);
 
+  const totalFriendPages = Math.max(
+    1,
+    Math.ceil(filteredFriends.length / FRIENDS_PAGE_SIZE)
+  );
+  const pagedFriends = useMemo(() => {
+    const start = (friendPage - 1) * FRIENDS_PAGE_SIZE;
+    return filteredFriends.slice(start, start + FRIENDS_PAGE_SIZE);
+  }, [filteredFriends, friendPage]);
+
+  useEffect(() => {
+    setFriendPage(1);
+  }, [friendQuery]);
+
+  useEffect(() => {
+    if (friendPage > totalFriendPages) {
+      setFriendPage(totalFriendPages);
+    }
+  }, [friendPage, totalFriendPages]);
+
+  const trustedCircleFriendRows = useMemo(() => {
+    const profileMap = new Map<number, FriendProfile>();
+    profiles.forEach((profile) => {
+      if (profile.userId) {
+        profileMap.set(profile.userId, profile);
+      }
+    });
+    return trustedCircleMembers
+      .filter((member) => member.userId !== user?.id)
+      .map((member) => ({
+        member,
+        profile: profileMap.get(member.userId),
+      }));
+  }, [profiles, trustedCircleMembers, user?.id]);
+
   useEffect(() => {
     if (!filteredFriends.length) {
       setSelectedFriendId(null);
@@ -687,6 +1188,67 @@ export default function Friends() {
     if (!selectedFriendId) return null;
     return profiles.find((profile) => profile.userId === selectedFriendId) || null;
   }, [profiles, selectedFriendId]);
+  const filteredFriendMedia = useMemo(() => {
+    if (friendMediaTab === "all") return friendMedia;
+    return friendMedia.filter((item) => {
+      const kind = item.kind || (item.media && isVideoUrl(item.media) ? "video" : "photo");
+      return kind === friendMediaTab;
+    });
+  }, [friendMedia, friendMediaTab]);
+  const activeMediaItem = mediaLightboxOpen
+    ? mediaLightboxItems[mediaLightboxIndex]
+    : null;
+
+  const openMediaLightboxAt = (index: number) => {
+    if (!filteredFriendMedia.length) return;
+    setMediaLightboxItems(filteredFriendMedia);
+    setMediaLightboxIndex(index);
+    setMediaLightboxOpen(true);
+  };
+
+  const closeMediaLightbox = () => {
+    setMediaLightboxOpen(false);
+  };
+
+  useEffect(() => {
+    if (!mediaLightboxOpen) return;
+    if (mediaLightboxItems.length === 0) return;
+    if (mediaLightboxIndex >= mediaLightboxItems.length) {
+      setMediaLightboxIndex(0);
+    }
+  }, [mediaLightboxIndex, mediaLightboxItems.length, mediaLightboxOpen]);
+
+  useEffect(() => {
+    if (!mediaLightboxOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMediaLightboxOpen(false);
+        return;
+      }
+      if (mediaLightboxItems.length < 2) return;
+      if (event.key === "ArrowRight") {
+        setMediaLightboxIndex((prev) =>
+          (prev + 1) % mediaLightboxItems.length
+        );
+      }
+      if (event.key === "ArrowLeft") {
+        setMediaLightboxIndex((prev) =>
+          (prev - 1 + mediaLightboxItems.length) % mediaLightboxItems.length
+        );
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [mediaLightboxItems.length, mediaLightboxOpen]);
+
+  useEffect(() => {
+    if (!mediaLightboxOpen || typeof document === "undefined") return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [mediaLightboxOpen]);
   const selectedFriendLabel = selectedFriend
     ? `${selectedFriend.firstName || ""} ${selectedFriend.lastName || ""}`.trim() ||
       `@${selectedFriend.handle || "friend"}`
@@ -989,6 +1551,31 @@ export default function Friends() {
   };
 
   useEffect(() => {
+    const loadMedia = async () => {
+      if (!selectedFriend?.userId) {
+        setFriendMedia([]);
+        return;
+      }
+      setFriendMediaLoading(true);
+      setFriendMediaError(null);
+      try {
+        const res = await api.get(
+          `/profile-media-items?filters[owner][id][$eq]=${selectedFriend.userId}` +
+            `&populate=media&sort=createdAt:desc&pagination[pageSize]=200`
+        );
+        const items = (res.data?.data ?? []).map(normalizeFriendMedia);
+        setFriendMedia(items);
+      } catch {
+        setFriendMediaError("Unable to load gallery for this friend.");
+      } finally {
+        setFriendMediaLoading(false);
+      }
+    };
+
+    void loadMedia();
+  }, [selectedFriend?.userId]);
+
+  useEffect(() => {
     if (!activePost) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -1067,7 +1654,7 @@ export default function Friends() {
   );
 
   return (
-    <div className="dashboard-shell" style={getBackgroundStyle("friends")}>
+    <div className="dashboard-shell friends-page" style={getBackgroundStyle("friends")}>
       <Sidebar active="friends" />
 
       <div className="main-content">
@@ -1075,10 +1662,7 @@ export default function Friends() {
         <div className="dash-hero">
           <div className="dash-hero__text">
             <p className="eyebrow">Friends</p>
-            <h1>Your friends</h1>
-            <p className="subhead">
-              Pick a friend to preview their latest posts and send a message.
-            </p>
+            <h1>Your Friends</h1>
           </div>
         </div>
 
@@ -1089,7 +1673,7 @@ export default function Friends() {
             <div className="panel-header friend-panel-header">
               <div>
                 <p className="eyebrow">Friends</p>
-                <h3>Current friends</h3>
+                <h3>Current Friends</h3>
               </div>
               {!loading && profiles.length > 0 && (
                 <button
@@ -1104,7 +1688,7 @@ export default function Friends() {
             {!loading && profiles.length > 0 && (
               <div className="friend-search">
                 <label className="friend-search-label" htmlFor="friend-search-input">
-                  Search friends
+                  Search Friends
                 </label>
                 <input
                   id="friend-search-input"
@@ -1123,8 +1707,9 @@ export default function Friends() {
             ) : filteredFriends.length === 0 ? (
               <p className="status">No friends match your search.</p>
             ) : (
-              <ul className="friend-mini-list">
-                {filteredFriends.map((friend) => {
+              <>
+                <ul className="friend-mini-list">
+                  {pagedFriends.map((friend) => {
                   const name = `${friend.firstName || ""} ${friend.lastName || ""}`.trim();
                   const handle = friend.handle || "friend";
                   const displayName = name || handle;
@@ -1167,15 +1752,52 @@ export default function Friends() {
                       </div>
                     </li>
                   );
-                })}
-              </ul>
+                  })}
+                </ul>
+                {totalFriendPages > 1 && (
+                  <div className="friend-pagination">
+                    <button
+                      className="friend-page-btn"
+                      type="button"
+                      onClick={() => setFriendPage((prev) => Math.max(1, prev - 1))}
+                      disabled={friendPage <= 1}
+                    >
+                      Prev
+                    </button>
+                    {Array.from({ length: totalFriendPages }, (_, index) => index + 1).map(
+                      (page) => (
+                        <button
+                          key={page}
+                          className={`friend-page-btn${
+                            page === friendPage ? " is-active" : ""
+                          }`}
+                          type="button"
+                          onClick={() => setFriendPage(page)}
+                        >
+                          {page}
+                        </button>
+                      )
+                    )}
+                    <button
+                      className="friend-page-btn"
+                      type="button"
+                      onClick={() =>
+                        setFriendPage((prev) => Math.min(totalFriendPages, prev + 1))
+                      }
+                      disabled={friendPage >= totalFriendPages}
+                    >
+                      Next
+                    </button>
+                  </div>
+                )}
+              </>
             )}
           </section>
           <section className="panel">
             <div className="panel-header">
               <div>
                 <p className="eyebrow">Spotlight</p>
-                <h3>Friend activity</h3>
+                <h3>Friend Activity</h3>
               </div>
             </div>
             {!selectedFriend ? (
@@ -1244,6 +1866,125 @@ export default function Friends() {
                     See All
                   </button>
                 </div>
+                <div className="friend-media">
+                  <div className="friend-media__header">
+                    <h4>Gallery</h4>
+                    <div className="friend-media__tabs">
+                      <button
+                        type="button"
+                        className={`friend-media__tab${
+                          friendMediaTab === "all" ? " is-active" : ""
+                        }`}
+                        onClick={() => setFriendMediaTab("all")}
+                      >
+                        All
+                      </button>
+                      <button
+                        type="button"
+                        className={`friend-media__tab${
+                          friendMediaTab === "photo" ? " is-active" : ""
+                        }`}
+                        onClick={() => setFriendMediaTab("photo")}
+                      >
+                        Photos
+                      </button>
+                      <button
+                        type="button"
+                        className={`friend-media__tab${
+                          friendMediaTab === "video" ? " is-active" : ""
+                        }`}
+                        onClick={() => setFriendMediaTab("video")}
+                      >
+                        Videos
+                      </button>
+                    </div>
+                  </div>
+                  {friendMediaLoading && (
+                    <p className="status">Loading gallery...</p>
+                  )}
+                  {friendMediaError && (
+                    <p className="status status-error">{friendMediaError}</p>
+                  )}
+                  {!friendMediaLoading && filteredFriendMedia.length === 0 && (
+                    <p className="status">No gallery items yet.</p>
+                  )}
+                  {!friendMediaLoading && filteredFriendMedia.length > 0 && (
+                    <div className="friend-media__grid">
+                      {filteredFriendMedia.map((item, index) => {
+                        const isVideo = item.kind === "video" || isVideoUrl(item.media);
+                        return (
+                          <article key={String(item.id)} className="friend-media__card">
+                            <div
+                              className={`friend-media__asset${
+                                item.media ? " is-interactive" : ""
+                              }`}
+                              role={item.media ? "button" : undefined}
+                              tabIndex={item.media ? 0 : undefined}
+                              onClick={(event) => {
+                                if (!item.media) return;
+                                const target = event.target as HTMLElement;
+                                if (
+                                  target.closest("button, a, input, select, textarea")
+                                ) {
+                                  return;
+                                }
+                                if (
+                                  isVideo &&
+                                  target.tagName &&
+                                  target.tagName.toLowerCase() === "video"
+                                ) {
+                                  return;
+                                }
+                                openMediaLightboxAt(index);
+                              }}
+                              onKeyDown={(event) => {
+                                if (!item.media) return;
+                                if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault();
+                                  openMediaLightboxAt(index);
+                                }
+                              }}
+                              aria-label="Open media preview"
+                            >
+                              {item.media ? (
+                                isVideo ? (
+                                  <video controls preload="metadata">
+                                    <source src={item.media} />
+                                  </video>
+                                ) : (
+                                  <img src={item.media} alt={item.title || "Photo"} />
+                                )
+                              ) : (
+                                <div className="friend-media__placeholder">No media</div>
+                              )}
+                              {item.media && (
+                                <button
+                                  className="media-lightbox__open"
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    openMediaLightboxAt(index);
+                                  }}
+                                >
+                                  View
+                                </button>
+                              )}
+                            </div>
+                            <div className="friend-media__meta">
+                              <strong>{item.title || (isVideo ? "Video" : "Photo")}</strong>
+                              {item.caption && <p>{item.caption}</p>}
+                              {item.createdAt && (
+                                <span>
+                                  {new Date(item.createdAt).toLocaleDateString()}
+                                </span>
+                              )}
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
                 <div className="friend-safety-actions">
                   <button
                     className="btn ghost friend-action-muted"
@@ -1294,10 +2035,328 @@ export default function Friends() {
                     )}
                   </div>
                 )}
-              </div>
-            )}
+                </div>
+              )}
           </section>
         </div>
+
+        <section className="panel trusted-circle-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Trusted circles</p>
+              <h3>My Trusted Groups</h3>
+              <p className="panel-sub">
+                Create up to {MAX_TRUSTED_CIRCLES} private circles and choose who can see
+                sensitive updates.
+              </p>
+            </div>
+            <span className="trusted-circle__count">
+              {trustedCircles.length}/{MAX_TRUSTED_CIRCLES}
+            </span>
+          </div>
+          {trustedCircleError && (
+            <p className="status status-error">{trustedCircleError}</p>
+          )}
+          {trustedCircleSuccess && (
+            <p className="status status-success">{trustedCircleSuccess}</p>
+          )}
+          {trustedCircleLoading ? (
+            <p className="status">Loading trusted circles...</p>
+          ) : (
+            <>
+              <div className="trusted-circle__create">
+                <input
+                  className="auth-input"
+                  placeholder="Name your trusted circle"
+                  value={trustedCircleName}
+                  onChange={(event) => setTrustedCircleName(event.target.value)}
+                  maxLength={40}
+                  disabled={trustedCircleBusy || trustedCircles.length >= MAX_TRUSTED_CIRCLES}
+                />
+                <button
+                  className="btn primary"
+                  type="button"
+                  disabled={
+                    trustedCircleBusy ||
+                    trustedCircles.length >= MAX_TRUSTED_CIRCLES ||
+                    !trustedCircleName.trim()
+                  }
+                  onClick={() => void createTrustedCircle()}
+                >
+                  {trustedCircleBusy ? "Creating..." : "Create circle"}
+                </button>
+              </div>
+              {trustedCircles.length === 0 ? (
+                <p className="status">Create your first trusted circle to add friends.</p>
+              ) : (
+                <>
+                  <div className="trusted-circle__tabs">
+                    {trustedCircles.map((circle) => (
+                      <button
+                        key={circle.id}
+                        type="button"
+                        className={`trusted-circle__tab${
+                          circle.id === activeTrustedCircle?.id ? " is-active" : ""
+                        }`}
+                        onClick={() => setActiveTrustedCircleId(circle.id)}
+                      >
+                        {circle.name}
+                      </button>
+                    ))}
+                  </div>
+                  {activeTrustedCircle && (
+                    <div className="trusted-circle__editor">
+                      {trustedCircleRenaming ? (
+                        <>
+                          <input
+                            className="auth-input"
+                            value={trustedCircleRename}
+                            onChange={(event) =>
+                              setTrustedCircleRename(event.target.value)
+                            }
+                            maxLength={40}
+                          />
+                          <div className="trusted-circle__editor-actions">
+                            <button
+                              className="btn ghost"
+                              type="button"
+                              onClick={() => {
+                                setTrustedCircleRenaming(false);
+                                setTrustedCircleRename(activeTrustedCircle.name);
+                              }}
+                              disabled={trustedCircleSaving}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              className="btn primary"
+                              type="button"
+                              onClick={handleRenameTrustedCircle}
+                              disabled={
+                                trustedCircleSaving || !trustedCircleRename.trim()
+                              }
+                            >
+                              {trustedCircleSaving ? "Saving..." : "Save name"}
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="trusted-circle__editor-row">
+                          <div>
+                            <p className="trusted-circle__label">Active circle</p>
+                            <div className="trusted-circle__menu">
+                              <button
+                                className="btn ghost trusted-circle__menu-button"
+                                type="button"
+                                onClick={() =>
+                                  setTrustedCircleMenuOpen((prev) => !prev)
+                                }
+                                disabled={trustedCircleSaving}
+                              >
+                                {activeTrustedCircle.name}
+                                <span className="trusted-circle__menu-caret">▾</span>
+                              </button>
+                              {trustedCircleMenuOpen && (
+                                <div className="trusted-circle__menu-list">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      cancelTrustedCircleEdits();
+                                      setTrustedCircleRenaming(true);
+                                      setTrustedCircleMenuOpen(false);
+                                    }}
+                                  >
+                                    Rename
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setTrustedCircleEditing(true);
+                                      setTrustedCircleMenuOpen(false);
+                                    }}
+                                  >
+                                    Edit friends
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="danger"
+                                    onClick={() => {
+                                      setTrustedCircleMenuOpen(false);
+                                      setTrustedCircleDeleteTarget(activeTrustedCircle);
+                                      setTrustedCircleDeleteOpen(true);
+                                    }}
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <div className="goals-panel__trusted">
+                    <div className="goals-panel__trusted-group">
+                      <div className="goals-panel__trusted-header">
+                        <h5>{activeTrustedCircle?.name || "Trusted friends"}</h5>
+                        <div className="goals-panel__trusted-actions">
+                          <button
+                            className="btn ghost"
+                            type="button"
+                            disabled={trustedCircleBusy || !activeTrustedCircle?.id}
+                            onClick={clearTrustedFriends}
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      </div>
+                      {trustedFriendOptions.length === 0 ? (
+                        <p className="goals-empty">Add friends to build a trusted circle.</p>
+                      ) : (
+                        <>
+                          <div className="goals-panel__trusted-picker">
+                            <div className="goals-panel__select">
+                              <select
+                                className="auth-input goals-select"
+                                value={trustedFriendPicker}
+                                onChange={(event) => {
+                                  const value = event.target.value;
+                                  setTrustedFriendPicker(value);
+                                  const nextId = Number(value);
+                                  if (Number.isFinite(nextId)) {
+                                    queueTrustedFriend(nextId);
+                                  }
+                                  setTrustedFriendPicker("");
+                                }}
+                                disabled={
+                                  !canEditTrustedCircle ||
+                                  trustedCircleBusy ||
+                                  !activeTrustedCircle?.id
+                                }
+                              >
+                                <option value="">Select a friend to trust</option>
+                                {trustedFriendOptions.map((friend) => (
+                                  <option
+                                    key={friend.id}
+                                    value={friend.id}
+                                    disabled={
+                                      trustedMemberIds.has(friend.id) ||
+                                      friend.id === user?.id
+                                    }
+                                  >
+                                    {friend.label}
+                                  </option>
+                                ))}
+                              </select>
+                              <span className="goals-select-caret" />
+                            </div>
+                          </div>
+                          {canEditTrustedCircle && pendingTrustedAddOptions.length > 0 && (
+                            <div className="trusted-circle__pending">
+                              <p className="trusted-circle__pending-label">Pending</p>
+                              <div className="trusted-circle__pending-list">
+                                {pendingTrustedAddOptions.map((friend) => (
+                                  <span
+                                    key={friend.id}
+                                    className="trusted-circle__pending-chip"
+                                  >
+                                    {friend.label}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {canEditTrustedCircle && (
+                            <div className="trusted-circle__apply">
+                              <button
+                                className="btn ghost"
+                                type="button"
+                                onClick={cancelTrustedCircleEdits}
+                                disabled={trustedCircleBusy || !trustedCircleEditing}
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                className="btn primary"
+                                type="button"
+                                onClick={() => void applyTrustedCircleChanges()}
+                                disabled={!hasPendingTrustedChanges || trustedCircleBusy}
+                              >
+                                {trustedCircleBusy ? "Saving..." : "Apply changes"}
+                              </button>
+                            </div>
+                          )}
+                          <div className="goals-panel__trusted-list">
+                            {trustedCircleFriendRows.map(({ member, profile }) => {
+                              const avatarUrl = profile?.avatarUrl;
+                              const label = profile
+                                ? formatFriendLabel(profile)
+                                : `User ${member.userId}`;
+                              return (
+                                <div key={member.id} className="trusted-friend-row">
+                                  <button
+                                    type="button"
+                                    className={`trusted-friend-toggle${
+                                      pendingTrustedRemoveSet.has(member.id)
+                                        ? " is-remove"
+                                        : " is-active"
+                                    }${avatarUrl ? " has-avatar" : ""}${
+                                      canEditTrustedCircle ? "" : " is-locked"
+                                    }`}
+                                    onClick={() => togglePendingRemoval(member)}
+                                    disabled={!canEditTrustedCircle}
+                                    aria-pressed={!pendingTrustedRemoveSet.has(member.id)}
+                                    aria-label={
+                                      pendingTrustedRemoveSet.has(member.id)
+                                        ? "Marked for removal"
+                                        : "Trusted friend"
+                                    }
+                                  >
+                                    {avatarUrl ? (
+                                      <img
+                                        className="trusted-friend-toggle__avatar"
+                                        src={avatarUrl}
+                                        alt={label}
+                                        loading="lazy"
+                                        decoding="async"
+                                      />
+                                    ) : (
+                                      <>
+                                        <span className="trusted-friend-toggle__ring" />
+                                        <span className="trusted-friend-toggle__dot" />
+                                      </>
+                                    )}
+                                  </button>
+                                  <span
+                                    className={`trusted-friend-name${
+                                      pendingTrustedRemoveSet.has(member.id)
+                                        ? " is-muted"
+                                        : ""
+                                    }`}
+                                  >
+                                    {label}
+                                  </span>
+                                  {pendingTrustedRemoveSet.has(member.id) && (
+                                    <span className="trusted-friend-tag">Remove</span>
+                                  )}
+                                </div>
+                              );
+                            })}
+                            {trustedCircleFriendRows.length === 0 && (
+                              <p className="goals-empty">No trusted friends yet.</p>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </section>
       </div>
 
       {activePost && (
@@ -1484,6 +2543,155 @@ export default function Friends() {
               >
                 {actionBusy === "report" ? "Sending..." : "Submit report"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {trustedCircleDeleteOpen && trustedCircleDeleteTarget && (
+        <div
+          className="trusted-circle-modal__backdrop"
+          role="dialog"
+          aria-modal="true"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setTrustedCircleDeleteOpen(false);
+              setTrustedCircleDeleteTarget(null);
+            }
+          }}
+        >
+          <div className="trusted-circle-modal">
+            <h4>Delete trusted circle?</h4>
+            <p>
+              This will remove <strong>{trustedCircleDeleteTarget.name}</strong> and
+              its member list.
+            </p>
+            <div className="trusted-circle-modal__actions">
+              <button
+                className="btn ghost"
+                type="button"
+                onClick={() => {
+                  setTrustedCircleDeleteOpen(false);
+                  setTrustedCircleDeleteTarget(null);
+                }}
+                disabled={trustedCircleSaving}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn ghost danger"
+                type="button"
+                onClick={() => void handleDeleteTrustedCircle()}
+                disabled={trustedCircleSaving}
+              >
+                {trustedCircleSaving ? "Deleting..." : "Delete circle"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {mediaLightboxOpen && activeMediaItem && (
+        <div
+          className="media-lightbox"
+          role="dialog"
+          aria-modal="true"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              closeMediaLightbox();
+            }
+          }}
+        >
+          <div className="media-lightbox__dialog">
+            <div className="media-lightbox__media">
+              {activeMediaItem.media ? (
+                activeMediaItem.kind === "video" ||
+                isVideoUrl(activeMediaItem.media) ? (
+                  <video controls autoPlay>
+                    <source src={activeMediaItem.media} />
+                  </video>
+                ) : (
+                  <img
+                    src={activeMediaItem.media}
+                    alt={activeMediaItem.title || "Photo"}
+                  />
+                )
+              ) : (
+                <div className="friend-media__placeholder">No media</div>
+              )}
+              {mediaLightboxItems.length > 1 && (
+                <>
+                  <button
+                    className="media-lightbox__nav media-lightbox__nav--prev"
+                    type="button"
+                    onClick={() =>
+                      setMediaLightboxIndex((prev) =>
+                        (prev - 1 + mediaLightboxItems.length) %
+                        mediaLightboxItems.length
+                      )
+                    }
+                    aria-label="Previous media"
+                  >
+                    {"<"}
+                  </button>
+                  <button
+                    className="media-lightbox__nav media-lightbox__nav--next"
+                    type="button"
+                    onClick={() =>
+                      setMediaLightboxIndex((prev) =>
+                        (prev + 1) % mediaLightboxItems.length
+                      )
+                    }
+                    aria-label="Next media"
+                  >
+                    {">"}
+                  </button>
+                  <div className="media-lightbox__counter">
+                    {mediaLightboxIndex + 1} / {mediaLightboxItems.length}
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="media-lightbox__details">
+              <div className="media-lightbox__header">
+                <div>
+                  <p className="media-lightbox__eyebrow">
+                    {activeMediaItem.kind === "video" ||
+                    isVideoUrl(activeMediaItem.media)
+                      ? "Video"
+                      : "Photo"}
+                  </p>
+                  <h3 className="media-lightbox__title">
+                    {activeMediaItem.title ||
+                      (activeMediaItem.kind === "video" ? "Video" : "Photo")}
+                  </h3>
+                </div>
+                <button
+                  className="media-lightbox__close"
+                  type="button"
+                  onClick={closeMediaLightbox}
+                >
+                  Close
+                </button>
+              </div>
+              {activeMediaItem.caption ? (
+                <p className="media-lightbox__caption">{activeMediaItem.caption}</p>
+              ) : (
+                <p className="media-lightbox__caption is-muted">
+                  No description yet.
+                </p>
+              )}
+              <div className="media-lightbox__meta">
+                {activeMediaItem.visibility && (
+                  <span className="media-lightbox__tag">
+                    {activeMediaItem.visibility}
+                  </span>
+                )}
+                {activeMediaItem.createdAt && (
+                  <span className="media-lightbox__tag">
+                    {new Date(activeMediaItem.createdAt).toLocaleDateString()}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
         </div>

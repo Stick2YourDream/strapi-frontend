@@ -66,6 +66,7 @@ type VideoCallMessage = {
 };
 
 type VideoCallStatus = "idle" | "setup" | "incoming" | "connecting" | "in-call";
+type RealtimeStatus = "disconnected" | "connecting" | "connected";
 
 type ScreenControlRequest = {
   socketId: string;
@@ -149,6 +150,9 @@ type SelfieSegmentationConstructor = new (config: {
 type VideoCallContextValue = {
   isOpen: boolean;
   status: VideoCallStatus;
+  realtimeStatus: RealtimeStatus;
+  realtimeError: string | null;
+  realtimeUrl: string;
   selectedInvitees: VideoCallInvitee[];
   incomingCall: IncomingCall | null;
   activeRoomId: string | null;
@@ -219,9 +223,22 @@ const CALL_KEY_GRACE_MS = 2000;
 const CALL_E2EE_ENABLED = ["1", "true", "on", "yes"].includes(
   String(import.meta.env.VITE_CALL_E2EE || "").toLowerCase()
 );
+const REALTIME_URL =
+  String(import.meta.env.VITE_SOCKET_URL || "").trim() ||
+  String(import.meta.env.VITE_API_URL || "").replace(/\/api$/, "") ||
+  (typeof window !== "undefined" ? window.location.origin : "");
 const AUDIO_SYNC_DELAY_SEC = 0.14;
 const NOISE_SUPPRESSION_STORAGE_KEY = "call:noise-suppression";
 const LOW_LATENCY_STORAGE_KEY = "call:low-latency";
+const SOCKET_HEARTBEAT_INTERVAL_MS = Number(
+  import.meta.env.VITE_SOCKET_HEARTBEAT_INTERVAL || 20000
+);
+const SOCKET_HEARTBEAT_TIMEOUT_MS = Number(
+  import.meta.env.VITE_SOCKET_HEARTBEAT_TIMEOUT || 45000
+);
+const SOCKET_AUTH_REFRESH_INTERVAL_MS = Number(
+  import.meta.env.VITE_SOCKET_AUTH_REFRESH_INTERVAL || 10 * 60 * 1000
+);
 
 const isChromeOrEdge = () => {
   if (typeof navigator === "undefined") return false;
@@ -386,6 +403,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     filter: "none",
   });
   const [onlineUserIds, setOnlineUserIds] = useState<Set<number>>(new Set());
+  const [realtimeStatus, setRealtimeStatus] = useState<RealtimeStatus>("disconnected");
+  const [realtimeError, setRealtimeError] = useState<string | null>(null);
   const [noiseSuppressionEnabled, setNoiseSuppressionEnabled] = useState(() => {
     if (typeof window === "undefined") return true;
     const stored = window.localStorage.getItem(NOISE_SUPPRESSION_STORAGE_KEY);
@@ -402,7 +421,13 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const [lowLatencySuggestionReason, setLowLatencySuggestionReason] = useState<string | null>(
     null
   );
+  const errorRef = useRef<string | null>(null);
+  const transientErrorTimerRef = useRef<number | null>(null);
   const socketRef = useRef<Socket | null>(null);
+  const heartbeatTimerRef = useRef<number | null>(null);
+  const lastHeartbeatRef = useRef(0);
+  const authRefreshTimerRef = useRef<number | null>(null);
+  const reconnectingRef = useRef(false);
   const peersRef = useRef<Map<string, RTCPeerConnection>>(new Map());
   const localStreamRef = useRef<MediaStream | null>(null);
   const localScreenStreamRef = useRef<MediaStream | null>(null);
@@ -439,6 +464,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const screenControlTargetRef = useRef<string | null>(null);
   const screenControlAgentRef = useRef<string | null>(null);
   const callTimeoutRef = useRef<number | null>(null);
+  const turnAvailableRef = useRef<boolean>(TURN_URLS.length > 0);
   const videoProcessingRef = useRef<{
     track: MediaStreamTrack | null;
     cleanup: (() => void) | null;
@@ -482,6 +508,141 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     if (typeof window !== "undefined") return window.location.origin;
     return "";
   };
+
+  const resolveSocketAuth = useCallback(() => {
+    const token = localStorage.getItem("token") || "";
+    const profile = profileRef.current;
+    return {
+      token,
+      userId: user?.id,
+      displayName: profile?.displayName || user?.email || "",
+      handle: profile?.handle || "",
+      avatarUrl: profile?.avatarUrl || "",
+    };
+  }, [user?.email, user?.id]);
+
+  const refreshSocketAuth = useCallback(
+    async (socket?: Socket | null) => {
+      const target = socket ?? socketRef.current;
+      if (!target) return "timeout" as const;
+      const auth = resolveSocketAuth();
+      target.auth = auth;
+      return new Promise<"ok" | "unauthorized" | "timeout">((resolve) => {
+        target
+          .timeout(6000)
+          .emit(
+            "auth:refresh",
+            auth,
+            (err: Error | null, response?: { ok?: boolean }) => {
+              if (err) {
+                resolve("timeout");
+                return;
+              }
+              if (response?.ok === false) {
+                resolve("unauthorized");
+                return;
+              }
+              resolve("ok");
+            }
+          );
+      });
+    },
+    [resolveSocketAuth]
+  );
+
+  const stopHeartbeat = useCallback(() => {
+    if (heartbeatTimerRef.current) {
+      window.clearInterval(heartbeatTimerRef.current);
+      heartbeatTimerRef.current = null;
+    }
+  }, []);
+
+  const stopAuthRefresh = useCallback(() => {
+    if (authRefreshTimerRef.current) {
+      window.clearInterval(authRefreshTimerRef.current);
+      authRefreshTimerRef.current = null;
+    }
+  }, []);
+
+  const startHeartbeat = useCallback(
+    (socket: Socket) => {
+      stopHeartbeat();
+      if (
+        !Number.isFinite(SOCKET_HEARTBEAT_INTERVAL_MS) ||
+        SOCKET_HEARTBEAT_INTERVAL_MS < 5000
+      ) {
+        return;
+      }
+      lastHeartbeatRef.current = Date.now();
+      heartbeatTimerRef.current = window.setInterval(() => {
+        if (!socket.connected) return;
+        const now = Date.now();
+        if (
+          Number.isFinite(SOCKET_HEARTBEAT_TIMEOUT_MS) &&
+          SOCKET_HEARTBEAT_TIMEOUT_MS > 0 &&
+          now - lastHeartbeatRef.current > SOCKET_HEARTBEAT_TIMEOUT_MS
+        ) {
+          setRealtimeError("Realtime keepalive timed out.");
+          socket.disconnect();
+          socket.connect();
+          return;
+        }
+        socket
+          .timeout(5000)
+          .emit(
+            "presence:ping",
+            { at: now },
+            (err: Error | null, response?: { ok?: boolean }) => {
+              if (!err && response?.ok) {
+                lastHeartbeatRef.current = Date.now();
+              }
+            }
+          );
+      }, SOCKET_HEARTBEAT_INTERVAL_MS);
+    },
+    [stopHeartbeat]
+  );
+
+  const startAuthRefresh = useCallback(
+    (socket: Socket) => {
+      stopAuthRefresh();
+      if (
+        !Number.isFinite(SOCKET_AUTH_REFRESH_INTERVAL_MS) ||
+        SOCKET_AUTH_REFRESH_INTERVAL_MS < 60_000
+      ) {
+        return;
+      }
+      authRefreshTimerRef.current = window.setInterval(() => {
+        void refreshSocketAuth(socket).then((result) => {
+          if (result !== "unauthorized") return;
+          setRealtimeError("Session expired. Please log in again.");
+          socket.disconnect();
+        });
+      }, SOCKET_AUTH_REFRESH_INTERVAL_MS);
+    },
+    [refreshSocketAuth, stopAuthRefresh]
+  );
+
+  const showTransientError = useCallback((message: string, duration = 8000) => {
+    if (!message) return;
+    setError(message);
+    if (transientErrorTimerRef.current) {
+      window.clearTimeout(transientErrorTimerRef.current);
+    }
+    transientErrorTimerRef.current = window.setTimeout(() => {
+      if (errorRef.current === message) {
+        setError(null);
+      }
+    }, duration);
+  }, []);
+
+  const warnIfNoTurn = useCallback(() => {
+    if (turnAvailableRef.current) return;
+    showTransientError(
+      "No TURN server configured. Calls may drop on restrictive networks.",
+      10000
+    );
+  }, [showTransientError]);
 
   const setVideoEffects = useCallback((effects: Partial<VideoCallEffects>) => {
     setVideoEffectsState((prev) => {
@@ -1964,16 +2125,27 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       return iceServersLoadingRef.current;
     }
     const load = (async () => {
+      const hasTurn = (servers: RTCIceServer[]) =>
+        servers.some((server) => {
+          const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+          return urls.some((url) => {
+            const value = String(url || "").toLowerCase();
+            return value.startsWith("turn:") || value.startsWith("turns:");
+          });
+        });
       try {
         const res = await api.get("/webrtc/ice");
         const servers = res.data?.iceServers ?? res.data?.ice_servers ?? [];
         if (Array.isArray(servers) && servers.length > 0) {
           rtcConfigRef.current = { ...RTC_CONFIG, iceServers: servers };
+          turnAvailableRef.current = hasTurn(servers);
         } else {
           rtcConfigRef.current = RTC_CONFIG;
+          turnAvailableRef.current = hasTurn(RTC_CONFIG.iceServers || []);
         }
       } catch {
         rtcConfigRef.current = RTC_CONFIG;
+        turnAvailableRef.current = hasTurn(RTC_CONFIG.iceServers || []);
       } finally {
         iceServersLoadingRef.current = null;
       }
@@ -2297,6 +2469,19 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   }, [status]);
 
   useEffect(() => {
+    errorRef.current = error;
+  }, [error]);
+
+  useEffect(() => {
+    return () => {
+      if (transientErrorTimerRef.current) {
+        window.clearTimeout(transientErrorTimerRef.current);
+        transientErrorTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     incomingCallRef.current = incomingCall;
   }, [incomingCall]);
 
@@ -2420,7 +2605,13 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   useEffect(() => {
     if (user?.id) return;
     setOnlineUserIds(new Set());
+    setRealtimeStatus("disconnected");
+    setRealtimeError(null);
     presenceTargetsRef.current = [];
+    reconnectingRef.current = false;
+    lastHeartbeatRef.current = 0;
+    stopHeartbeat();
+    stopAuthRefresh();
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => track.stop());
       localStreamRef.current = null;
@@ -2443,36 +2634,75 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     setScreenControlCursor(null);
     stopVideoProcessing();
     resetE2eeState();
-  }, [resetE2eeState, stopVideoProcessing, user?.id]);
+  }, [resetE2eeState, stopAuthRefresh, stopHeartbeat, stopVideoProcessing, user?.id]);
 
   useEffect(() => {
     if (!user?.id) {
       socketRef.current?.disconnect();
       socketRef.current = null;
+      setRealtimeStatus("disconnected");
+      setRealtimeError(null);
       return;
     }
     if (socketRef.current) return;
     const socketUrl = buildSocketUrl();
-    if (!socketUrl) return;
-    const token = localStorage.getItem("token") || "";
-    const profile = profileRef.current;
+    if (!socketUrl) {
+      setRealtimeStatus("disconnected");
+      setRealtimeError("Realtime server not configured.");
+      return;
+    }
+    setRealtimeStatus("connecting");
+    setRealtimeError(null);
+    const auth = resolveSocketAuth();
     const socket = io(socketUrl, {
       autoConnect: true,
       transports: ["websocket", "polling"],
-      auth: {
-        token,
-        userId: user.id,
-        displayName: profile?.displayName || user.email,
-        handle: profile?.handle || "",
-        avatarUrl: profile?.avatarUrl || "",
-      },
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 8000,
+      timeout: 20000,
+      auth,
     });
     socketRef.current = socket;
     socket.on("connect", () => {
       localSocketIdRef.current = socket.id ?? null;
+      setRealtimeStatus("connected");
+      setRealtimeError(null);
+      reconnectingRef.current = false;
+      startHeartbeat(socket);
+      startAuthRefresh(socket);
+      void refreshSocketAuth(socket);
+      const reconnectPresenceTargets = presenceTargetsRef.current;
+      if (reconnectPresenceTargets.length) {
+        socket.emit("presence:subscribe", { userIds: reconnectPresenceTargets });
+      }
+      if (
+        activeRoomRef.current &&
+        (statusRef.current === "in-call" || statusRef.current === "connecting")
+      ) {
+        socket.emit("call:join", { roomId: activeRoomRef.current });
+      }
     });
-    socket.on("disconnect", () => {
+    socket.on("disconnect", (reason) => {
       localSocketIdRef.current = null;
+      setRealtimeStatus("disconnected");
+      stopHeartbeat();
+      stopAuthRefresh();
+      if (reason === "io client disconnect") {
+        setRealtimeError(null);
+      } else {
+        setRealtimeError("Realtime connection lost.");
+        reconnectingRef.current = true;
+        if (statusRef.current === "in-call" || statusRef.current === "connecting") {
+          setStatus("connecting");
+        }
+      }
+    });
+    socket.on("connect_error", () => {
+      setRealtimeStatus("disconnected");
+      setRealtimeError("Unable to reach realtime server.");
+      reconnectingRef.current = true;
     });
     const presenceTargets = presenceTargetsRef.current;
     if (presenceTargets.length) {
@@ -2962,6 +3192,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     });
 
     return () => {
+      stopHeartbeat();
+      stopAuthRefresh();
       socket.disconnect();
       socketRef.current = null;
       setOnlineUserIds(new Set());
@@ -2979,6 +3211,12 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     shareCallKeyWithPublicKey,
     forceMuteLocalAudio,
     stopScreenShare,
+    resolveSocketAuth,
+    refreshSocketAuth,
+    startAuthRefresh,
+    startHeartbeat,
+    stopAuthRefresh,
+    stopHeartbeat,
     user?.email,
     user?.id,
   ]);
@@ -3267,6 +3505,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       return;
     }
     await ensureIceServers();
+    warnIfNoTurn();
     socketRef.current.emit("call:join", { roomId });
     socketRef.current.emit("call:invite", {
       roomId,
@@ -3281,6 +3520,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     selectedInvitees,
     setCallEncryptionMode,
     user?.id,
+    warnIfNoTurn,
   ]);
 
   const openCallComposer = useCallback(
@@ -3326,6 +3566,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       return;
     }
     await ensureIceServers();
+    warnIfNoTurn();
     socketRef.current.emit("call:join", { roomId: incomingCall.roomId });
     setIncomingCall(null);
   }, [
@@ -3335,6 +3576,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     incomingCall,
     resetE2eeState,
     setCallEncryptionMode,
+    warnIfNoTurn,
   ]);
 
   const declineCall = useCallback(() => {
@@ -3545,6 +3787,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     () => ({
       isOpen,
       status,
+      realtimeStatus,
+      realtimeError,
+      realtimeUrl: REALTIME_URL,
       selectedInvitees,
       incomingCall,
       activeRoomId,
@@ -3627,6 +3872,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       isOpen,
       isVideoEnabled,
       localScreenStream,
+      realtimeStatus,
+      realtimeError,
+      REALTIME_URL,
       setAudioInputDevice,
       setVideoInputDevice,
       setVideoEffects,

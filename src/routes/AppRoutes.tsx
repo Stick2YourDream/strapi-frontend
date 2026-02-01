@@ -30,6 +30,7 @@ import Moderation from "../pages/moderation";
 import News from "../pages/news";
 import Apps from "../pages/apps";
 import Downloads from "../pages/downloads";
+import Forums from "../pages/forums";
 
 export default function AppRoutes(): JSX.Element {
   const { user, appSettings } = useAuth();
@@ -59,6 +60,7 @@ export default function AppRoutes(): JSX.Element {
       <Route path="/what-makes-us-different" element={<WhatMakesUsDifferent />} />
       <Route path="/apps" element={<Apps />} />
       <Route path="/downloads" element={<Downloads />} />
+      <Route path="/forums" element={<Forums />} />
       <Route path="/share" element={<ShareTarget />} />
       <Route path="/protocol" element={<ProtocolHandler />} />
       <Route path="/notes/new" element={<NewNote />} />

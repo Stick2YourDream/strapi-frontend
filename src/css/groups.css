@@ -70,6 +70,26 @@
   font-weight: 600;
 }
 
+.group-create-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.group-create-actions--form {
+  justify-content: flex-end;
+}
+
+.group-create-collapsed {
+  padding: 8px 0 4px;
+}
+
+.group-create-collapsed .status {
+  margin: 0;
+  color: #cbd5f5;
+}
+
 .group-gradient-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));

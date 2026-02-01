@@ -7,14 +7,14 @@ const STORAGE_KEY = "releaseNotesDismissedVersion";
 const SESSION_PREFIX = "releaseNotesClosed:";
 
 const RELEASE_NOTES = [
-  "Added more interactivitiy with posts",
-  "Redesigned Landing Page to remove unncessary clutter",
-  "Improved UI of Video Calling",
-  "Added Birthday Notifications and Reactions",
-  "Updated My Profile UI to be more user friendly",
-  "Updated ChatBox UI to include user friendly icons",
-  "Added Android and Windows App (Found in Apps on the Main Screen",
-  "Added Low Latency Mode for Slow Connections During Video Calls",
+  "New Dashboard UI",
+  "Added Goals and Impact Section",
+  "Added Forums",
+  "Added Standalone Downloadable Video Calling Application",
+  "Added Photo/Video Gallery",
+  "Added Featured Wins to Dashboard",
+  "You can now add friends to a trusted circle a create a trusted circle group to direct message",
+  "Pages that are updated: Dashboard, Profile, Friends, Forums",
 ];
 
 export default function ReleaseNotesModal() {

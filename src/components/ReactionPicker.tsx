@@ -5,7 +5,6 @@ type ReactionPickerProps = {
 
 const REACTIONS = [
   "\u{1F44D}",
-  "\u{1F602}",
   "\u{1F970}",
   "\u{1F929}",
   "\u{1F60E}",
@@ -17,9 +16,9 @@ const REACTIONS = [
   "\u{1F91D}",
   "\u{1F31F}",
   "\u2764\uFE0F",
-  "\u{1F62E}",
-  "\u{1F622}",
-  "\u{1F92F}",
+  "\u{1F600}",
+  "\u{1F60A}",
+  "\u{1F913}",
 ];
 
 export default function ReactionPicker({ onPick, className }: ReactionPickerProps) {

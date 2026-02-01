@@ -3,7 +3,7 @@
   position: fixed;
   top: 0;
   left: 0;
-  width: 300px;
+  width: var(--sidebar-width, 300px);
   height: 100vh;
   z-index: 12;
   display: flex;
@@ -983,5 +983,165 @@
   .nav-links .nav-btn {
     padding: 10px 12px;
     font-size: 14px;
+  }
+}
+
+@media (min-width: 1920px) {
+  .dash-nav {
+    padding: 20px 18px;
+    gap: 18px;
+    font-size: 15px;
+  }
+
+  .brand {
+    padding-right: 1.2rem;
+  }
+
+  .brand-mark {
+    width: 44px;
+    height: 44px;
+  }
+
+  .sidebar-nav-link {
+    padding: 14px 16px;
+    font-size: 15px;
+  }
+
+  .sidebar-settings-button {
+    padding: 12px 14px;
+    font-size: 14px;
+  }
+
+  .sidebar-settings-link {
+    padding: 10px 12px;
+    font-size: 14px;
+  }
+
+  .sidebar-bell {
+    width: 44px;
+    height: 44px;
+  }
+
+  .sidebar-bell svg {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+@media (min-width: 2560px) {
+  .dash-nav {
+    padding: 22px 20px;
+    gap: 20px;
+    font-size: 16px;
+  }
+
+  .brand-mark {
+    width: 48px;
+    height: 48px;
+  }
+
+  .sidebar-nav-link {
+    padding: 15px 18px;
+    font-size: 16px;
+  }
+
+  .sidebar-settings-button {
+    padding: 12px 16px;
+    font-size: 15px;
+  }
+
+  .sidebar-settings-link {
+    padding: 11px 14px;
+    font-size: 15px;
+  }
+
+  .sidebar-bell {
+    width: 48px;
+    height: 48px;
+  }
+
+  .sidebar-bell svg {
+    width: 22px;
+    height: 22px;
+  }
+}
+
+@media (min-width: 3840px) {
+  .dash-nav {
+    padding: 24px 22px;
+    gap: 22px;
+    font-size: 17px;
+  }
+
+  .brand-mark {
+    width: 52px;
+    height: 52px;
+  }
+
+  .sidebar-nav-link {
+    padding: 16px 20px;
+    font-size: 17px;
+  }
+
+  .sidebar-settings-button {
+    padding: 14px 18px;
+    font-size: 16px;
+  }
+
+  .sidebar-settings-link {
+    padding: 12px 16px;
+    font-size: 16px;
+  }
+
+  .sidebar-bell {
+    width: 52px;
+    height: 52px;
+  }
+
+  .sidebar-bell svg {
+    width: 24px;
+    height: 24px;
+  }
+}
+
+@media (min-width: 7680px) {
+  .dash-nav {
+    padding: 28px 26px;
+    gap: 26px;
+    font-size: 19px;
+  }
+
+  .brand {
+    padding-right: 1.6rem;
+  }
+
+  .brand-mark {
+    width: 60px;
+    height: 60px;
+  }
+
+  .sidebar-nav-link {
+    padding: 18px 22px;
+    font-size: 19px;
+  }
+
+  .sidebar-settings-button {
+    padding: 16px 20px;
+    font-size: 18px;
+  }
+
+  .sidebar-settings-link {
+    padding: 14px 18px;
+    font-size: 18px;
+  }
+
+  .sidebar-bell {
+    width: 60px;
+    height: 60px;
+  }
+
+  .sidebar-bell svg {
+    width: 28px;
+    height: 28px;
   }
 }

@@ -27,7 +27,7 @@ type MediaPickOptions = {
 
 const DEFAULT_PICK_ORDER: Record<MediaPickKind, MediaPickSize[]> = {
   avatar: ["thumbnail", "small", "medium", "large", "original"],
-  post: ["medium", "small", "large", "thumbnail", "original"],
+  post: ["large", "original", "medium", "small", "thumbnail"],
   cover: ["large", "medium", "small", "thumbnail", "original"],
   original: ["original", "large", "medium", "small", "thumbnail"],
 };

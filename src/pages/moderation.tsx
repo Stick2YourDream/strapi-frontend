@@ -265,9 +265,11 @@ export default function Moderation() {
       const createdPosts = Number(data?.createdPosts || 0);
       const createdComments = Number(data?.createdComments || 0);
       const createdMessages = Number(data?.createdMessages || 0);
+      const createdMedia = Number(data?.createdMedia || 0);
+      const createdFriendships = Number(data?.createdFriendships || 0);
       const password = data?.password ? ` Default password: ${data.password}` : "";
       setDemoStatus(
-        `Seeded ${createdUsers} users, ${createdPosts} posts, ${createdComments} comments, ${createdMessages} messages.${password}`
+        `Seeded ${createdUsers} users, ${createdPosts} posts, ${createdComments} comments, ${createdMessages} messages, ${createdMedia} media, ${createdFriendships} friends.${password}`
       );
     } catch (err) {
       if (err && typeof err === "object" && "response" in err) {
@@ -279,6 +281,38 @@ export default function Moderation() {
         setDemoStatus(String(message));
       } else {
         setDemoStatus("Unable to seed demo users.");
+      }
+    } finally {
+      setDemoBusy(false);
+    }
+  };
+
+  const handleSyncDemoUsers = async () => {
+    if (demoBusy) return;
+    setDemoBusy(true);
+    setDemoStatus(null);
+    try {
+      const res = await api.post("/moderation/demo-users/sync");
+      const data = res.data?.data;
+      const createdPosts = Number(data?.createdPosts || 0);
+      const createdComments = Number(data?.createdComments || 0);
+      const createdMessages = Number(data?.createdMessages || 0);
+      const createdMedia = Number(data?.createdMedia || 0);
+      const createdFriendships = Number(data?.createdFriendships || 0);
+      const demoUserCount = Number(data?.demoUserCount || 0);
+      setDemoStatus(
+        `Synced ${demoUserCount} demo users: ${createdPosts} posts, ${createdComments} comments, ${createdMessages} messages, ${createdMedia} media, ${createdFriendships} friends.`
+      );
+    } catch (err) {
+      if (err && typeof err === "object" && "response" in err) {
+        const anyErr = err as any;
+        const message =
+          anyErr.response?.data?.error?.message ||
+          anyErr.response?.data?.message ||
+          "Unable to sync demo users.";
+        setDemoStatus(String(message));
+      } else {
+        setDemoStatus("Unable to sync demo users.");
       }
     } finally {
       setDemoBusy(false);
@@ -556,6 +590,14 @@ export default function Moderation() {
                 onClick={() => void handleSeedDemoUsers()}
               >
                 {demoBusy ? "Working..." : "Create demo users"}
+              </button>
+              <button
+                className="btn ghost"
+                type="button"
+                disabled={demoBusy}
+                onClick={() => void handleSyncDemoUsers()}
+              >
+                {demoBusy ? "Working..." : "Sync demo data"}
               </button>
               <button
                 className="btn ghost"

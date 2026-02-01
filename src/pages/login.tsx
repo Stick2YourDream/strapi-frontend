@@ -14,7 +14,7 @@ type VerificationMethod = "sms" | "email" | "totp";
 export default function Login() {
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
-  const [rememberDevice, setRememberDevice] = useState(false);
+  const [rememberDevice, setRememberDevice] = useState(true);
   const [challengeId, setChallengeId] = useState<string | null>(null);
   const [challengeMethod, setChallengeMethod] = useState<VerificationMethod | null>(null);
   const [verificationCode, setVerificationCode] = useState("");
@@ -364,7 +364,7 @@ export default function Login() {
                 checked={rememberDevice}
                 onChange={(e) => setRememberDevice(e.target.checked)}
               />
-              <span>Remember this device for 30 days</span>
+              <span>Remember this device for 24 hours</span>
             </label>
           </>
         ) : (

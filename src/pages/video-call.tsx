@@ -21,7 +21,14 @@ const formatName = (displayName?: string, email?: string) => {
 export default function VideoCallHome() {
   const navigate = useNavigate();
   const { user, profile, logout } = useAuth();
-  const { openCallComposer, status, onlineUserIds } = useVideoCall();
+  const {
+    openCallComposer,
+    status,
+    onlineUserIds,
+    realtimeStatus,
+    realtimeError,
+    realtimeUrl,
+  } = useVideoCall();
   const { friends, loading, error } = useVideoInvitees();
   const brandName = String(import.meta.env.VITE_APP_NAME || "").trim() || "Your Social Place";
   const {
@@ -73,6 +80,11 @@ export default function VideoCallHome() {
     openCallComposer(invitees);
   };
 
+  const handleCallFriend = (friend: (typeof friends)[number]) => {
+    if (!friend?.userId) return;
+    openCallComposer([friend]);
+  };
+
   useEffect(() => {
     if (typeof document === "undefined") return;
     if (user) {
@@ -81,6 +93,8 @@ export default function VideoCallHome() {
       document.title = `${brandName} | Video Call`;
     }
   }, [brandName, displayName, user]);
+
+  const showRealtimeBanner = Boolean(user) && realtimeStatus !== "connected";
 
   return (
     <div className="video-app">
@@ -113,6 +127,28 @@ export default function VideoCallHome() {
       </header>
 
       <main className="video-app__main">
+        {showRealtimeBanner && (
+          <div className="video-app__banner" role="status" data-state={realtimeStatus}>
+            <div>
+              <strong>
+                {realtimeStatus === "connecting"
+                  ? "Connecting to realtime…"
+                  : "Realtime disconnected"}
+              </strong>
+              <span>
+                {realtimeStatus === "connecting"
+                  ? "Online status and calls will appear once connected."
+                  : "Online status and calls will not update until connection is restored."}
+              </span>
+            </div>
+            {realtimeStatus === "disconnected" && realtimeError && (
+              <span className="video-app__banner-reason">{realtimeError}</span>
+            )}
+            {realtimeUrl && (
+              <span className="video-app__banner-debug">Socket: {realtimeUrl}</span>
+            )}
+          </div>
+        )}
         <section className="video-app__hero">
           <p className="video-app__kicker">Standalone calls</p>
           <h1>Jump straight into a call with your people.</h1>
@@ -276,7 +312,13 @@ export default function VideoCallHome() {
               {friends.map((friend) => {
                 const isOnline = onlineUserIds.has(friend.userId);
                 return (
-                  <div key={friend.userId} className="video-app__friend">
+                  <button
+                    key={friend.userId}
+                    type="button"
+                    className="video-app__friend"
+                    onClick={() => handleCallFriend(friend)}
+                    aria-label={`Start a video call with ${friend.displayName}`}
+                  >
                     <div
                       className="video-app__friend-avatar"
                       style={
@@ -296,7 +338,7 @@ export default function VideoCallHome() {
                     <span className={`video-app__presence ${isOnline ? "is-online" : "is-offline"}`}>
                       {isOnline ? "Online" : "Offline"}
                     </span>
-                  </div>
+                  </button>
                 );
               })}
             </div>

@@ -29,6 +29,7 @@ import { pickMediaUrl } from "../utils/media";
 interface User {
   id: number;
   email: string;
+  username?: string;
   appRole?: "user" | "moderator" | "admin";
 }
 

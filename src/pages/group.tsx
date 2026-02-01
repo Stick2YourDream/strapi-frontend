@@ -5,7 +5,6 @@ import "../css/groups.css";
 import api from "../api/strapi";
 import Sidebar from "../components/Sidebar";
 import TopbarSearch from "../components/TopbarSearch";
-import ReactionPicker from "../components/ReactionPicker";
 import { useAuth } from "../context/AuthContext";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { sanitizePostText } from "../utils/emoji";
@@ -38,8 +37,14 @@ type GroupInvite = {
   inviteeName: string;
 };
 
+type ReactionCounts = {
+  thumbsUp: number;
+  heart: number;
+};
+
 type GroupPost = {
   id: number | string;
+  numericId?: number;
   title?: string;
   body?: string;
   mediaUrls: string[];
@@ -47,6 +52,8 @@ type GroupPost = {
   ownerName?: string;
   ownerId?: number;
   likes?: number;
+  reactionCounts?: ReactionCounts;
+  myReaction?: string | null;
   shares?: number;
 };
 
@@ -84,6 +91,28 @@ const getUserDisplayName = (entry: any, fallback = "Member") => {
   return fullName || handle || email || fallback;
 };
 
+const normalizeReactionCounts = (value: unknown, fallbackLikes?: number): ReactionCounts => {
+  const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const thumbsRaw = record.thumbsUp ?? record.thumbs_up;
+  const heartRaw = record.heart;
+  const thumbsUp = Number(thumbsRaw);
+  const heart = Number(heartRaw);
+  const hasCounts = Number.isFinite(thumbsUp) || Number.isFinite(heart);
+  return {
+    thumbsUp: Number.isFinite(thumbsUp)
+      ? thumbsUp
+      : hasCounts
+      ? 0
+      : Number(fallbackLikes ?? 0),
+    heart: Number.isFinite(heart) ? heart : 0,
+  };
+};
+
+const normalizeReactionValue = (value: unknown): string | null => {
+  const trimmed = String(value || "").trim();
+  if (trimmed === "👍" || trimmed === "❤️") return trimmed;
+  return null;
+};
 
 const hexToRgba = (value: string, alpha: number) => {
   const hex = (value || "").replace("#", "");
@@ -199,7 +228,6 @@ export default function GroupDetail() {
   const [postComments, setPostComments] = useState<Record<string, CommentItem[]>>({});
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
   const [openCommentsFor, setOpenCommentsFor] = useState<Record<string, boolean>>({});
-  const [reactionPickerFor, setReactionPickerFor] = useState<string | null>(null);
   const [shareMenuFor, setShareMenuFor] = useState<string | null>(null);
   const [shareNotice, setShareNotice] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -385,15 +413,22 @@ export default function GroupDetail() {
         .map((entry: any) => {
           const attrs = normalize(entry);
           const ownerEntry = getEntity(attrs.owner);
+          const likes = Number(attrs.likes ?? 0);
+          const reactionCounts = normalizeReactionCounts(attrs.reactionCounts, likes);
+          const myReaction = normalizeReactionValue(attrs.myReaction ?? entry?.myReaction);
+          const numericId = Number(entry.id ?? attrs.id);
           return {
             id: entry.id ?? attrs.documentId,
+            numericId: Number.isFinite(numericId) ? numericId : undefined,
             title: attrs.title || "",
             body: attrs.body || "",
             mediaUrls: pickMediaUrls(attrs.media, { kind: "post" }),
             createdAt: attrs.createdAt,
             ownerName: getUserDisplayName(ownerEntry, "Member"),
             ownerId: ownerEntry?.id ?? normalize(ownerEntry)?.id,
-            likes: Number(attrs.likes ?? 0),
+            likes,
+            reactionCounts,
+            myReaction,
             shares: Number(attrs.shares ?? 0),
           };
         })
@@ -405,7 +440,7 @@ export default function GroupDetail() {
       if (postList.length) {
         try {
           const commentsMap = await fetchCommentsForPostIds(
-            postList.map((post) => post.id)
+            postList.map((post) => post.numericId ?? post.id)
           );
           setPostComments(commentsMap);
         } catch (err) {
@@ -520,6 +555,19 @@ export default function GroupDetail() {
     );
   }, []);
 
+  const updatePostReactions = useCallback(
+    (postKey: string, reactionCounts: ReactionCounts, myReaction: string | null) => {
+      setPosts((prev) =>
+        prev.map((post) =>
+          String(post.id) === postKey
+            ? { ...post, reactionCounts, myReaction }
+            : post
+        )
+      );
+    },
+    []
+  );
+
   const pushShareNotice = useCallback((postKey: string, message: string) => {
     setShareNotice((prev) => ({ ...prev, [postKey]: message }));
     window.setTimeout(() => {
@@ -588,8 +636,16 @@ export default function GroupDetail() {
       try {
         const res = await api.post(`/group-posts/${post.id}/react`, { emoji });
         const payload = res.data?.data;
-        const nextLikes = Number(payload?.likes) || Number(post.likes ?? 0) + 1;
-        updatePostMetric(postKey, "likes", nextLikes);
+        const payloadLikes = Number(payload?.likes);
+        const nextLikes = Number.isFinite(payloadLikes)
+          ? payloadLikes
+          : Number(post.likes ?? 0) + 1;
+        if (Number.isFinite(payloadLikes)) {
+          updatePostMetric(postKey, "likes", nextLikes);
+        }
+        const counts = normalizeReactionCounts(payload?.reactionCounts, nextLikes);
+        const reactionValue = normalizeReactionValue(payload?.myReaction ?? emoji);
+        updatePostReactions(postKey, counts, reactionValue);
         if (payload?.alreadyReacted) {
           pushShareNotice(
             postKey,
@@ -603,7 +659,7 @@ export default function GroupDetail() {
         pushShareNotice(postKey, "Unable to react right now.");
       }
     },
-    [pushShareNotice, updatePostMetric]
+    [pushShareNotice, updatePostMetric, updatePostReactions]
   );
 
   const refreshCommentsForPost = useCallback(
@@ -620,18 +676,11 @@ export default function GroupDetail() {
 
   const toggleComments = useCallback((postKey: string) => {
     setOpenCommentsFor((prev) => ({ ...prev, [postKey]: !prev[postKey] }));
-    setReactionPickerFor(null);
-    setShareMenuFor(null);
-  }, []);
-
-  const toggleReactionPicker = useCallback((postKey: string) => {
-    setReactionPickerFor((prev) => (prev === postKey ? null : postKey));
     setShareMenuFor(null);
   }, []);
 
   const toggleShareMenu = useCallback((postKey: string) => {
     setShareMenuFor((prev) => (prev === postKey ? null : postKey));
-    setReactionPickerFor(null);
   }, []);
 
   useEffect(() => {
@@ -639,7 +688,6 @@ export default function GroupDetail() {
       const target = event.target as HTMLElement | null;
       if (!target) return;
       if (target.closest(".post-action-group")) return;
-      setReactionPickerFor(null);
       setShareMenuFor(null);
     };
     document.addEventListener("pointerdown", handlePointerDown);
@@ -1098,9 +1146,9 @@ export default function GroupDetail() {
                     const preview = postUrl ? linkPreviews[postUrl] : undefined;
                     const previewData = postUrl ? preview ?? { url: postUrl } : null;
                     const postKey = String(post.id);
-                    const comments = postComments[postKey] ?? [];
-                    const isCommentsOpen = Boolean(openCommentsFor[postKey]);
-                    const showReactionPicker = reactionPickerFor === postKey;
+                    const commentKey = String(post.numericId ?? post.id);
+                    const comments = postComments[commentKey] ?? [];
+                    const isCommentsOpen = Boolean(openCommentsFor[commentKey]);
                     const showShareMenu = shareMenuFor === postKey;
                     const authorLabel = post.ownerName || "Member";
                     const shareUrl = buildShareUrl(postKey);
@@ -1110,6 +1158,13 @@ export default function GroupDetail() {
                     const encodedUrl = encodeURIComponent(shareUrl);
                     const encodedText = encodeURIComponent(shareText);
                     const likesCount = Number(post.likes ?? 0);
+                    const reactionCounts = normalizeReactionCounts(
+                      post.reactionCounts,
+                      likesCount
+                    );
+                    const thumbsUpCount = reactionCounts.thumbsUp;
+                    const heartCount = reactionCounts.heart;
+                    const myReaction = normalizeReactionValue(post.myReaction);
                     const sharesCount = Number(post.shares ?? 0);
                     const commentsCount = comments.length;
                     return (
@@ -1165,11 +1220,25 @@ export default function GroupDetail() {
                         )}
                         <div className="post-actions">
                           <div className="post-action-counts">
-                            <span className="post-action-count">
+                            <span
+                              className={`post-action-count${
+                                myReaction === "👍" ? " is-selected" : ""
+                              }`}
+                            >
                               <span className="post-action-count-icon" aria-hidden="true">
                                 👍
                               </span>
-                              {likesCount}
+                              {thumbsUpCount}
+                            </span>
+                            <span
+                              className={`post-action-count${
+                                myReaction === "❤️" ? " is-selected" : ""
+                              }`}
+                            >
+                              <span className="post-action-count-icon" aria-hidden="true">
+                                ❤️
+                              </span>
+                              {heartCount}
                             </span>
                             <span className="post-action-count">
                               <span className="post-action-count-icon" aria-hidden="true">
@@ -1189,34 +1258,34 @@ export default function GroupDetail() {
                             <button
                               className="post-action-btn"
                               type="button"
-                              aria-pressed={showReactionPicker}
-                              onClick={() => toggleReactionPicker(postKey)}
+                              aria-pressed={myReaction === "👍"}
+                              onClick={() => void handleReaction(post, postKey, "👍")}
                             >
                               <span className="post-action-icon" aria-hidden="true">
-                                <svg viewBox="0 0 24 24">
-                                  <path d="M2 10.5A1.5 1.5 0 0 1 3.5 9h1A1.5 1.5 0 0 1 6 10.5v9A1.5 1.5 0 0 1 4.5 21h-1A1.5 1.5 0 0 1 2 19.5v-9Z" />
-                                  <path d="M6 10.333V5a3 3 0 0 1 3-3h.5a.5.5 0 0 1 .5.5V8h4.65a2.5 2.5 0 0 1 2.453 2.98l-1.2 6A2.5 2.5 0 0 1 13.452 19H8a2 2 0 0 1-2-2v-6.667Z" />
-                                </svg>
+                                👍
                               </span>
                               <span>Like</span>
                             </button>
-                            {showReactionPicker && (
-                              <div className="post-action-popover">
-                                <ReactionPicker
-                                  onPick={(emoji) => {
-                                    setReactionPickerFor(null);
-                                    void handleReaction(post, postKey, emoji);
-                                  }}
-                                />
-                              </div>
-                            )}
+                          </div>
+                          <div className="post-action-group">
+                            <button
+                              className="post-action-btn"
+                              type="button"
+                              aria-pressed={myReaction === "❤️"}
+                              onClick={() => void handleReaction(post, postKey, "❤️")}
+                            >
+                              <span className="post-action-icon" aria-hidden="true">
+                                ❤️
+                              </span>
+                              <span>Heart</span>
+                            </button>
                           </div>
                           <div className="post-action-group">
                             <button
                               className="post-action-btn"
                               type="button"
                               aria-pressed={isCommentsOpen}
-                              onClick={() => toggleComments(postKey)}
+                              onClick={() => toggleComments(commentKey)}
                             >
                               <span className="post-action-icon" aria-hidden="true">
                                 <svg viewBox="0 0 24 24">
@@ -1334,7 +1403,7 @@ export default function GroupDetail() {
                                             await api.delete(`/comments/${c.id}`);
                                             setPostComments((prev) => ({
                                               ...prev,
-                                              [postKey]: (prev[postKey] || []).filter(
+                                              [commentKey]: (prev[commentKey] || []).filter(
                                                 (comment) => comment.id !== c.id
                                               ),
                                             }));
@@ -1357,31 +1426,31 @@ export default function GroupDetail() {
                               <input
                                 className="auth-input"
                                 placeholder="Add a comment..."
-                                value={commentInputs[postKey] || ""}
+                                value={commentInputs[commentKey] || ""}
                                 onChange={(e) =>
                                   setCommentInputs((prev) => ({
                                     ...prev,
-                                    [postKey]: sanitizePostText(e.target.value),
+                                    [commentKey]: sanitizePostText(e.target.value),
                                   }))
                                 }
                               />
                               <button
                                 className="btn primary"
                                 type="button"
-                                disabled={!commentInputs[postKey]?.trim()}
+                                disabled={!commentInputs[commentKey]?.trim()}
                                 onClick={async () => {
-                                  const body = (commentInputs[postKey] || "").trim();
+                                  const body = (commentInputs[commentKey] || "").trim();
                                   if (!body) return;
                                   try {
                                     await api.post("/comments", {
                                       data: {
                                         body,
                                         target_type: "group-post",
-                                        target_id: post.id,
+                                        target_id: post.numericId ?? post.id,
                                       },
                                     });
-                                    await refreshCommentsForPost(post.id);
-                                    setCommentInputs((prev) => ({ ...prev, [postKey]: "" }));
+                                    await refreshCommentsForPost(post.numericId ?? post.id);
+                                    setCommentInputs((prev) => ({ ...prev, [commentKey]: "" }));
                                   } catch (err) {
                                     console.error("Add comment failed", err);
                                     setError("Failed to add comment");

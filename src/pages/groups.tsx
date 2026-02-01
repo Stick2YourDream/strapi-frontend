@@ -15,6 +15,7 @@ type GroupSummary = {
   name: string;
   description?: string;
   visibility: "public" | "private";
+  kind?: string;
   backgroundImage?: string;
   gradientStart?: string;
   gradientEnd?: string;
@@ -64,6 +65,7 @@ const toGroupSummary = (entry: any): GroupSummary => {
     name: attrs.name || "Group",
     description: attrs.description || "",
     visibility: attrs.visibility === "public" ? "public" : "private",
+    kind: attrs.kind || "group",
     backgroundImage: pickMediaUrl(attrs.backgroundImage, { kind: "cover" }),
     gradientStart: attrs.gradientStart || "",
     gradientEnd: attrs.gradientEnd || "",
@@ -96,6 +98,8 @@ const formatTime = (value?: string) => {
   if (Number.isNaN(date.getTime())) return "";
   return date.toLocaleString();
 };
+const buildIdFilter = (field: string, ids: number[]) =>
+  ids.map((id, index) => `filters[${field}][id][$in][${index}]=${id}`).join("&");
 
 export default function Groups() {
   const navigate = useNavigate();
@@ -124,6 +128,7 @@ export default function Groups() {
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [createStatus, setCreateStatus] = useState<string | null>(null);
+  const [showCreateForm, setShowCreateForm] = useState(false);
 
   const loadGroups = useCallback(async () => {
     if (!user?.id) {
@@ -133,7 +138,7 @@ export default function Groups() {
     setLoading(true);
     setError(null);
     try {
-      const [memberRes, inviteRes, publicRes, updateRes] = await Promise.all([
+      const [memberRes, inviteRes, publicRes] = await Promise.all([
         api.get(
           `/group-members?filters[user][id][$eq]=${user.id}` +
             `&populate=group&pagination[pageSize]=200`
@@ -143,10 +148,6 @@ export default function Groups() {
             `&filters[status][$eq]=pending&populate=group&populate=inviter&sort=createdAt:desc`
         ),
         api.get(`/groups?filters[visibility][$eq]=public&pagination[pageSize]=200`),
-        api.get(
-          `/group-notifications?filters[recipient][id][$eq]=${user.id}` +
-            `&populate=group&populate=actor&sort=createdAt:desc&pagination[pageSize]=8`
-        ),
       ]);
 
       const memberGroups: GroupSummary[] = (memberRes.data?.data ?? [])
@@ -159,6 +160,9 @@ export default function Groups() {
           return { ...group, role };
         })
         .filter(Boolean) as GroupSummary[];
+      const nonCircleGroups = memberGroups.filter(
+        (group) => (group.kind || "group") !== "circle"
+      );
 
       const inviteList: GroupInvite[] = (inviteRes.data?.data ?? [])
         .map((invite: any) => {
@@ -176,35 +180,55 @@ export default function Groups() {
           };
         })
         .filter(Boolean) as GroupInvite[];
+      const filteredInvites = inviteList.filter(
+        (invite) => (invite.group.kind || "group") !== "circle"
+      );
 
       const publicList: GroupSummary[] = (publicRes.data?.data ?? [])
         .map((entry: any) => toGroupSummary(entry))
         .filter(Boolean) as GroupSummary[];
+      const filteredPublic = publicList.filter(
+        (group) => (group.kind || "group") !== "circle"
+      );
 
       const memberIds = new Set(
-        memberGroups.map((group) => String(group.documentId ?? group.id))
+        nonCircleGroups.map((group) => String(group.documentId ?? group.id))
       );
-      const availablePublic = publicList.filter(
+      const availablePublic = filteredPublic.filter(
         (group) => !memberIds.has(String(group.documentId ?? group.id))
       );
 
-      const updateList: GroupUpdate[] = (updateRes.data?.data ?? [])
-        .map((entry: any) => {
-          const attrs = normalize(entry);
-          const groupEntry = getEntity(attrs.group);
-          const actorEntry = getEntity(attrs.actor);
-          return {
-            id: entry.id ?? attrs.documentId,
-            message: attrs.message || "",
-            group: groupEntry ? toGroupSummary(groupEntry) : undefined,
-            actor: normalize(actorEntry)?.email,
-            createdAt: attrs.createdAt,
-          };
-        })
-        .filter((entry: GroupUpdate) => entry.message) as GroupUpdate[];
+      let updateList: GroupUpdate[] = [];
+      const groupIds = nonCircleGroups
+        .map((group) => Number(group.id))
+        .filter((id) => Number.isFinite(id));
+      if (groupIds.length) {
+        const groupFilter = buildIdFilter("group", groupIds);
+        const updateRes = await api.get(
+          `/group-posts?${groupFilter}` +
+            `&populate=group&populate=owner&sort=createdAt:desc&pagination[pageSize]=8`
+        );
+        updateList = (updateRes.data?.data ?? [])
+          .map((entry: any) => {
+            const attrs = normalize(entry);
+            const groupEntry = getEntity(attrs.group);
+            const messageRaw =
+              String(attrs.body || attrs.content || attrs.title || "").trim() ||
+              "New group post";
+            const message =
+              messageRaw.length > 160 ? `${messageRaw.slice(0, 160)}…` : messageRaw;
+            return {
+              id: entry.id ?? attrs.documentId,
+              message,
+              group: groupEntry ? toGroupSummary(groupEntry) : undefined,
+              createdAt: attrs.createdAt,
+            };
+          })
+          .filter((entry: GroupUpdate) => entry.message) as GroupUpdate[];
+      }
 
-      setMyGroups(memberGroups);
-      setInvites(inviteList);
+      setMyGroups(nonCircleGroups);
+      setInvites(filteredInvites);
       setPublicGroups(availablePublic);
       setUpdates(updateList);
     } catch {
@@ -366,109 +390,146 @@ export default function Groups() {
               <p className="panel-sub">
                 Pick a name, keep it public or private, and drop in a background vibe.
               </p>
+              <div className="group-create-actions">
+                {!showCreateForm && (
+                  <button
+                    className="btn primary"
+                    type="button"
+                    onClick={() => setShowCreateForm(true)}
+                  >
+                    Create a group
+                  </button>
+                )}
+                {showCreateForm && (
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={() => setShowCreateForm(false)}
+                  >
+                    Hide options
+                  </button>
+                )}
+              </div>
             </div>
-            <div className="form-grid group-form">
-              <input
-                className="auth-input"
-                type="text"
-                value={groupName}
-                onChange={(e) => setGroupName(e.target.value)}
-                placeholder="Group name"
-              />
-              <textarea
-                className="auth-input"
-                rows={3}
-                value={groupDescription}
-                onChange={(e) => setGroupDescription(e.target.value)}
-                placeholder="Short description (optional)"
-              />
-              <div className="group-toggle-row">
-                <label className="group-toggle">
-                  <input
-                    type="radio"
-                    name="visibility"
-                    checked={visibility === "public"}
-                    onChange={() => setVisibility("public")}
-                  />
-                  <span>Public</span>
-                </label>
-                <label className="group-toggle">
-                  <input
-                    type="radio"
-                    name="visibility"
-                    checked={visibility === "private"}
-                    onChange={() => setVisibility("private")}
-                  />
-                  <span>Private</span>
-                </label>
+            {!showCreateForm ? (
+              <div className="group-create-collapsed">
+                <p className="status">
+                  Click “Create a group” to choose your name, privacy, and vibe.
+                </p>
               </div>
-              <div className="group-toggle-row">
-                <label className="group-toggle">
-                  <input
-                    type="checkbox"
-                    checked={useGradient}
-                    onChange={() => setUseGradient((prev) => !prev)}
-                  />
-                  <span>Use gradient</span>
-                </label>
-                <label className="group-toggle">
-                  <input
-                    type="checkbox"
-                    checked={useImage}
-                    onChange={() => setUseImage((prev) => !prev)}
-                  />
-                  <span>Use image</span>
-                </label>
-              </div>
-              {useGradient && (
-                <div className="group-gradient-row">
-                  <label>
-                    <span>Start</span>
+            ) : (
+              <div className="form-grid group-form">
+                <input
+                  className="auth-input"
+                  type="text"
+                  value={groupName}
+                  onChange={(e) => setGroupName(e.target.value)}
+                  placeholder="Group name"
+                />
+                <textarea
+                  className="auth-input"
+                  rows={3}
+                  value={groupDescription}
+                  onChange={(e) => setGroupDescription(e.target.value)}
+                  placeholder="Short description (optional)"
+                />
+                <div className="group-toggle-row">
+                  <label className="group-toggle">
                     <input
-                      type="color"
-                      value={gradientStart}
-                      onChange={(e) => setGradientStart(e.target.value)}
+                      type="radio"
+                      name="visibility"
+                      checked={visibility === "public"}
+                      onChange={() => setVisibility("public")}
                     />
+                    <span>Public</span>
                   </label>
-                  <label>
-                    <span>End</span>
+                  <label className="group-toggle">
                     <input
-                      type="color"
-                      value={gradientEnd}
-                      onChange={(e) => setGradientEnd(e.target.value)}
+                      type="radio"
+                      name="visibility"
+                      checked={visibility === "private"}
+                      onChange={() => setVisibility("private")}
                     />
-                  </label>
-                  <label className="group-angle">
-                    <span>Angle</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={180}
-                      value={gradientAngle}
-                      onChange={(e) => setGradientAngle(Number(e.target.value))}
-                    />
+                    <span>Private</span>
                   </label>
                 </div>
-              )}
-              {useImage && (
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={(e) =>
-                    setBackgroundFile(e.target.files?.[0] ? e.target.files[0] : null)
-                  }
-                />
-              )}
-              {createStatus && <div className="status">{createStatus}</div>}
-              <button
-                className="btn primary"
-                type="button"
-                onClick={handleCreateGroup}
-                disabled={creating}
-              >
-                {creating ? "Creating..." : "Create group"}
-              </button>
-            </div>
+                <div className="group-toggle-row">
+                  <label className="group-toggle">
+                    <input
+                      type="checkbox"
+                      checked={useGradient}
+                      onChange={() => setUseGradient((prev) => !prev)}
+                    />
+                    <span>Use gradient</span>
+                  </label>
+                  <label className="group-toggle">
+                    <input
+                      type="checkbox"
+                      checked={useImage}
+                      onChange={() => setUseImage((prev) => !prev)}
+                    />
+                    <span>Use image</span>
+                  </label>
+                </div>
+                {useGradient && (
+                  <div className="group-gradient-row">
+                    <label>
+                      <span>Start</span>
+                      <input
+                        type="color"
+                        value={gradientStart}
+                        onChange={(e) => setGradientStart(e.target.value)}
+                      />
+                    </label>
+                    <label>
+                      <span>End</span>
+                      <input
+                        type="color"
+                        value={gradientEnd}
+                        onChange={(e) => setGradientEnd(e.target.value)}
+                      />
+                    </label>
+                    <label className="group-angle">
+                      <span>Angle</span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={180}
+                        value={gradientAngle}
+                        onChange={(e) => setGradientAngle(Number(e.target.value))}
+                      />
+                    </label>
+                  </div>
+                )}
+                {useImage && (
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) =>
+                      setBackgroundFile(e.target.files?.[0] ? e.target.files[0] : null)
+                    }
+                  />
+                )}
+                {createStatus && <div className="status">{createStatus}</div>}
+                <div className="group-create-actions group-create-actions--form">
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={() => setShowCreateForm(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="btn primary"
+                    type="button"
+                    onClick={handleCreateGroup}
+                    disabled={creating}
+                  >
+                    {creating ? "Creating..." : "Create group"}
+                  </button>
+                </div>
+              </div>
+            )}
           </section>
 
           <section className="panel group-invite-panel">

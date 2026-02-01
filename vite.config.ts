@@ -6,7 +6,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const devPort = Number(env.VITE_DEV_PORT || 5173);
   const appMode = String(env.VITE_APP_MODE || "").toLowerCase();
-  const isVideoApp = appMode === "video";
+  const isVideoApp = mode === "video" || appMode === "video";
   const entryHtml = isVideoApp ? "video.html" : "index.html";
 
   return {

@@ -3,16 +3,17 @@ import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom";
 import "../css/dashboard.css";
 import "../css/profile.css";
+import "../css/media-lightbox.css";
 import { useAuth } from "../context/AuthContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";
 import api from "../api/strapi";
 import axios from "axios";
 import Sidebar from "../components/Sidebar";
 import TopbarSearch from "../components/TopbarSearch";
-import ReactionPicker from "../components/ReactionPicker";
 import { HOBBY_OPTIONS } from "./me_hobbies";
 import { RELIGION_OPTIONS } from "./me_religions";
 import { usePageMeta } from "../hooks/usePageMeta";
+import { useNewsPreference } from "../hooks/useNewsPreference";
 import {
   buildProfilePayloadFromAttrs,
   decryptOwnProfilePayload,
@@ -87,9 +88,15 @@ type LocationOption = {
   countryCode?: string;
 };
 
+type ReactionCounts = {
+  thumbsUp: number;
+  heart: number;
+};
+
 type MediaPost = {
   id: number | string;
   documentId?: number | string;
+  numericId?: number;
   text: string;
   media?: string;
   createdAt?: string;
@@ -97,12 +104,18 @@ type MediaPost = {
   feedbackTargetId?: number;
   feedbackTargetName?: string;
   likes?: number;
+  reactionCounts?: ReactionCounts;
+  myReaction?: string | null;
   shares?: number;
   visibility?: string;
+  trustedCircleId?: number;
+  trustedCircleName?: string;
 };
 
 type CommentItem = {
   id: number | string;
+  numericId?: number;
+  documentId?: string;
   body: string;
   owner?: string;
   ownerId?: number | string;
@@ -111,6 +124,44 @@ type CommentItem = {
 type FriendOption = {
   id: number;
   label: string;
+};
+
+type TrustedCircleOption = {
+  id: number;
+  name: string;
+};
+
+type GoalsState = {
+  selectedGoals: string[];
+  customGoals: string[];
+  achievedGoals: string[];
+  trustedFriendIds: number[];
+  reminder: "daily" | "weekly" | "off";
+  trustedCircleIds: number[];
+  checkIns: unknown[];
+};
+
+type PrivacyEditState = {
+  profile: boolean;
+  fields: boolean;
+  activity: boolean;
+  reminders: boolean;
+  news: boolean;
+  preview: boolean;
+};
+
+type ProfileMediaItem = {
+  id: number | string;
+  documentId?: string;
+  title?: string;
+  caption?: string;
+  visibility?: "public" | "friends" | "private" | "trusted";
+  kind?: "photo" | "video";
+  media?: string;
+  createdAt?: string;
+  ownerId?: number;
+  trustedCircleId?: number;
+  trustedCircleName?: string;
 };
 
 type TrustedDevice = {
@@ -192,6 +243,29 @@ const normalizeLocation = (value: string) => value.trim().toLowerCase();
 const matchByName = <T extends { name: string }>(list: T[], value: string) =>
   list.find((item) => normalizeLocation(item.name) === normalizeLocation(value));
 
+const normalizeReactionCounts = (value: unknown, fallbackLikes?: number): ReactionCounts => {
+  const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const thumbsRaw = record.thumbsUp ?? record.thumbs_up;
+  const heartRaw = record.heart;
+  const thumbsUp = Number(thumbsRaw);
+  const heart = Number(heartRaw);
+  const hasCounts = Number.isFinite(thumbsUp) || Number.isFinite(heart);
+  return {
+    thumbsUp: Number.isFinite(thumbsUp)
+      ? thumbsUp
+      : hasCounts
+      ? 0
+      : Number(fallbackLikes ?? 0),
+    heart: Number.isFinite(heart) ? heart : 0,
+  };
+};
+
+const normalizeReactionValue = (value: unknown): string | null => {
+  const trimmed = String(value || "").trim();
+  if (trimmed === "👍" || trimmed === "❤️") return trimmed;
+  return null;
+};
+
 const phoneDigits = (value?: string) => (value || "").replace(/\D/g, "").slice(0, 10);
 const formatPhone = (value?: string) => {
   const digits = phoneDigits(value);
@@ -263,9 +337,11 @@ const getTodayInput = () => {
   return `${year}-${month}-${day}`;
 };
 
-const PREVIEW_DEBOUNCE_MS = 450;
 const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
 const MAX_UPLOAD_LABEL = "1 GB";
+const MAX_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024;
+const MAX_VIDEO_UPLOAD_LABEL = "100 MB";
+const MAX_TRUSTED_CIRCLES = 5;
 const extractFirstUrl = (text: string) => {
   const match = text.match(/(https?:\/\/[^\s]+|www\.[^\s]+)/i);
   if (!match) return "";
@@ -288,7 +364,10 @@ const isYoutubeUrl = (value: string) => {
     return false;
   }
 };
-const isVideoUrl = (value?: string) => !!value && /\.(mp4|webm|mov|m4v|mkv)$/i.test(value);
+const isVideoUrl = (value?: string) =>
+  !!value && /\.(mp4|webm|mov|m4v|mkv)$/i.test(value);
+const isPreviewableUrl = (value?: string) =>
+  !!value && (isYoutubeUrl(value) || isVideoUrl(value));
 const isVideoFile = (file: File) => {
   if (file.type && file.type.startsWith("video/")) return true;
   return /\.(mp4|webm|mov|m4v|mkv)$/i.test(file.name);
@@ -307,6 +386,29 @@ const feedbackLabelFor = (post: MediaPost) => {
     return `Feedback: ${post.feedbackTargetName || "A friend"}`;
   }
   return "";
+};
+
+const normalizeProfileMedia = (entry: any): ProfileMediaItem => {
+  const record = entry?.data ?? entry ?? {};
+  const attrs = record?.attributes ?? record ?? {};
+  const mediaItem = attrs?.media ?? record?.media;
+  const mediaUrl = pickMediaUrl(mediaItem, { kind: "post" });
+  const trustedCircle = attrs?.trustedCircle ?? record?.trustedCircle;
+  const trustedCircleRecord = trustedCircle?.data ?? trustedCircle ?? null;
+  return {
+    id: record?.id ?? record?.documentId ?? "",
+    documentId: record?.documentId ?? attrs?.documentId,
+    title: String(attrs?.title || "").trim() || undefined,
+    caption: String(attrs?.caption || "").trim() || undefined,
+    visibility: attrs?.visibility as ProfileMediaItem["visibility"],
+    kind: attrs?.kind as ProfileMediaItem["kind"],
+    media: mediaUrl,
+    createdAt: String(attrs?.createdAt || ""),
+    ownerId: Number(attrs?.owner?.id ?? attrs?.owner ?? 0) || undefined,
+    trustedCircleId:
+      Number(trustedCircleRecord?.id ?? trustedCircleRecord?.documentId ?? 0) || undefined,
+    trustedCircleName: String(trustedCircleRecord?.attributes?.name || "").trim() || undefined,
+  };
 };
 
 const LinkPreviewCard = ({
@@ -374,6 +476,65 @@ const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   newsEnabled: true,
 };
 
+const goalsStorageKeyFor = (userId?: number | null) =>
+  userId ? `ysp-goals-${userId}` : "ysp-goals-guest";
+
+const loadGoalsState = (key: string): GoalsState => {
+  if (typeof window === "undefined") {
+    return {
+      selectedGoals: [],
+      customGoals: [],
+      achievedGoals: [],
+      trustedFriendIds: [],
+      reminder: "weekly",
+      trustedCircleIds: [],
+      checkIns: [],
+    };
+  }
+  const raw = window.localStorage.getItem(key);
+  if (!raw) {
+    return {
+      selectedGoals: [],
+      customGoals: [],
+      achievedGoals: [],
+      trustedFriendIds: [],
+      reminder: "weekly",
+      trustedCircleIds: [],
+      checkIns: [],
+    };
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<
+      GoalsState & { trustedGroupIds?: number[] }
+    > | null;
+    return {
+      selectedGoals: parsed?.selectedGoals ?? [],
+      customGoals: parsed?.customGoals ?? [],
+      achievedGoals: parsed?.achievedGoals ?? [],
+      trustedFriendIds: parsed?.trustedFriendIds ?? [],
+      reminder: parsed?.reminder ?? "weekly",
+      trustedCircleIds: parsed?.trustedCircleIds ?? parsed?.trustedGroupIds ?? [],
+      checkIns: parsed?.checkIns ?? [],
+    };
+  } catch {
+    return {
+      selectedGoals: [],
+      customGoals: [],
+      achievedGoals: [],
+      trustedFriendIds: [],
+      reminder: "weekly",
+      trustedCircleIds: [],
+      checkIns: [],
+    };
+  }
+};
+
+const saveGoalsState = (key: string, state: GoalsState) => {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(key, JSON.stringify(state));
+  window.dispatchEvent(new Event("ysp-goals-updated"));
+};
+
 const normalizeVisibility = (value: any, fallback: VisibilityLevel): VisibilityLevel => {
   if (value === "public" || value === "followers" || value === "private") {
     return value;
@@ -404,6 +565,20 @@ const normalizePrivacySettings = (
   following: normalizeVisibility(settings?.following, DEFAULT_PRIVACY_SETTINGS.following),
   activity: normalizeVisibility(settings?.activity, DEFAULT_PRIVACY_SETTINGS.activity),
 });
+
+const visibilityLabelFor = (value?: string) => {
+  if (value === "public") return "Public";
+  if (value === "followers") return "Followers";
+  if (value === "private") return "Private";
+  if (value === "custom") return "Custom";
+  return "Unknown";
+};
+
+const reminderLabelFor = (value: GoalsState["reminder"]) => {
+  if (value === "daily") return "Daily";
+  if (value === "weekly") return "Weekly";
+  return "Off";
+};
 
 const normalizeNotificationSettings = (settings?: NotificationSettings | null) => ({
   dndEnabled: Boolean(settings?.dndEnabled),
@@ -450,8 +625,15 @@ export default function Me() {
     type: "profile",
     robots: "noindex, nofollow",
   });
+  const { setPreference: setNewsPreference } = useNewsPreference(user?.id);
+  const goalsStorageKey = useMemo(
+    () => goalsStorageKeyFor(user?.id ?? null),
+    [user?.id]
+  );
+  const [goalReminder, setGoalReminder] = useState<GoalsState["reminder"]>(() =>
+    loadGoalsState(goalsStorageKey).reminder
+  );
   const todayInput = useMemo(() => getTodayInput(), []);
-
   const [profile, setProfile] = useState<Profile>({
     firstName: "",
     lastName: "",
@@ -491,10 +673,28 @@ export default function Me() {
   const [avatarRotateBusy, setAvatarRotateBusy] = useState(false);
   const [avatarRotateError, setAvatarRotateError] = useState<string | null>(null);
   const [posts, setPosts] = useState<MediaPost[]>([]);
+  const [profileMedia, setProfileMedia] = useState<ProfileMediaItem[]>([]);
+  const [profileMediaLoading, setProfileMediaLoading] = useState(false);
+  const [profileMediaError, setProfileMediaError] = useState<string | null>(null);
+  const [mediaTab, setMediaTab] = useState<"all" | "photo" | "video">("all");
+  const [mediaLightboxOpen, setMediaLightboxOpen] = useState(false);
+  const [mediaLightboxItems, setMediaLightboxItems] = useState<ProfileMediaItem[]>([]);
+  const [mediaLightboxIndex, setMediaLightboxIndex] = useState(0);
+  const [mediaFile, setMediaFile] = useState<File | null>(null);
+  const [mediaFilePreview, setMediaFilePreview] = useState<string | null>(null);
+  const [mediaTitle, setMediaTitle] = useState("");
+  const [mediaCaption, setMediaCaption] = useState("");
+  const [mediaVisibility, setMediaVisibility] = useState<
+    "public" | "friends" | "private" | "trusted"
+  >("friends");
+  const [mediaTrustedCircleId, setMediaTrustedCircleId] = useState<string | number>("");
+  const [mediaSubmitting, setMediaSubmitting] = useState(false);
+  const [trustedCircleOptions, setTrustedCircleOptions] = useState<
+    TrustedCircleOption[]
+  >([]);
   const [postComments, setPostComments] = useState<Record<string, CommentItem[]>>({});
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
   const [openCommentsFor, setOpenCommentsFor] = useState<Record<string, boolean>>({});
-  const [reactionPickerFor, setReactionPickerFor] = useState<string | null>(null);
   const [shareMenuFor, setShareMenuFor] = useState<string | null>(null);
   const [shareNotice, setShareNotice] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -509,6 +709,26 @@ export default function Me() {
   const settingsMenuRef = useRef<HTMLDivElement | null>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [settingsTriggerWidth, setSettingsTriggerWidth] = useState<number | null>(null);
+  const [privacyEdits, setPrivacyEdits] = useState<PrivacyEditState>({
+    profile: false,
+    fields: false,
+    activity: false,
+    reminders: false,
+    news: false,
+    preview: false,
+  });
+  const dashboardNewsEnabled = profile.notificationSettings.newsEnabled !== false;
+
+  useEffect(() => {
+    setGoalReminder(loadGoalsState(goalsStorageKey).reminder);
+  }, [goalsStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleSync = () => setGoalReminder(loadGoalsState(goalsStorageKey).reminder);
+    window.addEventListener("ysp-goals-updated", handleSync);
+    return () => window.removeEventListener("ysp-goals-updated", handleSync);
+  }, [goalsStorageKey]);
   useEffect(() => {
     if (typeof window === "undefined") return;
     const sectionParam = searchParams.get("section");
@@ -527,22 +747,11 @@ export default function Me() {
   const [activeHobbyPicker, setActiveHobbyPicker] = useState<
     "onboarding" | "profile" | null
   >(null);
-  const [postContent, setPostContent] = useState("");
-  const [postFile, setPostFile] = useState<File | null>(null);
-  const [postFilePreviewUrl, setPostFilePreviewUrl] = useState<string | null>(null);
-  const [postSubmitting, setPostSubmitting] = useState(false);
-  const [postError, setPostError] = useState<string | null>(null);
-  const [postVisibility, setPostVisibility] = useState("friends");
-  const [feedbackAudience, setFeedbackAudience] = useState("none");
-  const [feedbackTargetId, setFeedbackTargetId] = useState<number | null>(null);
   const [friendOptions, setFriendOptions] = useState<FriendOption[]>([]);
   const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
   const [deleteAccountError, setDeleteAccountError] = useState<string | null>(null);
   const [deletingAccount, setDeletingAccount] = useState(false);
   const [deletePostTarget, setDeletePostTarget] = useState<MediaPost | null>(null);
-  const [linkPreview, setLinkPreview] = useState<LinkPreview | null>(null);
-  const [linkPreviewLoading, setLinkPreviewLoading] = useState(false);
-  const [linkPreviewError, setLinkPreviewError] = useState<string | null>(null);
   const [previewCache, setPreviewCache] = useState<Record<string, LinkPreview | null>>({});
   const [countryOptions, setCountryOptions] = useState<LocationOption[]>([]);
   const [stateOptions, setStateOptions] = useState<LocationOption[]>([]);
@@ -624,17 +833,85 @@ export default function Me() {
     "me" | "public" | "followers"
   >("me");
   const isSettingsView = settingsView === "settings";
-  const postFileIsVideo = postFile ? isVideoFile(postFile) : false;
+  const mediaFileIsVideo = mediaFile ? isVideoFile(mediaFile) : false;
+
+  const filteredMedia = useMemo(() => {
+    if (mediaTab === "all") return profileMedia;
+    return profileMedia.filter((item) => {
+      const kind = item.kind || (item.media && isVideoUrl(item.media) ? "video" : "photo");
+      return kind === mediaTab;
+    });
+  }, [mediaTab, profileMedia]);
+  const activeMediaItem = mediaLightboxOpen
+    ? mediaLightboxItems[mediaLightboxIndex]
+    : null;
+
+  const openMediaLightboxAt = (index: number) => {
+    if (!filteredMedia.length) return;
+    setMediaLightboxItems(filteredMedia);
+    setMediaLightboxIndex(index);
+    setMediaLightboxOpen(true);
+  };
+
+  const closeMediaLightbox = () => {
+    setMediaLightboxOpen(false);
+  };
 
   useEffect(() => {
-    if (!postFile) {
-      setPostFilePreviewUrl(null);
+    if (!mediaLightboxOpen) return;
+    if (mediaLightboxItems.length === 0) return;
+    if (mediaLightboxIndex >= mediaLightboxItems.length) {
+      setMediaLightboxIndex(0);
+    }
+  }, [mediaLightboxIndex, mediaLightboxItems.length, mediaLightboxOpen]);
+
+  useEffect(() => {
+    if (!mediaLightboxOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMediaLightboxOpen(false);
+        return;
+      }
+      if (mediaLightboxItems.length < 2) return;
+      if (event.key === "ArrowRight") {
+        setMediaLightboxIndex((prev) =>
+          (prev + 1) % mediaLightboxItems.length
+        );
+      }
+      if (event.key === "ArrowLeft") {
+        setMediaLightboxIndex((prev) =>
+          (prev - 1 + mediaLightboxItems.length) % mediaLightboxItems.length
+        );
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [mediaLightboxItems.length, mediaLightboxOpen]);
+
+  useEffect(() => {
+    if (!mediaLightboxOpen || typeof document === "undefined") return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [mediaLightboxOpen]);
+
+  useEffect(() => {
+    if (!mediaFile) {
+      setMediaFilePreview(null);
       return;
     }
-    const objectUrl = URL.createObjectURL(postFile);
-    setPostFilePreviewUrl(objectUrl);
+    const objectUrl = URL.createObjectURL(mediaFile);
+    setMediaFilePreview(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
-  }, [postFile]);
+  }, [mediaFile]);
+
+  useEffect(() => {
+    if (mediaVisibility !== "trusted") {
+      setMediaTrustedCircleId("");
+    }
+  }, [mediaVisibility]);
   const pushEnabled = Boolean(profile.notificationSettings.pushEnabled);
   const pushBlockedByPhone = phoneVerified !== true && !pushEnabled;
   const phoneVerificationLabel = useMemo(() => {
@@ -697,11 +974,16 @@ export default function Me() {
       const ownerEntry = getEntity(attrs.owner ?? entry?.owner);
       const ownerId = getEntityId(ownerEntry);
       const ownerLabel = getEntityLabel(ownerEntry, "User");
-      const commentId = entry?.id ?? attrs?.documentId ?? attrs?.id ?? String(targetId);
+      const rawId = entry?.id ?? attrs?.id;
+      const numericId = Number(rawId);
+      const documentId = attrs?.documentId ?? entry?.documentId;
+      const commentId = rawId ?? documentId ?? String(targetId);
       const body = String(attrs.body ?? entry?.body ?? "").trim();
       if (!body) return;
       (next[key] = next[key] || []).push({
         id: commentId,
+        numericId: Number.isFinite(numericId) ? numericId : undefined,
+        documentId,
         body,
         owner: ownerLabel,
         ownerId,
@@ -730,9 +1012,31 @@ export default function Me() {
       )
     );
   };
+  const updatePostReactions = (
+    postKey: string,
+    reactionCounts: ReactionCounts,
+    myReaction: string | null
+  ) => {
+    setPosts((prev) =>
+      prev.map((post) =>
+        String(post.id) === postKey ? { ...post, reactionCounts, myReaction } : post
+      )
+    );
+  };
   const updatePostVisibility = async (post: MediaPost, nextVisibility: string) => {
     const visibility = String(nextVisibility || "").trim();
     if (!visibility) return;
+    const payload: Record<string, unknown> = { visibility };
+    if (visibility === "trusted") {
+      const groupId = post.trustedCircleId ?? trustedCircleOptions[0]?.id;
+      if (!groupId) {
+        setError("Select a trusted circle before saving.");
+        return;
+      }
+      payload.trustedCircle = groupId;
+    } else {
+      payload.trustedCircle = null;
+    }
     const attempts: string[] = [];
     if (post.documentId) attempts.push(`/users-posts/${post.documentId}`);
     const idNumber = typeof post.id === "number" ? post.id : Number(post.id);
@@ -741,13 +1045,28 @@ export default function Me() {
 
     for (const url of attempts) {
       try {
-        await api.put(url, { data: { visibility } });
+        await api.put(url, { data: payload });
         setPosts((prev) =>
           prev.map((entry) =>
-            String(entry.id) === String(post.id) ? { ...entry, visibility } : entry
+            String(entry.id) === String(post.id)
+              ? {
+                  ...entry,
+                  visibility,
+                  trustedCircleId:
+                    visibility === "trusted"
+                      ? (payload.trustedCircle as number)
+                      : undefined,
+                  trustedCircleName:
+                    visibility === "trusted"
+                      ? trustedCircleOptions.find(
+                          (group) => group.id === payload.trustedCircle
+                        )?.name
+                      : undefined,
+                }
+              : entry
           )
         );
-        setPostError(null);
+        setError(null);
         return;
       } catch (err) {
         if (url === attempts[attempts.length - 1]) {
@@ -755,7 +1074,7 @@ export default function Me() {
         }
       }
     }
-    setPostError("Failed to update post visibility.");
+    setError("Failed to update post visibility.");
   };
   const buildShareUrl = (postKey: string) => {
     if (typeof window === "undefined") return "";
@@ -820,8 +1139,16 @@ export default function Me() {
     try {
       const res = await api.post(`/users-posts/${post.id}/react`, { emoji });
       const payload = res.data?.data;
-      const nextLikes = Number(payload?.likes) || Number(post.likes ?? 0) + 1;
-      updatePostMetric(postKey, "likes", nextLikes);
+      const payloadLikes = Number(payload?.likes);
+      const nextLikes = Number.isFinite(payloadLikes)
+        ? payloadLikes
+        : Number(post.likes ?? 0) + 1;
+      if (Number.isFinite(payloadLikes)) {
+        updatePostMetric(postKey, "likes", nextLikes);
+      }
+      const counts = normalizeReactionCounts(payload?.reactionCounts, nextLikes);
+      const reactionValue = normalizeReactionValue(payload?.myReaction ?? emoji);
+      updatePostReactions(postKey, counts, reactionValue);
       if (payload?.alreadyReacted) {
         pushShareNotice(
           postKey,
@@ -845,16 +1172,10 @@ export default function Me() {
   };
   const toggleComments = (postKey: string) => {
     setOpenCommentsFor((prev) => ({ ...prev, [postKey]: !prev[postKey] }));
-    setReactionPickerFor(null);
-    setShareMenuFor(null);
-  };
-  const toggleReactionPicker = (postKey: string) => {
-    setReactionPickerFor((prev) => (prev === postKey ? null : postKey));
     setShareMenuFor(null);
   };
   const toggleShareMenu = (postKey: string) => {
     setShareMenuFor((prev) => (prev === postKey ? null : postKey));
-    setReactionPickerFor(null);
   };
 
   useEffect(() => {
@@ -862,7 +1183,6 @@ export default function Me() {
       const target = event.target as HTMLElement | null;
       if (!target) return;
       if (target.closest(".post-action-group")) return;
-      setReactionPickerFor(null);
       setShareMenuFor(null);
     };
     document.addEventListener("pointerdown", handlePointerDown);
@@ -1200,6 +1520,7 @@ export default function Me() {
     setPrivacySaving(true);
     try {
       await persistProfileSettings(profile);
+      setNewsPreference(profile.notificationSettings.newsEnabled !== false);
       setPrivacySuccess("Privacy settings saved.");
     } catch (err) {
       if (axios.isAxiosError(err)) {
@@ -1268,6 +1589,29 @@ export default function Me() {
       privacySettings: {
         ...prev.privacySettings,
         [field]: value,
+      },
+    }));
+  };
+
+  const togglePrivacyEdit = (key: keyof PrivacyEditState) => {
+    setPrivacyEdits((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const handleGoalReminderSetting = (value: GoalsState["reminder"]) => {
+    setGoalReminder(value);
+    const nextState: GoalsState = {
+      ...loadGoalsState(goalsStorageKey),
+      reminder: value,
+    };
+    saveGoalsState(goalsStorageKey, nextState);
+  };
+
+  const handleDashboardNewsToggle = (enabled: boolean) => {
+    setProfile((prev) => ({
+      ...prev,
+      notificationSettings: {
+        ...prev.notificationSettings,
+        newsEnabled: enabled,
       },
     }));
   };
@@ -1693,21 +2037,6 @@ export default function Me() {
   }, [profile.firstName, profile.lastName, user]);
 
   useEffect(() => {
-    if (feedbackAudience !== "specific") {
-      setFeedbackTargetId(null);
-      return;
-    }
-    if (!friendOptions.length) {
-      setFeedbackTargetId(null);
-      return;
-    }
-    if (feedbackTargetId && friendOptions.some((option) => option.id === feedbackTargetId)) {
-      return;
-    }
-    setFeedbackTargetId(friendOptions[0].id);
-  }, [feedbackAudience, feedbackTargetId, friendOptions]);
-
-  useEffect(() => {
     if (!avatarFile) {
       setAvatarPreviewUrl(null);
       return;
@@ -2110,7 +2439,7 @@ const setProfileFromEntry = async (entry: any) => {
     if (!user) return [];
 
     const postsRes = await api.get(
-      `/users-posts?filters[owner][id][$eq]=${user.id}&populate=Users_Pictures&populate=feedbackTarget&sort=createdAt:desc`
+      `/users-posts?filters[owner][id][$eq]=${user.id}&populate=Users_Pictures&populate=feedbackTarget&populate=trustedCircle&sort=createdAt:desc`
     );
 
     const mappedPosts: MediaPost[] = (postsRes.data?.data ?? []).map((p: any) => {
@@ -2121,14 +2450,24 @@ const setProfileFromEntry = async (entry: any) => {
       const feedbackTargetName = feedbackTargetId
         ? getEntityLabel(feedbackTargetData, `User ${feedbackTargetId}`)
         : undefined;
+      const trustedCircleData = getEntity(attrs.trustedCircle);
+      const trustedCircleId = getEntityId(trustedCircleData);
+      const trustedCircleName = trustedCircleId
+        ? getEntityLabel(trustedCircleData, `Circle ${trustedCircleId}`)
+        : undefined;
       const postId =
         p?.id ??
         attrs?.id ??
         p?.documentId ??
         attrs?.documentId ??
         String(attrs?.Users_Content || "");
+      const numericId = Number(p?.id ?? attrs?.id);
+      const likes = Number(attrs.likes ?? 0);
+      const reactionCounts = normalizeReactionCounts(attrs.reactionCounts, likes);
+      const myReaction = normalizeReactionValue(attrs.myReaction ?? p?.myReaction);
       return {
         id: postId,
+        numericId: Number.isFinite(numericId) ? numericId : undefined,
         documentId: p?.documentId ?? attrs?.documentId,
         text: attrs.Users_Content || "",
         media: pic,
@@ -2136,9 +2475,13 @@ const setProfileFromEntry = async (entry: any) => {
         feedbackAudience: attrs.feedbackAudience || undefined,
         feedbackTargetId,
         feedbackTargetName,
-        likes: Number(attrs.likes ?? 0),
+        likes,
+        reactionCounts,
+        myReaction,
         shares: Number(attrs.shares ?? 0),
         visibility: attrs.visibility || undefined,
+        trustedCircleId,
+        trustedCircleName,
       };
     });
 
@@ -2146,7 +2489,7 @@ const setProfileFromEntry = async (entry: any) => {
     if (mappedPosts.length) {
       try {
         const commentsMap = await fetchCommentsForPostIds(
-          mappedPosts.map((post) => post.id)
+          mappedPosts.map((post) => post.numericId ?? post.id)
         );
         setPostComments(commentsMap);
       } catch (err) {
@@ -2159,17 +2502,54 @@ const setProfileFromEntry = async (entry: any) => {
     return mappedPosts;
   };
 
-  const fetchLinkPreview = async (
-    url: string,
-    options?: { silent?: boolean }
-  ): Promise<LinkPreview | null> => {
+  const fetchProfileMedia = async (): Promise<ProfileMediaItem[]> => {
+    if (!user) return [];
+    setProfileMediaLoading(true);
+    setProfileMediaError(null);
+    try {
+      const res = await api.get(
+        `/profile-media-items?filters[owner][id][$eq]=${user.id}&populate=media&populate=trustedCircle&sort=createdAt:desc&pagination[pageSize]=200`
+      );
+      const items = (res.data?.data ?? []).map(normalizeProfileMedia);
+      setProfileMedia(items);
+      return items;
+    } catch (err) {
+      setProfileMediaError("Unable to load your media gallery.");
+      return [];
+    } finally {
+      setProfileMediaLoading(false);
+    }
+  };
+
+  const fetchTrustedCircleOptions = async (): Promise<TrustedCircleOption[]> => {
+    if (!user) return [];
+    try {
+      const res = await api.get(
+        `/trusted-circles?sort=name:asc&pagination[pageSize]=${MAX_TRUSTED_CIRCLES}`
+      );
+      const entries = res.data?.data ?? [];
+      const mapped = entries
+        .map((entry: any) => {
+          const attrs = normalize(entry);
+          const circleId = Number(entry?.id ?? attrs?.documentId ?? attrs?.id);
+          if (!Number.isFinite(circleId)) return null;
+          return {
+            id: circleId,
+            name: String(attrs?.name || `Circle ${circleId}`),
+          } as TrustedCircleOption;
+        })
+        .filter(Boolean) as TrustedCircleOption[];
+      setTrustedCircleOptions(mapped);
+      return mapped;
+    } catch {
+      setTrustedCircleOptions([]);
+      return [];
+    }
+  };
+
+  const fetchLinkPreview = async (url: string): Promise<LinkPreview | null> => {
     if (!url) return null;
     if (previewCache[url] !== undefined) return previewCache[url];
-
-    if (!options?.silent) {
-      setLinkPreviewLoading(true);
-      setLinkPreviewError(null);
-    }
 
     try {
       const res = await api.get("/link-preview", { params: { url } });
@@ -2188,81 +2568,254 @@ const setProfileFromEntry = async (entry: any) => {
       return preview;
     } catch {
       setPreviewCache((prev) => ({ ...prev, [url]: null }));
-      if (!options?.silent) {
-        setLinkPreviewError("Unable to load link preview.");
-      }
       return null;
-    } finally {
-      if (!options?.silent) {
-        setLinkPreviewLoading(false);
-      }
     }
   };
 
-  const createPost = async () => {
+  const createMediaItem = async () => {
     if (!user) return;
-    const content = postContent.trim();
-    if (!content && !postFile) {
-      setPostError("Add a message or a photo/video to post.");
+    if (!mediaFile) {
+      setProfileMediaError("Select a photo or video to upload.");
       return;
     }
-    if (feedbackAudience === "specific" && !feedbackTargetId) {
-      setPostError("Choose a friend for a specific feedback request.");
+    const isVideo = isVideoFile(mediaFile);
+    const maxBytes = isVideo ? MAX_VIDEO_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
+    const maxLabel = isVideo ? MAX_VIDEO_UPLOAD_LABEL : MAX_UPLOAD_LABEL;
+    if (mediaFile.size > maxBytes) {
+      setProfileMediaError(`Media files must be under ${maxLabel}.`);
       return;
     }
-    if (postFile && postFile.size > MAX_UPLOAD_BYTES) {
-      setPostError(`Media files must be under ${MAX_UPLOAD_LABEL}.`);
+    if (mediaVisibility === "trusted" && !mediaTrustedCircleId) {
+      setProfileMediaError("Choose a trusted circle for this media.");
       return;
     }
 
-    setPostError(null);
-    setPostSubmitting(true);
+    setProfileMediaError(null);
+    setMediaSubmitting(true);
     try {
-      let uploadedId: number | undefined;
-
-      if (postFile) {
-        const fd = new FormData();
-        fd.append("files", postFile);
-        const uploadRes = await api.post("/upload", fd);
-        uploadedId = uploadRes.data?.[0]?.id;
+      const fd = new FormData();
+      fd.append("files", mediaFile);
+      const uploadRes = await api.post("/upload", fd);
+      const uploadedId = uploadRes.data?.[0]?.id;
+      if (!uploadedId) {
+        setProfileMediaError("Media upload failed.");
+        return;
       }
-
-      await api.post("/users-posts", {
+      await api.post("/profile-media-items", {
         data: {
-          Title: content.slice(0, 80) || "Post",
-          Users_Content: content,
-          owner: user.id,
-          Users_Pictures: uploadedId ? [uploadedId] : undefined,
-          visibility: postVisibility,
-          feedbackAudience,
-          feedbackTarget: feedbackAudience === "specific" ? feedbackTargetId : undefined,
+          title: mediaTitle.trim() || null,
+          caption: mediaCaption.trim() || null,
+          visibility: mediaVisibility,
+          kind: isVideo ? "video" : "photo",
+          media: uploadedId,
+          trustedCircle:
+            mediaVisibility === "trusted" && mediaTrustedCircleId
+              ? Number(mediaTrustedCircleId)
+              : null,
         },
       });
-
-      setPostContent("");
-      setPostFile(null);
-      setLinkPreview(null);
-      setLinkPreviewError(null);
-      setFeedbackAudience("none");
-      setFeedbackTargetId(null);
-      await fetchMyPosts();
+      setMediaTitle("");
+      setMediaCaption("");
+      setMediaFile(null);
+      setMediaVisibility("friends");
+      setMediaTrustedCircleId("");
+      await fetchProfileMedia();
     } catch (err) {
       if (axios.isAxiosError(err)) {
         const msg =
           err.response?.data?.error?.message ||
           err.response?.data?.message ||
-          "Failed to create post.";
-        setPostError(String(msg));
+          "Unable to upload media.";
+        setProfileMediaError(String(msg));
       } else {
-        setPostError("Failed to create post.");
+        setProfileMediaError("Unable to upload media.");
       }
     } finally {
-      setPostSubmitting(false);
+      setMediaSubmitting(false);
+    }
+  };
+
+  const updateMediaVisibility = async (
+    item: ProfileMediaItem,
+    nextVisibility: ProfileMediaItem["visibility"]
+  ) => {
+    if (!item.id) return;
+    setProfileMediaError(null);
+    const payload: Record<string, unknown> = { visibility: nextVisibility };
+    if (nextVisibility === "trusted") {
+      const fallbackGroup = trustedCircleOptions[0]?.id;
+      const groupId = item.trustedCircleId || fallbackGroup;
+      if (!groupId) {
+        setProfileMediaError("Select a trusted circle before saving.");
+        return;
+      }
+      payload.trustedCircle = groupId;
+    } else {
+      payload.trustedCircle = null;
+    }
+
+    try {
+      const attempts: string[] = [];
+      if (item.documentId) attempts.push(`/profile-media-items/${item.documentId}`);
+      const numericId = typeof item.id === "number" ? item.id : Number(item.id);
+      if (Number.isFinite(numericId)) attempts.push(`/profile-media-items/${numericId}`);
+      attempts.push(`/profile-media-items/${item.id}`);
+
+      let updated = false;
+      for (const path of attempts) {
+        try {
+          await api.put(path, { data: payload });
+          updated = true;
+          break;
+        } catch (err: any) {
+          if (err?.response?.status === 404) continue;
+          throw err;
+        }
+      }
+
+      if (!updated) {
+        setProfileMediaError("Unable to update media visibility.");
+        return;
+      }
+
+      setProfileMedia((prev) =>
+        prev.map((entry) =>
+          String(entry.id) === String(item.id) ||
+          (item.documentId && String(entry.documentId) === String(item.documentId))
+            ? {
+                ...entry,
+                visibility: nextVisibility,
+                trustedCircleId:
+                  nextVisibility === "trusted"
+                    ? (payload.trustedCircle as number)
+                    : undefined,
+                trustedCircleName:
+                  nextVisibility === "trusted"
+                    ? trustedCircleOptions.find(
+                        (group) => group.id === (payload.trustedCircle as number)
+                      )?.name
+                    : undefined,
+              }
+            : entry
+        )
+      );
+    } catch {
+      setProfileMediaError("Unable to update media visibility.");
+    }
+  };
+
+  const updateMediaTrustedCircle = async (
+    item: ProfileMediaItem,
+    groupId: number | ""
+  ) => {
+    if (!item.id) return;
+    if (!groupId) {
+      setProfileMediaError("Select a trusted circle.");
+      return;
+    }
+    setProfileMediaError(null);
+    try {
+      const attempts: string[] = [];
+      if (item.documentId) attempts.push(`/profile-media-items/${item.documentId}`);
+      const numericId = typeof item.id === "number" ? item.id : Number(item.id);
+      if (Number.isFinite(numericId)) attempts.push(`/profile-media-items/${numericId}`);
+      attempts.push(`/profile-media-items/${item.id}`);
+
+      let updated = false;
+      for (const path of attempts) {
+        try {
+          await api.put(path, {
+            data: { visibility: "trusted", trustedCircle: groupId },
+          });
+          updated = true;
+          break;
+        } catch (err: any) {
+          if (err?.response?.status === 404) continue;
+          throw err;
+        }
+      }
+
+      if (!updated) {
+        setProfileMediaError("Unable to update trusted circle.");
+        return;
+      }
+
+      setProfileMedia((prev) =>
+        prev.map((entry) =>
+          String(entry.id) === String(item.id) ||
+          (item.documentId && String(entry.documentId) === String(item.documentId))
+            ? {
+                ...entry,
+                visibility: "trusted",
+                trustedCircleId: Number(groupId),
+                trustedCircleName: trustedCircleOptions.find((group) => group.id === groupId)
+                  ?.name,
+              }
+            : entry
+        )
+      );
+    } catch {
+      setProfileMediaError("Unable to update trusted circle.");
+    }
+  };
+
+  const deleteMediaItem = async (item: ProfileMediaItem) => {
+    if (!item.id) return;
+    setProfileMediaError(null);
+    const numericId = typeof item.id === "number" ? item.id : Number(item.id);
+    const docId = item.documentId;
+    const matchesItem = (entry: ProfileMediaItem) => {
+      if (docId && String(entry.documentId) === String(docId)) return true;
+      if (Number.isFinite(numericId) && String(entry.id) === String(numericId)) {
+        return true;
+      }
+      return String(entry.id) === String(item.id);
+    };
+    try {
+      const attempts: string[] = [];
+      if (docId) attempts.push(`/profile-media-items/${docId}`);
+      if (Number.isFinite(numericId)) attempts.push(`/profile-media-items/${numericId}`);
+      attempts.push(`/profile-media-items/${item.id}`);
+
+      let removed = false;
+      for (const path of attempts) {
+        try {
+          await api.delete(path);
+          removed = true;
+          break;
+        } catch (err: any) {
+          if (err?.response?.status === 404) continue;
+          throw err;
+        }
+      }
+
+      if (!removed) {
+        setProfileMediaError("Unable to delete media item.");
+        return;
+      }
+
+      setProfileMedia((prev) =>
+        prev.filter((entry) => !matchesItem(entry))
+      );
+    } catch (err) {
+      const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+      if (status && status >= 500) {
+        try {
+          const refreshed = await fetchProfileMedia();
+          const stillThere = refreshed.some((entry) => matchesItem(entry));
+          if (!stillThere) {
+            return;
+          }
+        } catch {
+          // fall through to error message
+        }
+      }
+      setProfileMediaError("Unable to delete media item.");
     }
   };
 
   const deletePost = async (post: MediaPost) => {
-    setPostError(null);
+    setError(null);
     try {
       const idNumber = typeof post.id === "number" ? post.id : Number(post.id);
       const docId = post.documentId ?? (typeof post.id === "string" ? post.id : null);
@@ -2290,11 +2843,11 @@ const setProfileFromEntry = async (entry: any) => {
         return false;
       });
       if (stillThere) {
-        setPostError("Delete failed to persist. Please try again.");
+        setError("Delete failed to persist. Please try again.");
       }
     } catch (err) {
       console.error("Delete post failed", err);
-      setPostError("Failed to delete post.");
+      setError("Failed to delete post.");
     } finally {
       setDeletePostTarget(null);
     }
@@ -2573,12 +3126,16 @@ const setProfileFromEntry = async (entry: any) => {
           setOnboardingStep(0);
           setEditing(true);
           await fetchMyPosts();
+          await fetchProfileMedia();
+          await fetchTrustedCircleOptions();
           return;
         }
 
         await setProfileFromEntry(mine);
         setEditing(false);
         await fetchMyPosts();
+        await fetchProfileMedia();
+        await fetchTrustedCircleOptions();
       } catch {
         setError("Failed to load profile");
       } finally {
@@ -2615,37 +3172,6 @@ const setProfileFromEntry = async (entry: any) => {
   }, [user?.id, isSettingsView]);
 
   useEffect(() => {
-    const url = extractFirstUrl(postContent);
-    if (!url) {
-      setLinkPreview(null);
-      setLinkPreviewError(null);
-      setLinkPreviewLoading(false);
-      return;
-    }
-
-    setLinkPreviewError(null);
-    if (linkPreview?.url === url) return;
-    const cached = previewCache[url];
-    if (cached !== undefined) {
-      setLinkPreview(cached);
-      return;
-    }
-
-    let active = true;
-    const handle = setTimeout(() => {
-      fetchLinkPreview(url).then((preview) => {
-        if (!active) return;
-        setLinkPreview(preview);
-      });
-    }, PREVIEW_DEBOUNCE_MS);
-
-    return () => {
-      active = false;
-      clearTimeout(handle);
-    };
-  }, [postContent, linkPreview?.url, previewCache]);
-
-  useEffect(() => {
     const urls = Array.from(
       new Set(
         posts
@@ -2657,9 +3183,25 @@ const setProfileFromEntry = async (entry: any) => {
     if (!urls.length) return;
     urls.forEach((url) => {
       if (previewCache[url] !== undefined) return;
-      void fetchLinkPreview(url, { silent: true });
+      void fetchLinkPreview(url);
     });
   }, [posts, previewCache]);
+
+  useEffect(() => {
+    const urls = new Set<string>();
+    Object.values(postComments).forEach((commentList) => {
+      commentList.forEach((comment) => {
+        const url = extractFirstUrl(comment.body);
+        if (!isPreviewableUrl(url)) return;
+        if (previewCache[url] !== undefined) return;
+        urls.add(url);
+      });
+    });
+    if (!urls.size) return;
+    urls.forEach((url) => {
+      void fetchLinkPreview(url);
+    });
+  }, [postComments, previewCache]);
 
   const saveProfile = async (override?: Partial<Profile>) => {
     if (!user) return;
@@ -3061,6 +3603,54 @@ const setProfileFromEntry = async (entry: any) => {
   const previewActivity = canPreviewField("activity")
     ? "Active now / last seen"
     : "Hidden";
+  const isCustomVisibility = profile.profileVisibility === "custom";
+  const profileVisibilitySummary = useMemo(() => {
+    const summary = [
+      `Visibility: ${visibilityLabelFor(profile.profileVisibility)}`,
+      `Search: ${profile.searchIndexingEnabled ? "On" : "Off"}`,
+    ];
+    if (profile.profileVisibility === "public") {
+      summary.push(`External: ${profile.externalIndexingEnabled ? "On" : "Off"}`);
+    }
+    return summary;
+  }, [
+    profile.profileVisibility,
+    profile.searchIndexingEnabled,
+    profile.externalIndexingEnabled,
+  ]);
+  const whoCanSeeSummary = useMemo(() => {
+    if (!isCustomVisibility) {
+      return [
+        "Using profile visibility for all fields",
+        `Phone: ${profile.showPhoneOnProfile ? "On" : "Off"}`,
+      ];
+    }
+    return [
+      `Bio: ${visibilityLabelFor(profile.privacySettings.bio)}`,
+      `Links: ${visibilityLabelFor(profile.privacySettings.links)}`,
+      `Location: ${visibilityLabelFor(profile.privacySettings.location)}`,
+      `Birthday: ${visibilityLabelFor(profile.privacySettings.birthday)}`,
+      `Followers: ${visibilityLabelFor(profile.privacySettings.followers)}`,
+      `Following: ${visibilityLabelFor(profile.privacySettings.following)}`,
+      `Phone: ${profile.showPhoneOnProfile ? "On" : "Off"}`,
+    ];
+  }, [isCustomVisibility, profile.privacySettings, profile.showPhoneOnProfile]);
+  const activitySummary = useMemo(
+    () => [`Visible to: ${visibilityLabelFor(profile.activityVisibility)}`],
+    [profile.activityVisibility]
+  );
+  const reminderSummary = useMemo(
+    () => [`Reminders: ${reminderLabelFor(goalReminder)}`],
+    [goalReminder]
+  );
+  const newsSummary = useMemo(
+    () => [dashboardNewsEnabled ? "Newsroom: On" : "Newsroom: Off"],
+    [dashboardNewsEnabled]
+  );
+  const previewSummary = useMemo(
+    () => [`Previewing as ${previewAudienceLabel}`],
+    [previewAudienceLabel]
+  );
   const emailCooldownAt = accountStatus?.emailChangeAvailableAt ?? null;
   const emailCooldownActive =
     Boolean(emailCooldownAt) && new Date(emailCooldownAt as string).getTime() > Date.now();
@@ -3071,7 +3661,6 @@ const setProfileFromEntry = async (entry: any) => {
     ? formatDateTime(accountStatus.deactivatedUntil)
     : "Not scheduled";
   const deactivationDays = accountStatus?.deactivationDays ?? 30;
-  const isCustomVisibility = profile.profileVisibility === "custom";
   const isDeactivated =
     Boolean(accountStatus?.deactivatedUntil) &&
     new Date(accountStatus?.deactivatedUntil as string).getTime() > Date.now();
@@ -4612,7 +5201,7 @@ const setProfileFromEntry = async (entry: any) => {
 
         {isSettingsView && settingsSection === "privacy" && (
         <div className="panel-grid">
-          <section className="panel profile-settings-panel">
+          <section className="panel profile-settings-panel profile-settings-panel--privacy">
             <div className="panel-header">
               <div>
                 <p className="eyebrow">Privacy</p>
@@ -4625,10 +5214,45 @@ const setProfileFromEntry = async (entry: any) => {
 
             <div className="security-grid">
               <div className="security-card">
-                <h4>Profile visibility</h4>
-                <p className="security-muted">
-                  Choose an overall visibility or set custom rules below.
-                </p>
+                <div className="security-card__header">
+                  <span className="security-card__icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24">
+                      <path
+                        d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6-10-6-10-6Z"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                      />
+                      <circle cx="12" cy="12" r="3.2" fill="currentColor" />
+                    </svg>
+                  </span>
+                  <div className="security-card__header-content">
+                    <div className="security-card__title-row">
+                      <h4>Profile visibility</h4>
+                      <button
+                        className="security-card__edit"
+                        type="button"
+                        onClick={() => togglePrivacyEdit("profile")}
+                        aria-expanded={privacyEdits.profile}
+                        aria-controls="privacy-profile-body"
+                      >
+                        {privacyEdits.profile ? "Done" : "Edit"}
+                      </button>
+                    </div>
+                    <p className="security-muted">
+                      Choose an overall visibility or set custom rules below.
+                    </p>
+                  </div>
+                </div>
+                <div className="security-card__summary">
+                  {profileVisibilitySummary.map((item) => (
+                    <span key={item} className="security-summary-chip">
+                      {item}
+                    </span>
+                  ))}
+                </div>
+                {privacyEdits.profile && (
+                  <div className="security-card__body" id="privacy-profile-body">
                 <select
                   className="auth-input compact-select compact-select-inline"
                   value={profile.profileVisibility}
@@ -4686,13 +5310,62 @@ const setProfileFromEntry = async (entry: any) => {
                     External indexing is only available for public profiles.
                   </p>
                 )}
+                  </div>
+                )}
               </div>
 
               <div className="security-card">
-                <h4>Who can see</h4>
-                <p className="security-muted">
-                  Fine-tune visibility for key profile sections.
-                </p>
+                <div className="security-card__header">
+                  <span className="security-card__icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24">
+                      <path
+                        d="M16 11a4 4 0 1 0-8 0"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                      />
+                      <path
+                        d="M4 21a8 8 0 0 1 16 0"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                        strokeLinecap="round"
+                      />
+                      <path
+                        d="M18.5 9.5a3 3 0 1 0-3-3"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.4"
+                      />
+                    </svg>
+                  </span>
+                  <div className="security-card__header-content">
+                    <div className="security-card__title-row">
+                      <h4>Who can see</h4>
+                      <button
+                        className="security-card__edit"
+                        type="button"
+                        onClick={() => togglePrivacyEdit("fields")}
+                        aria-expanded={privacyEdits.fields}
+                        aria-controls="privacy-fields-body"
+                      >
+                        {privacyEdits.fields ? "Done" : "Edit"}
+                      </button>
+                    </div>
+                    <p className="security-muted">
+                      Fine-tune visibility for key profile sections.
+                    </p>
+                  </div>
+                </div>
+                <div className="security-card__summary">
+                  {whoCanSeeSummary.map((item) => (
+                    <span key={item} className="security-summary-chip">
+                      {item}
+                    </span>
+                  ))}
+                </div>
+                {privacyEdits.fields && (
+                  <div className="security-card__body" id="privacy-fields-body">
                 <div className="privacy-grid">
                   <label className="profile-field compact-field">
                     <span className="profile-field-label">Bio</span>
@@ -4821,13 +5494,59 @@ const setProfileFromEntry = async (entry: any) => {
                     Switch profile visibility to Custom to edit field-by-field.
                   </p>
                 )}
+                  </div>
+                )}
               </div>
 
               <div className="security-card">
-                <h4>Activity status</h4>
-                <p className="security-muted">
-                  Controls who can see “active now” or “last seen.”
-                </p>
+                <div className="security-card__header">
+                  <span className="security-card__icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24">
+                      <circle
+                        cx="12"
+                        cy="12"
+                        r="8.5"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                      />
+                      <path
+                        d="M12 7.5v5l3 2"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </span>
+                  <div className="security-card__header-content">
+                    <div className="security-card__title-row">
+                      <h4>Activity status</h4>
+                      <button
+                        className="security-card__edit"
+                        type="button"
+                        onClick={() => togglePrivacyEdit("activity")}
+                        aria-expanded={privacyEdits.activity}
+                        aria-controls="privacy-activity-body"
+                      >
+                        {privacyEdits.activity ? "Done" : "Edit"}
+                      </button>
+                    </div>
+                    <p className="security-muted">
+                      Controls who can see “active now” or “last seen.”
+                    </p>
+                  </div>
+                </div>
+                <div className="security-card__summary">
+                  {activitySummary.map((item) => (
+                    <span key={item} className="security-summary-chip">
+                      {item}
+                    </span>
+                  ))}
+                </div>
+                {privacyEdits.activity && (
+                  <div className="security-card__body" id="privacy-activity-body">
                 <select
                   className="auth-input compact-select compact-select-inline"
                   value={profile.activityVisibility}
@@ -4847,13 +5566,176 @@ const setProfileFromEntry = async (entry: any) => {
                     Activity status is hidden while your profile is private.
                   </p>
                 )}
+                  </div>
+                )}
+              </div>
+
+              <div className="security-card">
+                <div className="security-card__header">
+                  <span className="security-card__icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24">
+                      <path
+                        d="M12 3.5c4 0 7.2 3.2 7.2 7.2v3.6l1.4 2.7H3.4l1.4-2.7v-3.6c0-4 3.2-7.2 7.2-7.2Z"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                      />
+                      <path
+                        d="M9.2 19.6c.4 1.1 1.5 1.9 2.8 1.9s2.4-.8 2.8-1.9"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  </span>
+                  <div className="security-card__header-content">
+                    <div className="security-card__title-row">
+                      <h4>Goal reminders</h4>
+                      <button
+                        className="security-card__edit"
+                        type="button"
+                        onClick={() => togglePrivacyEdit("reminders")}
+                        aria-expanded={privacyEdits.reminders}
+                        aria-controls="privacy-reminders-body"
+                      >
+                        {privacyEdits.reminders ? "Done" : "Edit"}
+                      </button>
+                    </div>
+                    <p className="security-muted">
+                      Choose how often we remind you about your goals.
+                    </p>
+                  </div>
+                </div>
+                <div className="security-card__summary">
+                  {reminderSummary.map((item) => (
+                    <span key={item} className="security-summary-chip">
+                      {item}
+                    </span>
+                  ))}
+                </div>
+                {privacyEdits.reminders && (
+                  <div className="security-card__body" id="privacy-reminders-body">
+                    <select
+                      className="auth-input compact-select compact-select-inline"
+                      value={goalReminder}
+                      onChange={(e) =>
+                        handleGoalReminderSetting(
+                          e.target.value as GoalsState["reminder"]
+                        )
+                      }
+                    >
+                      <option value="daily">Daily reminder</option>
+                      <option value="weekly">Weekly recap</option>
+                      <option value="off">No reminders</option>
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              <div className="security-card">
+                <div className="security-card__header">
+                  <span className="security-card__icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24">
+                      <path
+                        d="M4 6h16v12H4z"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                      />
+                      <path
+                        d="M8 6v12M4 10h16"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                      />
+                    </svg>
+                  </span>
+                  <div className="security-card__header-content">
+                    <div className="security-card__title-row">
+                      <h4>Dashboard news</h4>
+                      <button
+                        className="security-card__edit"
+                        type="button"
+                        onClick={() => togglePrivacyEdit("news")}
+                        aria-expanded={privacyEdits.news}
+                        aria-controls="privacy-news-body"
+                      >
+                        {privacyEdits.news ? "Done" : "Edit"}
+                      </button>
+                    </div>
+                    <p className="security-muted">
+                      Control whether Newsroom appears on your dashboard.
+                    </p>
+                  </div>
+                </div>
+                <div className="security-card__summary">
+                  {newsSummary.map((item) => (
+                    <span key={item} className="security-summary-chip">
+                      {item}
+                    </span>
+                  ))}
+                </div>
+                {privacyEdits.news && (
+                  <div className="security-card__body" id="privacy-news-body">
+                    <label className="profile-check">
+                      <input
+                        type="checkbox"
+                        checked={dashboardNewsEnabled}
+                        onChange={(e) => handleDashboardNewsToggle(e.target.checked)}
+                      />
+                      <span>Show Newsroom on my dashboard</span>
+                    </label>
+                  </div>
+                )}
               </div>
 
               <div className="security-card security-card-wide">
-                <h4>Profile preview</h4>
-                <p className="security-muted">
-                  Preview what others see based on your current settings.
-                </p>
+                <div className="security-card__header">
+                  <span className="security-card__icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24">
+                      <path
+                        d="M4 6h16v10H4z"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                      />
+                      <path
+                        d="M9 20h6M12 16v4"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  </span>
+                  <div className="security-card__header-content">
+                    <div className="security-card__title-row">
+                      <h4>Profile preview</h4>
+                      <button
+                        className="security-card__edit"
+                        type="button"
+                        onClick={() => togglePrivacyEdit("preview")}
+                        aria-expanded={privacyEdits.preview}
+                        aria-controls="privacy-preview-body"
+                      >
+                        {privacyEdits.preview ? "Done" : "Edit"}
+                      </button>
+                    </div>
+                    <p className="security-muted">
+                      Preview what others see based on your current settings.
+                    </p>
+                  </div>
+                </div>
+                <div className="security-card__summary">
+                  {previewSummary.map((item) => (
+                    <span key={item} className="security-summary-chip">
+                      {item}
+                    </span>
+                  ))}
+                </div>
+                {privacyEdits.preview && (
+                  <div className="security-card__body" id="privacy-preview-body">
                 <div className="preview-toggle-group">
                   {["me", "public", "followers"].map((option) => (
                     <button
@@ -4909,6 +5791,8 @@ const setProfileFromEntry = async (entry: any) => {
                     <span className="profile-preview-value">{previewActivity}</span>
                   </div>
                 </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -5092,29 +5976,6 @@ const setProfileFromEntry = async (entry: any) => {
                 {pushStatusLabel && <p className="security-muted">{pushStatusLabel}</p>}
                 {pushError && <p className="status status-error">{pushError}</p>}
               </div>
-
-              <div className="security-card">
-                <h4>Dashboard news</h4>
-                <p className="security-muted">
-                  Control whether the Newsroom feed appears on your dashboard.
-                </p>
-                <div className="profile-check">
-                  <input
-                    type="checkbox"
-                    checked={profile.notificationSettings.newsEnabled !== false}
-                    onChange={(e) =>
-                      setProfile({
-                        ...profile,
-                        notificationSettings: {
-                          ...profile.notificationSettings,
-                          newsEnabled: e.target.checked,
-                        },
-                      })
-                    }
-                  />
-                  <span>Show Newsroom on my dashboard</span>
-                </div>
-              </div>
             </div>
 
             <div className="settings-actions">
@@ -5259,169 +6120,288 @@ const setProfileFromEntry = async (entry: any) => {
         )}
 
         {!isSettingsView && (
-        <div className="panel-grid">
-          <section className="panel post-composer">
-            <div className="panel-header">
-              <div>
-                <p className="eyebrow">Share</p>
-                <h3>New Post</h3>
-                <p className="panel-sub">
-                  Share With Our Community!
-                </p>
-              </div>
+        <section className="panel profile-media">
+          <div className="panel-header profile-media__header">
+            <div>
+              <p className="eyebrow">Gallery</p>
+              <h3>Photo + Video Gallery</h3>
+              <p className="panel-sub">
+                Curate your moments and choose who can see them.
+              </p>
             </div>
-
-            <div className="post-composer__top">
-              <div className="post-composer__avatar">
-                {avatarImg ? (
-                  <img src={avatarImg} alt={displayName} loading="lazy" decoding="async" />
-                ) : (
-                  <span>{initials}</span>
-                )}
-              </div>
-              <div className="post-composer__input">
-                <textarea
-                  className="auth-input"
-                  placeholder="What's on your mind?"
-                  value={postContent}
-                  onChange={(e) => {
-                    setPostContent(e.target.value);
-                    setPostError(null);
-                  }}
-                  rows={4}
-                />
-                {linkPreviewLoading && (
-                  <span className="post-composer__hint">Loading preview...</span>
-                )}
-              </div>
+            <div className="profile-media__tabs">
+              <button
+                type="button"
+                className={`profile-media__tab${mediaTab === "all" ? " is-active" : ""}`}
+                onClick={() => setMediaTab("all")}
+              >
+                All
+              </button>
+              <button
+                type="button"
+                className={`profile-media__tab${mediaTab === "photo" ? " is-active" : ""}`}
+                onClick={() => setMediaTab("photo")}
+              >
+                Photos
+              </button>
+              <button
+                type="button"
+                className={`profile-media__tab${mediaTab === "video" ? " is-active" : ""}`}
+                onClick={() => setMediaTab("video")}
+              >
+                Videos
+              </button>
             </div>
+          </div>
 
-            {linkPreview && (
-              <LinkPreviewCard
-                preview={linkPreview}
-                url={linkPreview.url || extractFirstUrl(postContent)}
-              />
-            )}
-            {linkPreviewError && <p className="status status-error">{linkPreviewError}</p>}
-            {postFilePreviewUrl && (
-              <div className="post-composer__media-preview">
-                {postFileIsVideo ? (
+          <div className="profile-media__composer">
+            <div className="profile-media__preview">
+              {mediaFilePreview ? (
+                mediaFileIsVideo ? (
                   <video controls muted playsInline preload="metadata">
-                    <source src={postFilePreviewUrl} />
+                    <source src={mediaFilePreview} />
                   </video>
                 ) : (
-                  <img src={postFilePreviewUrl} alt="Upload preview" />
-                )}
-              </div>
-            )}
-
-            <div className="post-composer__feedback">
-              <span className="post-feedback-label">Post visibility</span>
-              <div className="post-feedback-row">
+                  <img src={mediaFilePreview} alt="Media preview" />
+                )
+              ) : (
+                <div className="profile-media__placeholder">
+                  Select a photo or video to preview.
+                </div>
+              )}
+            </div>
+            <div className="profile-media__fields">
+              <div className="profile-media__row">
+                <input
+                  className="auth-input"
+                  placeholder="Title (optional)"
+                  value={mediaTitle}
+                  onChange={(e) => setMediaTitle(e.target.value)}
+                />
                 <select
-                  className="auth-input post-feedback-select"
-                  value={postVisibility}
-                  onChange={(e) => {
-                    setPostVisibility(e.target.value);
-                    setPostError(null);
-                  }}
+                  className="auth-input profile-media__select"
+                  value={mediaVisibility}
+                  onChange={(e) =>
+                    setMediaVisibility(
+                      e.target.value as "public" | "friends" | "private" | "trusted"
+                    )
+                  }
                 >
                   <option value="public">Public</option>
                   <option value="friends">Friends</option>
                   <option value="private">Private</option>
+                  <option value="trusted">Trusted Circle</option>
                 </select>
               </div>
-            </div>
-
-            <div className="post-composer__feedback">
-              <span className="post-feedback-label">Request feedback</span>
-              <div className="post-feedback-row">
-                <select
-                  className="auth-input post-feedback-select"
-                  value={feedbackAudience}
-                  onChange={(e) => {
-                    setFeedbackAudience(e.target.value);
-                    setPostError(null);
-                  }}
-                >
-                  <option value="none">No feedback request</option>
-                  <option value="public">Public feedback</option>
-                  <option value="friends">Friends only</option>
-                  <option value="specific">Specific friend</option>
-                </select>
-                {feedbackAudience === "specific" && (
+              {mediaVisibility === "trusted" && (
+                <div className="profile-media__row">
                   <select
-                    className="auth-input post-feedback-select"
-                    value={feedbackTargetId ?? ""}
-                    onChange={(e) => {
-                      const nextId = Number(e.target.value);
-                      setFeedbackTargetId(Number.isFinite(nextId) ? nextId : null);
-                      setPostError(null);
-                    }}
-                    disabled={!friendOptions.length}
+                    className="auth-input profile-media__select"
+                    value={mediaTrustedCircleId}
+                    onChange={(e) =>
+                      setMediaTrustedCircleId(e.target.value ? Number(e.target.value) : "")
+                    }
                   >
-                    <option value="">Select a friend</option>
-                    {friendOptions.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.label}
+                    <option value="">Select a trusted circle</option>
+                    {trustedCircleOptions.map((group) => (
+                      <option key={group.id} value={group.id}>
+                        {group.name}
                       </option>
                     ))}
                   </select>
-                )}
-              </div>
-              {feedbackAudience === "specific" && friendOptions.length === 0 && (
-                <p className="post-feedback-note">
-                  Add a friend first to request feedback from a specific person.
-                </p>
+                  {trustedCircleOptions.length === 0 && (
+                    <span className="post-composer__hint">
+                      Create a trusted circle on the Friends page to use this.
+                    </span>
+                  )}
+                </div>
               )}
-            </div>
-
-            <div className="post-composer__actions">
-              <div className="post-composer__tools">
+              <textarea
+                className="auth-input profile-media__caption"
+                placeholder="Caption (optional)"
+                value={mediaCaption}
+                onChange={(e) => setMediaCaption(e.target.value)}
+                rows={3}
+              />
+              <div className="profile-media__actions">
                 <label className="post-composer__tool">
                   <input
                     type="file"
                     accept="image/*,video/*"
                     onChange={(e) => {
                       const file = e.target.files?.[0] || null;
-                      if (file && file.size > MAX_UPLOAD_BYTES) {
-                        setPostError(`Media files must be under ${MAX_UPLOAD_LABEL}.`);
-                        e.target.value = "";
-                        setPostFile(null);
+                      if (!file) {
+                        setMediaFile(null);
                         return;
                       }
-                      setPostFile(file);
-                      setPostError(null);
+                      const isVideo = isVideoFile(file);
+                      const maxBytes = isVideo ? MAX_VIDEO_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
+                      const maxLabel = isVideo ? MAX_VIDEO_UPLOAD_LABEL : MAX_UPLOAD_LABEL;
+                      if (file.size > maxBytes) {
+                        setProfileMediaError(`Media files must be under ${maxLabel}.`);
+                        e.target.value = "";
+                        setMediaFile(null);
+                        return;
+                      }
+                      setMediaFile(file);
+                      setProfileMediaError(null);
                     }}
                   />
-                  <span>{postFile ? "Change media" : "Add photo/video"}</span>
+                  <span>{mediaFile ? "Change media" : "Choose media"}</span>
                 </label>
-                <span className="post-composer__file">
-                  {postFile ? postFile.name : "No media selected"}
+                <span className="profile-media__file">
+                  {mediaFile ? mediaFile.name : "No media selected"}
                 </span>
-                {postFile && (
+                {mediaFile && (
                   <button
                     className="btn ghost"
                     type="button"
-                    onClick={() => setPostFile(null)}
+                    onClick={() => setMediaFile(null)}
                   >
                     Remove
                   </button>
                 )}
+                <button
+                  className="btn primary"
+                  type="button"
+                  onClick={createMediaItem}
+                  disabled={mediaSubmitting || !mediaFile}
+                >
+                  {mediaSubmitting ? "Uploading..." : "Add to gallery"}
+                </button>
               </div>
-              <button
-                className="btn primary"
-                type="button"
-                onClick={createPost}
-                disabled={postSubmitting}
-              >
-                {postSubmitting ? "Posting..." : "Post"}
-              </button>
+              {profileMediaError && (
+                <p className="status status-error">{profileMediaError}</p>
+              )}
             </div>
+          </div>
 
-            {postError && <p className="status status-error">{postError}</p>}
-          </section>
-        </div>
+          {profileMediaLoading && <p className="status">Loading gallery...</p>}
+          {!profileMediaLoading && filteredMedia.length === 0 && (
+            <p className="status">No gallery items yet.</p>
+          )}
+          {!profileMediaLoading && filteredMedia.length > 0 && (
+            <div className="profile-media__grid">
+              {filteredMedia.map((item, index) => {
+                const isVideo = item.kind === "video" || isVideoUrl(item.media);
+                return (
+                  <article key={String(item.id)} className="profile-media__card">
+                    <div
+                      className={`profile-media__asset${
+                        item.media ? " is-interactive" : ""
+                      }`}
+                      role={item.media ? "button" : undefined}
+                      tabIndex={item.media ? 0 : undefined}
+                      onClick={(event) => {
+                        if (!item.media) return;
+                        const target = event.target as HTMLElement;
+                        if (target.closest("button, a, input, select, textarea")) {
+                          return;
+                        }
+                        if (
+                          isVideo &&
+                          target.tagName &&
+                          target.tagName.toLowerCase() === "video"
+                        ) {
+                          return;
+                        }
+                        openMediaLightboxAt(index);
+                      }}
+                      onKeyDown={(event) => {
+                        if (!item.media) return;
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          openMediaLightboxAt(index);
+                        }
+                      }}
+                      aria-label="Open media preview"
+                    >
+                      {item.media ? (
+                        isVideo ? (
+                          <video controls preload="metadata">
+                            <source src={item.media} />
+                          </video>
+                        ) : (
+                          <img src={item.media} alt={item.title || "Photo"} />
+                        )
+                      ) : (
+                        <div className="profile-media__placeholder">No media</div>
+                      )}
+                      {item.media && (
+                        <button
+                          className="media-lightbox__open"
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openMediaLightboxAt(index);
+                          }}
+                        >
+                          View
+                        </button>
+                      )}
+                      <span className="profile-media__badge">
+                        {item.visibility || "friends"}
+                      </span>
+                    </div>
+                    <div className="profile-media__meta">
+                      <div className="profile-media__title-row">
+                        <strong>{item.title || (isVideo ? "Video" : "Photo")}</strong>
+                        {item.createdAt && (
+                          <span>{formatPostUpdateLabel(item.createdAt)}</span>
+                        )}
+                      </div>
+                      {item.caption && (
+                        <p className="profile-media__caption-text">{item.caption}</p>
+                      )}
+                      <div className="profile-media__controls">
+                        <select
+                          className="auth-input profile-media__select"
+                          value={item.visibility || "friends"}
+                          onChange={(e) =>
+                            updateMediaVisibility(
+                              item,
+                              e.target.value as ProfileMediaItem["visibility"]
+                            )
+                          }
+                        >
+                          <option value="public">Public</option>
+                          <option value="friends">Friends</option>
+                          <option value="private">Private</option>
+                          <option value="trusted">Trusted Circle</option>
+                        </select>
+                        <select
+                          className="auth-input profile-media__select"
+                          value={item.trustedCircleId ?? ""}
+                          disabled={(item.visibility || "friends") !== "trusted"}
+                          onChange={(e) =>
+                            updateMediaTrustedCircle(
+                              item,
+                              e.target.value ? Number(e.target.value) : ""
+                            )
+                          }
+                        >
+                          <option value="">Select circle</option>
+                          {trustedCircleOptions.map((group) => (
+                            <option key={group.id} value={group.id}>
+                              {group.name}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          className="btn ghost"
+                          type="button"
+                          onClick={() => deleteMediaItem(item)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </section>
         )}
 
         {!isSettingsView && (
@@ -5434,9 +6414,9 @@ const setProfileFromEntry = async (entry: any) => {
             const canDelete = Boolean(p.id ?? p.documentId);
             const feedbackLabel = feedbackLabelFor(p);
             const postKey = String(p.id);
-            const comments = postComments[postKey] ?? [];
-            const isCommentsOpen = Boolean(openCommentsFor[postKey]);
-            const showReactionPicker = reactionPickerFor === postKey;
+            const commentKey = String(p.numericId ?? p.id);
+            const comments = postComments[commentKey] ?? [];
+            const isCommentsOpen = Boolean(openCommentsFor[commentKey]);
             const showShareMenu = shareMenuFor === postKey;
             const shareUrl = buildShareUrl(postKey);
             const shareText = p.text
@@ -5445,6 +6425,10 @@ const setProfileFromEntry = async (entry: any) => {
             const encodedUrl = encodeURIComponent(shareUrl);
             const encodedText = encodeURIComponent(shareText);
             const likesCount = Number(p.likes ?? 0);
+            const reactionCounts = normalizeReactionCounts(p.reactionCounts, likesCount);
+            const thumbsUpCount = reactionCounts.thumbsUp;
+            const heartCount = reactionCounts.heart;
+            const myReaction = normalizeReactionValue(p.myReaction);
             const sharesCount = Number(p.shares ?? 0);
             const commentsCount = comments.length;
             const currentVisibility = p.visibility || "friends";
@@ -5453,9 +6437,7 @@ const setProfileFromEntry = async (entry: any) => {
               <article
                 key={String(p.id)}
                 id={`post-${postKey}`}
-                className={`post-card${
-                  showReactionPicker || showShareMenu ? " is-popover-open" : ""
-                }`}
+                className={`post-card${showShareMenu ? " is-popover-open" : ""}`}
               >
                 <div className="post-meta-bar">
                   <span className="post-meta-name">{displayName}</span>
@@ -5471,6 +6453,7 @@ const setProfileFromEntry = async (entry: any) => {
                   >
                     <option value="public">Public</option>
                     <option value="friends">Friends</option>
+                    <option value="trusted">Trusted Circle</option>
                     <option value="private">Private</option>
                   </select>
                   {canDelete && (
@@ -5512,11 +6495,25 @@ const setProfileFromEntry = async (entry: any) => {
                   )}
                   <div className="post-actions">
                     <div className="post-action-counts">
-                      <span className="post-action-count">
+                      <span
+                        className={`post-action-count${
+                          myReaction === "👍" ? " is-selected" : ""
+                        }`}
+                      >
                         <span className="post-action-count-icon" aria-hidden="true">
                           👍
                         </span>
-                        {likesCount}
+                        {thumbsUpCount}
+                      </span>
+                      <span
+                        className={`post-action-count${
+                          myReaction === "❤️" ? " is-selected" : ""
+                        }`}
+                      >
+                        <span className="post-action-count-icon" aria-hidden="true">
+                          ❤️
+                        </span>
+                        {heartCount}
                       </span>
                       <span className="post-action-count">
                         <span className="post-action-count-icon" aria-hidden="true">
@@ -5536,34 +6533,34 @@ const setProfileFromEntry = async (entry: any) => {
                       <button
                         className="post-action-btn"
                         type="button"
-                        aria-pressed={showReactionPicker}
-                        onClick={() => toggleReactionPicker(postKey)}
+                        aria-pressed={myReaction === "👍"}
+                        onClick={() => void handleReaction(p, postKey, "👍")}
                       >
                         <span className="post-action-icon" aria-hidden="true">
-                          <svg viewBox="0 0 24 24">
-                            <path d="M2 10.5A1.5 1.5 0 0 1 3.5 9h1A1.5 1.5 0 0 1 6 10.5v9A1.5 1.5 0 0 1 4.5 21h-1A1.5 1.5 0 0 1 2 19.5v-9Z" />
-                            <path d="M6 10.333V5a3 3 0 0 1 3-3h.5a.5.5 0 0 1 .5.5V8h4.65a2.5 2.5 0 0 1 2.453 2.98l-1.2 6A2.5 2.5 0 0 1 13.452 19H8a2 2 0 0 1-2-2v-6.667Z" />
-                          </svg>
+                          👍
                         </span>
                         <span>Like</span>
                       </button>
-                      {showReactionPicker && (
-                        <div className="post-action-popover">
-                          <ReactionPicker
-                            onPick={(emoji) => {
-                              setReactionPickerFor(null);
-                              void handleReaction(p, postKey, emoji);
-                            }}
-                          />
-                        </div>
-                      )}
+                    </div>
+                    <div className="post-action-group">
+                      <button
+                        className="post-action-btn"
+                        type="button"
+                        aria-pressed={myReaction === "❤️"}
+                        onClick={() => void handleReaction(p, postKey, "❤️")}
+                      >
+                        <span className="post-action-icon" aria-hidden="true">
+                          ❤️
+                        </span>
+                        <span>Heart</span>
+                      </button>
                     </div>
                     <div className="post-action-group">
                       <button
                         className="post-action-btn"
                         type="button"
                         aria-pressed={isCommentsOpen}
-                        onClick={() => toggleComments(postKey)}
+                        onClick={() => toggleComments(commentKey)}
                       >
                         <span className="post-action-icon" aria-hidden="true">
                           <svg viewBox="0 0 24 24">
@@ -5672,22 +6669,175 @@ const setProfileFromEntry = async (entry: any) => {
                             <li key={c.id} className="comment-item">
                               <div className="comment-author">{c.owner || "User"}</div>
                               <div className="comment-body">{c.body}</div>
+                              {(() => {
+                                const commentUrl = extractFirstUrl(c.body);
+                                if (!isPreviewableUrl(commentUrl)) return null;
+                                const preview = previewCache[commentUrl];
+                                if (!preview) return null;
+                                return (
+                                  <div className="comment-preview">
+                                    <LinkPreviewCard
+                                      preview={preview}
+                                      url={preview.url || commentUrl}
+                                      compact
+                                    />
+                                  </div>
+                                );
+                              })()}
                               {user?.id === c.ownerId && (
                                 <button
                                   className="btn ghost comment-delete"
                                   type="button"
                                   onClick={async () => {
+                                    const numericId =
+                                      c.numericId ??
+                                      (typeof c.id === "number" ? c.id : Number(c.id));
+                                    const removeIds = new Set<string>();
+                                    removeIds.add(String(c.id));
+                                    if (c.documentId) {
+                                      removeIds.add(String(c.documentId));
+                                    }
+                                    if (Number.isFinite(numericId)) {
+                                      removeIds.add(String(numericId));
+                                    }
                                     try {
-                                      await api.delete(`/comments/${c.id}`);
+                                      setError(null);
+                                      const attempts: string[] = [];
+                                      if (c.documentId) {
+                                        attempts.push(`/comments/${c.documentId}`);
+                                      }
+                                      if (Number.isFinite(numericId)) {
+                                        attempts.push(`/comments/${numericId}`);
+                                      }
+                                      attempts.push(`/comments/${c.id}`);
+
+                                      let removed = false;
+                                      for (const path of attempts) {
+                                        try {
+                                          await api.delete(path);
+                                          removed = true;
+                                          break;
+                                        } catch (err) {
+                                          if (
+                                            axios.isAxiosError(err) &&
+                                            err.response?.status === 404
+                                          ) {
+                                            continue;
+                                          }
+                                          throw err;
+                                        }
+                                      }
+
+                                      if (!removed) {
+                                        setError("Failed to delete comment.");
+                                        return;
+                                      }
+
                                       setPostComments((prev) => ({
                                         ...prev,
-                                        [postKey]: (prev[postKey] || []).filter(
-                                          (comment) => comment.id !== c.id
+                                        [commentKey]: (prev[commentKey] || []).filter(
+                                          (comment) => {
+                                            if (removeIds.has(String(comment.id))) {
+                                              return false;
+                                            }
+                                            if (
+                                              comment.documentId &&
+                                              removeIds.has(String(comment.documentId))
+                                            ) {
+                                              return false;
+                                            }
+                                            if (
+                                              Number.isFinite(comment.numericId) &&
+                                              removeIds.has(String(comment.numericId))
+                                            ) {
+                                              return false;
+                                            }
+                                            return true;
+                                          }
                                         ),
                                       }));
+
+                                      try {
+                                        const refreshed = await fetchCommentsForPostIds([
+                                          commentKey,
+                                        ]);
+                                        if (Object.keys(refreshed).length) {
+                                          setPostComments((prev) => ({
+                                            ...prev,
+                                            ...refreshed,
+                                          }));
+                                        }
+                                      } catch (err) {
+                                        console.warn(
+                                          "Comment refresh failed after delete",
+                                          err
+                                        );
+                                      }
                                     } catch (err) {
+                                      const status = axios.isAxiosError(err)
+                                        ? err.response?.status
+                                        : undefined;
+                                      if (status && status >= 500) {
+                                        try {
+                                          const refreshed = await fetchCommentsForPostIds([
+                                            commentKey,
+                                          ]);
+                                          let stillThere = true;
+                                          setPostComments((prev) => {
+                                            const refreshedList = refreshed[commentKey];
+                                            const nextList = Array.isArray(refreshedList)
+                                              ? refreshedList
+                                              : (prev[commentKey] || []).filter((comment) => {
+                                                  if (removeIds.has(String(comment.id))) {
+                                                    return false;
+                                                  }
+                                                  if (
+                                                    comment.documentId &&
+                                                    removeIds.has(String(comment.documentId))
+                                                  ) {
+                                                    return false;
+                                                  }
+                                                  if (
+                                                    Number.isFinite(comment.numericId) &&
+                                                    removeIds.has(String(comment.numericId))
+                                                  ) {
+                                                    return false;
+                                                  }
+                                                  return true;
+                                                });
+                                            stillThere = nextList.some((comment) => {
+                                              if (removeIds.has(String(comment.id))) {
+                                                return true;
+                                              }
+                                              if (
+                                                comment.documentId &&
+                                                removeIds.has(String(comment.documentId))
+                                              ) {
+                                                return true;
+                                              }
+                                              if (
+                                                Number.isFinite(comment.numericId) &&
+                                                removeIds.has(String(comment.numericId))
+                                              ) {
+                                                return true;
+                                              }
+                                              return false;
+                                            });
+                                            return {
+                                              ...prev,
+                                              ...refreshed,
+                                              [commentKey]: nextList,
+                                            };
+                                          });
+                                          if (!stillThere) {
+                                            return;
+                                          }
+                                        } catch {
+                                          // fall through to error message
+                                        }
+                                      }
                                       console.error("Delete comment failed", err);
-                                      setPostError("Failed to delete comment.");
+                                      setError("Failed to delete comment.");
                                     }
                                   }}
                                 >
@@ -5704,34 +6854,34 @@ const setProfileFromEntry = async (entry: any) => {
                         <input
                           className="auth-input"
                           placeholder="Add a comment..."
-                          value={commentInputs[postKey] || ""}
+                          value={commentInputs[commentKey] || ""}
                           onChange={(e) =>
                             setCommentInputs((prev) => ({
                               ...prev,
-                              [postKey]: sanitizePostText(e.target.value),
+                              [commentKey]: sanitizePostText(e.target.value),
                             }))
                           }
                         />
                         <button
                           className="btn primary"
                           type="button"
-                          disabled={!commentInputs[postKey]?.trim()}
+                          disabled={!commentInputs[commentKey]?.trim()}
                           onClick={async () => {
-                            const body = (commentInputs[postKey] || "").trim();
+                            const body = (commentInputs[commentKey] || "").trim();
                             if (!body) return;
                             try {
                               await api.post("/comments", {
                                 data: {
                                   body,
                                   target_type: "user",
-                                  target_id: p.id,
+                                  target_id: p.numericId ?? p.id,
                                 },
                               });
-                              await refreshCommentsForPost(p.id);
-                              setCommentInputs((prev) => ({ ...prev, [postKey]: "" }));
+                              await refreshCommentsForPost(p.numericId ?? p.id);
+                              setCommentInputs((prev) => ({ ...prev, [commentKey]: "" }));
                             } catch (err) {
                               console.error("Add comment failed", err);
-                              setPostError("Failed to add comment.");
+                              setError("Failed to add comment.");
                             }
                           }}
                         >
@@ -5747,6 +6897,111 @@ const setProfileFromEntry = async (entry: any) => {
         </div>
         )}
       </div>
+
+      {mediaLightboxOpen && activeMediaItem && (
+        <div
+          className="media-lightbox"
+          role="dialog"
+          aria-modal="true"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              closeMediaLightbox();
+            }
+          }}
+        >
+          <div className="media-lightbox__dialog">
+            <div className="media-lightbox__media">
+              {activeMediaItem.media ? (
+                activeMediaItem.kind === "video" ||
+                isVideoUrl(activeMediaItem.media) ? (
+                  <video controls autoPlay>
+                    <source src={activeMediaItem.media} />
+                  </video>
+                ) : (
+                  <img
+                    src={activeMediaItem.media}
+                    alt={activeMediaItem.title || "Photo"}
+                  />
+                )
+              ) : (
+                <div className="profile-media__placeholder">No media</div>
+              )}
+              {mediaLightboxItems.length > 1 && (
+                <>
+                  <button
+                    className="media-lightbox__nav media-lightbox__nav--prev"
+                    type="button"
+                    onClick={() =>
+                      setMediaLightboxIndex((prev) =>
+                        (prev - 1 + mediaLightboxItems.length) %
+                        mediaLightboxItems.length
+                      )
+                    }
+                    aria-label="Previous media"
+                  >
+                    {"<"}
+                  </button>
+                  <button
+                    className="media-lightbox__nav media-lightbox__nav--next"
+                    type="button"
+                    onClick={() =>
+                      setMediaLightboxIndex((prev) =>
+                        (prev + 1) % mediaLightboxItems.length
+                      )
+                    }
+                    aria-label="Next media"
+                  >
+                    {">"}
+                  </button>
+                  <div className="media-lightbox__counter">
+                    {mediaLightboxIndex + 1} / {mediaLightboxItems.length}
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="media-lightbox__details">
+              <div className="media-lightbox__header">
+                <div>
+                  <p className="media-lightbox__eyebrow">
+                    {activeMediaItem.kind === "video" ||
+                    isVideoUrl(activeMediaItem.media)
+                      ? "Video"
+                      : "Photo"}
+                  </p>
+                  <h3 className="media-lightbox__title">
+                    {activeMediaItem.title ||
+                      (activeMediaItem.kind === "video" ? "Video" : "Photo")}
+                  </h3>
+                </div>
+                <button
+                  className="media-lightbox__close"
+                  type="button"
+                  onClick={closeMediaLightbox}
+                >
+                  Close
+                </button>
+              </div>
+              {activeMediaItem.caption ? (
+                <p className="media-lightbox__caption">{activeMediaItem.caption}</p>
+              ) : (
+                <p className="media-lightbox__caption is-muted">
+                  No description yet.
+                </p>
+              )}
+              <div className="media-lightbox__meta">
+                <span className="media-lightbox__tag">
+                  {activeMediaItem.visibility || "friends"}
+                </span>
+                {activeMediaItem.createdAt && (
+                  <span className="media-lightbox__tag">
+                    {formatPostUpdateLabel(activeMediaItem.createdAt)}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
