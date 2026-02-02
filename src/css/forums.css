@@ -464,7 +464,7 @@
 
 .link-preview-card {
   display: grid;
-  grid-template-columns: 140px 1fr;
+  grid-template-columns: minmax(0, 140px) minmax(0, 1fr);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 16px;
   background: rgba(8, 12, 20, 0.55);
@@ -474,7 +474,7 @@
 }
 
 .link-preview-card.is-compact {
-  grid-template-columns: 110px 1fr;
+  grid-template-columns: minmax(0, 110px) minmax(0, 1fr);
   margin-top: 8px;
 }
 
@@ -486,11 +486,16 @@
     rgba(68, 210, 255, 0.15),
     rgba(15, 23, 42, 0.6)
   );
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .link-preview-media img {
   width: 100%;
   height: 100%;
+  max-width: 100%;
+  max-height: 100%;
   object-fit: cover;
   display: block;
 }
@@ -515,6 +520,7 @@
   padding: 12px 14px;
   display: grid;
   gap: 6px;
+  min-width: 0;
 }
 
 .link-preview-title {

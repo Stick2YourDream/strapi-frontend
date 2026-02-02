@@ -77,6 +77,8 @@ const NEWS_DIRECT_BASE = (import.meta.env.VITE_NEWS_API_URL ||
   "https://newsapp_backend.rousehouse.net"
 ).replace(/\/$/, "");
 const NEWS_ACCESS_MODE = String(import.meta.env.VITE_NEWS_ACCESS_MODE || "proxy");
+const FORCE_READABLE_LIST =
+  String(import.meta.env.VITE_NEWS_FORCE_READABLE_LIST || "").toLowerCase() === "true";
 type NewsRequestParams = Record<string, string | number | undefined>;
 
 const isRecord = (value: unknown): value is UnknownRecord =>
@@ -142,7 +144,9 @@ const extractImageFromHtml = (value?: string) => {
 
 const buildHeaders = () => {
   const apiKey = import.meta.env.VITE_NEWS_API_KEY;
-  return apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined;
+  const headers: Record<string, string> = { accept: "application/json" };
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+  return headers;
 };
 
 const shouldUseDirectOnly = NEWS_ACCESS_MODE === "direct";
@@ -162,7 +166,10 @@ const requestNews = async (
             params,
             headers: buildHeaders(),
           })
-        : await api.get(`${NEWS_PROXY_PATH}${path}`, { params });
+        : await api.get(`${NEWS_PROXY_PATH}${path}`, {
+            params,
+            headers: buildHeaders(),
+          });
     return res.data;
   } catch (error: any) {
     if (
@@ -360,23 +367,46 @@ const extractStatString = (payload: unknown) => {
 };
 
 export const fetchNewsArticles = async (params: NewsQueryParams) => {
-  const payload = await requestNews(
-    "/articles",
-    params,
-    shouldUseDirectOnly ? "direct" : "proxy"
-  );
-  throwIfError(payload);
-  const rows = Array.isArray(payload?.data)
-    ? payload.data
-    : Array.isArray(payload?.articles)
-    ? payload.articles
-    : Array.isArray(payload)
-    ? payload
-    : [];
-  const mapped = rows
-    .map((item: unknown, index: number) => normalizeArticle(item, index))
-    .filter(Boolean) as NewsArticle[];
-  return mapped;
+  const mode = shouldUseDirectOnly ? "direct" : "proxy";
+  const useReadableList = FORCE_READABLE_LIST;
+  const primaryPath = useReadableList ? "/articles/readable" : "/articles";
+  try {
+    const payload = await requestNews(primaryPath, params, mode);
+    throwIfError(payload);
+    const rows = Array.isArray(payload?.data)
+      ? payload.data
+      : Array.isArray(payload?.articles)
+      ? payload.articles
+      : Array.isArray(payload)
+      ? payload
+      : [];
+    const mapped = rows
+      .map((item: unknown, index: number) => normalizeArticle(item, index))
+      .filter(Boolean) as NewsArticle[];
+    return mapped;
+  } catch (error) {
+    if (!useReadableList) {
+      throw error;
+    }
+    if (axios.isAxiosError(error)) {
+      const status = error.response?.status;
+      if (status === 400 || status === 422) {
+        const payload = await requestNews("/articles", params, mode);
+        throwIfError(payload);
+        const rows = Array.isArray(payload?.data)
+          ? payload.data
+          : Array.isArray(payload?.articles)
+          ? payload.articles
+          : Array.isArray(payload)
+          ? payload
+          : [];
+        return rows
+          .map((item: unknown, index: number) => normalizeArticle(item, index))
+          .filter(Boolean) as NewsArticle[];
+      }
+    }
+    throw error;
+  }
 };
 
 export const fetchNewsProviders = async () => {
@@ -559,6 +589,12 @@ export const fetchNewsReadable = async (url: string, home?: string) => {
     shouldUseDirectOnly ? "direct" : "proxy"
   );
   throwIfError(payload);
+  if (typeof payload === "string") {
+    return { url, html: payload } as NewsReadable;
+  }
+  if (isRecord(payload) && typeof payload.data === "string") {
+    return { url, html: payload.data } as NewsReadable;
+  }
   const record = asRecord(payload?.data) ? asRecord(payload.data) : asRecord(payload);
   return {
     url: readString(record.url) || url,

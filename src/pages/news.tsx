@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "../css/dashboard.css";
 import "../css/news.css";
+import "../css/news-reader-overrides.css";
 import { useAuth } from "../context/AuthContext";
 import { useNewsPreference } from "../hooks/useNewsPreference";
 import { useUserPreferences } from "../context/UserPreferencesContext";
@@ -144,6 +145,84 @@ const mergeOptions = (primary: string[], fallback: string[], selected?: string) 
 
 const IMAGE_EXT_PATTERN = /\.(png|jpe?g|gif|webp|avif)(\?|$)/i;
 
+const sanitizeReadableHtml = (rawHtml: string, baseUrl?: string) => {
+  if (!rawHtml || typeof window === "undefined") return "";
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(rawHtml, "text/html");
+    const root =
+      doc.querySelector(".reader-shell") ||
+      doc.querySelector("#reader-content") ||
+      doc.querySelector(".reader-content") ||
+      doc.querySelector("article") ||
+      doc.body;
+    if (!root) return "";
+
+    root
+      .querySelectorAll("script, style, iframe, object, embed, link, meta, noscript")
+      .forEach((node) => node.remove());
+
+    const readControls = root.querySelector("#read-controls");
+    if (readControls) {
+      readControls.removeAttribute("hidden");
+    }
+
+    const badge = root.querySelector(".badge");
+    if (badge && badge.textContent?.toLowerCase().includes("read-only")) {
+      badge.remove();
+    }
+
+    const cleanUrl = (value: string) => {
+      const trimmed = value.trim();
+      if (!trimmed) return "";
+      if (trimmed.toLowerCase().startsWith("javascript:")) return "";
+      if (!baseUrl) return trimmed;
+      try {
+        return new URL(trimmed, baseUrl).toString();
+      } catch {
+        return trimmed;
+      }
+    };
+
+    root.querySelectorAll("*").forEach((node) => {
+      const element = node as Element;
+      Array.from(element.attributes).forEach((attr) => {
+        const name = attr.name.toLowerCase();
+        if (name.startsWith("on") || name === "style") {
+          element.removeAttribute(attr.name);
+          return;
+        }
+        if (name === "href" || name === "src") {
+          const nextValue = cleanUrl(attr.value);
+          if (!nextValue) {
+            element.removeAttribute(attr.name);
+          } else {
+            element.setAttribute(attr.name, nextValue);
+          }
+        }
+      });
+    });
+
+    root.querySelectorAll("a").forEach((node) => {
+      const link = node as HTMLAnchorElement;
+      if (!link.getAttribute("href")) return;
+      link.setAttribute("target", "_blank");
+      link.setAttribute("rel", "noreferrer");
+    });
+
+    root.querySelectorAll("img").forEach((node) => {
+      const img = node as HTMLImageElement;
+      img.setAttribute("loading", "lazy");
+      img.setAttribute("decoding", "async");
+    });
+
+    const isShell = root.classList.contains("reader-shell");
+    return (isShell ? root.outerHTML : root.innerHTML).trim();
+  } catch {
+    return "";
+  }
+};
+
 const isImageAsset = (asset: NewsAsset) => {
   if (asset.contentType?.startsWith("image/")) return true;
   if (asset.url && IMAGE_EXT_PATTERN.test(asset.url)) return true;
@@ -159,6 +238,10 @@ export default function News() {
   const profileNewsEnabled = profile?.notificationSettings?.newsEnabled !== false;
   const newsroomEnabled = appSettings?.newsroomEnabled !== false;
   const newsEnabled = (newsOverride ?? profileNewsEnabled) && newsroomEnabled;
+  const newsAccessMode = String(import.meta.env.VITE_NEWS_ACCESS_MODE || "proxy")
+    .trim()
+    .toLowerCase();
+  const isDirectNewsMode = newsAccessMode === "direct";
 
   const [query, setQuery] = useState("");
   const [provider, setProvider] = useState("");
@@ -190,10 +273,12 @@ export default function News() {
   const [readableError, setReadableError] = useState<string | null>(null);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [voiceGender, setVoiceGender] = useState<"female" | "male">("female");
+  const [voiceOverride, setVoiceOverride] = useState("");
   const [speechRate, setSpeechRate] = useState(1);
   const [isReading, setIsReading] = useState(false);
   const [isSpeechPaused, setIsSpeechPaused] = useState(false);
   const loadIdRef = useRef(0);
+  const readerHtmlRef = useRef<HTMLDivElement | null>(null);
   const imageCacheRef = useRef<Record<string, string>>({});
   const lastFilterKeyRef = useRef("");
   const lastPageRef = useRef(1);
@@ -214,6 +299,10 @@ export default function News() {
     let active = true;
 
     const loadMeta = async () => {
+      if (isDirectNewsMode) {
+        setStatsError("Stats are unavailable in direct mode.");
+        return;
+      }
       try {
         const results = await Promise.allSettled([
           fetchNewsProviders(),
@@ -293,7 +382,7 @@ export default function News() {
     return () => {
       active = false;
     };
-  }, [newsEnabled]);
+  }, [newsEnabled, isDirectNewsMode]);
 
   const speechSupported =
     typeof window !== "undefined" && "speechSynthesis" in window;
@@ -317,6 +406,12 @@ export default function News() {
 
   const preferredVoice = useMemo(() => {
     if (!voices.length) return null;
+    if (voiceOverride) {
+      const match = voices.find(
+        (voice) => (voice.voiceURI || voice.name) === voiceOverride || voice.name === voiceOverride
+      );
+      if (match) return match;
+    }
     const hints = voiceGender === "female" ? FEMALE_VOICE_HINTS : MALE_VOICE_HINTS;
     const candidates = voices.filter((voice) => voice.lang?.startsWith("en"));
     const list = candidates.length ? candidates : voices;
@@ -325,7 +420,7 @@ export default function News() {
       return hints.some((hint) => value.includes(hint));
     });
     return match || list[0] || null;
-  }, [voiceGender, voices]);
+  }, [voiceGender, voiceOverride, voices]);
 
   const stopSpeech = useCallback(() => {
     if (!speechSupported) return;
@@ -613,6 +708,16 @@ export default function News() {
 
   const readableTitle = readableArticle?.title || activeArticle?.title || "Article";
   const readableAuthor = readableArticle?.author;
+  const readableHtml = useMemo(() => {
+    const html = readableArticle?.html;
+    if (!html) return "";
+    return sanitizeReadableHtml(
+      html,
+      readableArticle?.url || activeArticle?.url || undefined
+    );
+  }, [activeArticle?.url, readableArticle?.html, readableArticle?.url]);
+  const hasReadableHtml = Boolean(readableHtml);
+  const hasReaderNav = hasReadableHtml && readableHtml.includes("reader-nav");
   const readableMetaLine = useMemo(() => {
     const meta = [
       readableArticle?.source || activeArticle?.source,
@@ -624,6 +729,30 @@ export default function News() {
     readableArticle?.publishedAt || activeArticle?.publishedAt
   );
   const readableText = useMemo(() => {
+    const html = readableArticle?.html;
+    if (html && typeof window !== "undefined") {
+      try {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, "text/html");
+        const content =
+          doc.querySelector("#reader-content") ||
+          doc.querySelector(".reader-content") ||
+          doc.querySelector("article");
+        const text =
+          content && content instanceof HTMLElement
+            ? content.innerText || content.textContent || ""
+            : content?.textContent || "";
+        if (text.trim()) {
+          return text.replace(/\s+\n/g, "\n").trim();
+        }
+        const fallback = doc.body?.innerText || doc.body?.textContent || "";
+        if (fallback.trim()) {
+          return fallback.replace(/\s+\n/g, "\n").trim();
+        }
+      } catch {
+        // fall back to raw parsing below
+      }
+    }
     const rawText =
       readableArticle?.text ||
       readableArticle?.content ||
@@ -643,12 +772,17 @@ export default function News() {
       }
     }
     return rawText.replace(/\s+\n/g, "\n").trim();
-  }, [activeArticle?.summary, readableArticle?.content, readableArticle?.html, readableArticle?.text]);
+  }, [
+    activeArticle?.summary,
+    readableArticle?.content,
+    readableArticle?.html,
+    readableArticle?.text,
+  ]);
   const readableParagraphs = useMemo(() => {
     if (!readableText) return [];
     return readableText
       .split(/\n{2,}/)
-      .map((paragraph) => paragraph.trim())
+      .map((paragraph: string) => paragraph.trim())
       .filter(Boolean);
   }, [readableText]);
   const fallbackParagraphs = useMemo(() => {
@@ -657,6 +791,8 @@ export default function News() {
     return [];
   }, [activeArticle?.summary, readableParagraphs]);
   const hasFallbackParagraphs = fallbackParagraphs.length > 0;
+  const newsModalBackground =
+    getBackgroundStyle("news") || getBackgroundStyle("dashboard");
 
   useEffect(() => {
     speechTextRef.current = readableText;
@@ -745,7 +881,7 @@ export default function News() {
         .replace(/^-+|-+$/g, "")
         .slice(0, 60) || "article";
       const contentHtml = readableParagraphs
-        .map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`)
+        .map((paragraph: string) => `<p>${escapeHtml(paragraph)}</p>`)
         .join("");
       const html = `<!doctype html><html><head><meta charset="utf-8" /><title>${escapeHtml(
         readableTitle
@@ -789,6 +925,189 @@ export default function News() {
   }, [stopSpeech]);
 
   useEffect(() => {
+    const root = readerHtmlRef.current;
+    if (!root) return;
+
+    const shareBtn = root.querySelector<HTMLButtonElement>("#share-btn");
+    const pdfBtn = root.querySelector<HTMLButtonElement>("#pdf-btn");
+    const readBtn = root.querySelector<HTMLButtonElement>("#read-btn");
+    const homeBtn = root.querySelector<HTMLButtonElement>("#home-btn");
+    const originLink = root.querySelector<HTMLAnchorElement>("#origin-link");
+    const readPauseBtn = root.querySelector<HTMLButtonElement>("#read-pause");
+    const readResumeBtn = root.querySelector<HTMLButtonElement>("#read-resume");
+    const readStopBtn = root.querySelector<HTMLButtonElement>("#read-stop");
+    const readRateInput = root.querySelector<HTMLInputElement>("#read-rate");
+    const readVoiceSelect = root.querySelector<HTMLSelectElement>("#read-voice");
+    const readProgress = root.querySelector<HTMLElement>("#read-progress");
+
+    if (originLink && activeArticle?.url) {
+      originLink.href = activeArticle.url;
+    }
+
+    const handleShare = async () => {
+      if (!activeArticle?.url) return;
+      const title = readableTitle || "Article";
+      if (navigator.share) {
+        try {
+          await navigator.share({ title, url: activeArticle.url });
+        } catch {
+          // ignore share cancel
+        }
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(activeArticle.url);
+      } catch {
+        // ignore clipboard failures
+      }
+    };
+
+    const handlePdf = () => downloadArticle("pdf");
+    const handleRead = () => togglePauseSpeech();
+    const handleHome = () => handleCloseReader();
+    const handlePause = () => {
+      if (!speechSupported) return;
+      if (!isReading) {
+        startSpeech(0);
+        return;
+      }
+      if (!window.speechSynthesis.paused) {
+        window.speechSynthesis.pause();
+        setIsSpeechPaused(true);
+      }
+    };
+    const handleResume = () => {
+      if (!speechSupported) return;
+      if (!isReading) {
+        startSpeech(0);
+        return;
+      }
+      if (window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+        setIsSpeechPaused(false);
+      }
+    };
+    const handleStop = () => stopSpeech();
+    const handleRate = (event: Event) => {
+      const target = event.target as HTMLInputElement | null;
+      if (!target) return;
+      updateSpeechRate(Number(target.value));
+    };
+    const handleVoice = (event: Event) => {
+      const target = event.target as HTMLSelectElement | null;
+      if (!target) return;
+      setVoiceOverride(target.value);
+    };
+
+    if (readRateInput) {
+      readRateInput.value = String(speechRate);
+    }
+    if (readVoiceSelect) {
+      const list = voices.length ? voices : window.speechSynthesis?.getVoices() || [];
+      readVoiceSelect.innerHTML = "";
+      const defaultOption = document.createElement("option");
+      defaultOption.value = "";
+      defaultOption.textContent = "System default";
+      readVoiceSelect.appendChild(defaultOption);
+      list.forEach((voice) => {
+        const option = document.createElement("option");
+        const value = voice.voiceURI || voice.name;
+        option.value = value;
+        option.textContent = voice.name + (voice.lang ? ` (${voice.lang})` : "");
+        readVoiceSelect.appendChild(option);
+      });
+      const preferredId = preferredVoice ? preferredVoice.voiceURI || preferredVoice.name : "";
+      readVoiceSelect.value = voiceOverride || preferredId || "";
+    }
+
+    if (readProgress) {
+      readProgress.textContent = isReading
+        ? isSpeechPaused
+          ? "Paused."
+          : "Reading..."
+        : "";
+    }
+
+    shareBtn?.addEventListener("click", handleShare);
+    pdfBtn?.addEventListener("click", handlePdf);
+    readBtn?.addEventListener("click", handleRead);
+    homeBtn?.addEventListener("click", handleHome);
+    readPauseBtn?.addEventListener("click", handlePause);
+    readResumeBtn?.addEventListener("click", handleResume);
+    readStopBtn?.addEventListener("click", handleStop);
+    readRateInput?.addEventListener("input", handleRate);
+    readRateInput?.addEventListener("change", handleRate);
+    readVoiceSelect?.addEventListener("change", handleVoice);
+
+    return () => {
+      shareBtn?.removeEventListener("click", handleShare);
+      pdfBtn?.removeEventListener("click", handlePdf);
+      readBtn?.removeEventListener("click", handleRead);
+      homeBtn?.removeEventListener("click", handleHome);
+      readPauseBtn?.removeEventListener("click", handlePause);
+      readResumeBtn?.removeEventListener("click", handleResume);
+      readStopBtn?.removeEventListener("click", handleStop);
+      readRateInput?.removeEventListener("input", handleRate);
+      readRateInput?.removeEventListener("change", handleRate);
+      readVoiceSelect?.removeEventListener("change", handleVoice);
+    };
+  }, [
+    activeArticle?.url,
+    downloadArticle,
+    handleCloseReader,
+    readableTitle,
+    isReading,
+    isSpeechPaused,
+    speechRate,
+    speechSupported,
+    startSpeech,
+    stopSpeech,
+    togglePauseSpeech,
+    updateSpeechRate,
+    voiceOverride,
+    preferredVoice,
+    voices,
+  ]);
+
+  useEffect(() => {
+    const root = readerHtmlRef.current;
+    if (!root) return;
+    const readBtn = root.querySelector<HTMLButtonElement>("#read-btn");
+    const readPauseBtn = root.querySelector<HTMLButtonElement>("#read-pause");
+    const readResumeBtn = root.querySelector<HTMLButtonElement>("#read-resume");
+    const readStopBtn = root.querySelector<HTMLButtonElement>("#read-stop");
+    const readProgress = root.querySelector<HTMLElement>("#read-progress");
+    const readRateInput = root.querySelector<HTMLInputElement>("#read-rate");
+    if (readBtn) {
+      readBtn.textContent = isReading
+        ? isSpeechPaused
+          ? "Resume"
+          : "Pause"
+        : "Read aloud";
+      readBtn.disabled = !readableText.trim();
+    }
+    if (readPauseBtn) {
+      readPauseBtn.disabled = !isReading || isSpeechPaused;
+    }
+    if (readResumeBtn) {
+      readResumeBtn.disabled = !isReading || !isSpeechPaused;
+    }
+    if (readStopBtn) {
+      readStopBtn.disabled = !isReading;
+    }
+    if (readProgress) {
+      readProgress.textContent = isReading
+        ? isSpeechPaused
+          ? "Paused."
+          : "Reading..."
+        : "";
+    }
+    if (readRateInput) {
+      readRateInput.value = String(speechRate);
+    }
+  }, [isReading, isSpeechPaused, readableText, readableHtml, speechRate]);
+
+  useEffect(() => {
     if (!activeArticle) return;
     const handleKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -809,7 +1128,7 @@ export default function News() {
         <div className="dash-hero news-hero">
           <div className="dash-hero__text">
             <p className="eyebrow">Newsroom</p>
-            <h1>Daily Signal</h1>
+            <h1>Powered By Daily Signal</h1>
             <p className="subhead">
               Discover the latest stories, trending topics, and conversation starters.
             </p>
@@ -1138,11 +1457,12 @@ export default function News() {
               role="dialog"
               aria-modal="true"
               aria-labelledby="news-reader-title"
+              style={newsModalBackground}
               onClick={(event) => event.stopPropagation()}
             >
               <header className="news-reader-header">
                 <div>
-                  <p className="news-reader-eyebrow">Read-only view</p>
+                  <p className="news-reader-eyebrow" aria-hidden="true" />
                   <h2 id="news-reader-title">{readableTitle}</h2>
                   <div className="news-reader-meta">
                     <span>{readableMetaLine}</span>
@@ -1160,110 +1480,129 @@ export default function News() {
                 </button>
               </header>
 
-              <div className="news-reader-actions">
-                <a
-                  className="news-reader-link"
-                  href={activeArticle.url}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Read original story
-                </a>
-                <div className="news-reader-downloads">
-                  <button
-                    type="button"
-                    className="btn ghost"
-                    onClick={() => downloadArticle("pdf")}
-                    disabled={!readableText.trim()}
-                  >
-                    Download PDF
-                  </button>
-                  <button
-                    type="button"
-                    className="btn ghost"
-                    onClick={() => downloadArticle("doc")}
-                    disabled={!readableText.trim()}
-                  >
-                    Download DOC
-                  </button>
-                  <button
-                    type="button"
-                    className="btn ghost"
-                    onClick={() => downloadArticle("docx")}
-                    disabled={!readableText.trim()}
-                  >
-                    Download DOCX
-                  </button>
-                </div>
-              </div>
-
-              {speechSupported && (
-                <div className="news-reader-voice">
-                  <label>
-                    <span>Voice</span>
-                    <select
-                      className="auth-input"
-                      value={voiceGender}
-                      onChange={(event) =>
-                        setVoiceGender(event.target.value as "female" | "male")
-                      }
+              {!hasReaderNav && (
+                <>
+                  <div className="news-reader-actions">
+                    <a
+                      className="news-reader-link"
+                      href={activeArticle.url}
+                      target="_blank"
+                      rel="noreferrer"
                     >
-                      <option value="female">Woman voice</option>
-                      <option value="male">Man voice</option>
-                    </select>
-                  </label>
-                  <label className="news-reader-rate">
-                    <span>Speed</span>
-                    <input
-                      type="range"
-                      min={0.75}
-                      max={1.5}
-                      step={0.05}
-                      value={speechRate}
-                      onChange={(event) =>
-                        updateSpeechRate(Number(event.target.value))
-                      }
-                    />
-                    <span className="news-reader-rate-value">
-                      {speechRate.toFixed(2)}x
-                    </span>
-                  </label>
-                  <div className="news-reader-voice-actions">
-                    <button
-                      type="button"
-                      className="btn primary"
-                      onClick={togglePauseSpeech}
-                      disabled={!readableText.trim()}
-                    >
-                      {isReading
-                        ? isSpeechPaused
-                          ? "Resume"
-                          : "Pause"
-                        : "Read aloud"}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn ghost"
-                      onClick={stopSpeech}
-                      disabled={!isReading}
-                    >
-                      Stop
-                    </button>
+                      Read original story
+                    </a>
+                    <div className="news-reader-downloads">
+                      <button
+                        type="button"
+                        className="btn ghost"
+                        onClick={() => downloadArticle("pdf")}
+                        disabled={!readableText.trim()}
+                      >
+                        Download PDF
+                      </button>
+                      <button
+                        type="button"
+                        className="btn ghost"
+                        onClick={() => downloadArticle("doc")}
+                        disabled={!readableText.trim()}
+                      >
+                        Download DOC
+                      </button>
+                      <button
+                        type="button"
+                        className="btn ghost"
+                        onClick={() => downloadArticle("docx")}
+                        disabled={!readableText.trim()}
+                      >
+                        Download DOCX
+                      </button>
+                    </div>
                   </div>
-                </div>
+
+                  {speechSupported && (
+                    <div className="news-reader-voice">
+                      <label>
+                        <span>Voice</span>
+                        <select
+                          className="auth-input"
+                          value={voiceGender}
+                          onChange={(event) =>
+                            setVoiceGender(event.target.value as "female" | "male")
+                          }
+                        >
+                          <option value="female">Woman voice</option>
+                          <option value="male">Man voice</option>
+                        </select>
+                      </label>
+                      <label className="news-reader-rate">
+                        <span>Speed</span>
+                        <input
+                          type="range"
+                          min={0.75}
+                          max={1.5}
+                          step={0.05}
+                          value={speechRate}
+                          onChange={(event) =>
+                            updateSpeechRate(Number(event.target.value))
+                          }
+                        />
+                        <span className="news-reader-rate-value">
+                          {speechRate.toFixed(2)}x
+                        </span>
+                      </label>
+                      <div className="news-reader-voice-actions">
+                        <button
+                          type="button"
+                          className="btn primary"
+                          onClick={togglePauseSpeech}
+                          disabled={!readableText.trim()}
+                        >
+                          {isReading
+                            ? isSpeechPaused
+                              ? "Resume"
+                              : "Pause"
+                            : "Read aloud"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn ghost"
+                          onClick={stopSpeech}
+                          disabled={!isReading}
+                        >
+                          Stop
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
 
-              <div className="news-reader-content">
+              <div className="news-reader-content news-reader-theme">
                 {readableLoading && <p className="status">Loading article...</p>}
-                {!readableLoading && readableError && !hasFallbackParagraphs && (
+                {!readableLoading &&
+                  readableError &&
+                  !hasReadableHtml &&
+                  !hasFallbackParagraphs && (
                   <p className="status status-error">{readableError}</p>
                 )}
+                {!readableLoading && hasReadableHtml && (
+                  <div
+                    ref={readerHtmlRef}
+                    className="news-reader-article"
+                    dangerouslySetInnerHTML={{ __html: readableHtml }}
+                  />
+                )}
                 {!readableLoading &&
-                  hasFallbackParagraphs &&
-                  fallbackParagraphs.map((paragraph, index) => (
-                    <p key={`${activeArticle.id}-${index}`}>{paragraph}</p>
-                  ))}
+                  !hasReadableHtml &&
+                  hasFallbackParagraphs && (
+                    <article className="reader-content news-reader-article">
+                      {fallbackParagraphs.map((paragraph: string, index: number) => (
+                        <p key={`${activeArticle.id}-${index}`}>{paragraph}</p>
+                      ))}
+                    </article>
+                  )}
                 {!readableLoading &&
+                  !hasReadableHtml &&
                   !hasFallbackParagraphs &&
                   !readableError && (
                     <p className="status">

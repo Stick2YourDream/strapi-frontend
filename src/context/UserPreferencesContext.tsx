@@ -9,11 +9,16 @@ import {
   PROFILE_PII_CLEAR_FIELDS,
 } from "../utils/profile-e2ee";
 
-export type PageKey = "dashboard" | "profile" | "friends" | "forums";
+export type PageKey = "dashboard" | "profile" | "friends" | "forums" | "news";
 
 type BackgroundPrefs = {
   color?: string;
+  colorOpacity?: number;
   image?: string;
+  gradientStart?: string;
+  gradientEnd?: string;
+  gradientAngle?: number;
+  gradientOpacity?: number;
 };
 
 type ChatPrefs = {
@@ -45,6 +50,7 @@ const DEFAULT_PREFERENCES: UserPreferences = {
     profile: {},
     friends: {},
     forums: {},
+    news: {},
   },
   chat: {
     width: 360,
@@ -57,6 +63,38 @@ const DEFAULT_PREFERENCES: UserPreferences = {
 
 const STORAGE_KEY = "user_preferences_v1";
 const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
+
+const clamp = (value: number, min = 0, max = 1) => Math.min(max, Math.max(min, value));
+
+const hexToRgba = (value: string, alpha: number) => {
+  const hex = (value || "").replace("#", "");
+  if (hex.length === 3) {
+    const r = parseInt(hex[0] + hex[0], 16);
+    const g = parseInt(hex[1] + hex[1], 16);
+    const b = parseInt(hex[2] + hex[2], 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+  if (hex.length === 6) {
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+  return value;
+};
+
+const applyOpacityToColor = (value: string, alpha: number) => {
+  const trimmed = (value || "").trim();
+  if (!trimmed) return "";
+  const lowered = trimmed.toLowerCase();
+  if (lowered.startsWith("rgb") || lowered.startsWith("hsl")) {
+    return trimmed;
+  }
+  if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(trimmed)) {
+    return hexToRgba(trimmed, alpha);
+  }
+  return trimmed;
+};
 
 const normalizeImage = (value?: string) => {
   if (value === undefined) return undefined;
@@ -85,15 +123,36 @@ const mergeBackgrounds = (
   incoming: any
 ): Record<PageKey, BackgroundPrefs> => {
   const next: Record<PageKey, BackgroundPrefs> = { ...current };
-  (["dashboard", "profile", "friends"] as PageKey[]).forEach((page) => {
+  (Object.keys(current) as PageKey[]).forEach((page) => {
     const entry = incoming?.[page];
     if (entry && typeof entry === "object") {
       const color = typeof entry.color === "string" ? entry.color : undefined;
       const image = typeof entry.image === "string" ? normalizeImage(entry.image) : undefined;
+      const colorOpacity =
+        typeof entry.colorOpacity === "number" && Number.isFinite(entry.colorOpacity)
+          ? clamp(entry.colorOpacity)
+          : undefined;
+      const gradientStart =
+        typeof entry.gradientStart === "string" ? entry.gradientStart : undefined;
+      const gradientEnd =
+        typeof entry.gradientEnd === "string" ? entry.gradientEnd : undefined;
+      const gradientAngle =
+        typeof entry.gradientAngle === "number" && Number.isFinite(entry.gradientAngle)
+          ? entry.gradientAngle
+          : undefined;
+      const gradientOpacity =
+        typeof entry.gradientOpacity === "number" && Number.isFinite(entry.gradientOpacity)
+          ? clamp(entry.gradientOpacity)
+          : undefined;
       next[page] = {
         ...current[page],
         ...(color !== undefined ? { color } : {}),
+        ...(colorOpacity !== undefined ? { colorOpacity } : {}),
         ...(image !== undefined ? { image } : {}),
+        ...(gradientStart !== undefined ? { gradientStart } : {}),
+        ...(gradientEnd !== undefined ? { gradientEnd } : {}),
+        ...(gradientAngle !== undefined ? { gradientAngle } : {}),
+        ...(gradientOpacity !== undefined ? { gradientOpacity } : {}),
       };
     }
   });
@@ -299,15 +358,42 @@ export const UserPreferencesProvider = ({ children }: { children: React.ReactNod
       const bg = preferences.backgrounds[page];
       const color = (bg?.color || "").trim();
       const image = (normalizeImage(bg?.image || "") || "").trim();
-      if (!color && !image) return undefined;
+      const hasGradient = Boolean(bg?.gradientStart || bg?.gradientEnd);
+      if (!color && !image && !hasGradient) return undefined;
 
-      const overlay =
-        "linear-gradient(120deg, rgba(7, 9, 17, 0.65), rgba(7, 9, 17, 0.92))";
-      const imageLayer = image ? `url(\"${image}\")` : "none";
-      const backgroundImage = image ? `${overlay}, ${imageLayer}` : "none";
+      const colorOpacity = clamp(
+        typeof bg?.colorOpacity === "number" ? bg.colorOpacity : 1
+      );
+      const gradientOpacity = clamp(
+        typeof bg?.gradientOpacity === "number" ? bg.gradientOpacity : 0.75
+      );
+      const gradientStart = (bg?.gradientStart || "#2563eb").trim();
+      const gradientEnd = (bg?.gradientEnd || "#22d3ee").trim();
+      const gradientAngle =
+        typeof bg?.gradientAngle === "number" && Number.isFinite(bg.gradientAngle)
+          ? bg.gradientAngle
+          : 135;
+
+      const overlay = hasGradient
+        ? `linear-gradient(${gradientAngle}deg, ${applyOpacityToColor(
+            gradientStart || "#2563eb",
+            gradientOpacity
+          )}, ${applyOpacityToColor(gradientEnd || "#22d3ee", gradientOpacity)})`
+        : image
+        ? "linear-gradient(120deg, rgba(7, 9, 17, 0.65), rgba(7, 9, 17, 0.92))"
+        : "";
+
+      const imageLayer = image ? `url(\"${image}\")` : "";
+      const backgroundImage = image
+        ? overlay
+          ? `${overlay}, ${imageLayer}`
+          : imageLayer
+        : overlay || "none";
 
       const style: CSSProperties = {
-        backgroundColor: color || "#0b0d14",
+        backgroundColor: color
+          ? applyOpacityToColor(color, colorOpacity)
+          : "#0b0d14",
         backgroundImage,
         backgroundSize: image ? "cover" : undefined,
         backgroundPosition: image ? "center" : undefined,

@@ -55,7 +55,18 @@ interface ProfileSummary {
   city?: string;
   handle?: string;
   avatarUrl?: string;
-  backgrounds?: Record<string, { color?: string; image?: string }>;
+  backgrounds?: Record<
+    string,
+    {
+      color?: string;
+      colorOpacity?: number;
+      image?: string;
+      gradientStart?: string;
+      gradientEnd?: string;
+      gradientAngle?: number;
+      gradientOpacity?: number;
+    }
+  >;
   profileVisibility?: ProfileVisibility;
   privacySettings?: PrivacySettings;
   searchIndexingEnabled?: boolean;

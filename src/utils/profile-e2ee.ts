@@ -29,7 +29,18 @@ export type ProfilePayload = {
   bio?: string;
   phone?: string;
   phoneDialCode?: string;
-  backgrounds?: Record<string, { color?: string; image?: string }>;
+  backgrounds?: Record<
+    string,
+    {
+      color?: string;
+      colorOpacity?: number;
+      image?: string;
+      gradientStart?: string;
+      gradientEnd?: string;
+      gradientAngle?: number;
+      gradientOpacity?: number;
+    }
+  >;
   intent?: string;
   onboardingComplete?: boolean;
   profileVisibility?: ProfileVisibility;

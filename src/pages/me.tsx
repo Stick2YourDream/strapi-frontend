@@ -1314,10 +1314,54 @@ export default function Me() {
   }, []);
   const currentBackground = preferences.backgrounds.dashboard;
   const appearanceColor = currentBackground.color || "#0b0d14";
+  const appearanceColorOpacity =
+    typeof currentBackground.colorOpacity === "number" &&
+    Number.isFinite(currentBackground.colorOpacity)
+      ? currentBackground.colorOpacity
+      : 1;
+  const appearanceGradientStart = currentBackground.gradientStart || "#2563eb";
+  const appearanceGradientEnd = currentBackground.gradientEnd || "#22d3ee";
+  const appearanceGradientAngle =
+    typeof currentBackground.gradientAngle === "number" &&
+    Number.isFinite(currentBackground.gradientAngle)
+      ? currentBackground.gradientAngle
+      : 135;
+  const appearanceGradientOpacity =
+    typeof currentBackground.gradientOpacity === "number" &&
+    Number.isFinite(currentBackground.gradientOpacity)
+      ? currentBackground.gradientOpacity
+      : 0.75;
+  const appearanceGradientEnabled = Boolean(
+    currentBackground.gradientStart || currentBackground.gradientEnd
+  );
 
   const handleBackgroundColor = (value: string) => {
     setAppearanceError(null);
     setBackgroundAll({ color: value });
+  };
+
+  const handleBackgroundColorOpacity = (value: number) => {
+    const next = Math.min(1, Math.max(0, value));
+    const nextColor = currentBackground.color || "#0b0d14";
+    setBackgroundAll({ colorOpacity: next, color: nextColor });
+  };
+
+  const toggleGradient = (enabled: boolean) => {
+    if (enabled) {
+      setBackgroundAll({
+        gradientStart: appearanceGradientStart || "#2563eb",
+        gradientEnd: appearanceGradientEnd || "#22d3ee",
+        gradientAngle: Number.isFinite(appearanceGradientAngle)
+          ? appearanceGradientAngle
+          : 135,
+      });
+      return;
+    }
+    setBackgroundAll({
+      gradientStart: "",
+      gradientEnd: "",
+      gradientAngle: 135,
+    });
   };
 
   const handleBackgroundImage = async (file?: File | null) => {
@@ -4845,7 +4889,7 @@ const setProfileFromEntry = async (entry: any) => {
                 <p className="eyebrow">Style</p>
                 <h4>Background &amp; Chat</h4>
                 <p className="profile-appearance-sub">
-                  Update the background for dashboard, friends, and profile in one place.
+                  Update the background for dashboard, friends, profile, and news in one place.
                 </p>
               </div>
               <button
@@ -4883,6 +4927,124 @@ const setProfileFromEntry = async (entry: any) => {
                       Leave blank to use the default gradient.
                     </small>
                   </label>
+
+                  <label className="profile-field">
+                    <span className="profile-field-label">Background color opacity</span>
+                    <input
+                      className="appearance-range"
+                      type="range"
+                      min={0.1}
+                      max={1}
+                      step={0.05}
+                      value={appearanceColorOpacity}
+                      onChange={(e) =>
+                        handleBackgroundColorOpacity(Number(e.target.value))
+                      }
+                    />
+                    <small className="profile-appearance-sub">
+                      Current opacity: {Math.round(appearanceColorOpacity * 100)}%
+                    </small>
+                  </label>
+
+                  <div className="profile-field">
+                    <span className="profile-field-label">Background gradient</span>
+                    <div className="appearance-gradient-toggle">
+                      <input
+                        type="checkbox"
+                        checked={appearanceGradientEnabled}
+                        onChange={(e) => toggleGradient(e.target.checked)}
+                      />
+                      <span>Enable gradient overlay</span>
+                    </div>
+                    {appearanceGradientEnabled && (
+                      <div className="appearance-gradient-grid">
+                        <div>
+                          <span className="profile-field-label">Gradient start</span>
+                          <div className="appearance-color-row">
+                            <input
+                              type="color"
+                              value={appearanceGradientStart}
+                              onChange={(e) =>
+                                setBackgroundAll({ gradientStart: e.target.value })
+                              }
+                              aria-label="Gradient start color"
+                            />
+                            <input
+                              className="auth-input"
+                              value={currentBackground.gradientStart || ""}
+                              placeholder="#2563eb"
+                              onChange={(e) =>
+                                setBackgroundAll({
+                                  gradientStart: e.target.value.trim(),
+                                })
+                              }
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <span className="profile-field-label">Gradient end</span>
+                          <div className="appearance-color-row">
+                            <input
+                              type="color"
+                              value={appearanceGradientEnd}
+                              onChange={(e) =>
+                                setBackgroundAll({ gradientEnd: e.target.value })
+                              }
+                              aria-label="Gradient end color"
+                            />
+                            <input
+                              className="auth-input"
+                              value={currentBackground.gradientEnd || ""}
+                              placeholder="#22d3ee"
+                              onChange={(e) =>
+                                setBackgroundAll({
+                                  gradientEnd: e.target.value.trim(),
+                                })
+                              }
+                            />
+                          </div>
+                        </div>
+                        <label className="profile-field">
+                          <span className="profile-field-label">Gradient angle</span>
+                          <input
+                            className="appearance-range"
+                            type="range"
+                            min={0}
+                            max={360}
+                            step={1}
+                            value={appearanceGradientAngle}
+                            onChange={(e) =>
+                              setBackgroundAll({
+                                gradientAngle: Number(e.target.value),
+                              })
+                            }
+                          />
+                          <small className="profile-appearance-sub">
+                            {appearanceGradientAngle}°
+                          </small>
+                        </label>
+                        <label className="profile-field">
+                          <span className="profile-field-label">Gradient opacity</span>
+                          <input
+                            className="appearance-range"
+                            type="range"
+                            min={0.1}
+                            max={1}
+                            step={0.05}
+                            value={appearanceGradientOpacity}
+                            onChange={(e) =>
+                              setBackgroundAll({
+                                gradientOpacity: Number(e.target.value),
+                              })
+                            }
+                          />
+                          <small className="profile-appearance-sub">
+                            {Math.round(appearanceGradientOpacity * 100)}%
+                          </small>
+                        </label>
+                      </div>
+                    )}
+                  </div>
 
                   <label className="profile-field">
                     <span className="profile-field-label">Background image</span>
