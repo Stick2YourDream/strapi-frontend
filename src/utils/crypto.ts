@@ -52,11 +52,128 @@ const fromBase64 = (value: string) => {
   return bytes;
 };
 
-export const getStoredKey = async <T>(key: string) =>
-  withStore<T | null>("readonly", (store) => store.get(key));
+type SerializedCryptoKey = {
+  __type: "crypto-key";
+  format: "jwk" | "raw";
+  algorithm: "ECDH" | "AES-GCM";
+  usages: KeyUsage[];
+  extractable: boolean;
+  data: JsonWebKey | string;
+};
 
-export const setStoredKey = async (key: string, value: unknown) =>
-  withStore("readwrite", (store) => store.put(value, key));
+const isCryptoKeyLike = (value: unknown): value is CryptoKey => {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as CryptoKey;
+  return (
+    typeof (candidate as { type?: unknown }).type === "string" &&
+    typeof (candidate as { algorithm?: unknown }).algorithm === "object" &&
+    typeof (candidate as { extractable?: unknown }).extractable === "boolean" &&
+    Array.isArray((candidate as { usages?: unknown }).usages)
+  );
+};
+
+const isSerializedCryptoKey = (value: unknown): value is SerializedCryptoKey => {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as SerializedCryptoKey;
+  return (
+    candidate.__type === "crypto-key" &&
+    (candidate.format === "jwk" || candidate.format === "raw") &&
+    (candidate.algorithm === "ECDH" || candidate.algorithm === "AES-GCM")
+  );
+};
+
+const serializeCryptoKey = async (key: CryptoKey): Promise<SerializedCryptoKey> => {
+  const algorithmName = key.algorithm?.name;
+  const usages = Array.isArray(key.usages) ? key.usages : [];
+  const extractable = Boolean(key.extractable);
+  if (algorithmName === "ECDH") {
+    const jwk = await crypto.subtle.exportKey("jwk", key);
+    return {
+      __type: "crypto-key",
+      format: "jwk",
+      algorithm: "ECDH",
+      usages,
+      extractable,
+      data: jwk,
+    };
+  }
+  if (algorithmName === "AES-GCM") {
+    const raw = await crypto.subtle.exportKey("raw", key);
+    return {
+      __type: "crypto-key",
+      format: "raw",
+      algorithm: "AES-GCM",
+      usages,
+      extractable,
+      data: toBase64(raw),
+    };
+  }
+  throw new Error(`Unsupported key algorithm: ${String(algorithmName)}`);
+};
+
+const deserializeCryptoKey = async (payload: SerializedCryptoKey): Promise<CryptoKey> => {
+  const usages = Array.isArray(payload.usages) ? payload.usages : [];
+  const extractable = Boolean(payload.extractable);
+  if (payload.algorithm === "ECDH" && payload.format === "jwk") {
+    const jwk = payload.data as JsonWebKey;
+    const namedCurve = typeof jwk?.crv === "string" ? jwk.crv : "P-256";
+    return crypto.subtle.importKey(
+      "jwk",
+      jwk,
+      { name: "ECDH", namedCurve },
+      extractable,
+      usages
+    );
+  }
+  if (payload.algorithm === "AES-GCM" && payload.format === "raw") {
+    const raw = fromBase64(String(payload.data || ""));
+    return crypto.subtle.importKey(
+      "raw",
+      raw,
+      { name: "AES-GCM", length: 256 },
+      extractable,
+      usages
+    );
+  }
+  throw new Error(`Unsupported key payload: ${payload.algorithm}:${payload.format}`);
+};
+
+export const getStoredKey = async <T>(key: string) => {
+  const stored = await withStore<unknown | null>("readonly", (store) => store.get(key));
+  if (!stored) return null;
+  if (isCryptoKeyLike(stored)) {
+    void (async () => {
+      try {
+        const serialized = await serializeCryptoKey(stored);
+        await withStore("readwrite", (store) => store.put(serialized, key));
+      } catch {
+        // Ignore serialization failures and keep the existing key.
+      }
+    })();
+    return stored as T;
+  }
+  if (isSerializedCryptoKey(stored)) {
+    try {
+      const imported = await deserializeCryptoKey(stored);
+      return imported as T;
+    } catch {
+      return null;
+    }
+  }
+  return stored as T;
+};
+
+export const setStoredKey = async (key: string, value: unknown) => {
+  if (isCryptoKeyLike(value)) {
+    try {
+      const serialized = await serializeCryptoKey(value);
+      return withStore("readwrite", (store) => store.put(serialized, key));
+    } catch {
+      // Fall back to storing the key directly if serialization fails.
+    }
+  }
+  return withStore("readwrite", (store) => store.put(value, key));
+};
 
 export const removeStoredKey = async (key: string) =>
   withStore("readwrite", (store) => store.delete(key));

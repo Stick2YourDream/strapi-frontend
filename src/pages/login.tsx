@@ -196,7 +196,7 @@ export default function Login() {
       }
 
       if ("jwt" in res.data && res.data.jwt) {
-        login(res.data.user, res.data.jwt);
+        login(res.data.user, res.data.jwt, { rememberDevice });
         navigate(postLoginPath);
         return;
       }
@@ -284,7 +284,7 @@ export default function Login() {
         return;
       }
 
-      login(res.data.user, res.data.jwt);
+      login(res.data.user, res.data.jwt, { rememberDevice });
       navigate(postLoginPath);
     } catch (err: unknown) {
       if (!axios.isAxiosError(err)) {
@@ -417,7 +417,10 @@ export default function Login() {
                 checked={rememberDevice}
                 onChange={(e) => setRememberDevice(e.target.checked)}
               />
-              <span>Remember this device for 24 hours</span>
+              <span className="auth-check__track" aria-hidden="true">
+                <span className="auth-check__thumb" />
+              </span>
+              <span className="auth-check__label">Remember this device for 30 days</span>
             </label>
           </>
         ) : (

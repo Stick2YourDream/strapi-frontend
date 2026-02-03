@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import {
@@ -51,6 +51,7 @@ export default function KeyBackupModal() {
     null
   );
   const [deviceRequestLoading, setDeviceRequestLoading] = useState(false);
+  const autoRequestRef = useRef(false);
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
   const [resetSuccess, setResetSuccess] = useState(false);
   const [recoveryEmailCode, setRecoveryEmailCode] = useState("");
@@ -138,6 +139,50 @@ export default function KeyBackupModal() {
       setDeviceRequestLabel(getDefaultDeviceLabel());
     }
   }, [mode]);
+
+  const startDeviceApprovalRequest = useCallback(
+    async (source: "auto" | "manual") => {
+      if (!user) return;
+      setDeviceRequestError(null);
+      if (source === "manual") {
+        setCopyStatus(null);
+      }
+      setDeviceRequestLoading(true);
+      setDeviceRequestStatus("requesting");
+      try {
+        const label = getDefaultDeviceLabel();
+        setDeviceRequestLabel(label);
+        const response = await requestDeviceKeyApproval(label);
+        setDeviceRequestId(response.requestId);
+        setDeviceRequestStatus("pending");
+        setDeviceRequestExpiresAt(response.expiresAt ? Number(response.expiresAt) : null);
+      } catch {
+        setDeviceRequestError(
+          source === "auto"
+            ? "Unable to auto-request approval. You can try again."
+            : "Unable to request approval. Try again."
+        );
+        setDeviceRequestStatus("idle");
+      } finally {
+        setDeviceRequestLoading(false);
+      }
+    },
+    [user]
+  );
+
+  useEffect(() => {
+    if (mode !== "restore") {
+      autoRequestRef.current = false;
+      return;
+    }
+    if (autoRequestRef.current) return;
+    if (getPendingDeviceKeyRequestId()) return;
+    if (deviceRequestId || deviceRequestStatus === "pending" || deviceRequestStatus === "requesting") {
+      return;
+    }
+    autoRequestRef.current = true;
+    void startDeviceApprovalRequest("auto");
+  }, [deviceRequestId, deviceRequestStatus, mode, startDeviceApprovalRequest]);
 
   useEffect(() => {
     if (mode !== "restore" || !deviceRequestId || !user) return;
@@ -288,27 +333,12 @@ export default function KeyBackupModal() {
   };
 
   const handleRequestApproval = async () => {
-    if (!user) return;
-    setDeviceRequestError(null);
-    setCopyStatus(null);
-    setDeviceRequestLoading(true);
-    setDeviceRequestStatus("requesting");
-    try {
-      const label = getDefaultDeviceLabel();
-      setDeviceRequestLabel(label);
-      const response = await requestDeviceKeyApproval(label);
-      setDeviceRequestId(response.requestId);
-      setDeviceRequestStatus("pending");
-      setDeviceRequestExpiresAt(response.expiresAt ? Number(response.expiresAt) : null);
-    } catch {
-      setDeviceRequestError("Unable to request approval. Try again.");
-      setDeviceRequestStatus("idle");
-    } finally {
-      setDeviceRequestLoading(false);
-    }
+    autoRequestRef.current = true;
+    await startDeviceApprovalRequest("manual");
   };
 
   const handleCancelApproval = () => {
+    autoRequestRef.current = true;
     clearPendingDeviceKeyRequestId();
     setDeviceRequestId(null);
     setDeviceRequestStatus("idle");
@@ -446,6 +476,11 @@ export default function KeyBackupModal() {
             </p>
           )}
           {mode === "restore" && (
+            <p className="key-backup-hint">
+              Quick restore: we can send a request to your trusted devices automatically.
+            </p>
+          )}
+          {mode === "restore" && (
             <div className="key-backup-device">
               <h4>Approve from a trusted device</h4>
               <p className="key-backup-hint">
@@ -503,6 +538,9 @@ export default function KeyBackupModal() {
                     ? ` (expires ${new Date(deviceRequestExpiresAt).toLocaleTimeString()}).`
                     : "."}
                 </p>
+              )}
+              {deviceRequestStatus === "requesting" && (
+                <p className="key-backup-hint">Requesting approval…</p>
               )}
               {copyStatus && <p className="key-backup-hint">{copyStatus}</p>}
               {deviceRequestStatus === "approved" && (

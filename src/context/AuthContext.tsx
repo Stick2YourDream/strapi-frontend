@@ -89,7 +89,7 @@ interface AuthContextType {
   keyBackupStatus: "unknown" | "ready" | "needs-setup" | "needs-restore";
   keyBackupLoading: boolean;
   keyBackupError: string | null;
-  login: (user: User, token: string) => void;
+  login: (user: User, token: string, options?: { rememberDevice?: boolean }) => void;
   updateUser: (user: User) => void;
   logout: () => void;
   refreshProfile: () => Promise<void>;
@@ -104,6 +104,23 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+const parseJwtExpiry = (token: string | null) => {
+  if (!token || typeof token !== "string") return null;
+  const parts = token.split(".");
+  if (parts.length < 2) return null;
+  const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+  const padded = payload.padEnd(payload.length + ((4 - (payload.length % 4)) % 4), "=");
+  try {
+    const decoded = JSON.parse(atob(padded));
+    if (typeof decoded?.exp === "number") {
+      return decoded.exp * 1000;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+};
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
@@ -122,7 +139,17 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const expiresAt = localStorage.getItem("expiresAt");
 
     if (storedUser && storedToken && expiresAt) {
-      if (new Date().getTime() < parseInt(expiresAt)) {
+      const now = Date.now();
+      const storedExpiresAt = Number(expiresAt);
+      const tokenExpiresAt = parseJwtExpiry(storedToken);
+      const effectiveExpiresAt = tokenExpiresAt
+        ? Math.min(storedExpiresAt || tokenExpiresAt, tokenExpiresAt)
+        : storedExpiresAt;
+
+      if (Number.isFinite(effectiveExpiresAt) && now < effectiveExpiresAt) {
+        if (effectiveExpiresAt !== storedExpiresAt) {
+          localStorage.setItem("expiresAt", effectiveExpiresAt.toString());
+        }
         setUser(JSON.parse(storedUser));
       } else {
         localStorage.removeItem("user");
@@ -421,14 +448,19 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     return () => clearTimeout(timer);
   }, [user]);
 
-  const login = (userData: User, token: string) => {
+  const login = (userData: User, token: string, options?: { rememberDevice?: boolean }) => {
     setUser(userData);
     setProfileLoading(true);
     localStorage.setItem("user", JSON.stringify(userData));
     localStorage.setItem("token", token);
-    // 24-hour session window
-    const expiresAt = new Date().getTime() + 24 * 60 * 60 * 1000;
-    localStorage.setItem("expiresAt", expiresAt.toString());
+    // 30 days when remembered, otherwise 24 hours.
+    const sessionDays = options?.rememberDevice ? 30 : 1;
+    const requestedExpiresAt = Date.now() + sessionDays * 24 * 60 * 60 * 1000;
+    const tokenExpiresAt = parseJwtExpiry(token);
+    const effectiveExpiresAt = tokenExpiresAt
+      ? Math.min(requestedExpiresAt, tokenExpiresAt)
+      : requestedExpiresAt;
+    localStorage.setItem("expiresAt", effectiveExpiresAt.toString());
     console.info("Auth: login success", { id: userData.id, email: userData.email });
   };
 

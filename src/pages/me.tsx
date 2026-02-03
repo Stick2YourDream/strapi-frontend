@@ -4948,14 +4948,17 @@ const setProfileFromEntry = async (entry: any) => {
 
                   <div className="profile-field">
                     <span className="profile-field-label">Background gradient</span>
-                    <div className="appearance-gradient-toggle">
+                    <label className="profile-check appearance-gradient-toggle">
                       <input
                         type="checkbox"
                         checked={appearanceGradientEnabled}
                         onChange={(e) => toggleGradient(e.target.checked)}
                       />
-                      <span>Enable gradient overlay</span>
-                    </div>
+                      <span className="profile-check__track" aria-hidden="true">
+                        <span className="profile-check__thumb" />
+                      </span>
+                      <span className="profile-check__label">Enable gradient overlay</span>
+                    </label>
                     {appearanceGradientEnabled && (
                       <div className="appearance-gradient-grid">
                         <div>
@@ -5559,7 +5562,10 @@ const setProfileFromEntry = async (entry: any) => {
                       checked={twoFactorEnabled}
                       onChange={(e) => setTwoFactorEnabled(e.target.checked)}
                     />
-                    <span>Enable 2FA</span>
+                    <span className="profile-check__track" aria-hidden="true">
+                      <span className="profile-check__thumb" />
+                    </span>
+                    <span className="profile-check__label">Enable 2FA</span>
                   </label>
                 </div>
                 <div className="security-row">
@@ -5916,7 +5922,7 @@ const setProfileFromEntry = async (entry: any) => {
                   <option value="private">Private</option>
                   <option value="custom">Custom</option>
                 </select>
-                <div className="profile-check">
+                <label className="profile-check">
                   <input
                     type="checkbox"
                     checked={profile.searchIndexingEnabled}
@@ -5931,9 +5937,14 @@ const setProfileFromEntry = async (entry: any) => {
                       }));
                     }}
                   />
-                  <span>Allow my profile to appear in platform search</span>
-                </div>
-                <div className="profile-check">
+                  <span className="profile-check__track" aria-hidden="true">
+                    <span className="profile-check__thumb" />
+                  </span>
+                  <span className="profile-check__label">
+                    Allow my profile to appear in platform search
+                  </span>
+                </label>
+                <label className="profile-check">
                   <input
                     type="checkbox"
                     checked={profile.externalIndexingEnabled}
@@ -5948,8 +5959,13 @@ const setProfileFromEntry = async (entry: any) => {
                       !profile.searchIndexingEnabled
                     }
                   />
-                  <span>Allow search engines to index my public profile</span>
-                </div>
+                  <span className="profile-check__track" aria-hidden="true">
+                    <span className="profile-check__thumb" />
+                  </span>
+                  <span className="profile-check__label">
+                    Allow search engines to index my public profile
+                  </span>
+                </label>
                 {profile.profileVisibility !== "public" && (
                   <p className="security-muted">
                     External indexing is only available for public profiles.
@@ -6121,7 +6137,7 @@ const setProfileFromEntry = async (entry: any) => {
                     </select>
                   </label>
                 </div>
-                <div className="profile-check">
+                <label className="profile-check">
                   <input
                     type="checkbox"
                     checked={profile.showPhoneOnProfile}
@@ -6129,8 +6145,13 @@ const setProfileFromEntry = async (entry: any) => {
                       setProfile({ ...profile, showPhoneOnProfile: e.target.checked })
                     }
                   />
-                  <span>Show my phone number to friends</span>
-                </div>
+                  <span className="profile-check__track" aria-hidden="true">
+                    <span className="profile-check__thumb" />
+                  </span>
+                  <span className="profile-check__label">
+                    Show my phone number to friends
+                  </span>
+                </label>
                 <p className="security-muted">
                   Your phone stays private unless you enable this.
                 </p>
@@ -6329,7 +6350,12 @@ const setProfileFromEntry = async (entry: any) => {
                         checked={dashboardNewsEnabled}
                         onChange={(e) => handleDashboardNewsToggle(e.target.checked)}
                       />
-                      <span>Show Newsroom on my dashboard</span>
+                      <span className="profile-check__track" aria-hidden="true">
+                        <span className="profile-check__thumb" />
+                      </span>
+                      <span className="profile-check__label">
+                        Show Newsroom on my dashboard
+                      </span>
                     </label>
                   </div>
                 )}
@@ -6478,7 +6504,7 @@ const setProfileFromEntry = async (entry: any) => {
                 <p className="security-muted">
                   Silence notifications during quiet hours or when DND is enabled.
                 </p>
-                <div className="profile-check">
+                <label className="profile-check">
                   <input
                     type="checkbox"
                     checked={Boolean(profile.notificationSettings.dndEnabled)}
@@ -6492,8 +6518,11 @@ const setProfileFromEntry = async (entry: any) => {
                       })
                     }
                   />
-                  <span>Enable Do Not Disturb</span>
-                </div>
+                  <span className="profile-check__track" aria-hidden="true">
+                    <span className="profile-check__thumb" />
+                  </span>
+                  <span className="profile-check__label">Enable Do Not Disturb</span>
+                </label>
                 <div className="privacy-grid">
                   <label className="profile-field">
                     <span className="profile-field-label">Quiet hours start</span>
@@ -6549,7 +6578,7 @@ const setProfileFromEntry = async (entry: any) => {
                 <p className="security-muted">
                   Toggle audio cues and vibration feedback (mobile).
                 </p>
-                <div className="profile-check">
+                <label className="profile-check">
                   <input
                     type="checkbox"
                     checked={profile.notificationSettings.soundEnabled !== false}
@@ -6563,9 +6592,12 @@ const setProfileFromEntry = async (entry: any) => {
                       })
                     }
                   />
-                  <span>Play notification sounds</span>
-                </div>
-                <div className="profile-check">
+                  <span className="profile-check__track" aria-hidden="true">
+                    <span className="profile-check__thumb" />
+                  </span>
+                  <span className="profile-check__label">Play notification sounds</span>
+                </label>
+                <label className="profile-check">
                   <input
                     type="checkbox"
                     checked={profile.notificationSettings.vibrationEnabled !== false}
@@ -6579,8 +6611,13 @@ const setProfileFromEntry = async (entry: any) => {
                       })
                     }
                   />
-                  <span>Vibrate on alerts (mobile)</span>
-                </div>
+                  <span className="profile-check__track" aria-hidden="true">
+                    <span className="profile-check__thumb" />
+                  </span>
+                  <span className="profile-check__label">
+                    Vibrate on alerts (mobile)
+                  </span>
+                </label>
               </div>
 
               <div className="security-card">
@@ -6588,7 +6625,7 @@ const setProfileFromEntry = async (entry: any) => {
                 <p className="security-muted">
                   Receive native alerts even when the app is closed.
                 </p>
-                <div className="profile-check">
+                <label className="profile-check">
                   <input
                     type="checkbox"
                     checked={pushEnabled}
@@ -6611,8 +6648,11 @@ const setProfileFromEntry = async (entry: any) => {
                       });
                     }}
                   />
-                  <span>Enable push notifications</span>
-                </div>
+                  <span className="profile-check__track" aria-hidden="true">
+                    <span className="profile-check__thumb" />
+                  </span>
+                  <span className="profile-check__label">Enable push notifications</span>
+                </label>
                 {pushBlockedByPhone && phoneVerificationLabel && (
                   <p className={phoneVerified === null ? "security-muted" : "status status-error"}>
                     {phoneVerificationLabel}

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import "../css/release-notes.css";
 
-const RELEASE_NOTES_VERSION = "2026.01.26";
+const RELEASE_NOTES_VERSION = "2026.02.03";
 const STORAGE_KEY = "releaseNotesDismissedVersion";
 const SESSION_PREFIX = "releaseNotesClosed:";
 
@@ -14,7 +14,7 @@ const RELEASE_NOTES = [
   "Added Photo/Video Gallery",
   "Added Featured Wins to Dashboard",
   "You can now add friends to a trusted circle a create a trusted circle group to direct message",
-  "Pages that are updated: Dashboard, Profile, Friends, Forums",
+  "Improved performance of video calls and messaging",
 ];
 
 export default function ReleaseNotesModal() {
@@ -62,13 +62,16 @@ export default function ReleaseNotesModal() {
       setUpdateStatus("Updates are not supported in this browser.");
       return;
     }
+    if (import.meta.env.DEV) {
+      setUpdateStatus("Updates are available in production builds only.");
+      return;
+    }
     setCheckingUpdate(true);
     setUpdateStatus(null);
     try {
-      const registration = await navigator.serviceWorker.getRegistration();
+      let registration = await navigator.serviceWorker.getRegistration();
       if (!registration) {
-        setUpdateStatus("No service worker is registered yet.");
-        return;
+        registration = await navigator.serviceWorker.register("/sw.js");
       }
       await registration.update();
       if (registration.waiting) {

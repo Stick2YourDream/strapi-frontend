@@ -447,13 +447,20 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const screenShareByOwnerRef = useRef<Map<string, string>>(new Map());
   const disconnectTimersRef = useRef<Map<string, number>>(new Map());
   const rtcConfigRef = useRef<RTCConfiguration>(RTC_CONFIG);
-  const iceServersLoadingRef = useRef<Promise<void> | null>(null);
+  const iceServersLoadingRef = useRef<
+    Promise<{ servers: RTCIceServer[]; ttlSeconds: number; updated: boolean }> | null
+  >(null);
+  const iceServerMetaRef = useRef<{ expiresAt: number; ttlSeconds: number } | null>(null);
+  const iceRefreshTimerRef = useRef<number | null>(null);
+  const iceRestartAttemptsRef = useRef<Map<string, { count: number; lastAttemptAt: number }>>(
+    new Map()
+  );
   const audioInputDeviceRef = useRef<string | null>(null);
   const videoInputDeviceRef = useRef<string | null>(null);
   const selectedInviteesRef = useRef<VideoCallInvitee[]>([]);
-  const peerNegotiationRef = useRef<Map<string, { makingOffer: boolean; isPolite: boolean }>>(
-    new Map()
-  );
+  const peerNegotiationRef = useRef<
+    Map<string, { makingOffer: boolean; isPolite: boolean; needsIceRestart?: boolean }>
+  >(new Map());
   const localSocketIdRef = useRef<string | null>(null);
   const incomingCallRef = useRef<IncomingCall | null>(null);
   const videoEffectsRef = useRef(videoEffects);
@@ -814,7 +821,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     if (existing) return existing;
     const localSocketId = socketRef.current?.id || localSocketIdRef.current || "";
     const isPolite = localSocketId ? localSocketId.localeCompare(socketId) < 0 : true;
-    const created = { makingOffer: false, isPolite };
+    const created = { makingOffer: false, isPolite, needsIceRestart: false };
     peerNegotiationRef.current.set(socketId, created);
     return created;
   }, []);
@@ -2089,11 +2096,13 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       window.clearTimeout(disconnectTimer);
       disconnectTimersRef.current.delete(socketId);
     }
+    iceRestartAttemptsRef.current.delete(socketId);
     const pc = peersRef.current.get(socketId);
     if (pc) {
       pc.ontrack = null;
       pc.onicecandidate = null;
       pc.onconnectionstatechange = null;
+      pc.onsignalingstatechange = null;
       pc.close();
       peersRef.current.delete(socketId);
     }
@@ -2137,39 +2146,156 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     }
   }, []);
 
-  const ensureIceServers = useCallback(async () => {
-    if (iceServersLoadingRef.current) {
-      return iceServersLoadingRef.current;
+  const clearIceRefreshTimer = useCallback(() => {
+    if (iceRefreshTimerRef.current) {
+      window.clearTimeout(iceRefreshTimerRef.current);
+      iceRefreshTimerRef.current = null;
     }
-    const load = (async () => {
-      const hasTurn = (servers: RTCIceServer[]) =>
-        servers.some((server) => {
-          const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
-          return urls.some((url) => {
-            const value = String(url || "").toLowerCase();
-            return value.startsWith("turn:") || value.startsWith("turns:");
-          });
-        });
+  }, []);
+
+  const scheduleIceRefresh = useCallback(
+    (ttlSeconds: number) => {
+      if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0) return;
+      clearIceRefreshTimer();
+      const ttlMs = ttlSeconds * 1000;
+      const refreshAt = Date.now() + Math.max(ttlMs * 0.8, ttlMs - 5 * 60 * 1000);
+      const delay = Math.max(60_000, refreshAt - Date.now());
+      iceRefreshTimerRef.current = window.setTimeout(() => {
+        void refreshIceServers("ttl");
+      }, delay);
+    },
+    [clearIceRefreshTimer]
+  );
+
+  const requestIceRestart = useCallback(
+    async (socketId: string, reason: string, options?: { force?: boolean }) => {
+      const pc = peersRef.current.get(socketId);
+      const socket = socketRef.current;
+      if (!pc || !socket || pc.signalingState === "closed") return false;
+      const attempts = iceRestartAttemptsRef.current.get(socketId) ?? {
+        count: 0,
+        lastAttemptAt: 0,
+      };
+      const now = Date.now();
+      if (!options?.force) {
+        if (attempts.count >= 2 && now - attempts.lastAttemptAt < 30_000) {
+          return false;
+        }
+        if (now - attempts.lastAttemptAt < 8000) {
+          return false;
+        }
+      }
+      attempts.count = options?.force ? attempts.count : attempts.count + 1;
+      attempts.lastAttemptAt = now;
+      iceRestartAttemptsRef.current.set(socketId, attempts);
+
+      const negotiationState = getPeerNegotiationState(socketId);
+      if (pc.signalingState !== "stable") {
+        negotiationState.needsIceRestart = true;
+        return false;
+      }
       try {
-        const res = await api.get("/webrtc/ice");
-        const servers = res.data?.iceServers ?? res.data?.ice_servers ?? [];
-        if (Array.isArray(servers) && servers.length > 0) {
+        negotiationState.makingOffer = true;
+        const offer = await pc.createOffer({ iceRestart: true });
+        await pc.setLocalDescription(offer);
+        socket.emit("call:offer", {
+          to: socketId,
+          sdp: pc.localDescription,
+          iceRestart: true,
+          reason,
+        });
+        return true;
+      } catch {
+        return false;
+      } finally {
+        negotiationState.makingOffer = false;
+      }
+    },
+    [getPeerNegotiationState]
+  );
+
+  const applyIceServersToPeers = useCallback(
+    (servers: RTCIceServer[], reason: string) => {
+      peersRef.current.forEach((pc, socketId) => {
+        try {
+          const current = pc.getConfiguration?.() || {};
+          pc.setConfiguration({
+            ...current,
+            iceServers: servers,
+          });
+        } catch {
+          // ignore configuration errors
+        }
+        void requestIceRestart(socketId, reason, { force: true });
+      });
+    },
+    [requestIceRestart]
+  );
+
+  const ensureIceServers = useCallback(
+    async (options?: { force?: boolean }) => {
+      if (iceServersLoadingRef.current) {
+        return iceServersLoadingRef.current;
+      }
+      const meta = iceServerMetaRef.current;
+      if (!options?.force && meta && meta.expiresAt - Date.now() > 5 * 60 * 1000) {
+        return {
+          servers: rtcConfigRef.current?.iceServers || RTC_CONFIG.iceServers || [],
+          ttlSeconds: meta.ttlSeconds,
+          updated: false,
+        };
+      }
+      const load = (async () => {
+        const hasTurn = (servers: RTCIceServer[]) =>
+          servers.some((server) => {
+            const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+            return urls.some((url) => {
+              const value = String(url || "").toLowerCase();
+              return value.startsWith("turn:") || value.startsWith("turns:");
+            });
+          });
+        let ttlSeconds = 0;
+        let servers: RTCIceServer[] = RTC_CONFIG.iceServers || [];
+        try {
+          const res = await api.get("/webrtc/ice");
+          const nextServers = res.data?.iceServers ?? res.data?.ice_servers ?? [];
+          ttlSeconds = Number(res.data?.ttl) || 0;
+          if (Array.isArray(nextServers) && nextServers.length > 0) {
+            servers = nextServers;
+          }
           rtcConfigRef.current = { ...RTC_CONFIG, iceServers: servers };
           turnAvailableRef.current = hasTurn(servers);
-        } else {
+          if (ttlSeconds > 0) {
+            iceServerMetaRef.current = {
+              expiresAt: Date.now() + ttlSeconds * 1000,
+              ttlSeconds,
+            };
+            scheduleIceRefresh(ttlSeconds);
+          }
+        } catch {
           rtcConfigRef.current = RTC_CONFIG;
           turnAvailableRef.current = hasTurn(RTC_CONFIG.iceServers || []);
+        } finally {
+          iceServersLoadingRef.current = null;
         }
-      } catch {
-        rtcConfigRef.current = RTC_CONFIG;
-        turnAvailableRef.current = hasTurn(RTC_CONFIG.iceServers || []);
-      } finally {
-        iceServersLoadingRef.current = null;
+        return { servers, ttlSeconds, updated: true };
+      })();
+      iceServersLoadingRef.current = load;
+      return load;
+    },
+    [scheduleIceRefresh]
+  );
+
+  const refreshIceServers = useCallback(
+    async (reason: string) => {
+      const result = await ensureIceServers({ force: true });
+      if (Array.isArray(result?.servers) && result.servers.length > 0) {
+        applyIceServersToPeers(result.servers, `ice-refresh:${reason}`);
       }
-    })();
-    iceServersLoadingRef.current = load;
-    return load;
-  }, []);
+      return result;
+    },
+    [applyIceServersToPeers, ensureIceServers]
+  );
 
   const replaceAudioTrack = useCallback(
     (nextTrack: MediaStreamTrack) => {
@@ -2335,10 +2461,14 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         if (!socketRef.current) return;
         try {
           negotiationState.makingOffer = true;
-          await pc.setLocalDescription();
+          const shouldRestart = Boolean(negotiationState.needsIceRestart);
+          const offer = await pc.createOffer(shouldRestart ? { iceRestart: true } : undefined);
+          await pc.setLocalDescription(offer);
+          negotiationState.needsIceRestart = false;
           socketRef.current.emit("call:offer", {
             to: socketId,
             sdp: pc.localDescription,
+            iceRestart: shouldRestart,
           });
         } catch {
           setError("Failed to renegotiate call.");
@@ -2437,16 +2567,39 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           return { ...prev, [socketId]: nextStream };
         });
       };
+      pc.onsignalingstatechange = () => {
+        if (pc.signalingState !== "stable") return;
+        const state = getPeerNegotiationState(socketId);
+        if (!state.needsIceRestart) return;
+        void requestIceRestart(socketId, "deferred", { force: true });
+      };
       pc.onconnectionstatechange = () => {
         const timers = disconnectTimersRef.current;
+        if (pc.connectionState === "connected") {
+          iceRestartAttemptsRef.current.delete(socketId);
+        }
         if (pc.connectionState === "disconnected") {
+          void requestIceRestart(socketId, "disconnected");
           if (!timers.has(socketId)) {
             const timer = window.setTimeout(() => {
               timers.delete(socketId);
               if (pc.connectionState === "disconnected") {
                 closePeer(socketId);
               }
-            }, 12000);
+            }, 25000);
+            timers.set(socketId, timer);
+          }
+          return;
+        }
+        if (pc.connectionState === "failed") {
+          void requestIceRestart(socketId, "failed", { force: true });
+          if (!timers.has(socketId)) {
+            const timer = window.setTimeout(() => {
+              timers.delete(socketId);
+              if (pc.connectionState === "failed") {
+                closePeer(socketId);
+              }
+            }, 15000);
             timers.set(socketId, timer);
           }
           return;
@@ -2456,7 +2609,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           window.clearTimeout(existingTimer);
           timers.delete(socketId);
         }
-        if (pc.connectionState === "failed" || pc.connectionState === "closed") {
+        if (pc.connectionState === "closed") {
           closePeer(socketId);
         }
       };
@@ -2468,6 +2621,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       closePeer,
       e2eeSupported,
       getPeerNegotiationState,
+      requestIceRestart,
       setupReceiverE2ee,
     ]
   );
@@ -2484,6 +2638,23 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleOnline = () => {
+      if (statusRef.current !== "in-call" && statusRef.current !== "connecting") {
+        return;
+      }
+      void refreshIceServers("online");
+      peersRef.current.forEach((_, socketId) => {
+        void requestIceRestart(socketId, "online", { force: true });
+      });
+    };
+    window.addEventListener("online", handleOnline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+    };
+  }, [refreshIceServers, requestIceRestart]);
 
   useEffect(() => {
     errorRef.current = error;
@@ -2699,6 +2870,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         (statusRef.current === "in-call" || statusRef.current === "connecting")
       ) {
         socket.emit("call:join", { roomId: activeRoomRef.current });
+        void refreshIceServers("socket-connect");
       }
     });
     socket.on("disconnect", (reason) => {
@@ -3230,6 +3402,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     stopScreenShare,
     resolveSocketAuth,
     refreshSocketAuth,
+    refreshIceServers,
     startAuthRefresh,
     startHeartbeat,
     stopAuthRefresh,
@@ -3415,6 +3588,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const cleanupCall = useCallback(() => {
     peersRef.current.forEach((_, socketId) => closePeer(socketId));
     peersRef.current.clear();
+    iceRestartAttemptsRef.current.clear();
+    clearIceRefreshTimer();
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => track.stop());
     }
@@ -3435,6 +3610,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     resetCallState();
   }, [
     closePeer,
+    clearIceRefreshTimer,
     resetCallState,
     resetE2eeState,
     stopAudioProcessing,
@@ -3521,7 +3697,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       setStatus("setup");
       return;
     }
-    await ensureIceServers();
+    await ensureIceServers({ force: true });
     warnIfNoTurn();
     socketRef.current.emit("call:join", { roomId });
     socketRef.current.emit("call:invite", {
@@ -3582,7 +3758,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       setIsOpen(false);
       return;
     }
-    await ensureIceServers();
+    await ensureIceServers({ force: true });
     warnIfNoTurn();
     socketRef.current.emit("call:join", { roomId: incomingCall.roomId });
     setIncomingCall(null);
