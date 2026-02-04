@@ -105,21 +105,32 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const parseJwtExpiry = (token: string | null) => {
+const parseJwtPayload = (token: string | null) => {
   if (!token || typeof token !== "string") return null;
   const parts = token.split(".");
   if (parts.length < 2) return null;
   const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
   const padded = payload.padEnd(payload.length + ((4 - (payload.length % 4)) % 4), "=");
   try {
-    const decoded = JSON.parse(atob(padded));
-    if (typeof decoded?.exp === "number") {
-      return decoded.exp * 1000;
-    }
+    return JSON.parse(atob(padded));
   } catch {
     return null;
   }
+};
+
+const parseJwtExpiry = (token: string | null) => {
+  const decoded = parseJwtPayload(token);
+  if (typeof decoded?.exp === "number") {
+    return decoded.exp * 1000;
+  }
   return null;
+};
+
+const parseJwtUserId = (token: string | null) => {
+  const decoded = parseJwtPayload(token);
+  const rawId = decoded?.id ?? decoded?.userId ?? decoded?.sub;
+  const parsed = Number(rawId);
+  return Number.isFinite(parsed) ? parsed : null;
 };
 
 const normalizeTokenValue = (value: string | null | undefined) => {
@@ -192,101 +203,128 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const lastLoginAtRef = useRef<number | null>(null);
   const hasEncryptedProfileRef = useRef<boolean | null>(null);
   const profileDecryptFailedRef = useRef(false);
+  const lastGoodProfileRef = useRef<ProfileSummary | null>(null);
 
   useEffect(() => {
-    const now = Date.now();
-    const localTokenRaw = safeGetItem(window.localStorage, "token");
-    const sessionTokenRaw = safeGetItem(window.sessionStorage, "token");
-    const localToken = normalizeTokenValue(localTokenRaw);
-    const sessionToken = normalizeTokenValue(sessionTokenRaw);
-    const localExp = parseJwtExpiry(localToken);
-    const sessionExp = parseJwtExpiry(sessionToken);
-    const localValid = Number.isFinite(localExp as number) && (localExp as number) > now + 60_000;
-    const sessionValid =
-      Number.isFinite(sessionExp as number) && (sessionExp as number) > now + 60_000;
-    let storedToken: string | null = null;
-    let preferLocal = false;
-    if (localToken && sessionToken) {
-      if (sessionValid && (!localValid || (sessionExp as number) > (localExp as number))) {
-        storedToken = sessionToken;
-        preferLocal = false;
-      } else if (localValid) {
-        storedToken = localToken;
-        preferLocal = true;
-      } else if (sessionValid) {
-        storedToken = sessionToken;
-        preferLocal = false;
-      } else {
-        storedToken = localToken;
-        preferLocal = true;
+    let active = true;
+
+    const hydrate = async () => {
+      const now = Date.now();
+      const localToken = normalizeTokenValue(safeGetItem(window.localStorage, "token"));
+      const sessionToken = normalizeTokenValue(safeGetItem(window.sessionStorage, "token"));
+      const storedToken = localToken || sessionToken;
+
+      const localUserRaw = safeGetItem(window.localStorage, "user");
+      const sessionUserRaw = safeGetItem(window.sessionStorage, "user");
+      let storedUser = parseStoredUser(localUserRaw, window.localStorage);
+      if (!storedUser && sessionUserRaw) {
+        storedUser = parseStoredUser(sessionUserRaw, window.sessionStorage);
       }
-    } else if (localToken) {
-      storedToken = localToken;
-      preferLocal = true;
-    } else if (sessionToken) {
-      storedToken = sessionToken;
-      preferLocal = false;
-    }
 
-    const localUserRaw = safeGetItem(window.localStorage, "user");
-    const sessionUserRaw = safeGetItem(window.sessionStorage, "user");
-    let storedUser = preferLocal
-      ? parseStoredUser(localUserRaw, window.localStorage)
-      : parseStoredUser(sessionUserRaw, window.sessionStorage);
-    if (!storedUser && !preferLocal && localToken) {
-      storedUser = parseStoredUser(localUserRaw, window.localStorage);
-    } else if (!storedUser && preferLocal && sessionToken) {
-      storedUser = parseStoredUser(sessionUserRaw, window.sessionStorage);
-    }
+      const expiresAtRaw =
+        safeGetItem(window.localStorage, "expiresAt") ||
+        safeGetItem(window.sessionStorage, "expiresAt");
+      const rememberFlag =
+        safeGetItem(window.localStorage, "rememberDevice") ||
+        safeGetItem(window.sessionStorage, "rememberDevice");
+      const rememberDevice = rememberFlag === "1" || rememberFlag === "true";
 
-    const expiresAt = preferLocal
-      ? safeGetItem(window.localStorage, "expiresAt")
-      : safeGetItem(window.sessionStorage, "expiresAt");
-    const rememberFlag = preferLocal
-      ? safeGetItem(window.localStorage, "rememberDevice")
-      : safeGetItem(window.sessionStorage, "rememberDevice");
-    const rememberDevice = rememberFlag === "1" || rememberFlag === "true";
+      if (storedToken) {
+        const storedExpiresAt = normalizeExpiry(Number(expiresAtRaw));
+        const validStoredExpiresAt =
+          storedExpiresAt && storedExpiresAt > now ? storedExpiresAt : null;
+        const tokenExpiresAt = parseJwtExpiry(storedToken);
+        const fallbackSessionDays = rememberDevice ? 30 : 1;
+        const requestedExpiresAt = now + fallbackSessionDays * 24 * 60 * 60 * 1000;
+        const effectiveExpiresAt = resolveEffectiveExpiry(
+          Number.isFinite(validStoredExpiresAt as number)
+            ? (validStoredExpiresAt as number)
+            : requestedExpiresAt,
+          tokenExpiresAt,
+          now
+        );
+        const effectiveExpiry =
+          Number.isFinite(effectiveExpiresAt as number) ? (effectiveExpiresAt as number) : null;
 
-    if (storedUser && storedToken) {
-      const storedExpiresAt = normalizeExpiry(Number(expiresAt));
-      const validStoredExpiresAt =
-        storedExpiresAt && storedExpiresAt > now ? storedExpiresAt : null;
-      const tokenExpiresAt = parseJwtExpiry(storedToken);
-      const fallbackSessionDays = rememberDevice ? 30 : 1;
-      const requestedExpiresAt = now + fallbackSessionDays * 24 * 60 * 60 * 1000;
-      const effectiveExpiresAt = resolveEffectiveExpiry(
-        Number.isFinite(validStoredExpiresAt as number)
-          ? (validStoredExpiresAt as number)
-          : requestedExpiresAt,
-        tokenExpiresAt,
-        now
-      );
-      const effectiveExpiry =
-        Number.isFinite(effectiveExpiresAt as number) ? (effectiveExpiresAt as number) : null;
-
-      if (effectiveExpiry && now < effectiveExpiry) {
-        if (effectiveExpiry !== storedExpiresAt) {
+        if (effectiveExpiry && now < effectiveExpiry) {
+          localStorage.setItem("token", storedToken);
           localStorage.setItem("expiresAt", effectiveExpiry.toString());
-          sessionStorage.setItem("expiresAt", effectiveExpiry.toString());
+          localStorage.setItem("rememberDevice", rememberDevice ? "1" : "0");
+          sessionStorage.removeItem("token");
+          sessionStorage.removeItem("expiresAt");
+          sessionStorage.removeItem("rememberDevice");
+          setAuthToken(storedToken);
+
+          if (storedUser) {
+            localStorage.setItem("user", JSON.stringify(storedUser));
+            sessionStorage.removeItem("user");
+            if (active) {
+              setUser(storedUser);
+            }
+          } else {
+            try {
+              const res = await api.get("/users/me");
+              const payload = res.data || {};
+              const recovered: User = {
+                id: Number(payload.id),
+                email: String(payload.email || ""),
+                username: payload.username || undefined,
+                appRole: payload.appRole || undefined,
+              };
+              if (Number.isFinite(recovered.id)) {
+                localStorage.setItem("user", JSON.stringify(recovered));
+                sessionStorage.removeItem("user");
+                if (active) {
+                  setUser(recovered);
+                }
+              }
+            } catch (error) {
+              const tokenUserId = parseJwtUserId(storedToken);
+              if (tokenUserId && active) {
+                const fallbackUser: User = {
+                  id: tokenUserId,
+                  email: "",
+                };
+                localStorage.setItem("user", JSON.stringify(fallbackUser));
+                sessionStorage.removeItem("user");
+                setUser(fallbackUser);
+                console.warn("Auth: recovered user from token due to /users/me failure.", error);
+              } else if (active) {
+                console.warn("Auth: unable to restore user from token.", error);
+              }
+            }
+          }
+        } else {
+          localStorage.removeItem("user");
+          localStorage.removeItem("token");
+          localStorage.removeItem("expiresAt");
+          localStorage.removeItem("rememberDevice");
+          sessionStorage.removeItem("user");
+          sessionStorage.removeItem("token");
+          sessionStorage.removeItem("expiresAt");
+          sessionStorage.removeItem("rememberDevice");
+          setAuthToken(null);
         }
-        localStorage.setItem("rememberDevice", rememberDevice ? "1" : "0");
-        sessionStorage.setItem("rememberDevice", rememberDevice ? "1" : "0");
-        setAuthToken(storedToken);
-        setUser(storedUser);
       } else {
         localStorage.removeItem("user");
-        localStorage.removeItem("token");
         localStorage.removeItem("expiresAt");
         localStorage.removeItem("rememberDevice");
         sessionStorage.removeItem("user");
-        sessionStorage.removeItem("token");
         sessionStorage.removeItem("expiresAt");
         sessionStorage.removeItem("rememberDevice");
         setAuthToken(null);
       }
-    }
 
-    setLoading(false); // Finished checking localStorage
+      if (active) {
+        setLoading(false);
+      }
+    };
+
+    void hydrate();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   const refreshProfile = async () => {
@@ -297,6 +335,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     setProfileLoading(true);
     setProfileSynced(false);
     profileDecryptFailedRef.current = false;
+    const previousProfile = lastGoodProfileRef.current || profile;
     try {
       const res = await api.get("/profiles/me?populate=avatar");
       const data = res.data?.data;
@@ -305,6 +344,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         setProfile(null);
         hasEncryptedProfileRef.current = null;
         profileDecryptFailedRef.current = false;
+        lastGoodProfileRef.current = null;
         return;
       }
 
@@ -405,11 +445,25 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       const avatarUrl = pickMediaUrl(attrs.avatar, { kind: "avatar" });
       const handle = attrs.handle || undefined;
       const notificationReadState = attrs?.notificationReadState || undefined;
-      setProfile({ ...payload, onboardingComplete, avatarUrl, handle, notificationReadState });
+      const mergedPayload =
+        profileDecryptFailedRef.current && lastGoodProfileRef.current
+          ? { ...lastGoodProfileRef.current, ...payload }
+          : payload;
+      const nextProfile = {
+        ...mergedPayload,
+        onboardingComplete,
+        avatarUrl,
+        handle,
+        notificationReadState,
+      };
+      setProfile(nextProfile);
+      lastGoodProfileRef.current = nextProfile;
     } catch {
-      setProfile(null);
-      hasEncryptedProfileRef.current = null;
-      profileDecryptFailedRef.current = false;
+      if (previousProfile) {
+        setProfile(previousProfile);
+      } else {
+        setProfile(null);
+      }
     } finally {
       setProfileLoading(false);
       setProfileSynced(true);
@@ -506,8 +560,23 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     setKeyBackupError(null);
     try {
       await restoreKeyBackup(user.id, passphrase);
+      const hasLocal = await hasLocalKeyMaterial(user.id);
+      if (!hasLocal) {
+        setKeyBackupError(
+          "Unable to persist keys in this browser. Check storage settings and try again."
+        );
+        setKeyBackupStatus("needs-restore");
+        return false;
+      }
       await ensureUserKeyOnServer();
       await refreshProfile();
+      if (profileDecryptFailedRef.current) {
+        setKeyBackupError(
+          "Backup does not match the current encrypted profile. Request device approval or reset encrypted profile."
+        );
+        setKeyBackupStatus("needs-restore");
+        return false;
+      }
       setKeyBackupStatus("ready");
       return true;
     } catch (error) {
@@ -595,45 +664,16 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   useEffect(() => {
     if (!user) return;
     const now = Date.now();
-    const localTokenRaw = safeGetItem(window.localStorage, "token");
-    const sessionTokenRaw = safeGetItem(window.sessionStorage, "token");
-    const localToken = normalizeTokenValue(localTokenRaw);
-    const sessionToken = normalizeTokenValue(sessionTokenRaw);
-    const localExp = parseJwtExpiry(localToken);
-    const sessionExp = parseJwtExpiry(sessionToken);
-    const localValid = Number.isFinite(localExp as number) && (localExp as number) > now + 60_000;
-    const sessionValid =
-      Number.isFinite(sessionExp as number) && (sessionExp as number) > now + 60_000;
-    let storedToken: string | null = null;
-    let preferLocal = false;
-    if (localToken && sessionToken) {
-      if (sessionValid && (!localValid || (sessionExp as number) > (localExp as number))) {
-        storedToken = sessionToken;
-        preferLocal = false;
-      } else if (localValid) {
-        storedToken = localToken;
-        preferLocal = true;
-      } else if (sessionValid) {
-        storedToken = sessionToken;
-        preferLocal = false;
-      } else {
-        storedToken = localToken;
-        preferLocal = true;
-      }
-    } else if (localToken) {
-      storedToken = localToken;
-      preferLocal = true;
-    } else if (sessionToken) {
-      storedToken = sessionToken;
-      preferLocal = false;
-    }
+    const storedToken =
+      normalizeTokenValue(safeGetItem(window.localStorage, "token")) ||
+      normalizeTokenValue(safeGetItem(window.sessionStorage, "token"));
     if (!storedToken) return;
-    const expiresAt = preferLocal
-      ? safeGetItem(window.localStorage, "expiresAt")
-      : safeGetItem(window.sessionStorage, "expiresAt");
-    const rememberFlag = preferLocal
-      ? safeGetItem(window.localStorage, "rememberDevice")
-      : safeGetItem(window.sessionStorage, "rememberDevice");
+    const expiresAt =
+      safeGetItem(window.localStorage, "expiresAt") ||
+      safeGetItem(window.sessionStorage, "expiresAt");
+    const rememberFlag =
+      safeGetItem(window.localStorage, "rememberDevice") ||
+      safeGetItem(window.sessionStorage, "rememberDevice");
     const rememberDevice = rememberFlag === "1" || rememberFlag === "true";
 
     const normalizedExpiresAt = normalizeExpiry(Number(expiresAt));
@@ -678,9 +718,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     localStorage.setItem("user", JSON.stringify(userData));
     localStorage.setItem("token", token);
     localStorage.setItem("rememberDevice", options?.rememberDevice ? "1" : "0");
-    sessionStorage.setItem("user", JSON.stringify(userData));
-    sessionStorage.setItem("token", token);
-    sessionStorage.setItem("rememberDevice", options?.rememberDevice ? "1" : "0");
+    sessionStorage.removeItem("user");
+    sessionStorage.removeItem("token");
+    sessionStorage.removeItem("rememberDevice");
     setAuthToken(token);
     // 30 days when remembered, otherwise 24 hours.
     const sessionDays = options?.rememberDevice ? 30 : 1;
@@ -708,7 +748,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       });
     }
     localStorage.setItem("expiresAt", finalExpiry.toString());
-    sessionStorage.setItem("expiresAt", finalExpiry.toString());
+    sessionStorage.removeItem("expiresAt");
     console.info("Auth: login success", { id: userData.id, email: userData.email });
   };
 

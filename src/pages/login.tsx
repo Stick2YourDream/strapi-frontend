@@ -293,8 +293,6 @@ export default function Login() {
 
     try {
       setLoginLoading(true);
-      localStorage.removeItem("token");
-      localStorage.removeItem("user");
 
       const deviceId = getOrCreateDeviceId();
       const normalizedIdentifier = identifier.trim().toLowerCase();
