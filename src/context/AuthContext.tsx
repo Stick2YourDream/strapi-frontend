@@ -122,6 +122,23 @@ const parseJwtExpiry = (token: string | null) => {
   return null;
 };
 
+const resolveEffectiveExpiry = (
+  requestedExpiresAt: number | null,
+  tokenExpiresAt: number | null,
+  now: number
+) => {
+  const minSkewMs = 60_000;
+  const tokenLooksValid =
+    Number.isFinite(tokenExpiresAt as number) &&
+    (tokenExpiresAt as number) > now + minSkewMs;
+  if (tokenLooksValid && Number.isFinite(requestedExpiresAt as number)) {
+    return Math.min(requestedExpiresAt as number, tokenExpiresAt as number);
+  }
+  if (tokenLooksValid) return tokenExpiresAt as number;
+  if (Number.isFinite(requestedExpiresAt as number)) return requestedExpiresAt as number;
+  return Number.isFinite(tokenExpiresAt as number) ? (tokenExpiresAt as number) : null;
+};
+
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true); // Track if auth is initializing
@@ -145,11 +162,13 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       const now = Date.now();
       const storedExpiresAt = Number(expiresAt);
       const tokenExpiresAt = parseJwtExpiry(storedToken);
-      const effectiveExpiresAt = tokenExpiresAt
-        ? Math.min(storedExpiresAt || tokenExpiresAt, tokenExpiresAt)
-        : storedExpiresAt;
+      const effectiveExpiresAt = resolveEffectiveExpiry(
+        Number.isFinite(storedExpiresAt) ? storedExpiresAt : null,
+        tokenExpiresAt,
+        now
+      );
 
-      if (Number.isFinite(effectiveExpiresAt) && now < effectiveExpiresAt) {
+      if (Number.isFinite(effectiveExpiresAt) && now < (effectiveExpiresAt as number)) {
         if (effectiveExpiresAt !== storedExpiresAt) {
           localStorage.setItem("expiresAt", effectiveExpiresAt.toString());
           sessionStorage.setItem("expiresAt", effectiveExpiresAt.toString());
@@ -441,7 +460,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   // Auto-logout when the session window expires
   useEffect(() => {
-    const expiresAt = localStorage.getItem("expiresAt");
+    const expiresAt =
+      localStorage.getItem("expiresAt") || sessionStorage.getItem("expiresAt");
     if (!user || !expiresAt) return;
 
     const timeLeft = parseInt(expiresAt) - new Date().getTime();
@@ -467,11 +487,20 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     setAuthToken(token);
     // 30 days when remembered, otherwise 24 hours.
     const sessionDays = options?.rememberDevice ? 30 : 1;
-    const requestedExpiresAt = Date.now() + sessionDays * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const requestedExpiresAt = now + sessionDays * 24 * 60 * 60 * 1000;
     const tokenExpiresAt = parseJwtExpiry(token);
-    const effectiveExpiresAt = tokenExpiresAt
-      ? Math.min(requestedExpiresAt, tokenExpiresAt)
-      : requestedExpiresAt;
+    const effectiveExpiresAt = resolveEffectiveExpiry(
+      requestedExpiresAt,
+      tokenExpiresAt,
+      now
+    );
+    if (tokenExpiresAt && tokenExpiresAt <= now + 60_000) {
+      console.warn("Auth token expiry is in the past or too soon; using session expiry.", {
+        tokenExpiresAt,
+        now,
+      });
+    }
     localStorage.setItem("expiresAt", effectiveExpiresAt.toString());
     sessionStorage.setItem("expiresAt", effectiveExpiresAt.toString());
     console.info("Auth: login success", { id: userData.id, email: userData.email });
