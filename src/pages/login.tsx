@@ -108,7 +108,7 @@ export default function Login() {
   const isVideoApp = appMode === "video";
   const envDebug =
     String(import.meta.env.VITE_AUTH_DEBUG || "").toLowerCase() === "true";
-  const showDebug = isVideoApp || import.meta.env.DEV || envDebug;
+  const showDebug = import.meta.env.DEV || envDebug;
   const brandName = String(import.meta.env.VITE_APP_NAME || "").trim() || "Your Social Place";
   usePageMeta({
     title: `Login | ${isVideoApp ? brandName : "Your Social Place"}`,

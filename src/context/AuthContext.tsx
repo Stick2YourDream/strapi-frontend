@@ -139,6 +139,16 @@ const resolveEffectiveExpiry = (
   return Number.isFinite(tokenExpiresAt as number) ? (tokenExpiresAt as number) : null;
 };
 
+const normalizeExpiry = (value: number | null) => {
+  if (!Number.isFinite(value as number)) return null;
+  const numeric = value as number;
+  // If stored as seconds (legacy), convert to ms.
+  if (numeric > 0 && numeric < 10_000_000_000) {
+    return numeric * 1000;
+  }
+  return numeric;
+};
+
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true); // Track if auth is initializing
@@ -165,12 +175,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
     if (storedUser && storedToken) {
       const now = Date.now();
-      const storedExpiresAt = Number(expiresAt);
+      const storedExpiresAt = normalizeExpiry(Number(expiresAt));
       const tokenExpiresAt = parseJwtExpiry(storedToken);
       const fallbackSessionDays = rememberDevice ? 30 : 1;
       const requestedExpiresAt = now + fallbackSessionDays * 24 * 60 * 60 * 1000;
       const effectiveExpiresAt = resolveEffectiveExpiry(
-        Number.isFinite(storedExpiresAt) ? storedExpiresAt : requestedExpiresAt,
+        Number.isFinite(storedExpiresAt as number) ? (storedExpiresAt as number) : requestedExpiresAt,
         tokenExpiresAt,
         now
       );
@@ -477,7 +487,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       localStorage.getItem("expiresAt") || sessionStorage.getItem("expiresAt");
     if (!user || !expiresAt) return;
 
-    const timeLeft = parseInt(expiresAt, 10) - new Date().getTime();
+    const normalizedExpiresAt = normalizeExpiry(Number(expiresAt));
+    const timeLeft =
+      Number.isFinite(normalizedExpiresAt as number)
+        ? (normalizedExpiresAt as number) - new Date().getTime()
+        : NaN;
     if (!Number.isFinite(timeLeft)) {
       console.warn("Auth expiry is invalid; skipping auto-logout.");
       return;
