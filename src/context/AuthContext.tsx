@@ -466,10 +466,18 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       localStorage.getItem("expiresAt") || sessionStorage.getItem("expiresAt");
     if (!user || !expiresAt) return;
 
-    const timeLeft = parseInt(expiresAt) - new Date().getTime();
-    if (timeLeft <= 0) {
-      logout();
+    const timeLeft = parseInt(expiresAt, 10) - new Date().getTime();
+    if (!Number.isFinite(timeLeft)) {
+      console.warn("Auth expiry is invalid; skipping auto-logout.");
       return;
+    }
+    if (timeLeft <= 0) {
+      const graceMs = 5 * 60 * 1000;
+      console.warn("Auth expiry already passed; applying grace window.", { timeLeft });
+      const timer = setTimeout(() => {
+        logout();
+      }, graceMs);
+      return () => clearTimeout(timer);
     }
 
     const timer = setTimeout(() => {
@@ -497,18 +505,21 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       tokenExpiresAt,
       now
     );
+    const minExpiry = now + 5 * 60 * 1000;
     const effectiveExpiry =
       Number.isFinite(effectiveExpiresAt as number)
         ? (effectiveExpiresAt as number)
         : requestedExpiresAt;
+    const finalExpiry =
+      effectiveExpiry > minExpiry ? effectiveExpiry : requestedExpiresAt;
     if (tokenExpiresAt && tokenExpiresAt <= now + 60_000) {
       console.warn("Auth token expiry is in the past or too soon; using session expiry.", {
         tokenExpiresAt,
         now,
       });
     }
-    localStorage.setItem("expiresAt", effectiveExpiry.toString());
-    sessionStorage.setItem("expiresAt", effectiveExpiry.toString());
+    localStorage.setItem("expiresAt", finalExpiry.toString());
+    sessionStorage.setItem("expiresAt", finalExpiry.toString());
     console.info("Auth: login success", { id: userData.id, email: userData.email });
   };
 
