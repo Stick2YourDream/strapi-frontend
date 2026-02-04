@@ -6,6 +6,7 @@ import ConsentBanner from "./components/ConsentBanner";
 import KeyBackupModal from "./components/KeyBackupModal";
 import ReleaseNotesModal from "./components/ReleaseNotesModal";
 import UpdateNotice from "./components/UpdateNotice";
+import AuthDebugOverlay from "./components/AuthDebugOverlay";
 
 export default function App() {
   return (
@@ -16,6 +17,7 @@ export default function App() {
       <KeyBackupModal />
       <ReleaseNotesModal />
       <UpdateNotice />
+      <AuthDebugOverlay />
     </BrowserRouter>
   );
 }

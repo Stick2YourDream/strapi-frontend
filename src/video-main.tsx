@@ -5,6 +5,7 @@ import { AuthProvider } from "./context/AuthContext";
 import { VideoCallProvider } from "./context/VideoCallContext";
 import VideoAppRoutes from "./routes/VideoAppRoutes";
 import UpdateNotice from "./components/UpdateNotice";
+import AuthDebugOverlay from "./components/AuthDebugOverlay";
 import "./index.css";
 import "./css/chatbox.css";
 import "./css/video-app.css";
@@ -16,6 +17,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         <BrowserRouter>
           <VideoAppRoutes />
           <UpdateNotice />
+          <AuthDebugOverlay />
         </BrowserRouter>
       </VideoCallProvider>
     </AuthProvider>

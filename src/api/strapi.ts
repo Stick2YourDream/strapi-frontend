@@ -22,7 +22,10 @@ const publicAuthEndpoints = new Set([
 
 const normalizeToken = (token?: string | null) => {
   const trimmed = token?.trim();
-  return trimmed ? trimmed : null;
+  if (!trimmed) return null;
+  return trimmed.toLowerCase().startsWith("bearer ")
+    ? trimmed.slice(7).trim()
+    : trimmed;
 };
 
 const safeGetStorage = (storage: Storage | null | undefined, key: string) => {

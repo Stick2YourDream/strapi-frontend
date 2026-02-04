@@ -105,9 +105,18 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const stripBearer = (value: string | null | undefined) => {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  return trimmed.toLowerCase().startsWith("bearer ")
+    ? trimmed.slice(7).trim()
+    : trimmed;
+};
+
 const parseJwtPayload = (token: string | null) => {
-  if (!token || typeof token !== "string") return null;
-  const parts = token.split(".");
+  const clean = stripBearer(token);
+  if (!clean || typeof clean !== "string") return null;
+  const parts = clean.split(".");
   if (parts.length < 2) return null;
   const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
   const padded = payload.padEnd(payload.length + ((4 - (payload.length % 4)) % 4), "=");
@@ -134,8 +143,7 @@ const parseJwtUserId = (token: string | null) => {
 };
 
 const normalizeTokenValue = (value: string | null | undefined) => {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
+  return stripBearer(value);
 };
 
 const safeGetItem = (storage: Storage | null | undefined, key: string) => {
@@ -145,6 +153,44 @@ const safeGetItem = (storage: Storage | null | undefined, key: string) => {
   } catch {
     return null;
   }
+};
+
+const trySetItem = (storage: Storage | null | undefined, key: string, value: string) => {
+  if (!storage) return false;
+  try {
+    storage.setItem(key, value);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+type AuthSnapshot = {
+  userRaw?: string;
+  userId?: string;
+  token?: string;
+  expiresAt?: string;
+  rememberDevice?: string;
+};
+
+const persistAuthSnapshot = (storage: Storage, snapshot: AuthSnapshot) => {
+  let ok = true;
+  if (snapshot.userRaw !== undefined) {
+    ok = trySetItem(storage, "user", snapshot.userRaw) && ok;
+  }
+  if (snapshot.userId !== undefined) {
+    ok = trySetItem(storage, "userId", snapshot.userId) && ok;
+  }
+  if (snapshot.token !== undefined) {
+    ok = trySetItem(storage, "token", snapshot.token) && ok;
+  }
+  if (snapshot.expiresAt !== undefined) {
+    ok = trySetItem(storage, "expiresAt", snapshot.expiresAt) && ok;
+  }
+  if (snapshot.rememberDevice !== undefined) {
+    ok = trySetItem(storage, "rememberDevice", snapshot.rememberDevice) && ok;
+  }
+  return ok;
 };
 
 const parseStoredUser = (raw: string | null, storage?: Storage | null) => {
@@ -189,6 +235,14 @@ const normalizeExpiry = (value: number | null) => {
   return numeric;
 };
 
+const parseStoredUserId = (local: Storage, session: Storage) => {
+  const raw =
+    safeGetItem(local, "userId") ||
+    safeGetItem(session, "userId");
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true); // Track if auth is initializing
@@ -210,9 +264,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
     const hydrate = async () => {
       const now = Date.now();
-      const localToken = normalizeTokenValue(safeGetItem(window.localStorage, "token"));
-      const sessionToken = normalizeTokenValue(safeGetItem(window.sessionStorage, "token"));
-      const storedToken = localToken || sessionToken;
+    const localToken = normalizeTokenValue(safeGetItem(window.localStorage, "token"));
+    const sessionToken = normalizeTokenValue(safeGetItem(window.sessionStorage, "token"));
+    const storedToken = localToken || sessionToken;
+    const storedUserId = parseStoredUserId(window.localStorage, window.sessionStorage);
 
       const localUserRaw = safeGetItem(window.localStorage, "user");
       const sessionUserRaw = safeGetItem(window.sessionStorage, "user");
@@ -246,22 +301,37 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         const effectiveExpiry =
           Number.isFinite(effectiveExpiresAt as number) ? (effectiveExpiresAt as number) : null;
 
-        if (effectiveExpiry && now < effectiveExpiry) {
-          localStorage.setItem("token", storedToken);
-          localStorage.setItem("expiresAt", effectiveExpiry.toString());
-          localStorage.setItem("rememberDevice", rememberDevice ? "1" : "0");
+      if (effectiveExpiry && now < effectiveExpiry) {
+        const baseSnapshot: AuthSnapshot = {
+          token: storedToken,
+          expiresAt: effectiveExpiry.toString(),
+          rememberDevice: rememberDevice ? "1" : "0",
+        };
+        const localOk = persistAuthSnapshot(window.localStorage, baseSnapshot);
+        if (!localOk) {
+          persistAuthSnapshot(window.sessionStorage, baseSnapshot);
+        } else {
           sessionStorage.removeItem("token");
           sessionStorage.removeItem("expiresAt");
           sessionStorage.removeItem("rememberDevice");
-          setAuthToken(storedToken);
+        }
+        setAuthToken(storedToken);
 
-          if (storedUser) {
-            localStorage.setItem("user", JSON.stringify(storedUser));
-            sessionStorage.removeItem("user");
-            if (active) {
-              setUser(storedUser);
-            }
+        if (storedUser) {
+          const userSnapshot: AuthSnapshot = {
+            userRaw: JSON.stringify(storedUser),
+            userId: String(storedUser.id),
+          };
+          const localUserOk = persistAuthSnapshot(window.localStorage, userSnapshot);
+          if (!localUserOk) {
+            persistAuthSnapshot(window.sessionStorage, userSnapshot);
           } else {
+            sessionStorage.removeItem("user");
+          }
+          if (active) {
+            setUser(storedUser);
+          }
+        } else {
             try {
               const res = await api.get("/users/me");
               const payload = res.data || {};
@@ -272,21 +342,38 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                 appRole: payload.appRole || undefined,
               };
               if (Number.isFinite(recovered.id)) {
-                localStorage.setItem("user", JSON.stringify(recovered));
-                sessionStorage.removeItem("user");
+                const userSnapshot: AuthSnapshot = {
+                  userRaw: JSON.stringify(recovered),
+                  userId: String(recovered.id),
+                };
+                const localUserOk = persistAuthSnapshot(window.localStorage, userSnapshot);
+                if (!localUserOk) {
+                  persistAuthSnapshot(window.sessionStorage, userSnapshot);
+                } else {
+                  sessionStorage.removeItem("user");
+                }
                 if (active) {
                   setUser(recovered);
                 }
               }
             } catch (error) {
               const tokenUserId = parseJwtUserId(storedToken);
-              if (tokenUserId && active) {
+              const fallbackId = storedUserId || tokenUserId;
+              if (fallbackId && active) {
                 const fallbackUser: User = {
-                  id: tokenUserId,
+                  id: fallbackId,
                   email: "",
                 };
-                localStorage.setItem("user", JSON.stringify(fallbackUser));
-                sessionStorage.removeItem("user");
+                const userSnapshot: AuthSnapshot = {
+                  userRaw: JSON.stringify(fallbackUser),
+                  userId: String(fallbackId),
+                };
+                const localUserOk = persistAuthSnapshot(window.localStorage, userSnapshot);
+                if (!localUserOk) {
+                  persistAuthSnapshot(window.sessionStorage, userSnapshot);
+                } else {
+                  sessionStorage.removeItem("user");
+                }
                 setUser(fallbackUser);
                 console.warn("Auth: recovered user from token due to /users/me failure.", error);
               } else if (active) {
@@ -295,25 +382,29 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             }
           }
         } else {
-          localStorage.removeItem("user");
-          localStorage.removeItem("token");
-          localStorage.removeItem("expiresAt");
-          localStorage.removeItem("rememberDevice");
-          sessionStorage.removeItem("user");
-          sessionStorage.removeItem("token");
-          sessionStorage.removeItem("expiresAt");
-          sessionStorage.removeItem("rememberDevice");
-          setAuthToken(null);
-        }
-      } else {
         localStorage.removeItem("user");
+        localStorage.removeItem("token");
         localStorage.removeItem("expiresAt");
         localStorage.removeItem("rememberDevice");
+        localStorage.removeItem("userId");
         sessionStorage.removeItem("user");
+        sessionStorage.removeItem("token");
         sessionStorage.removeItem("expiresAt");
         sessionStorage.removeItem("rememberDevice");
+        sessionStorage.removeItem("userId");
         setAuthToken(null);
       }
+    } else {
+      localStorage.removeItem("user");
+      localStorage.removeItem("expiresAt");
+      localStorage.removeItem("rememberDevice");
+      localStorage.removeItem("userId");
+      sessionStorage.removeItem("user");
+      sessionStorage.removeItem("expiresAt");
+      sessionStorage.removeItem("rememberDevice");
+      sessionStorage.removeItem("userId");
+      setAuthToken(null);
+    }
 
       if (active) {
         setLoading(false);
@@ -715,12 +806,20 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const login = (userData: User, token: string, options?: { rememberDevice?: boolean }) => {
     setUser(userData);
     setProfileLoading(true);
-    localStorage.setItem("user", JSON.stringify(userData));
-    localStorage.setItem("token", token);
-    localStorage.setItem("rememberDevice", options?.rememberDevice ? "1" : "0");
-    sessionStorage.removeItem("user");
-    sessionStorage.removeItem("token");
-    sessionStorage.removeItem("rememberDevice");
+    const snapshot: AuthSnapshot = {
+      userRaw: JSON.stringify(userData),
+      userId: String(userData.id),
+      token: normalizeTokenValue(token) || token,
+      rememberDevice: options?.rememberDevice ? "1" : "0",
+    };
+    const localOk = persistAuthSnapshot(window.localStorage, snapshot);
+    if (!localOk) {
+      persistAuthSnapshot(window.sessionStorage, snapshot);
+    } else {
+      sessionStorage.removeItem("user");
+      sessionStorage.removeItem("token");
+      sessionStorage.removeItem("rememberDevice");
+    }
     setAuthToken(token);
     // 30 days when remembered, otherwise 24 hours.
     const sessionDays = options?.rememberDevice ? 30 : 1;
@@ -747,14 +846,28 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         now,
       });
     }
-    localStorage.setItem("expiresAt", finalExpiry.toString());
-    sessionStorage.removeItem("expiresAt");
+    const expirySnapshot: AuthSnapshot = {
+      expiresAt: finalExpiry.toString(),
+    };
+    const localExpiryOk = persistAuthSnapshot(window.localStorage, expirySnapshot);
+    if (!localExpiryOk) {
+      persistAuthSnapshot(window.sessionStorage, expirySnapshot);
+    } else {
+      sessionStorage.removeItem("expiresAt");
+    }
     console.info("Auth: login success", { id: userData.id, email: userData.email });
   };
 
   const updateUser = (userData: User) => {
     setUser(userData);
-    localStorage.setItem("user", JSON.stringify(userData));
+    const snapshot: AuthSnapshot = {
+      userRaw: JSON.stringify(userData),
+      userId: String(userData.id),
+    };
+    const localOk = persistAuthSnapshot(window.localStorage, snapshot);
+    if (!localOk) {
+      persistAuthSnapshot(window.sessionStorage, snapshot);
+    }
   };
 
   const logout = (reason?: string) => {
@@ -792,10 +905,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     localStorage.removeItem("token");
     localStorage.removeItem("expiresAt");
     localStorage.removeItem("rememberDevice");
+    localStorage.removeItem("userId");
     sessionStorage.removeItem("user");
     sessionStorage.removeItem("token");
     sessionStorage.removeItem("expiresAt");
     sessionStorage.removeItem("rememberDevice");
+    sessionStorage.removeItem("userId");
     setAuthToken(null);
     console.info("Auth: logout success");
   };

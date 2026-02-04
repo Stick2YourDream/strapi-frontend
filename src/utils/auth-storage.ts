@@ -5,7 +5,11 @@ export const getStoredToken = () => {
       window.localStorage.getItem("token") ||
       window.sessionStorage.getItem("token") ||
       "";
-    return token.trim();
+    const trimmed = token.trim();
+    if (!trimmed) return "";
+    return trimmed.toLowerCase().startsWith("bearer ")
+      ? trimmed.slice(7).trim()
+      : trimmed;
   } catch {
     return "";
   }
