@@ -134,8 +134,15 @@ const parseJwtPayload = (token: string | null) => {
 
 const parseJwtExpiry = (token: string | null) => {
   const decoded = parseJwtPayload(token);
-  if (typeof decoded?.exp === "number") {
-    return decoded.exp * 1000;
+  const rawExp = decoded?.exp;
+  if (typeof rawExp === "number") {
+    return rawExp > 10_000_000_000 ? rawExp : rawExp * 1000;
+  }
+  if (typeof rawExp === "string") {
+    const parsed = Number(rawExp);
+    if (Number.isFinite(parsed)) {
+      return parsed > 10_000_000_000 ? parsed : parsed * 1000;
+    }
   }
   return null;
 };
@@ -321,15 +328,17 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         );
         const effectiveExpiry =
           Number.isFinite(effectiveExpiresAt as number) ? (effectiveExpiresAt as number) : null;
+        const fallbackExpiry = now + 2 * 60 * 60 * 1000;
+        const resolvedExpiry = effectiveExpiry || fallbackExpiry;
 
-        if (effectiveExpiry && now < effectiveExpiry) {
+        if (!effectiveExpiry || now < effectiveExpiry) {
           if (active) {
             setSessionActive(true);
-            setSessionExpiresAt(effectiveExpiry);
+            setSessionExpiresAt(resolvedExpiry);
           }
           const baseSnapshot: AuthSnapshot = {
             token: storedToken,
-            expiresAt: effectiveExpiry.toString(),
+            expiresAt: resolvedExpiry.toString(),
             rememberDevice: rememberDevice ? "1" : "0",
           };
           persistAuthSnapshot(window.localStorage, baseSnapshot);
