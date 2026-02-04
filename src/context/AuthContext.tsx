@@ -134,9 +134,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [keyBackupError, setKeyBackupError] = useState<string | null>(null);
 
   useEffect(() => {
-    const storedUser = localStorage.getItem("user");
-    const storedToken = localStorage.getItem("token");
-    const expiresAt = localStorage.getItem("expiresAt");
+    const storedUser =
+      localStorage.getItem("user") || sessionStorage.getItem("user");
+    const storedToken =
+      localStorage.getItem("token") || sessionStorage.getItem("token");
+    const expiresAt =
+      localStorage.getItem("expiresAt") || sessionStorage.getItem("expiresAt");
 
     if (storedUser && storedToken && expiresAt) {
       const now = Date.now();
@@ -149,6 +152,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       if (Number.isFinite(effectiveExpiresAt) && now < effectiveExpiresAt) {
         if (effectiveExpiresAt !== storedExpiresAt) {
           localStorage.setItem("expiresAt", effectiveExpiresAt.toString());
+          sessionStorage.setItem("expiresAt", effectiveExpiresAt.toString());
         }
         setAuthToken(storedToken);
         setUser(JSON.parse(storedUser));
@@ -156,6 +160,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         localStorage.removeItem("user");
         localStorage.removeItem("token");
         localStorage.removeItem("expiresAt");
+        sessionStorage.removeItem("user");
+        sessionStorage.removeItem("token");
+        sessionStorage.removeItem("expiresAt");
         setAuthToken(null);
       }
     }
@@ -455,6 +462,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     setProfileLoading(true);
     localStorage.setItem("user", JSON.stringify(userData));
     localStorage.setItem("token", token);
+    sessionStorage.setItem("user", JSON.stringify(userData));
+    sessionStorage.setItem("token", token);
     setAuthToken(token);
     // 30 days when remembered, otherwise 24 hours.
     const sessionDays = options?.rememberDevice ? 30 : 1;
@@ -464,6 +473,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       ? Math.min(requestedExpiresAt, tokenExpiresAt)
       : requestedExpiresAt;
     localStorage.setItem("expiresAt", effectiveExpiresAt.toString());
+    sessionStorage.setItem("expiresAt", effectiveExpiresAt.toString());
     console.info("Auth: login success", { id: userData.id, email: userData.email });
   };
 
@@ -482,6 +492,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     localStorage.removeItem("user");
     localStorage.removeItem("token");
     localStorage.removeItem("expiresAt");
+    sessionStorage.removeItem("user");
+    sessionStorage.removeItem("token");
+    sessionStorage.removeItem("expiresAt");
     setAuthToken(null);
     console.info("Auth: logout success");
   };
