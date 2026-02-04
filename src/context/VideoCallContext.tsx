@@ -521,17 +521,29 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     return "";
   };
 
+  const resolveLocalIdentity = useCallback(() => {
+    const profile = profileRef.current;
+    const displayName = String(
+      profile?.displayName || user?.username || user?.email || ""
+    ).trim();
+    return {
+      displayName,
+      handle: String(profile?.handle || "").trim(),
+      avatarUrl: String(profile?.avatarUrl || "").trim(),
+    };
+  }, [user?.email, user?.username]);
+
   const resolveSocketAuth = useCallback(() => {
     const token = getStoredToken();
-    const profile = profileRef.current;
+    const identity = resolveLocalIdentity();
     return {
       token,
       userId: user?.id,
-      displayName: profile?.displayName || user?.email || "",
-      handle: profile?.handle || "",
-      avatarUrl: profile?.avatarUrl || "",
+      displayName: identity.displayName,
+      handle: identity.handle,
+      avatarUrl: identity.avatarUrl,
     };
-  }, [user?.email, user?.id]);
+  }, [resolveLocalIdentity, user?.id]);
 
   const refreshSocketAuth = useCallback(
     async (socket?: Socket | null) => {
@@ -2753,6 +2765,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
             handle,
             avatarUrl,
           };
+          if (socketRef.current) {
+            void refreshSocketAuth(socketRef.current);
+          }
         }
       } catch {
         if (active) {
@@ -2760,6 +2775,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
             userId: user.id,
             displayName: user.email,
           };
+          if (socketRef.current) {
+            void refreshSocketAuth(socketRef.current);
+          }
         }
       }
     };
@@ -2767,7 +2785,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     return () => {
       active = false;
     };
-  }, [user?.email, user?.id]);
+  }, [refreshSocketAuth, user?.email, user?.id]);
 
   const forceMuteLocalAudio = useCallback(() => {
     const rawStream = rawStreamRef.current;
@@ -3701,16 +3719,21 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     await ensureIceServers({ force: true });
     warnIfNoTurn();
     socketRef.current.emit("call:join", { roomId });
+    const hostIdentity = resolveLocalIdentity();
     socketRef.current.emit("call:invite", {
       roomId,
       invitees: targetInvitees.map((invitee) => invitee.userId),
       e2eeEnabled: callEncryptionEnabledRef.current,
+      hostName: hostIdentity.displayName,
+      hostHandle: hostIdentity.handle,
+      hostAvatar: hostIdentity.avatarUrl,
     });
   }, [
     e2eeSupported,
     ensureCallMedia,
     ensureIceServers,
     resetE2eeState,
+    resolveLocalIdentity,
     selectedInvitees,
     setCallEncryptionMode,
     user?.id,

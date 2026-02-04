@@ -81,7 +81,7 @@ const maskDeviceId = (value: string) => {
 export default function Login() {
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
-  const [rememberDevice, setRememberDevice] = useState(false);
+  const rememberDevice = false;
   const [challengeId, setChallengeId] = useState<string | null>(null);
   const [challengeMethod, setChallengeMethod] = useState<VerificationMethod | null>(null);
   const [verificationCode, setVerificationCode] = useState("");
@@ -548,17 +548,6 @@ export default function Login() {
               If you have 2FA enabled, you will need to enter the code from your authenticator app.
             </p>
 
-            <label className="auth-check">
-              <input
-                type="checkbox"
-                checked={rememberDevice}
-                onChange={(e) => setRememberDevice(e.target.checked)}
-              />
-              <span className="auth-check__track" aria-hidden="true">
-                <span className="auth-check__thumb" />
-              </span>
-              <span className="auth-check__label">Remember this device for 30 days</span>
-            </label>
           </>
         ) : (
           <>
