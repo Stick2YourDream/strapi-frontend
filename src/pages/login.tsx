@@ -106,14 +106,9 @@ export default function Login() {
   const navigate = useNavigate();
   const appMode = String(import.meta.env.VITE_APP_MODE || "").toLowerCase();
   const isVideoApp = appMode === "video";
-  const debugParam =
-    typeof window !== "undefined" &&
-    new URLSearchParams(window.location.search).get("authDebug") === "1";
-  const debugFlag =
-    typeof window !== "undefined" && window.localStorage.getItem("authDebug") === "1";
   const envDebug =
     String(import.meta.env.VITE_AUTH_DEBUG || "").toLowerCase() === "true";
-  const showDebug = isVideoApp || import.meta.env.DEV || envDebug || debugParam || debugFlag;
+  const showDebug = isVideoApp || import.meta.env.DEV || envDebug;
   const brandName = String(import.meta.env.VITE_APP_NAME || "").trim() || "Your Social Place";
   usePageMeta({
     title: `Login | ${isVideoApp ? brandName : "Your Social Place"}`,
@@ -131,7 +126,7 @@ export default function Login() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    window.localStorage.setItem("authDebug", "1");
+    window.localStorage.setItem("authDebug", "0");
   }, []);
 
   useEffect(() => {

@@ -3628,11 +3628,16 @@ export default function VideoCallModal({
                 {status === "incoming" ? "Incoming video call" : "Video room"}
               </p>
               <h3 className="video-call-title">
-                {status === "incoming"
-                  ? incomingHostName
-                  : status === "setup"
-                  ? "Start a video call"
-                  : "Live video call"}
+                {status === "incoming" ? (
+                  <span className="video-call-title-call">
+                    <span className="video-call-title-name">{incomingHostName}</span>{" "}
+                    is calling
+                  </span>
+                ) : status === "setup" ? (
+                  "Start a video call"
+                ) : (
+                  "Live video call"
+                )}
               </h3>
             </div>
             {showCallUi && (
@@ -4073,7 +4078,10 @@ export default function VideoCallModal({
             <div className="video-call-incoming">
               <div className="video-incoming-card">
                 <p className="eyebrow">Incoming call</p>
-                <h3>{incomingHostName}</h3>
+                <h3 className="video-incoming-title">
+                  <span className="video-incoming-name">{incomingHostName}</span>{" "}
+                  is calling
+                </h3>
                 <p className="subhead">
                   {incomingCall?.hostHandle ? `@${incomingCall.hostHandle}` : "Tap accept to join."}
                 </p>

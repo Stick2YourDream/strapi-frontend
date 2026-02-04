@@ -3515,6 +3515,20 @@ html.key-backup-active .chat-toggle-icon {
   text-align: center;
 }
 
+.video-incoming-title {
+  margin: 0;
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+.video-incoming-name,
+.video-call-title-name {
+  color: #ffffff;
+  font-weight: 700;
+  text-shadow: 0 0 10px rgba(147, 197, 253, 0.45),
+    0 0 18px rgba(59, 130, 246, 0.35);
+}
+
 .video-incoming-actions {
   display: flex;
   gap: 10px;

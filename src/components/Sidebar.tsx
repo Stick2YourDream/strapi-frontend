@@ -330,6 +330,14 @@ export default function Sidebar({
     return actor ? `${actor} posted a group update.` : "New group update received.";
   }, [counts.groupUpdates, previews.groupUpdates]);
 
+  const groupUpdatesTarget = useMemo(() => {
+    const message = String(previews.groupUpdates?.message || "").toLowerCase();
+    if (message.includes("device approval")) {
+      return "/me?view=settings&section=security";
+    }
+    return "/groups";
+  }, [previews.groupUpdates?.message]);
+
   const likesPreviewText = useMemo(() => {
     if (counts.likes <= 0) return "";
     return counts.likes === 1
@@ -555,7 +563,7 @@ export default function Sidebar({
         <button
           type="button"
           className="sidebar-notification-item is-action"
-          onClick={() => handleNotificationAction("/groups")}
+          onClick={() => handleNotificationAction(groupUpdatesTarget)}
         >
           <span>Group updates</span>
           <span className="sidebar-notification-count">{counts.groupUpdates}</span>
