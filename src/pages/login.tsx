@@ -8,6 +8,7 @@ import axios from "axios";
 import "../css/login.css";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { getOrCreateDeviceId } from "../utils/device-id";
+import { getStoredExpiresAt, getStoredToken } from "../utils/auth-storage";
 
 const SETTINGS_GLOBAL_KEY = "video-call-settings:global";
 const AUTH_DEBUG_SESSION_KEY = "auth:debug-last-login";
@@ -191,11 +192,11 @@ export default function Login() {
     if (typeof window === "undefined") return "";
     const now = Date.now();
     const deviceId = getOrCreateDeviceId();
-    const token = localStorage.getItem("token") || "";
+    const token = getStoredToken();
     const payload = token ? decodeJwtPayload(token) : null;
     const tokenIssuedAt = toMsFromSeconds(payload?.iat);
     const tokenExpiresAt = toMsFromSeconds(payload?.exp);
-    const storedExpiresAt = Number(localStorage.getItem("expiresAt") || 0);
+    const storedExpiresAt = getStoredExpiresAt();
     const effectiveStoredExpiresAt = Number.isFinite(storedExpiresAt) ? storedExpiresAt : null;
     const timeLeftMs =
       effectiveStoredExpiresAt && Number.isFinite(effectiveStoredExpiresAt)

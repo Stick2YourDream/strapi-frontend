@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import api from "../api/strapi";
 import axios from "axios";
+import { getStoredToken } from "../utils/auth-storage";
 import "../css/dashboard.css";
 import { useAuth } from "../context/AuthContext";
 import Sidebar from "../components/Sidebar";
@@ -1111,7 +1112,7 @@ export default function Dashboard() {
       }
       setError(null);
 
-      const token = localStorage.getItem("token");
+      const token = getStoredToken();
       if (!token) {
         if (!options?.silent) {
           setLoading(false);
@@ -1350,7 +1351,7 @@ export default function Dashboard() {
           if (status === 401) {
             setError(
               `401 Unauthorized. Token still in storage: ${
-                !!localStorage.getItem("token")
+                Boolean(getStoredToken())
               }. Message: ${msg}`
             );
             return;

@@ -25,6 +25,7 @@ import {
   fetchUserKeys,
 } from "../utils/profile-e2ee";
 import { pickMediaUrl } from "../utils/media";
+import { getStoredToken } from "../utils/auth-storage";
 
 type VideoCallInvitee = {
   userId: number;
@@ -521,7 +522,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   };
 
   const resolveSocketAuth = useCallback(() => {
-    const token = localStorage.getItem("token") || "";
+    const token = getStoredToken();
     const profile = profileRef.current;
     return {
       token,
