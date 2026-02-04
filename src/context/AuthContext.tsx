@@ -158,13 +158,19 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       localStorage.getItem("token") || sessionStorage.getItem("token");
     const expiresAt =
       localStorage.getItem("expiresAt") || sessionStorage.getItem("expiresAt");
+    const rememberFlag =
+      localStorage.getItem("rememberDevice") ||
+      sessionStorage.getItem("rememberDevice");
+    const rememberDevice = rememberFlag === "1" || rememberFlag === "true";
 
-    if (storedUser && storedToken && expiresAt) {
+    if (storedUser && storedToken) {
       const now = Date.now();
       const storedExpiresAt = Number(expiresAt);
       const tokenExpiresAt = parseJwtExpiry(storedToken);
+      const fallbackSessionDays = rememberDevice ? 30 : 1;
+      const requestedExpiresAt = now + fallbackSessionDays * 24 * 60 * 60 * 1000;
       const effectiveExpiresAt = resolveEffectiveExpiry(
-        Number.isFinite(storedExpiresAt) ? storedExpiresAt : null,
+        Number.isFinite(storedExpiresAt) ? storedExpiresAt : requestedExpiresAt,
         tokenExpiresAt,
         now
       );
@@ -176,15 +182,19 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           localStorage.setItem("expiresAt", effectiveExpiry.toString());
           sessionStorage.setItem("expiresAt", effectiveExpiry.toString());
         }
+        localStorage.setItem("rememberDevice", rememberDevice ? "1" : "0");
+        sessionStorage.setItem("rememberDevice", rememberDevice ? "1" : "0");
         setAuthToken(storedToken);
         setUser(JSON.parse(storedUser));
       } else {
         localStorage.removeItem("user");
         localStorage.removeItem("token");
         localStorage.removeItem("expiresAt");
+        localStorage.removeItem("rememberDevice");
         sessionStorage.removeItem("user");
         sessionStorage.removeItem("token");
         sessionStorage.removeItem("expiresAt");
+        sessionStorage.removeItem("rememberDevice");
         setAuthToken(null);
       }
     }
@@ -493,8 +503,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     setProfileLoading(true);
     localStorage.setItem("user", JSON.stringify(userData));
     localStorage.setItem("token", token);
+    localStorage.setItem("rememberDevice", options?.rememberDevice ? "1" : "0");
     sessionStorage.setItem("user", JSON.stringify(userData));
     sessionStorage.setItem("token", token);
+    sessionStorage.setItem("rememberDevice", options?.rememberDevice ? "1" : "0");
     setAuthToken(token);
     // 30 days when remembered, otherwise 24 hours.
     const sessionDays = options?.rememberDevice ? 30 : 1;
@@ -565,9 +577,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     localStorage.removeItem("user");
     localStorage.removeItem("token");
     localStorage.removeItem("expiresAt");
+    localStorage.removeItem("rememberDevice");
     sessionStorage.removeItem("user");
     sessionStorage.removeItem("token");
     sessionStorage.removeItem("expiresAt");
+    sessionStorage.removeItem("rememberDevice");
     setAuthToken(null);
     console.info("Auth: logout success");
   };
