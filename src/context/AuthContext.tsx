@@ -122,6 +122,34 @@ const parseJwtExpiry = (token: string | null) => {
   return null;
 };
 
+const normalizeTokenValue = (value: string | null | undefined) => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+};
+
+const safeGetItem = (storage: Storage | null | undefined, key: string) => {
+  if (!storage) return null;
+  try {
+    return storage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+
+const parseStoredUser = (raw: string | null, storage?: Storage | null) => {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as User;
+  } catch {
+    try {
+      storage?.removeItem("user");
+    } catch {
+      // ignore storage errors
+    }
+    return null;
+  }
+};
+
 const resolveEffectiveExpiry = (
   requestedExpiresAt: number | null,
   tokenExpiresAt: number | null,
@@ -142,6 +170,7 @@ const resolveEffectiveExpiry = (
 const normalizeExpiry = (value: number | null) => {
   if (!Number.isFinite(value as number)) return null;
   const numeric = value as number;
+  if (numeric <= 0) return null;
   // If stored as seconds (legacy), convert to ms.
   if (numeric > 0 && numeric < 10_000_000_000) {
     return numeric * 1000;
@@ -159,28 +188,76 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     useState<AuthContextType["keyBackupStatus"]>("unknown");
   const [keyBackupLoading, setKeyBackupLoading] = useState(false);
   const [keyBackupError, setKeyBackupError] = useState<string | null>(null);
+  const [profileSynced, setProfileSynced] = useState(false);
   const lastLoginAtRef = useRef<number | null>(null);
+  const hasEncryptedProfileRef = useRef<boolean | null>(null);
+  const profileDecryptFailedRef = useRef(false);
 
   useEffect(() => {
-    const storedUser =
-      localStorage.getItem("user") || sessionStorage.getItem("user");
-    const storedToken =
-      localStorage.getItem("token") || sessionStorage.getItem("token");
-    const expiresAt =
-      localStorage.getItem("expiresAt") || sessionStorage.getItem("expiresAt");
-    const rememberFlag =
-      localStorage.getItem("rememberDevice") ||
-      sessionStorage.getItem("rememberDevice");
+    const now = Date.now();
+    const localTokenRaw = safeGetItem(window.localStorage, "token");
+    const sessionTokenRaw = safeGetItem(window.sessionStorage, "token");
+    const localToken = normalizeTokenValue(localTokenRaw);
+    const sessionToken = normalizeTokenValue(sessionTokenRaw);
+    const localExp = parseJwtExpiry(localToken);
+    const sessionExp = parseJwtExpiry(sessionToken);
+    const localValid = Number.isFinite(localExp as number) && (localExp as number) > now + 60_000;
+    const sessionValid =
+      Number.isFinite(sessionExp as number) && (sessionExp as number) > now + 60_000;
+    let storedToken: string | null = null;
+    let preferLocal = false;
+    if (localToken && sessionToken) {
+      if (sessionValid && (!localValid || (sessionExp as number) > (localExp as number))) {
+        storedToken = sessionToken;
+        preferLocal = false;
+      } else if (localValid) {
+        storedToken = localToken;
+        preferLocal = true;
+      } else if (sessionValid) {
+        storedToken = sessionToken;
+        preferLocal = false;
+      } else {
+        storedToken = localToken;
+        preferLocal = true;
+      }
+    } else if (localToken) {
+      storedToken = localToken;
+      preferLocal = true;
+    } else if (sessionToken) {
+      storedToken = sessionToken;
+      preferLocal = false;
+    }
+
+    const localUserRaw = safeGetItem(window.localStorage, "user");
+    const sessionUserRaw = safeGetItem(window.sessionStorage, "user");
+    let storedUser = preferLocal
+      ? parseStoredUser(localUserRaw, window.localStorage)
+      : parseStoredUser(sessionUserRaw, window.sessionStorage);
+    if (!storedUser && !preferLocal && localToken) {
+      storedUser = parseStoredUser(localUserRaw, window.localStorage);
+    } else if (!storedUser && preferLocal && sessionToken) {
+      storedUser = parseStoredUser(sessionUserRaw, window.sessionStorage);
+    }
+
+    const expiresAt = preferLocal
+      ? safeGetItem(window.localStorage, "expiresAt")
+      : safeGetItem(window.sessionStorage, "expiresAt");
+    const rememberFlag = preferLocal
+      ? safeGetItem(window.localStorage, "rememberDevice")
+      : safeGetItem(window.sessionStorage, "rememberDevice");
     const rememberDevice = rememberFlag === "1" || rememberFlag === "true";
 
     if (storedUser && storedToken) {
-      const now = Date.now();
       const storedExpiresAt = normalizeExpiry(Number(expiresAt));
+      const validStoredExpiresAt =
+        storedExpiresAt && storedExpiresAt > now ? storedExpiresAt : null;
       const tokenExpiresAt = parseJwtExpiry(storedToken);
       const fallbackSessionDays = rememberDevice ? 30 : 1;
       const requestedExpiresAt = now + fallbackSessionDays * 24 * 60 * 60 * 1000;
       const effectiveExpiresAt = resolveEffectiveExpiry(
-        Number.isFinite(storedExpiresAt as number) ? (storedExpiresAt as number) : requestedExpiresAt,
+        Number.isFinite(validStoredExpiresAt as number)
+          ? (validStoredExpiresAt as number)
+          : requestedExpiresAt,
         tokenExpiresAt,
         now
       );
@@ -195,7 +272,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         localStorage.setItem("rememberDevice", rememberDevice ? "1" : "0");
         sessionStorage.setItem("rememberDevice", rememberDevice ? "1" : "0");
         setAuthToken(storedToken);
-        setUser(JSON.parse(storedUser));
+        setUser(storedUser);
       } else {
         localStorage.removeItem("user");
         localStorage.removeItem("token");
@@ -218,21 +295,28 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       return;
     }
     setProfileLoading(true);
+    setProfileSynced(false);
+    profileDecryptFailedRef.current = false;
     try {
       const res = await api.get("/profiles/me?populate=avatar");
       const data = res.data?.data;
       const attrs = data?.attributes ?? data ?? null;
       if (!attrs) {
         setProfile(null);
+        hasEncryptedProfileRef.current = null;
+        profileDecryptFailedRef.current = false;
         return;
       }
 
+      const hasEncryptedProfile = Boolean(attrs.encryptedProfile);
+      hasEncryptedProfileRef.current = hasEncryptedProfile;
       const basePayload = buildProfilePayloadFromAttrs(attrs);
       let payload: ProfilePayload | null = null;
       if (attrs.encryptedProfile) {
         try {
           payload = await decryptOwnProfilePayload(user.id, attrs.encryptedProfile);
         } catch (error) {
+          profileDecryptFailedRef.current = true;
           console.warn("Unable to decrypt profile payload:", error);
         }
       }
@@ -241,7 +325,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         payload = { ...basePayload, ...payload };
       } else {
         payload = basePayload;
-        if (Object.values(payload).some((value) => value)) {
+        if (!hasEncryptedProfile && Object.values(payload).some((value) => value)) {
           try {
             const encryptedProfile = await encryptProfilePayload(user.id, payload);
             await api.put("/profiles/me", {
@@ -324,8 +408,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       setProfile({ ...payload, onboardingComplete, avatarUrl, handle, notificationReadState });
     } catch {
       setProfile(null);
+      hasEncryptedProfileRef.current = null;
+      profileDecryptFailedRef.current = false;
     } finally {
       setProfileLoading(false);
+      setProfileSynced(true);
     }
   };
 
@@ -359,11 +446,30 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         fetchKeyBackup().catch(() => null),
       ]);
       const backupExists = Boolean(backup?.encryptedPayload);
+      const encryptedProfileFlag = hasEncryptedProfileRef.current;
+      if (encryptedProfileFlag === null) {
+        setKeyBackupStatus("unknown");
+        return;
+      }
+      const hasEncryptedProfile = encryptedProfileFlag === true;
+      const decryptFailed = profileDecryptFailedRef.current === true;
+      if (decryptFailed) {
+        setKeyBackupStatus("needs-restore");
+        setKeyBackupError(
+          "Unable to decrypt your profile. Restore your key backup or reset encrypted profile."
+        );
+        return;
+      }
       if (hasLocal) {
         await ensureUserKeyOnServer();
         setKeyBackupStatus(backupExists ? "ready" : "needs-setup");
       } else if (backupExists) {
         setKeyBackupStatus("needs-restore");
+      } else if (hasEncryptedProfile) {
+        setKeyBackupStatus("needs-restore");
+        setKeyBackupError(
+          "Missing local encryption keys. Restore your key backup or reset encrypted profile."
+        );
       } else {
         await ensureUserKeyOnServer();
         await getOrCreateProfileKey(user.id);
@@ -458,9 +564,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     if (!user) {
       setProfile(null);
       setProfileLoading(false);
+      setProfileSynced(false);
+      hasEncryptedProfileRef.current = null;
       return;
     }
     setProfileLoading(true);
+    setProfileSynced(false);
     void refreshProfile();
   }, [user?.id]);
 
@@ -478,20 +587,71 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       setKeyBackupError(null);
       return;
     }
+    if (!profileSynced) return;
     void refreshKeyBackup();
-  }, [user?.id]);
+  }, [profileSynced, user?.id]);
 
   // Auto-logout when the session window expires
   useEffect(() => {
-    const expiresAt =
-      localStorage.getItem("expiresAt") || sessionStorage.getItem("expiresAt");
-    if (!user || !expiresAt) return;
+    if (!user) return;
+    const now = Date.now();
+    const localTokenRaw = safeGetItem(window.localStorage, "token");
+    const sessionTokenRaw = safeGetItem(window.sessionStorage, "token");
+    const localToken = normalizeTokenValue(localTokenRaw);
+    const sessionToken = normalizeTokenValue(sessionTokenRaw);
+    const localExp = parseJwtExpiry(localToken);
+    const sessionExp = parseJwtExpiry(sessionToken);
+    const localValid = Number.isFinite(localExp as number) && (localExp as number) > now + 60_000;
+    const sessionValid =
+      Number.isFinite(sessionExp as number) && (sessionExp as number) > now + 60_000;
+    let storedToken: string | null = null;
+    let preferLocal = false;
+    if (localToken && sessionToken) {
+      if (sessionValid && (!localValid || (sessionExp as number) > (localExp as number))) {
+        storedToken = sessionToken;
+        preferLocal = false;
+      } else if (localValid) {
+        storedToken = localToken;
+        preferLocal = true;
+      } else if (sessionValid) {
+        storedToken = sessionToken;
+        preferLocal = false;
+      } else {
+        storedToken = localToken;
+        preferLocal = true;
+      }
+    } else if (localToken) {
+      storedToken = localToken;
+      preferLocal = true;
+    } else if (sessionToken) {
+      storedToken = sessionToken;
+      preferLocal = false;
+    }
+    if (!storedToken) return;
+    const expiresAt = preferLocal
+      ? safeGetItem(window.localStorage, "expiresAt")
+      : safeGetItem(window.sessionStorage, "expiresAt");
+    const rememberFlag = preferLocal
+      ? safeGetItem(window.localStorage, "rememberDevice")
+      : safeGetItem(window.sessionStorage, "rememberDevice");
+    const rememberDevice = rememberFlag === "1" || rememberFlag === "true";
 
     const normalizedExpiresAt = normalizeExpiry(Number(expiresAt));
-    const timeLeft =
-      Number.isFinite(normalizedExpiresAt as number)
-        ? (normalizedExpiresAt as number) - new Date().getTime()
-        : NaN;
+    const validStoredExpiresAt =
+      normalizedExpiresAt && normalizedExpiresAt > now ? normalizedExpiresAt : null;
+    const tokenExpiresAt = parseJwtExpiry(storedToken);
+    const requestedExpiresAt =
+      now + (rememberDevice ? 30 : 1) * 24 * 60 * 60 * 1000;
+    const effectiveExpiresAt = resolveEffectiveExpiry(
+      Number.isFinite(validStoredExpiresAt as number)
+        ? (validStoredExpiresAt as number)
+        : requestedExpiresAt,
+      tokenExpiresAt,
+      now
+    );
+    if (!Number.isFinite(effectiveExpiresAt as number)) return;
+
+    const timeLeft = (effectiveExpiresAt as number) - now;
     if (!Number.isFinite(timeLeft)) {
       console.warn("Auth expiry is invalid; skipping auto-logout.");
       return;

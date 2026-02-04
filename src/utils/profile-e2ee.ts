@@ -8,6 +8,7 @@ import {
   exportPublicKey,
   getOrCreateIdentityKeyPair,
   getOrCreateProfileKey,
+  getStoredKey,
   importPublicKey,
   removeStoredKey,
 } from "./crypto";
@@ -209,9 +210,18 @@ export const fetchUserKeys = async (userIds: number[]) => {
   return userKeyCache;
 };
 
-export const getOrCreateSelfProfileKey = async (userId: number) => {
+export const getOrCreateSelfProfileKey = async (
+  userId: number,
+  options?: { create?: boolean }
+) => {
   const cached = profileKeyCache.get(userId);
   if (cached) return cached;
+  if (options?.create === false) {
+    const stored = await getStoredKey<CryptoKey>(`profile-key-${userId}`);
+    if (!stored) return null;
+    profileKeyCache.set(userId, stored);
+    return stored;
+  }
   const key = await getOrCreateProfileKey(userId);
   profileKeyCache.set(userId, key);
   return key;
@@ -223,7 +233,10 @@ export const resetSelfProfileKey = async (userId: number) => {
 };
 
 export const encryptProfilePayload = async (userId: number, payload: ProfilePayload) => {
-  const key = await getOrCreateSelfProfileKey(userId);
+  const key = await getOrCreateSelfProfileKey(userId, { create: true });
+  if (!key) {
+    throw new Error("Missing profile key");
+  }
   return encryptJson(key, payload);
 };
 
@@ -231,7 +244,10 @@ export const decryptOwnProfilePayload = async <T = ProfilePayload>(
   userId: number,
   encryptedPayload: string
 ) => {
-  const key = await getOrCreateSelfProfileKey(userId);
+  const key = await getOrCreateSelfProfileKey(userId, { create: false });
+  if (!key) {
+    throw new Error("Missing profile key");
+  }
   return decryptJson<T>(key, encryptedPayload);
 };
 
@@ -242,7 +258,11 @@ export const ensureProfileKeyShares = async (
   if (!friendIds.length) return;
   await fetchUserKeys(friendIds);
   const { privateKey } = await getOrCreateIdentityKeyPair();
-  const profileKey = await getOrCreateSelfProfileKey(ownerId);
+  const profileKey = await getOrCreateSelfProfileKey(ownerId, { create: false });
+  if (!profileKey) {
+    console.warn("Missing profile key; skipping profile key shares.");
+    return;
+  }
 
   const existingShares = new Set<number>();
   try {
