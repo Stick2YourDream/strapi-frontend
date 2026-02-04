@@ -10,6 +10,17 @@ import { usePageMeta } from "../hooks/usePageMeta";
 import { getOrCreateDeviceId } from "../utils/device-id";
 
 const SETTINGS_GLOBAL_KEY = "video-call-settings:global";
+const AUTH_DEBUG_SESSION_KEY = "auth:debug-last-login";
+
+type AuthDebugSnapshot = {
+  at: number;
+  rememberDevice: boolean;
+  requestedExpiresAt: number;
+  effectiveExpiresAt: number;
+  tokenIssuedAt?: number | null;
+  tokenExpiresAt?: number | null;
+  tokenIssuer?: string | null;
+};
 
 const loadBackgroundSettings = (raw: string | null) => {
   if (!raw) return { backgroundImage: "", backgroundColor: "" };
@@ -31,6 +42,41 @@ const loadBackgroundSettings = (raw: string | null) => {
 
 type VerificationMethod = "sms" | "email" | "totp";
 
+const decodeJwtPayload = (token: string) => {
+  const parts = token.split(".");
+  if (parts.length < 2) return null;
+  const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+  const padded = payload.padEnd(payload.length + ((4 - (payload.length % 4)) % 4), "=");
+  try {
+    return JSON.parse(atob(padded));
+  } catch {
+    return null;
+  }
+};
+
+const toMsFromSeconds = (value: unknown) =>
+  typeof value === "number" && Number.isFinite(value) ? value * 1000 : null;
+
+const formatIso = (value: number | null | undefined) =>
+  Number.isFinite(value as number) ? new Date(value as number).toISOString() : "n/a";
+
+const formatRemaining = (value: number | null | undefined) => {
+  if (!Number.isFinite(value as number)) return "n/a";
+  const ms = value as number;
+  const sign = ms < 0 ? "-" : "";
+  const total = Math.round(Math.abs(ms) / 1000);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  return `${sign}${hours}h ${minutes}m ${seconds}s`;
+};
+
+const maskDeviceId = (value: string) => {
+  if (!value) return "n/a";
+  if (value.length <= 12) return value;
+  return `${value.slice(0, 8)}…${value.slice(-4)}`;
+};
+
 export default function Login() {
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
@@ -45,6 +91,16 @@ export default function Login() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [debugDetails, setDebugDetails] = useState<string | null>(null);
+  const [lastLoginDebug, setLastLoginDebug] = useState<AuthDebugSnapshot | null>(() => {
+    if (typeof window === "undefined") return null;
+    const raw = window.sessionStorage.getItem(AUTH_DEBUG_SESSION_KEY);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as AuthDebugSnapshot;
+    } catch {
+      return null;
+    }
+  });
   const { login } = useAuth();
   const navigate = useNavigate();
   const appMode = String(import.meta.env.VITE_APP_MODE || "").toLowerCase();
@@ -79,6 +135,30 @@ export default function Login() {
     if (typeof window === "undefined") return { backgroundImage: "", backgroundColor: "" };
     return loadBackgroundSettings(localStorage.getItem(SETTINGS_GLOBAL_KEY));
   });
+
+  const saveLoginDebug = (jwt: string, remember: boolean) => {
+    if (typeof window === "undefined") return;
+    const now = Date.now();
+    const payload = decodeJwtPayload(jwt);
+    const tokenIssuedAt = toMsFromSeconds(payload?.iat);
+    const tokenExpiresAt = toMsFromSeconds(payload?.exp);
+    const sessionDays = remember ? 30 : 1;
+    const requestedExpiresAt = now + sessionDays * 24 * 60 * 60 * 1000;
+    const effectiveExpiresAt = tokenExpiresAt
+      ? Math.min(requestedExpiresAt, tokenExpiresAt)
+      : requestedExpiresAt;
+    const snapshot: AuthDebugSnapshot = {
+      at: now,
+      rememberDevice: remember,
+      requestedExpiresAt,
+      effectiveExpiresAt,
+      tokenIssuedAt,
+      tokenExpiresAt,
+      tokenIssuer: typeof payload?.iss === "string" ? payload.iss : null,
+    };
+    window.sessionStorage.setItem(AUTH_DEBUG_SESSION_KEY, JSON.stringify(snapshot));
+    setLastLoginDebug(snapshot);
+  };
   const authShellStyle = useMemo(() => {
     const style: CSSProperties = {};
     const vars = style as Record<string, string>;
@@ -94,6 +174,55 @@ export default function Login() {
     }
     return style;
   }, [backgroundSettings.backgroundColor, backgroundSettings.backgroundImage]);
+
+  const authDebugText = useMemo(() => {
+    if (typeof window === "undefined") return "";
+    const now = Date.now();
+    const deviceId = getOrCreateDeviceId();
+    const token = localStorage.getItem("token") || "";
+    const payload = token ? decodeJwtPayload(token) : null;
+    const tokenIssuedAt = toMsFromSeconds(payload?.iat);
+    const tokenExpiresAt = toMsFromSeconds(payload?.exp);
+    const storedExpiresAt = Number(localStorage.getItem("expiresAt") || 0);
+    const effectiveStoredExpiresAt = Number.isFinite(storedExpiresAt) ? storedExpiresAt : null;
+    const timeLeftMs =
+      effectiveStoredExpiresAt && Number.isFinite(effectiveStoredExpiresAt)
+        ? effectiveStoredExpiresAt - now
+        : null;
+    const apiBase = String(import.meta.env.VITE_API_URL || "");
+    const socketBase = String(import.meta.env.VITE_SOCKET_URL || "");
+    const lines = [
+      `Now: ${formatIso(now)}`,
+      `App mode: ${appMode || "n/a"}`,
+      `Origin: ${window.location.origin}`,
+      `API base: ${apiBase || "n/a"}`,
+      `Socket base: ${socketBase || "n/a"}`,
+      `Device ID: ${maskDeviceId(deviceId)}`,
+      `Remember device toggle: ${rememberDevice ? "true (30d)" : "false (1d)"}`,
+      "",
+      "Current session",
+      `- Token present: ${token ? "yes" : "no"}`,
+      `- Token iat: ${formatIso(tokenIssuedAt)}`,
+      `- Token exp: ${formatIso(tokenExpiresAt)}`,
+      `- Stored expiresAt: ${formatIso(effectiveStoredExpiresAt)}`,
+      `- Time left: ${formatRemaining(timeLeftMs)}`,
+    ];
+    if (lastLoginDebug) {
+      lines.push("", "Last login attempt");
+      lines.push(`- At: ${formatIso(lastLoginDebug.at)}`);
+      lines.push(
+        `- Remember device: ${lastLoginDebug.rememberDevice ? "true (30d)" : "false (1d)"}`
+      );
+      lines.push(`- Token iat: ${formatIso(lastLoginDebug.tokenIssuedAt)}`);
+      lines.push(`- Token exp: ${formatIso(lastLoginDebug.tokenExpiresAt)}`);
+      lines.push(`- Requested expiresAt: ${formatIso(lastLoginDebug.requestedExpiresAt)}`);
+      lines.push(`- Effective expiresAt: ${formatIso(lastLoginDebug.effectiveExpiresAt)}`);
+      if (lastLoginDebug.tokenIssuer) {
+        lines.push(`- Token issuer: ${lastLoginDebug.tokenIssuer}`);
+      }
+    }
+    return lines.join("\n");
+  }, [appMode, lastLoginDebug, rememberDevice]);
 
   const buildDebugDetails = (err: unknown) => {
     if (!axios.isAxiosError(err)) {
@@ -196,6 +325,7 @@ export default function Login() {
       }
 
       if ("jwt" in res.data && res.data.jwt) {
+        saveLoginDebug(res.data.jwt, rememberDevice);
         login(res.data.user, res.data.jwt, { rememberDevice });
         navigate(postLoginPath);
         return;
@@ -284,6 +414,7 @@ export default function Login() {
         return;
       }
 
+      saveLoginDebug(res.data.jwt, rememberDevice);
       login(res.data.user, res.data.jwt, { rememberDevice });
       navigate(postLoginPath);
     } catch (err: unknown) {
@@ -466,6 +597,12 @@ export default function Login() {
           <details className="auth-debug">
             <summary>Show error details</summary>
             <pre>{debugDetails}</pre>
+          </details>
+        )}
+        {showDebug && (
+          <details className="auth-debug">
+            <summary>Auth debug</summary>
+            <pre>{authDebugText}</pre>
           </details>
         )}
 
