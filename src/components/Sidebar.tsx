@@ -760,7 +760,7 @@ export default function Sidebar({
                 className="mobile-profile-item"
                 type="button"
                 onClick={() => {
-                  logout();
+                  logout("user-action");
                   navigate("/login");
                   setMenuOpen(false);
                 }}
@@ -942,7 +942,7 @@ export default function Sidebar({
                     className="btn ghost nav-btn sidebar-profile-menu-button"
                     type="button"
                     onClick={() => {
-                      logout();
+                      logout("user-action");
                       navigate("/login");
                       setShowProfileMenu(false);
                     }}

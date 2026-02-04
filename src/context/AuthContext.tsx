@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from "react";
+import { createContext, useContext, useState, useEffect, useRef } from "react";
 import api, { setAuthToken } from "../api/strapi";
 import {
   buildProfilePayloadFromAttrs,
@@ -91,7 +91,7 @@ interface AuthContextType {
   keyBackupError: string | null;
   login: (user: User, token: string, options?: { rememberDevice?: boolean }) => void;
   updateUser: (user: User) => void;
-  logout: () => void;
+  logout: (reason?: string) => void;
   refreshProfile: () => Promise<void>;
   refreshAppSettings: () => Promise<void>;
   refreshKeyBackup: () => Promise<void>;
@@ -149,6 +149,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     useState<AuthContextType["keyBackupStatus"]>("unknown");
   const [keyBackupLoading, setKeyBackupLoading] = useState(false);
   const [keyBackupError, setKeyBackupError] = useState<string | null>(null);
+  const lastLoginAtRef = useRef<number | null>(null);
 
   useEffect(() => {
     const storedUser =
@@ -475,13 +476,13 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       const graceMs = 5 * 60 * 1000;
       console.warn("Auth expiry already passed; applying grace window.", { timeLeft });
       const timer = setTimeout(() => {
-        logout();
+        logout("session-expired");
       }, graceMs);
       return () => clearTimeout(timer);
     }
 
     const timer = setTimeout(() => {
-      logout();
+      logout("session-expired");
     }, timeLeft);
 
     return () => clearTimeout(timer);
@@ -498,6 +499,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     // 30 days when remembered, otherwise 24 hours.
     const sessionDays = options?.rememberDevice ? 30 : 1;
     const now = Date.now();
+    lastLoginAtRef.current = now;
+    sessionStorage.setItem("auth:last-login-at", String(now));
     const requestedExpiresAt = now + sessionDays * 24 * 60 * 60 * 1000;
     const tokenExpiresAt = parseJwtExpiry(token);
     const effectiveExpiresAt = resolveEffectiveExpiry(
@@ -528,7 +531,31 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     localStorage.setItem("user", JSON.stringify(userData));
   };
 
-  const logout = () => {
+  const logout = (reason?: string) => {
+    const now = Date.now();
+    const lastLoginAt = lastLoginAtRef.current;
+    const sinceLoginMs =
+      Number.isFinite(lastLoginAt as number) && lastLoginAt
+        ? now - lastLoginAt
+        : null;
+    const authDebug =
+      typeof window !== "undefined" &&
+      (window.location.search.includes("authDebug=1") ||
+        window.localStorage.getItem("authDebug") === "1");
+    if (reason !== "user-action" && sinceLoginMs !== null && sinceLoginMs < 120_000) {
+      if (authDebug) {
+        console.warn("Auth: logout ignored due to recent login.", {
+          reason,
+          sinceLoginMs,
+        });
+        console.trace("Auth logout ignored stack");
+      }
+      return;
+    }
+    if (authDebug) {
+      console.warn("Auth: logout requested", { reason, sinceLoginMs });
+      console.trace("Auth logout stack");
+    }
     setUser(null);
     setProfile(null);
     setProfileLoading(false);

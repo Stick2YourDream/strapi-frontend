@@ -258,7 +258,7 @@ export default function VideoCallHome() {
   }, [settings.backgroundColor, settings.backgroundImage, settings.boxColor]);
 
   const handleLogout = () => {
-    logout();
+    logout("user-action");
     navigate("/login");
   };
 

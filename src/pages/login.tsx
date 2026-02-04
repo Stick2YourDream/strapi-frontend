@@ -129,6 +129,11 @@ export default function Login() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("authDebug", "1");
+  }, []);
+
+  useEffect(() => {
     const handleStorage = (event: StorageEvent) => {
       if (event.key !== SETTINGS_GLOBAL_KEY) return;
       setBackgroundSettings(loadBackgroundSettings(event.newValue));

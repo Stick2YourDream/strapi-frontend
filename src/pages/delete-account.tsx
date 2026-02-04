@@ -56,7 +56,7 @@ export default function DeleteAccount() {
     setError(null);
     try {
       await api.post("/account/delete", { confirm: confirmText.trim() });
-      logout();
+      logout("user-action");
       setStatus("success");
     } catch (err) {
       setError(getErrorMessage(err));

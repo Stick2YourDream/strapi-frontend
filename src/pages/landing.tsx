@@ -676,7 +676,7 @@ export default function Landing() {
                       type="button"
                       className="landing-profile-item"
                       onClick={() => {
-                        logout();
+                        logout("user-action");
                         setProfileMenuOpen(false);
                         navigate("/login");
                       }}
