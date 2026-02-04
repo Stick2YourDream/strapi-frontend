@@ -80,7 +80,7 @@ const maskDeviceId = (value: string) => {
 export default function Login() {
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
-  const [rememberDevice, setRememberDevice] = useState(true);
+  const [rememberDevice, setRememberDevice] = useState(false);
   const [challengeId, setChallengeId] = useState<string | null>(null);
   const [challengeMethod, setChallengeMethod] = useState<VerificationMethod | null>(null);
   const [verificationCode, setVerificationCode] = useState("");
