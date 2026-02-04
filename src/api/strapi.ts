@@ -4,6 +4,40 @@ import axios, {
   type InternalAxiosRequestConfig,
 } from "axios";
 
+let cachedToken: string | null = null;
+
+const normalizeToken = (token?: string | null) => {
+  const trimmed = token?.trim();
+  return trimmed ? trimmed : null;
+};
+
+const safeGetStorage = (storage: Storage | null | undefined, key: string) => {
+  if (!storage) return null;
+  try {
+    return storage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+
+const resolveToken = () => {
+  if (cachedToken) return cachedToken;
+  if (typeof window === "undefined") return null;
+  return (
+    normalizeToken(safeGetStorage(window.localStorage, "token")) ||
+    normalizeToken(safeGetStorage(window.sessionStorage, "token"))
+  );
+};
+
+export const setAuthToken = (token: string | null) => {
+  cachedToken = normalizeToken(token);
+  if (cachedToken) {
+    api.defaults.headers.common.Authorization = `Bearer ${cachedToken}`;
+  } else {
+    delete api.defaults.headers.common.Authorization;
+  }
+};
+
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL, // http://localhost:1337/api
 });
@@ -16,7 +50,7 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
     config.url = rawUrl.replace(/^\/+/, "");
   }
 
-  const token = localStorage.getItem("token");
+  const token = resolveToken();
   const url = config.url || "";
   const path = url.split("?")[0];
   const publicAuthEndpoints = new Set([

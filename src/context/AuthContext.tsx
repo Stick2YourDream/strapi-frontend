@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect } from "react";
-import api from "../api/strapi";
+import api, { setAuthToken } from "../api/strapi";
 import {
   buildProfilePayloadFromAttrs,
   decryptOwnProfilePayload,
@@ -150,11 +150,13 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         if (effectiveExpiresAt !== storedExpiresAt) {
           localStorage.setItem("expiresAt", effectiveExpiresAt.toString());
         }
+        setAuthToken(storedToken);
         setUser(JSON.parse(storedUser));
       } else {
         localStorage.removeItem("user");
         localStorage.removeItem("token");
         localStorage.removeItem("expiresAt");
+        setAuthToken(null);
       }
     }
 
@@ -453,6 +455,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     setProfileLoading(true);
     localStorage.setItem("user", JSON.stringify(userData));
     localStorage.setItem("token", token);
+    setAuthToken(token);
     // 30 days when remembered, otherwise 24 hours.
     const sessionDays = options?.rememberDevice ? 30 : 1;
     const requestedExpiresAt = Date.now() + sessionDays * 24 * 60 * 60 * 1000;
@@ -479,6 +482,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     localStorage.removeItem("user");
     localStorage.removeItem("token");
     localStorage.removeItem("expiresAt");
+    setAuthToken(null);
     console.info("Auth: logout success");
   };
 
