@@ -167,11 +167,13 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         tokenExpiresAt,
         now
       );
+      const effectiveExpiry =
+        Number.isFinite(effectiveExpiresAt as number) ? (effectiveExpiresAt as number) : null;
 
-      if (Number.isFinite(effectiveExpiresAt) && now < (effectiveExpiresAt as number)) {
-        if (effectiveExpiresAt !== storedExpiresAt) {
-          localStorage.setItem("expiresAt", effectiveExpiresAt.toString());
-          sessionStorage.setItem("expiresAt", effectiveExpiresAt.toString());
+      if (effectiveExpiry && now < effectiveExpiry) {
+        if (effectiveExpiry !== storedExpiresAt) {
+          localStorage.setItem("expiresAt", effectiveExpiry.toString());
+          sessionStorage.setItem("expiresAt", effectiveExpiry.toString());
         }
         setAuthToken(storedToken);
         setUser(JSON.parse(storedUser));
@@ -495,14 +497,18 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       tokenExpiresAt,
       now
     );
+    const effectiveExpiry =
+      Number.isFinite(effectiveExpiresAt as number)
+        ? (effectiveExpiresAt as number)
+        : requestedExpiresAt;
     if (tokenExpiresAt && tokenExpiresAt <= now + 60_000) {
       console.warn("Auth token expiry is in the past or too soon; using session expiry.", {
         tokenExpiresAt,
         now,
       });
     }
-    localStorage.setItem("expiresAt", effectiveExpiresAt.toString());
-    sessionStorage.setItem("expiresAt", effectiveExpiresAt.toString());
+    localStorage.setItem("expiresAt", effectiveExpiry.toString());
+    sessionStorage.setItem("expiresAt", effectiveExpiry.toString());
     console.info("Auth: login success", { id: userData.id, email: userData.email });
   };
 
