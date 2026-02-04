@@ -1605,7 +1605,7 @@ html.key-backup-active .chat-toggle-icon {
     );
 }
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (max-width: 1024px) and (pointer: coarse) {
   .video-setup-preview {
     grid-template-columns: 1fr;
   }
@@ -3591,7 +3591,59 @@ html.key-backup-active .chat-toggle-icon {
   }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 1120px) {
+  .video-call-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
+    grid-template-areas:
+      "title meta"
+      "controls controls";
+    align-items: center;
+  }
+
+  .video-call-header-left {
+    grid-area: title;
+  }
+
+  .video-call-header-controls {
+    grid-area: controls;
+    justify-content: flex-start;
+    width: 100%;
+    margin-top: 6px;
+  }
+
+  .video-call-meta {
+    grid-area: meta;
+    justify-self: end;
+  }
+}
+
+@media (max-width: 880px) {
+  .video-call-overlay {
+    --video-header-icon-size: clamp(38px, calc(2.2vw + 16px), 48px);
+    --video-header-icon-font: clamp(0.95rem, calc(0.5vw + 0.6rem), 1.2rem);
+    --video-header-icon-pad: clamp(5px, calc(0.6vw + 3px), 8px);
+    --video-header-gap: clamp(10px, calc(0.8vw + 4px), 14px);
+    --video-header-pad-x: clamp(12px, calc(1vw + 6px), 18px);
+    --video-header-pad-y: clamp(10px, calc(0.8vw + 6px), 14px);
+  }
+
+  .video-call-header {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "title"
+      "controls"
+      "meta";
+  }
+
+  .video-call-meta {
+    grid-area: meta;
+    justify-self: start;
+    margin-top: 4px;
+  }
+}
+
+@media (max-width: 720px), (max-width: 1024px) and (pointer: coarse) {
   .video-call-overlay {
     --video-control-size: 34px;
     --video-control-icon-size: 16px;
@@ -3679,11 +3731,19 @@ html.key-backup-active .chat-toggle-icon {
 
   .video-call-modal.is-mobile-chat,
   .video-call-modal.is-mobile-video {
+    grid-template-columns: 1fr;
     grid-template-rows: 1fr;
   }
 
   .video-call-modal.is-mobile-chat .video-call-main {
     display: none;
+  }
+
+  .video-call-modal.is-mobile-chat .video-call-sidebar {
+    grid-column: 1 / -1;
+    grid-row: 1 / -1;
+    border-top: none;
+    height: 100%;
   }
 
   .video-call-modal.is-mobile-video .video-call-sidebar {
@@ -3821,10 +3881,11 @@ html.key-backup-active .chat-toggle-icon {
   }
 
   .video-call-header-controls {
-    justify-content: flex-start;
+    justify-content: center;
     flex-wrap: wrap;
     padding: var(--video-control-pad-y) var(--video-control-pad-x);
     border-radius: 16px;
+    width: 100%;
   }
 
   .video-call-header-controls-group.is-mobile-only {
@@ -3889,6 +3950,80 @@ html.key-backup-active .chat-toggle-icon {
   .video-call-controls-top {
     padding: calc(var(--video-control-pad-y) + 2px) var(--video-header-pad-x);
     gap: var(--video-control-gap);
+    justify-content: center;
+  }
+
+  .video-call-controls-group {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .video-call-modal.is-mobile-video .video-call-header {
+    display: none;
+  }
+
+  .video-call-modal.is-mobile-video .video-call-controls-top {
+    position: absolute;
+    left: 50%;
+    bottom: 16px;
+    transform: translateX(-50%);
+    width: min(92vw, 420px);
+    padding: 8px 12px;
+    border-radius: 999px;
+    background: rgba(8, 12, 22, 0.86);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 14px 28px rgba(2, 6, 23, 0.45);
+    backdrop-filter: blur(12px);
+    flex-wrap: nowrap;
+    z-index: 6;
+  }
+
+  .video-call-modal.is-mobile-video .video-call-controls-group {
+    width: auto;
+    flex-wrap: nowrap;
+  }
+
+  .video-call-modal.is-mobile-video .video-control-settings {
+    width: var(--video-control-size);
+    height: var(--video-control-size);
+    padding: 0;
+    justify-content: center;
+  }
+
+  .video-call-modal.is-mobile-video .video-control-settings-label {
+    display: none;
+  }
+
+  .video-call-modal.is-mobile-video .video-control.end {
+    display: inline-flex;
+  }
+
+  .video-call-modal.is-mobile-video .video-call-end-mobile {
+    display: none;
+  }
+
+  .video-call-modal.is-mobile-video .video-call-grid.is-video-only {
+    padding: 0;
+  }
+
+  .video-call-modal.is-mobile-video
+    .video-call-grid.is-video-only:not(.is-presenter)
+    .video-tile.is-self-video {
+    left: 10px;
+    top: 10px;
+  }
+
+  .video-call-modal.is-mobile-video
+    .video-call-grid.is-video-only:not(.is-presenter)
+    .video-tile:not(.is-self-video)
+    video,
+  .video-call-modal.is-mobile-video
+    .video-call-grid.is-video-only:not(.is-presenter)
+    .video-tile:not(.is-self-video)
+    .video-tile__media {
+    object-fit: contain;
+    background: radial-gradient(circle at 20% 20%, rgba(15, 23, 42, 0.45), transparent 60%),
+      #02030a;
   }
 
   .video-control-icon {
@@ -4013,6 +4148,43 @@ html.key-backup-active .chat-toggle-icon {
     display: flex;
     width: 100%;
     justify-content: center;
+    padding: 6px;
+    gap: 6px;
+    border-radius: 999px;
+    background: rgba(8, 12, 22, 0.65);
+    border: 1px solid rgba(148, 163, 184, 0.3);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  }
+
+  .video-chat-toggle .video-view-button {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 36px;
+    padding: 6px 12px;
+    font-size: 0.78rem;
+    border-color: transparent;
+    background: transparent;
+  }
+
+  .video-chat-toggle .video-view-button.is-active {
+    border-color: rgba(125, 211, 252, 0.7);
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.88), rgba(34, 211, 238, 0.82));
+    color: #0b1020;
+    box-shadow: 0 10px 20px rgba(14, 116, 144, 0.35);
+  }
+
+  .video-call-modal.is-mobile-chat .video-chat-toggle .video-view-button.is-active {
+    border-color: transparent;
+    background: transparent;
+    color: #cbd5f5;
+    box-shadow: none;
+  }
+
+  .video-call-modal.is-mobile-chat .video-chat-toggle .video-view-button:first-child {
+    border-color: rgba(125, 211, 252, 0.7);
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.88), rgba(34, 211, 238, 0.82));
+    color: #0b1020;
+    box-shadow: 0 10px 20px rgba(14, 116, 144, 0.35);
   }
 
   .video-chat-list {
@@ -4035,7 +4207,7 @@ html.key-backup-active .chat-toggle-icon {
   align-items: center;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (max-width: 1024px) and (pointer: coarse) {
   .message-popout {
     inset: 0;
     width: auto;
@@ -4214,6 +4386,16 @@ html.key-backup-active .chat-toggle-icon {
 @media (max-height: 520px) and (orientation: landscape) {
   .video-call-overlay {
     padding: 0;
+    --video-control-size: 34px;
+    --video-control-icon-size: 14px;
+    --video-control-icon-font: 0.9rem;
+    --video-control-font-size: 0.7rem;
+    --video-control-pad-x: 8px;
+    --video-control-pad-y: 5px;
+    --video-control-gap: 6px;
+    --video-header-pad-x: 12px;
+    --video-header-pad-y: 8px;
+    --video-header-gap: 10px;
   }
 
   .video-call-modal {
@@ -4234,12 +4416,54 @@ html.key-backup-active .chat-toggle-icon {
   .video-call-sidebar {
     max-height: 45vh;
   }
+
+  .video-call-modal.is-mobile-chat .video-call-sidebar {
+    max-height: none;
+  }
+
+  .video-call-grid {
+    padding: 6px;
+  }
+
+  .video-call-modal.is-mobile-video .video-call-controls-top {
+    bottom: 10px;
+    width: min(94vw, 520px);
+    padding: 6px 10px;
+  }
+
+  .video-call-modal.is-mobile-video
+    .video-call-grid.is-video-only:not(.is-presenter)
+    .video-tile.is-self-video {
+    width: clamp(80px, 22vw, 130px);
+    height: clamp(60px, 18vw, 100px);
+  }
 }
 
 @media (min-width: 1024px) and (orientation: portrait) {
   .video-call-modal {
     width: min(980px, 92vw);
     height: min(1080px, 92vh);
+  }
+}
+
+@media (min-width: 721px) {
+  .video-call-controls-group {
+    padding: 4px;
+    border-radius: 999px;
+    background: rgba(8, 12, 22, 0.55);
+    border: 1px solid rgba(148, 163, 184, 0.16);
+  }
+
+  .video-call-header-controls-group {
+    padding: 4px;
+    border-radius: 999px;
+    background: rgba(8, 12, 22, 0.45);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+  }
+
+  .video-call-header-controls-group.is-actions {
+    border-left: none;
+    padding-left: 4px;
   }
 }
 

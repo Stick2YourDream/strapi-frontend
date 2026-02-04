@@ -15,6 +15,7 @@ import VideoCallModal from "../components/VideoCallModal";
 
 const SETTINGS_STORAGE_PREFIX = "video-call-settings";
 const SETTINGS_GLOBAL_KEY = `${SETTINGS_STORAGE_PREFIX}:global`;
+const DEFAULT_BACKGROUND_COLOR = "rgba(5, 7, 15, 1)";
 
 type VideoAppSettings = {
   theme: "dark" | "light";
@@ -26,7 +27,7 @@ type VideoAppSettings = {
 
 const DEFAULT_SETTINGS: VideoAppSettings = {
   theme: "dark",
-  backgroundColor: "",
+  backgroundColor: DEFAULT_BACKGROUND_COLOR,
   backgroundImage: "",
   backgroundImageName: "",
   boxColor: "",
@@ -37,9 +38,13 @@ const loadSettings = (raw: string | null): VideoAppSettings => {
   try {
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") return { ...DEFAULT_SETTINGS };
+    const backgroundColor =
+      typeof parsed.backgroundColor === "string" && parsed.backgroundColor.trim()
+        ? parsed.backgroundColor
+        : DEFAULT_BACKGROUND_COLOR;
     return {
       theme: parsed.theme === "light" ? "light" : "dark",
-      backgroundColor: typeof parsed.backgroundColor === "string" ? parsed.backgroundColor : "",
+      backgroundColor,
       backgroundImage: typeof parsed.backgroundImage === "string" ? parsed.backgroundImage : "",
       backgroundImageName:
         typeof parsed.backgroundImageName === "string" ? parsed.backgroundImageName : "",
@@ -229,9 +234,11 @@ export default function VideoCallHome() {
     const backgroundColor = settings.backgroundColor.trim();
     const backgroundImage = settings.backgroundImage.trim();
     const boxColor = settings.boxColor.trim();
+    const hasCustomBackground =
+      Boolean(backgroundColor) && backgroundColor !== DEFAULT_BACKGROUND_COLOR;
     if (backgroundColor) {
       vars["--video-app-bg-color"] = backgroundColor;
-      if (!boxColor) {
+      if (!boxColor && hasCustomBackground) {
         vars["--video-hero-bg"] = "var(--video-surface-solid)";
         vars["--video-surface"] = "var(--video-surface-solid)";
         vars["--video-surface-alt"] = "var(--video-surface-alt-solid)";
@@ -241,7 +248,7 @@ export default function VideoCallHome() {
     }
     if (backgroundImage) {
       vars["--video-app-bg-image"] = `url("${backgroundImage}")`;
-    } else if (backgroundColor) {
+    } else if (hasCustomBackground) {
       vars["--video-app-bg-image"] = "none";
     }
     if (boxColor) {
@@ -460,7 +467,10 @@ export default function VideoCallHome() {
                       className="video-app__ghost video-app__settings-action"
                       type="button"
                       onClick={() =>
-                        setSettings((prev) => ({ ...prev, backgroundColor: "" }))
+                        setSettings((prev) => ({
+                          ...prev,
+                          backgroundColor: DEFAULT_BACKGROUND_COLOR,
+                        }))
                       }
                     >
                       Reset

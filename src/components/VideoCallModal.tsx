@@ -627,9 +627,10 @@ const FILTER_OPTIONS = [
 
 const SETTINGS_STORAGE_PREFIX = "video-call-settings";
 const SETTINGS_GLOBAL_KEY = `${SETTINGS_STORAGE_PREFIX}:global`;
+const DEFAULT_BACKGROUND_COLOR = "rgba(5, 7, 15, 1)";
 const DEFAULT_SETTINGS: VideoAppSettings = {
   theme: "dark",
-  backgroundColor: "",
+  backgroundColor: DEFAULT_BACKGROUND_COLOR,
   backgroundImage: "",
   backgroundImageName: "",
   boxColor: "",
@@ -640,9 +641,13 @@ const loadSettings = (raw: string | null): VideoAppSettings => {
   try {
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") return { ...DEFAULT_SETTINGS };
+    const backgroundColor =
+      typeof parsed.backgroundColor === "string" && parsed.backgroundColor.trim()
+        ? parsed.backgroundColor
+        : DEFAULT_BACKGROUND_COLOR;
     return {
       theme: parsed.theme === "light" ? "light" : "dark",
-      backgroundColor: typeof parsed.backgroundColor === "string" ? parsed.backgroundColor : "",
+      backgroundColor,
       backgroundImage: typeof parsed.backgroundImage === "string" ? parsed.backgroundImage : "",
       backgroundImageName:
         typeof parsed.backgroundImageName === "string" ? parsed.backgroundImageName : "",
@@ -952,9 +957,11 @@ export default function VideoCallModal({
     const backgroundColor = effectiveSettings.backgroundColor.trim();
     const backgroundImage = effectiveSettings.backgroundImage.trim();
     const boxColor = effectiveSettings.boxColor.trim();
+    const hasCustomBackground =
+      Boolean(backgroundColor) && backgroundColor !== DEFAULT_BACKGROUND_COLOR;
     if (backgroundColor) {
       vars["--video-app-bg-color"] = backgroundColor;
-      if (!boxColor) {
+      if (!boxColor && hasCustomBackground) {
         vars["--video-hero-bg"] = "var(--video-surface-solid)";
         vars["--video-surface"] = "var(--video-surface-solid)";
         vars["--video-surface-alt"] = "var(--video-surface-alt-solid)";
@@ -973,7 +980,7 @@ export default function VideoCallModal({
         vars["--video-card"] = "rgba(10, 16, 30, 0.78)";
         vars["--video-input-bg"] = "rgba(12, 18, 32, 0.8)";
       }
-    } else if (backgroundColor) {
+    } else if (hasCustomBackground) {
       vars["--video-app-bg-image"] = "none";
     }
     if (boxColor) {
@@ -1574,10 +1581,16 @@ export default function VideoCallModal({
     []
   );
 
+  const isMobileCameraOnly = isMobileLayout;
   const hasScreenShares = screenShareEntries.length > 0;
   const hasRemoteScreenShares = screenShareEntries.some((entry) => !entry.isLocal);
-  const effectiveViewMode = hasScreenShares ? screenViewMode : "video";
+  const effectiveViewMode = isMobileCameraOnly
+    ? "video"
+    : hasScreenShares
+    ? screenViewMode
+    : "video";
   const screenShareStatusLabel = useMemo(() => {
+    if (isMobileCameraOnly) return "";
     if (!showCallUi) return "";
     if (localScreenStream && screenShareEntries[0]?.isLocal) {
       return `Sharing ${screenShareEntries[0].label}`;
@@ -1588,14 +1601,18 @@ export default function VideoCallModal({
       return activeEntry ? `Viewing ${activeEntry.label}` : "";
     }
     return "";
-  }, [hasScreenShares, localScreenStream, screenShareEntries, showCallUi]);
+  }, [hasScreenShares, isMobileCameraOnly, localScreenStream, screenShareEntries, showCallUi]);
   const showScreenTiles = effectiveViewMode !== "video";
   const showVideoTiles = effectiveViewMode !== "screen";
   const shouldRenderRemoteAudio =
     showCallUi && (!showVideoTiles || isRenderingInPopout);
   const totalParticipantCount = videoParticipants.length;
   const presenterMode =
-    showCallUi && showVideoTiles && !showScreenTiles && totalParticipantCount > 2;
+    !isMobileCameraOnly &&
+    showCallUi &&
+    showVideoTiles &&
+    !showScreenTiles &&
+    totalParticipantCount > 2;
   const focusedScreenKey = effectiveViewMode === "screen" ? focusedScreenId : null;
   const focusedVideoKey = effectiveViewMode === "video" ? focusedVideoId : null;
   const visibleScreenShareEntries = useMemo(() => {
@@ -1701,11 +1718,15 @@ export default function VideoCallModal({
   }, [focusedVideoId, isSplitView, showVideoTiles, videoParticipants]);
 
   useEffect(() => {
+    if (isMobileCameraOnly) {
+      prevHasScreenSharesRef.current = hasScreenShares;
+      return;
+    }
     if (hasScreenShares && !prevHasScreenSharesRef.current && screenViewMode === "video") {
       setScreenViewMode("split");
     }
     prevHasScreenSharesRef.current = hasScreenShares;
-  }, [hasScreenShares, screenViewMode]);
+  }, [hasScreenShares, isMobileCameraOnly, screenViewMode]);
 
   useEffect(() => {
     if (!focusedScreenId) return;
@@ -1789,7 +1810,7 @@ export default function VideoCallModal({
   }, [videoEffects.background]);
 
   const isFullscreenUi = isFullscreenActive || Boolean(fullscreenTargetId);
-  const showFocusControls = !isFullscreenUi;
+  const showFocusControls = !isFullscreenUi && !isMobileCameraOnly;
 
   const renderCompactVideoTile = useCallback(
     (participant: VideoParticipantEntry, options?: { style?: CSSProperties; className?: string }) => {
@@ -1841,7 +1862,9 @@ export default function VideoCallModal({
   useEffect(() => {
     const targetWindow = isRenderingInPopout ? popoutWindowRef.current : window;
     if (!targetWindow || !targetWindow.matchMedia) return;
-    const media = targetWindow.matchMedia("(max-width: 720px)");
+    const media = targetWindow.matchMedia(
+      "(max-width: 720px), (max-width: 1024px) and (pointer: coarse)"
+    );
     const handleChange = () => setIsMobileLayout(media.matches);
     handleChange();
     if (media.addEventListener) {
@@ -1851,6 +1874,35 @@ export default function VideoCallModal({
     media.addListener(handleChange);
     return () => media.removeListener(handleChange);
   }, [isRenderingInPopout]);
+
+  useEffect(() => {
+    if (!isMobileLayout) return;
+    if (isPopout) setIsPopout(false);
+    if (screenViewMode !== "video") setScreenViewMode("video");
+    if (focusedScreenId) setFocusedScreenId(null);
+    if (focusedVideoId) setFocusedVideoId(null);
+    if (isScreenBorderless) setIsScreenBorderless(false);
+    if (showViewSelect) setShowViewSelect(false);
+    if (showScreenSelect) setShowScreenSelect(false);
+    if (showCameraSelect) setShowCameraSelect(false);
+    if (isScreenSharing) stopScreenShare();
+    setPipPosition(null);
+    setIsPipDragging(false);
+    pipDragRef.current.active = false;
+  }, [
+    focusedScreenId,
+    focusedVideoId,
+    isMobileLayout,
+    isPopout,
+    isScreenBorderless,
+    isScreenSharing,
+    mobilePanel,
+    screenViewMode,
+    showCameraSelect,
+    showScreenSelect,
+    showViewSelect,
+    stopScreenShare,
+  ]);
 
   useEffect(() => {
     if (!navigator.mediaDevices?.enumerateDevices) return;
@@ -1894,7 +1946,7 @@ export default function VideoCallModal({
 
   const handlePipPointerDown = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
-      if (!isMobileLayout || isLocalPrimary) return;
+      if (!isMobileLayout || isLocalPrimary || isMobileCameraOnly) return;
       const grid = gridRef.current;
       if (!grid) return;
       const tile = event.currentTarget;
@@ -1911,12 +1963,18 @@ export default function VideoCallModal({
       setIsPipDragging(true);
       tile.setPointerCapture?.(event.pointerId);
     },
-    [isLocalPrimary, isMobileLayout]
+    [isLocalPrimary, isMobileCameraOnly, isMobileLayout]
   );
 
   const handlePipPointerMove = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
-      if (!pipDragRef.current.active || !isMobileLayout || isLocalPrimary) return;
+      if (
+        !pipDragRef.current.active ||
+        !isMobileLayout ||
+        isLocalPrimary ||
+        isMobileCameraOnly
+      )
+        return;
       const grid = gridRef.current;
       if (!grid) return;
       const gridRect = grid.getBoundingClientRect();
@@ -1930,15 +1988,15 @@ export default function VideoCallModal({
       nextY = Math.min(Math.max(0, nextY), gridRect.height - height);
       setPipPosition({ x: nextX, y: nextY });
     },
-    [isLocalPrimary, isMobileLayout]
+    [isLocalPrimary, isMobileCameraOnly, isMobileLayout]
   );
 
   const handlePipPointerUp = useCallback((event: PointerEvent<HTMLDivElement>) => {
-    if (!pipDragRef.current.active) return;
+    if (!pipDragRef.current.active || isMobileCameraOnly) return;
     pipDragRef.current.active = false;
     setIsPipDragging(false);
     event.currentTarget.releasePointerCapture?.(event.pointerId);
-  }, []);
+  }, [isMobileCameraOnly]);
 
   const pipStyle = useMemo<CSSProperties | undefined>(() => {
     if (!isMobileLayout || isLocalPrimary || !pipPosition) return undefined;
@@ -2203,6 +2261,7 @@ export default function VideoCallModal({
   );
 
   const handleToggleScreenShare = useCallback(() => {
+    if (isMobileCameraOnly) return;
     if (isScreenSharing) {
       stopScreenShare();
       return;
@@ -2219,7 +2278,7 @@ export default function VideoCallModal({
       return;
     }
     void startScreenShare();
-  }, [isPopout, isScreenSharing, startScreenShare, stopScreenShare]);
+  }, [isMobileCameraOnly, isPopout, isScreenSharing, startScreenShare, stopScreenShare]);
 
   const handleOpenSettings = useCallback(() => {
     setShowSettingsPanel(true);
@@ -3138,7 +3197,10 @@ export default function VideoCallModal({
                           type="button"
                           className="video-settings-reset"
                           onClick={() =>
-                            updateAppSettings((prev) => ({ ...prev, backgroundColor: "" }))
+                            updateAppSettings((prev) => ({
+                              ...prev,
+                              backgroundColor: DEFAULT_BACKGROUND_COLOR,
+                            }))
                           }
                         >
                           Reset
@@ -3396,38 +3458,46 @@ export default function VideoCallModal({
                     aria-hidden="true"
                   />
                 </button>
-                <button
-                  type="button"
-                  className={`video-control video-control-icon${
-                    isScreenSharing ? " is-active" : ""
-                  }`}
-                  onClick={handleToggleScreenShare}
-                  data-hint={isScreenSharing ? "Stop share" : "Share screen"}
-                  aria-label={isScreenSharing ? "Stop share" : "Share screen"}
-                  title={isScreenSharing ? "Stop share" : "Share screen"}
-                >
-                  <FontAwesomeIcon
-                    icon={isScreenSharing ? faStop : faDesktop}
-                    aria-hidden="true"
-                  />
-                </button>
-                <button
-                  type="button"
-                  className={`video-control video-control-icon ghost${
-                    isRemoteMuted ? " is-active" : ""
-                  }`}
-                  onClick={() => setIsRemoteMuted((prev) => !prev)}
-                  data-hint={isRemoteMuted ? "Unmute everyone (local)" : "Mute everyone (local)"}
-                  aria-label={isRemoteMuted ? "Unmute everyone locally" : "Mute everyone locally"}
-                  title={isRemoteMuted ? "Unmute everyone locally" : "Mute everyone locally"}
-                  disabled={remoteAudioStreams.length === 0}
-                >
-                  <FontAwesomeIcon
-                    icon={isRemoteMuted ? faVolumeXmark : faVolumeHigh}
-                    aria-hidden="true"
-                  />
-                </button>
-                {isCallAdmin && (
+                {!isMobileCameraOnly && (
+                  <button
+                    type="button"
+                    className={`video-control video-control-icon${
+                      isScreenSharing ? " is-active" : ""
+                    }`}
+                    onClick={handleToggleScreenShare}
+                    data-hint={isScreenSharing ? "Stop share" : "Share screen"}
+                    aria-label={isScreenSharing ? "Stop share" : "Share screen"}
+                    title={isScreenSharing ? "Stop share" : "Share screen"}
+                  >
+                    <FontAwesomeIcon
+                      icon={isScreenSharing ? faStop : faDesktop}
+                      aria-hidden="true"
+                    />
+                  </button>
+                )}
+                {!isMobileCameraOnly && (
+                  <button
+                    type="button"
+                    className={`video-control video-control-icon ghost${
+                      isRemoteMuted ? " is-active" : ""
+                    }`}
+                    onClick={() => setIsRemoteMuted((prev) => !prev)}
+                    data-hint={
+                      isRemoteMuted ? "Unmute everyone (local)" : "Mute everyone (local)"
+                    }
+                    aria-label={
+                      isRemoteMuted ? "Unmute everyone locally" : "Mute everyone locally"
+                    }
+                    title={isRemoteMuted ? "Unmute everyone locally" : "Mute everyone locally"}
+                    disabled={remoteAudioStreams.length === 0}
+                  >
+                    <FontAwesomeIcon
+                      icon={isRemoteMuted ? faVolumeXmark : faVolumeHigh}
+                      aria-hidden="true"
+                    />
+                  </button>
+                )}
+                {isCallAdmin && !isMobileCameraOnly && (
                   <>
                     <button
                       type="button"
@@ -3464,33 +3534,49 @@ export default function VideoCallModal({
                   <FontAwesomeIcon icon={faSliders} aria-hidden="true" />
                   <span className="video-control-settings-label">Settings</span>
                 </button>
+                {isMobileLayout && (
+                  <button
+                    type="button"
+                    className="video-control video-control-icon ghost"
+                    onClick={() => setMobilePanel("chat")}
+                    data-hint="Chat"
+                    aria-label="Open chat"
+                    title="Chat"
+                  >
+                    <FontAwesomeIcon icon={faComments} aria-hidden="true" />
+                  </button>
+                )}
               </div>
               <div className="video-call-controls-group">
-                <button
-                  type="button"
-                  className={`video-control video-control-icon ghost${
-                    isHolding ? " is-active" : ""
-                  }`}
-                  onClick={toggleHold}
-                  data-hint={isHolding ? "Resume call" : "Hold call"}
-                  aria-label={isHolding ? "Resume call" : "Hold call"}
-                  title={isHolding ? "Resume call" : "Hold call"}
-                >
-                  <FontAwesomeIcon
-                    icon={isHolding ? faPlay : faPause}
-                    aria-hidden="true"
-                  />
-                </button>
-                <button
-                  type="button"
-                  className="video-control video-control-icon ghost"
-                  onClick={leaveCall}
-                  data-hint="Leave call"
-                  aria-label="Leave call"
-                  title="Leave call"
-                >
-                  <FontAwesomeIcon icon={faRightFromBracket} aria-hidden="true" />
-                </button>
+                {!isMobileCameraOnly && (
+                  <button
+                    type="button"
+                    className={`video-control video-control-icon ghost${
+                      isHolding ? " is-active" : ""
+                    }`}
+                    onClick={toggleHold}
+                    data-hint={isHolding ? "Resume call" : "Hold call"}
+                    aria-label={isHolding ? "Resume call" : "Hold call"}
+                    title={isHolding ? "Resume call" : "Hold call"}
+                  >
+                    <FontAwesomeIcon
+                      icon={isHolding ? faPlay : faPause}
+                      aria-hidden="true"
+                    />
+                  </button>
+                )}
+                {!isMobileCameraOnly && (
+                  <button
+                    type="button"
+                    className="video-control video-control-icon ghost"
+                    onClick={leaveCall}
+                    data-hint="Leave call"
+                    aria-label="Leave call"
+                    title="Leave call"
+                  >
+                    <FontAwesomeIcon icon={faRightFromBracket} aria-hidden="true" />
+                  </button>
+                )}
                 <button
                   type="button"
                   className="video-control video-control-icon end"
@@ -3551,213 +3637,215 @@ export default function VideoCallModal({
             </div>
             {showCallUi && (
               <div className="video-call-header-controls">
-                <div className="video-call-header-controls-group">
-                  {!isFullscreenUi && (
-                    <div
-                      className={`video-call-toolbar-group is-dropdown${
-                        showViewSelect ? " is-open" : ""
-                      }`}
-                      ref={viewSelectRef}
-                    >
-                      <button
-                        type="button"
-                        className="video-view-button is-icon is-dropdown-trigger"
-                        data-hint="View"
-                        aria-label="View options"
-                        title="View"
-                        aria-expanded={showViewSelect}
-                        onClick={() => {
-                          setShowViewSelect((prev) => !prev);
-                          setShowScreenSelect(false);
-                          setShowCameraSelect(false);
-                        }}
+                {!isMobileCameraOnly && (
+                  <div className="video-call-header-controls-group">
+                    {!isFullscreenUi && (
+                      <div
+                        className={`video-call-toolbar-group is-dropdown${
+                          showViewSelect ? " is-open" : ""
+                        }`}
+                        ref={viewSelectRef}
                       >
-                        <FontAwesomeIcon icon={faTableColumns} aria-hidden="true" />
-                      </button>
-                      {showViewSelect && (
-                        <div className="video-call-dropdown is-open">
-                          <div className="video-call-dropdown-list">
-                            <button
-                              type="button"
-                              className={`video-call-dropdown-option${
-                                effectiveViewMode === "split" ? " is-active" : ""
-                              }`}
-                              onClick={() => {
-                                setScreenViewMode("split");
-                                setShowViewSelect(false);
-                              }}
-                            >
-                              Split view
-                            </button>
-                            {hasScreenShares && (
+                        <button
+                          type="button"
+                          className="video-view-button is-icon is-dropdown-trigger"
+                          data-hint="View"
+                          aria-label="View options"
+                          title="View"
+                          aria-expanded={showViewSelect}
+                          onClick={() => {
+                            setShowViewSelect((prev) => !prev);
+                            setShowScreenSelect(false);
+                            setShowCameraSelect(false);
+                          }}
+                        >
+                          <FontAwesomeIcon icon={faTableColumns} aria-hidden="true" />
+                        </button>
+                        {showViewSelect && (
+                          <div className="video-call-dropdown is-open">
+                            <div className="video-call-dropdown-list">
                               <button
                                 type="button"
                                 className={`video-call-dropdown-option${
-                                  effectiveViewMode === "screen" ? " is-active" : ""
+                                  effectiveViewMode === "split" ? " is-active" : ""
                                 }`}
                                 onClick={() => {
-                                  setScreenViewMode("screen");
+                                  setScreenViewMode("split");
                                   setShowViewSelect(false);
                                 }}
                               >
-                                Screen focus
+                                Split view
                               </button>
-                            )}
-                            <button
-                              type="button"
-                              className={`video-call-dropdown-option${
-                                effectiveViewMode === "video" ? " is-active" : ""
-                              }`}
-                              onClick={() => {
-                                setScreenViewMode("video");
-                                setShowViewSelect(false);
-                              }}
-                            >
-                              All cameras
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {videoParticipants.length > 0 && (
-                    <div
-                      className={`video-call-toolbar-group is-dropdown${
-                        showCameraSelect ? " is-open" : ""
-                      }`}
-                      ref={cameraSelectRef}
-                    >
-                      <button
-                        type="button"
-                        className="video-view-button is-icon is-dropdown-trigger"
-                        data-hint="Camera feed"
-                        aria-label="Camera feed"
-                        title="Camera feed"
-                        aria-expanded={showCameraSelect}
-                        onClick={() => {
-                          setShowCameraSelect((prev) => !prev);
-                          setShowViewSelect(false);
-                          setShowScreenSelect(false);
-                        }}
-                      >
-                        <FontAwesomeIcon icon={faCamera} aria-hidden="true" />
-                      </button>
-                      {showCameraSelect && (
-                        <div className="video-call-dropdown is-open">
-                          <div className="video-call-dropdown-list">
-                            <button
-                              type="button"
-                              className={`video-call-dropdown-option${
-                                !focusedVideoId ? " is-active" : ""
-                              }`}
-                              onClick={() => {
-                                selectVideoFeedFocus(null);
-                                setShowCameraSelect(false);
-                              }}
-                            >
-                              All cameras
-                            </button>
-                            {videoParticipants.map((participant) => (
+                              {hasScreenShares && (
+                                <button
+                                  type="button"
+                                  className={`video-call-dropdown-option${
+                                    effectiveViewMode === "screen" ? " is-active" : ""
+                                  }`}
+                                  onClick={() => {
+                                    setScreenViewMode("screen");
+                                    setShowViewSelect(false);
+                                  }}
+                                >
+                                  Screen focus
+                                </button>
+                              )}
                               <button
                                 type="button"
-                                key={participant.id}
                                 className={`video-call-dropdown-option${
-                                  focusedVideoId === participant.id ? " is-active" : ""
+                                  effectiveViewMode === "video" ? " is-active" : ""
                                 }`}
                                 onClick={() => {
-                                  selectVideoFeedFocus(participant.id);
+                                  setScreenViewMode("video");
+                                  setShowViewSelect(false);
+                                }}
+                              >
+                                All cameras
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {videoParticipants.length > 0 && (
+                      <div
+                        className={`video-call-toolbar-group is-dropdown${
+                          showCameraSelect ? " is-open" : ""
+                        }`}
+                        ref={cameraSelectRef}
+                      >
+                        <button
+                          type="button"
+                          className="video-view-button is-icon is-dropdown-trigger"
+                          data-hint="Camera feed"
+                          aria-label="Camera feed"
+                          title="Camera feed"
+                          aria-expanded={showCameraSelect}
+                          onClick={() => {
+                            setShowCameraSelect((prev) => !prev);
+                            setShowViewSelect(false);
+                            setShowScreenSelect(false);
+                          }}
+                        >
+                          <FontAwesomeIcon icon={faCamera} aria-hidden="true" />
+                        </button>
+                        {showCameraSelect && (
+                          <div className="video-call-dropdown is-open">
+                            <div className="video-call-dropdown-list">
+                              <button
+                                type="button"
+                                className={`video-call-dropdown-option${
+                                  !focusedVideoId ? " is-active" : ""
+                                }`}
+                                onClick={() => {
+                                  selectVideoFeedFocus(null);
                                   setShowCameraSelect(false);
                                 }}
                               >
-                                {participant.isLocal ? localDisplayName : participant.label}
+                                All cameras
                               </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {hasScreenShares && (
-                    <div
-                      className={`video-call-toolbar-group is-dropdown${
-                        showScreenSelect ? " is-open" : ""
-                      }`}
-                      ref={screenSelectRef}
-                    >
-                      <button
-                        type="button"
-                        className="video-view-button is-icon is-dropdown-trigger"
-                        data-hint="Screen share"
-                        aria-label="Screen share"
-                        title="Screen share"
-                        aria-expanded={showScreenSelect}
-                        onClick={() => {
-                          setShowScreenSelect((prev) => !prev);
-                          setShowViewSelect(false);
-                          setShowCameraSelect(false);
-                        }}
-                      >
-                        <FontAwesomeIcon icon={faDisplay} aria-hidden="true" />
-                      </button>
-                      {showScreenSelect && (
-                        <div className="video-call-dropdown is-open">
-                          <div className="video-call-dropdown-list">
-                            <button
-                              type="button"
-                              className={`video-call-dropdown-option${
-                                !focusedScreenId ? " is-active" : ""
-                              }`}
-                              onClick={() => {
-                                selectScreenShareFocus(null);
-                                setShowScreenSelect(false);
-                              }}
-                            >
-                              All screens
-                            </button>
-                            {screenShareEntries.map((entry) => {
-                              const entryKey = getScreenFocusKey(entry);
-                              return (
+                              {videoParticipants.map((participant) => (
                                 <button
                                   type="button"
-                                  key={entryKey}
+                                  key={participant.id}
                                   className={`video-call-dropdown-option${
-                                    focusedScreenId === entryKey ? " is-active" : ""
+                                    focusedVideoId === participant.id ? " is-active" : ""
                                   }`}
-                                  title={entry.label}
                                   onClick={() => {
-                                    selectScreenShareFocus(entryKey);
-                                    setShowScreenSelect(false);
+                                    selectVideoFeedFocus(participant.id);
+                                    setShowCameraSelect(false);
                                   }}
                                 >
-                                  {entry.label}
+                                  {participant.isLocal ? localDisplayName : participant.label}
                                 </button>
-                              );
-                            })}
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {hasScreenShares && (
-                    <div className="video-call-toolbar-group">
-                      <button
-                        type="button"
-                        className={`video-view-button is-icon${
-                          isScreenBorderless ? " is-active" : ""
+                        )}
+                      </div>
+                    )}
+                    {hasScreenShares && (
+                      <div
+                        className={`video-call-toolbar-group is-dropdown${
+                          showScreenSelect ? " is-open" : ""
                         }`}
-                        onClick={() => setIsScreenBorderless((prev) => !prev)}
-                        data-hint={isScreenBorderless ? "Windowed" : "Borderless"}
-                        aria-label={isScreenBorderless ? "Windowed" : "Borderless"}
-                        title={isScreenBorderless ? "Windowed" : "Borderless"}
+                        ref={screenSelectRef}
                       >
-                        <FontAwesomeIcon
-                          icon={isScreenBorderless ? faWindowRestore : faWindowMaximize}
-                          aria-hidden="true"
-                        />
-                      </button>
-                    </div>
-                  )}
-                </div>
+                        <button
+                          type="button"
+                          className="video-view-button is-icon is-dropdown-trigger"
+                          data-hint="Screen share"
+                          aria-label="Screen share"
+                          title="Screen share"
+                          aria-expanded={showScreenSelect}
+                          onClick={() => {
+                            setShowScreenSelect((prev) => !prev);
+                            setShowViewSelect(false);
+                            setShowCameraSelect(false);
+                          }}
+                        >
+                          <FontAwesomeIcon icon={faDisplay} aria-hidden="true" />
+                        </button>
+                        {showScreenSelect && (
+                          <div className="video-call-dropdown is-open">
+                            <div className="video-call-dropdown-list">
+                              <button
+                                type="button"
+                                className={`video-call-dropdown-option${
+                                  !focusedScreenId ? " is-active" : ""
+                                }`}
+                                onClick={() => {
+                                  selectScreenShareFocus(null);
+                                  setShowScreenSelect(false);
+                                }}
+                              >
+                                All screens
+                              </button>
+                              {screenShareEntries.map((entry) => {
+                                const entryKey = getScreenFocusKey(entry);
+                                return (
+                                  <button
+                                    type="button"
+                                    key={entryKey}
+                                    className={`video-call-dropdown-option${
+                                      focusedScreenId === entryKey ? " is-active" : ""
+                                    }`}
+                                    title={entry.label}
+                                    onClick={() => {
+                                      selectScreenShareFocus(entryKey);
+                                      setShowScreenSelect(false);
+                                    }}
+                                  >
+                                    {entry.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {hasScreenShares && (
+                      <div className="video-call-toolbar-group">
+                        <button
+                          type="button"
+                          className={`video-view-button is-icon${
+                            isScreenBorderless ? " is-active" : ""
+                          }`}
+                          onClick={() => setIsScreenBorderless((prev) => !prev)}
+                          data-hint={isScreenBorderless ? "Windowed" : "Borderless"}
+                          aria-label={isScreenBorderless ? "Windowed" : "Borderless"}
+                          title={isScreenBorderless ? "Windowed" : "Borderless"}
+                        >
+                          <FontAwesomeIcon
+                            icon={isScreenBorderless ? faWindowRestore : faWindowMaximize}
+                            aria-hidden="true"
+                          />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className="video-call-header-controls-group is-actions">
                   <button
                     type="button"
@@ -3775,20 +3863,22 @@ export default function VideoCallModal({
                       aria-hidden="true"
                     />
                   </button>
-                  <button
-                    type="button"
-                    className={`video-view-button is-icon${isPopout ? " is-active" : ""}`}
-                    onClick={() => setIsPopout((prev) => !prev)}
-                    aria-pressed={isPopout}
-                    data-hint={isPopout ? "Dock" : "Pop out"}
-                    aria-label={isPopout ? "Dock" : "Pop out"}
-                    title={isPopout ? "Dock" : "Pop out"}
-                  >
-                    <FontAwesomeIcon
-                      icon={isPopout ? faCompress : faUpRightFromSquare}
-                      aria-hidden="true"
-                    />
-                  </button>
+                  {!isMobileCameraOnly && (
+                    <button
+                      type="button"
+                      className={`video-view-button is-icon${isPopout ? " is-active" : ""}`}
+                      onClick={() => setIsPopout((prev) => !prev)}
+                      aria-pressed={isPopout}
+                      data-hint={isPopout ? "Dock" : "Pop out"}
+                      aria-label={isPopout ? "Dock" : "Pop out"}
+                      title={isPopout ? "Dock" : "Pop out"}
+                    >
+                      <FontAwesomeIcon
+                        icon={isPopout ? faCompress : faUpRightFromSquare}
+                        aria-hidden="true"
+                      />
+                    </button>
+                  )}
                 </div>
                 <div className="video-call-header-controls-group is-mobile-only">
                   <span className="video-call-toolbar-label">Panel</span>
@@ -3820,7 +3910,7 @@ export default function VideoCallModal({
               </div>
             )}
             <div className="video-call-meta">
-              {screenShareStatusLabel && (
+              {!isMobileCameraOnly && screenShareStatusLabel && (
                 <span className="video-call-chip is-screen-share" title={screenShareStatusLabel}>
                   {screenShareStatusLabel}
                 </span>
@@ -4747,9 +4837,13 @@ export default function VideoCallModal({
                         status={!localStream ? "Camera off" : isVideoEnabled ? "" : "Camera off"}
                         className={`is-local is-self-video${
                           isLocalPrimary ? " is-primary" : ""
-                        }${!isLocalPrimary && isMobileLayout ? " is-draggable" : ""}${
-                          isPipDragging ? " is-dragging" : ""
-                        }${localEffectClass ? ` ${localEffectClass}` : ""}`}
+                        }${
+                          !isLocalPrimary && isMobileLayout && !isMobileCameraOnly
+                            ? " is-draggable"
+                            : ""
+                        }${isPipDragging ? " is-dragging" : ""}${
+                          localEffectClass ? ` ${localEffectClass}` : ""
+                        }`}
                         style={pipStyle}
                         onPointerDown={handlePipPointerDown}
                         onPointerMove={handlePipPointerMove}
@@ -4850,7 +4944,7 @@ export default function VideoCallModal({
                 onClick={() => setMobilePanel("video")}
                 disabled={!showCallUi}
               >
-                Video
+                {mobilePanel === "chat" ? "Back to video" : "Video"}
               </button>
               <button
                 type="button"

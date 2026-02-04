@@ -7,10 +7,10 @@ const STORAGE_KEY = "releaseNotesDismissedVersion";
 const SESSION_PREFIX = "releaseNotesClosed:";
 
 const RELEASE_NOTES = [
-  "New Dashboard UI",
+  "New Dashboard UI/Tweaks",
   "Added Goals and Impact Section",
   "Added Forums",
-  "Added Standalone Downloadable Video Calling Application",
+  "Added Standalone Downloadable Video Calling Application with new Mobile Only Features and Improved Responsivness",
   "Added Photo/Video Gallery",
   "Added Featured Wins to Dashboard",
   "You can now add friends to a trusted circle a create a trusted circle group to direct message",
