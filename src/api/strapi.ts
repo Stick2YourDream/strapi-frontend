@@ -46,6 +46,31 @@ const resolveToken = () => {
   );
 };
 
+const isAuthDebugEnabled = () => {
+  if (typeof window === "undefined") return false;
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("authDebug") !== "1") return false;
+  try {
+    const raw =
+      window.localStorage.getItem("user") || window.sessionStorage.getItem("user");
+    const parsed = raw ? (JSON.parse(raw) as { appRole?: string } | null) : null;
+    return parsed?.appRole === "admin";
+  } catch {
+    return false;
+  }
+};
+
+const logAuthDebug = (config: InternalAxiosRequestConfig, hasAuth: boolean) => {
+  if (!isAuthDebugEnabled()) return;
+  const base = String(config.baseURL || "");
+  const url = String(config.url || "");
+  const fullUrl = base && url ? `${base.replace(/\/+$/, "")}/${url.replace(/^\/+/, "")}` : url || base;
+  console.debug("[auth-debug] request", {
+    url: fullUrl || "n/a",
+    hasAuth,
+  });
+};
+
 const extractPath = (config: InternalAxiosRequestConfig) => {
   const url = String(config.url || "").trim();
   const baseUrl = String(config.baseURL || "").trim();
@@ -127,9 +152,11 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
     } else {
       headers.Authorization = `Bearer ${token}`;
     }
+    logAuthDebug(config, true);
   } else if (headers) {
     if (typeof headers.delete === "function") headers.delete("Authorization");
     else delete headers.Authorization;
+    logAuthDebug(config, false);
   }
 
   return config;
