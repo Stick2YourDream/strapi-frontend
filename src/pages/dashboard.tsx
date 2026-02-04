@@ -777,7 +777,7 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const location = useLocation();
   const hashHandledRef = useRef<string | null>(null);
-  const { user, profile } = useAuth();
+  const { user, profile, sessionActive } = useAuth();
   const { getBackgroundStyle } = useUserPreferences();
   const userId = user?.id;
   const goalsStorageKey = useMemo(() => goalsStorageKeyFor(userId), [userId]);
@@ -1117,7 +1117,9 @@ export default function Dashboard() {
         if (!options?.silent) {
           setLoading(false);
         }
-        navigate("/login");
+        if (!sessionActive && !userId) {
+          navigate("/login");
+        }
         return;
       }
 
@@ -1374,7 +1376,7 @@ export default function Dashboard() {
         }
       }
     },
-    [nameFromProfile, navigate, userId]
+    [nameFromProfile, navigate, sessionActive, userId]
   );
 
   useEffect(() => {

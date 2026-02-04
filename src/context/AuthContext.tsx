@@ -86,6 +86,9 @@ interface AuthContextType {
   profile: ProfileSummary | null;
   profileLoading: boolean;
   appSettings: AppSettings;
+  authReady: boolean;
+  sessionActive: boolean;
+  sessionExpiresAt: number | null;
   keyBackupStatus: "unknown" | "ready" | "needs-setup" | "needs-restore";
   keyBackupLoading: boolean;
   keyBackupError: string | null;
@@ -108,7 +111,9 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const stripBearer = (value: string | null | undefined) => {
   const trimmed = value?.trim();
   if (!trimmed) return null;
-  return trimmed.toLowerCase().startsWith("bearer ")
+  const lowered = trimmed.toLowerCase();
+  if (lowered === "null" || lowered === "undefined") return null;
+  return lowered.startsWith("bearer ")
     ? trimmed.slice(7).trim()
     : trimmed;
 };
@@ -139,7 +144,7 @@ const parseJwtUserId = (token: string | null) => {
   const decoded = parseJwtPayload(token);
   const rawId = decoded?.id ?? decoded?.userId ?? decoded?.sub;
   const parsed = Number(rawId);
-  return Number.isFinite(parsed) ? parsed : null;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 };
 
 const normalizeTokenValue = (value: string | null | undefined) => {
@@ -195,6 +200,17 @@ const persistAuthSnapshot = (storage: Storage, snapshot: AuthSnapshot) => {
 
 const parseStoredUser = (raw: string | null, storage?: Storage | null) => {
   if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const lowered = trimmed.toLowerCase();
+  if (lowered === "null" || lowered === "undefined") {
+    try {
+      storage?.removeItem("user");
+    } catch {
+      // ignore storage errors
+    }
+    return null;
+  }
   try {
     return JSON.parse(raw) as User;
   } catch {
@@ -239,8 +255,10 @@ const parseStoredUserId = (local: Storage, session: Storage) => {
   const raw =
     safeGetItem(local, "userId") ||
     safeGetItem(session, "userId");
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) ? parsed : null;
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 };
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
@@ -249,6 +267,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [profile, setProfile] = useState<ProfileSummary | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [appSettings, setAppSettings] = useState<AppSettings>({ newsroomEnabled: true });
+  const [authReady, setAuthReady] = useState(false);
+  const [sessionActive, setSessionActive] = useState(false);
+  const [sessionExpiresAt, setSessionExpiresAt] = useState<number | null>(null);
   const [keyBackupStatus, setKeyBackupStatus] =
     useState<AuthContextType["keyBackupStatus"]>("unknown");
   const [keyBackupLoading, setKeyBackupLoading] = useState(false);
@@ -264,10 +285,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
     const hydrate = async () => {
       const now = Date.now();
-    const localToken = normalizeTokenValue(safeGetItem(window.localStorage, "token"));
-    const sessionToken = normalizeTokenValue(safeGetItem(window.sessionStorage, "token"));
-    const storedToken = localToken || sessionToken;
-    const storedUserId = parseStoredUserId(window.localStorage, window.sessionStorage);
+      const localToken = normalizeTokenValue(safeGetItem(window.localStorage, "token"));
+      const sessionToken = normalizeTokenValue(safeGetItem(window.sessionStorage, "token"));
+      const storedToken = localToken || sessionToken;
+      const storedUserId = parseStoredUserId(window.localStorage, window.sessionStorage);
 
       const localUserRaw = safeGetItem(window.localStorage, "user");
       const sessionUserRaw = safeGetItem(window.sessionStorage, "user");
@@ -301,37 +322,49 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         const effectiveExpiry =
           Number.isFinite(effectiveExpiresAt as number) ? (effectiveExpiresAt as number) : null;
 
-      if (effectiveExpiry && now < effectiveExpiry) {
-        const baseSnapshot: AuthSnapshot = {
-          token: storedToken,
-          expiresAt: effectiveExpiry.toString(),
-          rememberDevice: rememberDevice ? "1" : "0",
-        };
-        const localOk = persistAuthSnapshot(window.localStorage, baseSnapshot);
-        if (!localOk) {
-          persistAuthSnapshot(window.sessionStorage, baseSnapshot);
-        } else {
-          sessionStorage.removeItem("token");
-          sessionStorage.removeItem("expiresAt");
-          sessionStorage.removeItem("rememberDevice");
-        }
-        setAuthToken(storedToken);
-
-        if (storedUser) {
-          const userSnapshot: AuthSnapshot = {
-            userRaw: JSON.stringify(storedUser),
-            userId: String(storedUser.id),
-          };
-          const localUserOk = persistAuthSnapshot(window.localStorage, userSnapshot);
-          if (!localUserOk) {
-            persistAuthSnapshot(window.sessionStorage, userSnapshot);
-          } else {
-            sessionStorage.removeItem("user");
-          }
+        if (effectiveExpiry && now < effectiveExpiry) {
           if (active) {
-            setUser(storedUser);
+            setSessionActive(true);
+            setSessionExpiresAt(effectiveExpiry);
           }
-        } else {
+          const baseSnapshot: AuthSnapshot = {
+            token: storedToken,
+            expiresAt: effectiveExpiry.toString(),
+            rememberDevice: rememberDevice ? "1" : "0",
+          };
+          persistAuthSnapshot(window.localStorage, baseSnapshot);
+          persistAuthSnapshot(window.sessionStorage, baseSnapshot);
+          setAuthToken(storedToken);
+
+          const tokenUserId = parseJwtUserId(storedToken);
+          const fallbackId = storedUserId ?? tokenUserId;
+          const hasFallback = typeof fallbackId === "number" && fallbackId > 0;
+
+          if (storedUser) {
+            const userSnapshot: AuthSnapshot = {
+              userRaw: JSON.stringify(storedUser),
+              userId: String(storedUser.id),
+            };
+            persistAuthSnapshot(window.localStorage, userSnapshot);
+            persistAuthSnapshot(window.sessionStorage, userSnapshot);
+            if (active) {
+              setUser(storedUser);
+            }
+          } else if (hasFallback && active) {
+            const fallbackUser: User = {
+              id: fallbackId,
+              email: "",
+            };
+            const userSnapshot: AuthSnapshot = {
+              userRaw: JSON.stringify(fallbackUser),
+              userId: String(fallbackId),
+            };
+            persistAuthSnapshot(window.localStorage, userSnapshot);
+            persistAuthSnapshot(window.sessionStorage, userSnapshot);
+            setUser(fallbackUser);
+          }
+
+          if (!storedUser) {
             try {
               const res = await api.get("/users/me");
               const payload = res.data || {};
@@ -346,42 +379,44 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                   userRaw: JSON.stringify(recovered),
                   userId: String(recovered.id),
                 };
-                const localUserOk = persistAuthSnapshot(window.localStorage, userSnapshot);
-                if (!localUserOk) {
-                  persistAuthSnapshot(window.sessionStorage, userSnapshot);
-                } else {
-                  sessionStorage.removeItem("user");
-                }
+                persistAuthSnapshot(window.localStorage, userSnapshot);
+                persistAuthSnapshot(window.sessionStorage, userSnapshot);
                 if (active) {
                   setUser(recovered);
                 }
               }
             } catch (error) {
-              const tokenUserId = parseJwtUserId(storedToken);
-              const fallbackId = storedUserId || tokenUserId;
-              if (fallbackId && active) {
-                const fallbackUser: User = {
-                  id: fallbackId,
-                  email: "",
-                };
-                const userSnapshot: AuthSnapshot = {
-                  userRaw: JSON.stringify(fallbackUser),
-                  userId: String(fallbackId),
-                };
-                const localUserOk = persistAuthSnapshot(window.localStorage, userSnapshot);
-                if (!localUserOk) {
-                  persistAuthSnapshot(window.sessionStorage, userSnapshot);
-                } else {
-                  sessionStorage.removeItem("user");
-                }
-                setUser(fallbackUser);
-                console.warn("Auth: recovered user from token due to /users/me failure.", error);
-              } else if (active) {
+              if (active && !hasFallback) {
                 console.warn("Auth: unable to restore user from token.", error);
+              } else if (!storedUser) {
+                console.warn("Auth: recovered user from token due to /users/me failure.", error);
               }
             }
           }
         } else {
+          if (active) {
+            setSessionActive(false);
+            setSessionExpiresAt(null);
+            setUser(null);
+          }
+          localStorage.removeItem("user");
+          localStorage.removeItem("token");
+          localStorage.removeItem("expiresAt");
+          localStorage.removeItem("rememberDevice");
+          localStorage.removeItem("userId");
+          sessionStorage.removeItem("user");
+          sessionStorage.removeItem("token");
+          sessionStorage.removeItem("expiresAt");
+          sessionStorage.removeItem("rememberDevice");
+          sessionStorage.removeItem("userId");
+          setAuthToken(null);
+        }
+      } else {
+        if (active) {
+          setSessionActive(false);
+          setSessionExpiresAt(null);
+          setUser(null);
+        }
         localStorage.removeItem("user");
         localStorage.removeItem("token");
         localStorage.removeItem("expiresAt");
@@ -394,20 +429,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         sessionStorage.removeItem("userId");
         setAuthToken(null);
       }
-    } else {
-      localStorage.removeItem("user");
-      localStorage.removeItem("expiresAt");
-      localStorage.removeItem("rememberDevice");
-      localStorage.removeItem("userId");
-      sessionStorage.removeItem("user");
-      sessionStorage.removeItem("expiresAt");
-      sessionStorage.removeItem("rememberDevice");
-      sessionStorage.removeItem("userId");
-      setAuthToken(null);
-    }
 
       if (active) {
         setLoading(false);
+        setAuthReady(true);
       }
     };
 
@@ -806,20 +831,15 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const login = (userData: User, token: string, options?: { rememberDevice?: boolean }) => {
     setUser(userData);
     setProfileLoading(true);
+    setSessionActive(true);
     const snapshot: AuthSnapshot = {
       userRaw: JSON.stringify(userData),
       userId: String(userData.id),
       token: normalizeTokenValue(token) || token,
       rememberDevice: options?.rememberDevice ? "1" : "0",
     };
-    const localOk = persistAuthSnapshot(window.localStorage, snapshot);
-    if (!localOk) {
-      persistAuthSnapshot(window.sessionStorage, snapshot);
-    } else {
-      sessionStorage.removeItem("user");
-      sessionStorage.removeItem("token");
-      sessionStorage.removeItem("rememberDevice");
-    }
+    persistAuthSnapshot(window.localStorage, snapshot);
+    persistAuthSnapshot(window.sessionStorage, snapshot);
     setAuthToken(token);
     // 30 days when remembered, otherwise 24 hours.
     const sessionDays = options?.rememberDevice ? 30 : 1;
@@ -846,15 +866,13 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         now,
       });
     }
+    setSessionExpiresAt(finalExpiry);
+    setAuthReady(true);
     const expirySnapshot: AuthSnapshot = {
       expiresAt: finalExpiry.toString(),
     };
-    const localExpiryOk = persistAuthSnapshot(window.localStorage, expirySnapshot);
-    if (!localExpiryOk) {
-      persistAuthSnapshot(window.sessionStorage, expirySnapshot);
-    } else {
-      sessionStorage.removeItem("expiresAt");
-    }
+    persistAuthSnapshot(window.localStorage, expirySnapshot);
+    persistAuthSnapshot(window.sessionStorage, expirySnapshot);
     console.info("Auth: login success", { id: userData.id, email: userData.email });
   };
 
@@ -864,10 +882,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       userRaw: JSON.stringify(userData),
       userId: String(userData.id),
     };
-    const localOk = persistAuthSnapshot(window.localStorage, snapshot);
-    if (!localOk) {
-      persistAuthSnapshot(window.sessionStorage, snapshot);
-    }
+    persistAuthSnapshot(window.localStorage, snapshot);
+    persistAuthSnapshot(window.sessionStorage, snapshot);
   };
 
   const logout = (reason?: string) => {
@@ -898,6 +914,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     setUser(null);
     setProfile(null);
     setProfileLoading(false);
+    setSessionActive(false);
+    setSessionExpiresAt(null);
     setKeyBackupStatus("unknown");
     setKeyBackupLoading(false);
     setKeyBackupError(null);
@@ -922,6 +940,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         profile,
         profileLoading,
         appSettings,
+        authReady,
+        sessionActive,
+        sessionExpiresAt,
         keyBackupStatus,
         keyBackupLoading,
         keyBackupError,
@@ -948,6 +969,9 @@ export const StaticAuthProvider = ({ children }: { children: React.ReactNode }) 
       profile: null,
       profileLoading: false,
       appSettings: { newsroomEnabled: true },
+      authReady: true,
+      sessionActive: false,
+      sessionExpiresAt: null,
       keyBackupStatus: "unknown",
       keyBackupLoading: false,
       keyBackupError: null,
@@ -959,7 +983,7 @@ export const StaticAuthProvider = ({ children }: { children: React.ReactNode }) 
       refreshKeyBackup: async () => undefined,
       createKeyBackup: async () => false,
       restoreKeyBackup: async () => false,
-      resetEncryptedProfile: async (_options) => false,
+      resetEncryptedProfile: async () => false,
     };
   return <AuthContext.Provider value={emptyAuth}>{children}</AuthContext.Provider>;
 };

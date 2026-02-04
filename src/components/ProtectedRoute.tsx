@@ -7,10 +7,17 @@ interface Props {
 }
 
 export default function ProtectedRoute({ children }: Props) {
-  const { user, profile, profileLoading } = useAuth();
+  const { user, profile, profileLoading, authReady, sessionActive } = useAuth();
   const location = useLocation();
 
+  if (!authReady) {
+    return null;
+  }
+
   if (!user) {
+    if (sessionActive) {
+      return null;
+    }
     return <Navigate to="/login" replace />;
   }
 

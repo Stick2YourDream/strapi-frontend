@@ -8,14 +8,36 @@ const createDeviceId = () => {
 };
 
 export const getOrCreateDeviceId = () => {
-  if (typeof window === "undefined" || !window.localStorage) {
+  if (typeof window === "undefined") {
     return createDeviceId();
   }
-  const existing = window.localStorage.getItem(DEVICE_ID_KEY);
+  const readFrom = (storage: Storage | null | undefined) => {
+    if (!storage) return "";
+    try {
+      return storage.getItem(DEVICE_ID_KEY) || "";
+    } catch {
+      return "";
+    }
+  };
+  const writeTo = (storage: Storage | null | undefined, value: string) => {
+    if (!storage) return false;
+    try {
+      storage.setItem(DEVICE_ID_KEY, value);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const existing =
+    readFrom(window.localStorage) || readFrom(window.sessionStorage);
   if (existing && existing.trim().length > 0) {
+    // Keep both storages in sync when possible.
+    writeTo(window.localStorage, existing);
+    writeTo(window.sessionStorage, existing);
     return existing;
   }
   const created = createDeviceId();
-  window.localStorage.setItem(DEVICE_ID_KEY, created);
+  writeTo(window.localStorage, created);
+  writeTo(window.sessionStorage, created);
   return created;
 };

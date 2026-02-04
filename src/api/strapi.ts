@@ -23,7 +23,9 @@ const publicAuthEndpoints = new Set([
 const normalizeToken = (token?: string | null) => {
   const trimmed = token?.trim();
   if (!trimmed) return null;
-  return trimmed.toLowerCase().startsWith("bearer ")
+  const lowered = trimmed.toLowerCase();
+  if (lowered === "null" || lowered === "undefined") return null;
+  return lowered.startsWith("bearer ")
     ? trimmed.slice(7).trim()
     : trimmed;
 };

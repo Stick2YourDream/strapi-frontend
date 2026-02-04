@@ -7,7 +7,9 @@ export const getStoredToken = () => {
       "";
     const trimmed = token.trim();
     if (!trimmed) return "";
-    return trimmed.toLowerCase().startsWith("bearer ")
+    const lowered = trimmed.toLowerCase();
+    if (lowered === "null" || lowered === "undefined") return "";
+    return lowered.startsWith("bearer ")
       ? trimmed.slice(7).trim()
       : trimmed;
   } catch {
@@ -22,6 +24,8 @@ export const getStoredExpiresAt = () => {
       window.localStorage.getItem("expiresAt") ||
       window.sessionStorage.getItem("expiresAt") ||
       "";
+    const lowered = raw.trim().toLowerCase();
+    if (!lowered || lowered === "null" || lowered === "undefined") return 0;
     const value = Number(raw);
     return Number.isFinite(value) ? value : 0;
   } catch {

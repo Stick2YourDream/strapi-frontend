@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useReducer } from "react";
 import { useAuth } from "../context/AuthContext";
 
 const readStorage = (storage: Storage | null | undefined, key: string) => {
@@ -27,18 +27,18 @@ const formatIso = (value: number | null) => {
 };
 
 export default function AuthDebugOverlay() {
-  const { user } = useAuth();
-  const [tick, setTick] = useState(0);
+  const { user, authReady, sessionActive, sessionExpiresAt } = useAuth();
+  const [, forceRender] = useReducer((value: number) => value + 1, 0);
 
-  const show = useMemo(() => {
+  const show = (() => {
     if (typeof window === "undefined") return false;
     const params = new URLSearchParams(window.location.search);
     return params.get("authDebug") === "1";
-  }, [tick]);
+  })();
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const handle = () => setTick((prev) => prev + 1);
+    const handle = () => forceRender();
     window.addEventListener("storage", handle);
     return () => window.removeEventListener("storage", handle);
   }, []);
@@ -85,6 +85,9 @@ export default function AuthDebugOverlay() {
       <div style={{ fontWeight: 600, marginBottom: 6 }}>Auth Debug (admin)</div>
       <div>Origin: {typeof window !== "undefined" ? window.location.origin : "n/a"}</div>
       <div>API: {String(import.meta.env.VITE_API_URL || "n/a")}</div>
+      <div>Auth ready: {authReady ? "yes" : "no"}</div>
+      <div>Session active: {sessionActive ? "yes" : "no"}</div>
+      <div>Session expires: {formatIso(sessionExpiresAt)}</div>
       <div>User id: {user.id}</div>
       <div>User id stored: {userIdStored || "n/a"}</div>
       <div>Token source: {tokenSource}</div>

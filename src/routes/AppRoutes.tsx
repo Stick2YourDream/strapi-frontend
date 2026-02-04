@@ -34,8 +34,9 @@ import Downloads from "../pages/downloads";
 import Forums from "../pages/forums";
 
 export default function AppRoutes(): JSX.Element {
-  const { user, appSettings } = useAuth();
-  const landingElement = user ? <Navigate to="/dashboard" replace /> : <Landing />;
+  const { user, appSettings, sessionActive } = useAuth();
+  const isAuthed = Boolean(user) || sessionActive;
+  const landingElement = isAuthed ? <Navigate to="/dashboard" replace /> : <Landing />;
   const newsroomEnabled = appSettings?.newsroomEnabled !== false;
 
   return (
