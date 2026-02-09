@@ -1206,7 +1206,10 @@ export default function Forums() {
   };
 
   return (
-    <div className="dashboard-shell" style={getBackgroundStyle("forums")}>
+    <div
+      className="dashboard-shell"
+      style={getBackgroundStyle("forums") || getBackgroundStyle("dashboard")}
+    >
       <Sidebar active="forums" />
       <div className="main-content">
         <TopbarSearch />

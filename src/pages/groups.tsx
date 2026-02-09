@@ -6,6 +6,7 @@ import api from "../api/strapi";
 import Sidebar from "../components/Sidebar";
 import TopbarSearch from "../components/TopbarSearch";
 import { useAuth } from "../context/AuthContext";
+import { useUserPreferences } from "../context/UserPreferencesContext";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { pickMediaUrl } from "../utils/media";
 
@@ -104,10 +105,12 @@ const buildIdFilter = (field: string, ids: number[]) =>
 export default function Groups() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { getBackgroundStyle } = useUserPreferences();
   usePageMeta({
     title: "Groups | Your Social Place",
     description: "Create groups, invite friends, and build shared momentum.",
   });
+  const pageBackground = getBackgroundStyle("groups") || getBackgroundStyle("dashboard");
 
   const [myGroups, setMyGroups] = useState<GroupSummary[]>([]);
   const [publicGroups, setPublicGroups] = useState<GroupSummary[]>([]);
@@ -350,7 +353,7 @@ export default function Groups() {
   );
 
   return (
-    <div className="dashboard-shell">
+    <div className="dashboard-shell" style={pageBackground}>
       <Sidebar active="groups" />
       <div className="main-content group-shell">
         <div className="topbar-greeting">

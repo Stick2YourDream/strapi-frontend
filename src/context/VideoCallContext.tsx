@@ -107,6 +107,7 @@ type VideoCallEffects = {
   mirror: boolean;
   background:
     | "none"
+    | "ai"
     | "backdrop1"
     | "backdrop2"
     | "backdrop3"
@@ -117,6 +118,9 @@ type VideoCallEffects = {
     | "backdrop8"
     | "backdrop9"
     | "backdrop10";
+  backgroundImageUrl: string;
+  avatarEnabled: boolean;
+  avatarImageUrl: string;
   filter:
     | "none"
     | "vivid"
@@ -405,6 +409,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     blur: false,
     mirror: false,
     background: "none",
+    backgroundImageUrl: "",
+    avatarEnabled: false,
+    avatarImageUrl: "",
     filter: "none",
   });
   const [onlineUserIds, setOnlineUserIds] = useState<Set<number>>(new Set());
@@ -1542,11 +1549,15 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       ctx: CanvasRenderingContext2D,
       width: number,
       height: number,
-      mode: VideoCallEffects["background"]
+      mode: VideoCallEffects["background"],
+      customUrl?: string
     ) => {
       if (mode === "none") return false;
 
-      const src = BACKDROP_ASSETS[mode as keyof typeof BACKDROP_ASSETS];
+      const src =
+        mode === "ai"
+          ? customUrl || ""
+          : BACKDROP_ASSETS[mode as keyof typeof BACKDROP_ASSETS];
       if (!src) return false;
 
       const image = getBackdropImage(src);
@@ -1693,6 +1704,25 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         });
       };
 
+      const drawCoverImage = (
+        context: CanvasRenderingContext2D,
+        image: HTMLImageElement,
+        width: number,
+        height: number,
+        mirror: boolean
+      ) => {
+        const vw = image.naturalWidth || width;
+        const vh = image.naturalHeight || height;
+        const scale = Math.max(width / vw, height / vh);
+        const sw = width / scale;
+        const sh = height / scale;
+        const sx = Math.max(0, (vw - sw) / 2);
+        const sy = Math.max(0, (vh - sh) / 2);
+        withMirror(context, width, mirror, () => {
+          context.drawImage(image, sx, sy, sw, sh, 0, 0, width, height);
+        });
+      };
+
       const maybeSegment = (shouldSegment: boolean) => {
         if (!shouldSegment || !segmenter || segmentationFailed || segmenting) return;
         const now = performance.now();
@@ -1736,7 +1766,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         }
 
         const effects = effectsRef.current;
-        const needsSegmentation = effects.blur || effects.background !== "none";
+        const useAvatar = effects.avatarEnabled && Boolean(effects.avatarImageUrl);
+        const needsSegmentation =
+          effects.blur || effects.background !== "none" || useAvatar;
         if (needsSegmentation) {
           ensureSegmentation();
         } else {
@@ -1793,8 +1825,21 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         }
 
         foregroundCtx.clearRect(0, 0, width, height);
-        foregroundCtx.filter = cameraFilter;
-        drawCover(foregroundCtx, width, height, false);
+        if (useAvatar) {
+          const avatarImage = effects.avatarImageUrl
+            ? getBackdropImage(effects.avatarImageUrl)
+            : null;
+          if (avatarImage && avatarImage.complete && avatarImage.naturalWidth) {
+            foregroundCtx.filter = "none";
+            drawCoverImage(foregroundCtx, avatarImage, width, height, false);
+          } else {
+            foregroundCtx.filter = cameraFilter;
+            drawCover(foregroundCtx, width, height, false);
+          }
+        } else {
+          foregroundCtx.filter = cameraFilter;
+          drawCover(foregroundCtx, width, height, false);
+        }
         foregroundCtx.filter = "none";
         foregroundCtx.globalCompositeOperation = "destination-in";
         if (maskCtx) {
@@ -1806,16 +1851,22 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         }
         foregroundCtx.globalCompositeOperation = "source-over";
 
-        const drawBackdropFrame = (mode: VideoCallEffects["background"]) => {
+        const drawBackdropFrame = (
+          mode: VideoCallEffects["background"],
+          customUrl?: string
+        ) => {
           let drew = false;
           withMirror(ctx, width, mirror, () => {
-            drew = drawBackdrop(ctx, width, height, mode);
+            drew = drawBackdrop(ctx, width, height, mode, customUrl);
           });
           return drew;
         };
 
         if (effects.background !== "none") {
-          const drewBackdrop = drawBackdropFrame(effects.background);
+          const drewBackdrop = drawBackdropFrame(
+            effects.background,
+            effects.backgroundImageUrl
+          );
           if (!drewBackdrop) {
             ctx.clearRect(0, 0, width, height);
             ctx.filter = baseFilter;
@@ -1907,11 +1958,13 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     }
 
     const effects = videoEffectsRef.current;
+    const hasAvatar = effects.avatarEnabled && Boolean(effects.avatarImageUrl);
     const needsProcessing =
       effects.blur ||
       effects.background !== "none" ||
       effects.filter !== "none" ||
-      effects.mirror;
+      effects.mirror ||
+      hasAvatar;
     if (!needsProcessing) {
       stopVideoProcessing();
       return rawTrack;
@@ -1922,7 +1975,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       current.track.enabled = rawTrack.enabled;
       current.effectsKey = `${effects.blur ? "1" : "0"}-${effects.background}-${
         effects.filter
-      }-${effects.mirror ? "1" : "0"}`;
+      }-${effects.mirror ? "1" : "0"}-${hasAvatar ? "1" : "0"}-${
+        effects.backgroundImageUrl
+      }-${effects.avatarImageUrl}`;
       return current.track;
     }
 
@@ -1938,7 +1993,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         sourceId: rawTrack.id,
         effectsKey: `${effects.blur ? "1" : "0"}-${effects.background}-${
           effects.filter
-        }-${effects.mirror ? "1" : "0"}`,
+        }-${effects.mirror ? "1" : "0"}-${hasAvatar ? "1" : "0"}-${
+          effects.backgroundImageUrl
+        }-${effects.avatarImageUrl}`,
       };
       return track;
     } catch {
@@ -1954,8 +2011,12 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       return null;
     }
     const effects = videoEffectsRef.current;
+    const hasAvatar = effects.avatarEnabled && Boolean(effects.avatarImageUrl);
     const needsProcessing =
-      effects.blur || effects.background !== "none" || effects.filter !== "none";
+      effects.blur ||
+      effects.background !== "none" ||
+      effects.filter !== "none" ||
+      hasAvatar;
     if (!needsProcessing || AUDIO_SYNC_DELAY_SEC <= 0) {
       stopAudioProcessing();
       return rawTrack;

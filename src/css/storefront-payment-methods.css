@@ -1,0 +1,359 @@
+@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap");
+
+.storefront-shell {
+  --sf-bg: #070b14;
+  --sf-text: #eaf1ff;
+  font-family: "Space Grotesk", "Outfit", sans-serif;
+  color: var(--sf-text);
+  position: relative;
+  overflow: hidden;
+  background-color: var(--sf-bg);
+  background: radial-gradient(140% 160% at 8% 12%, #162235 0%, #0b101d 52%, #05060a 100%);
+}
+
+.storefront-page {
+  position: relative;
+  z-index: 1;
+  gap: 32px;
+}
+
+.storefront-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.storefront-panel {
+  border-radius: 20px;
+  padding: 18px 20px;
+  background: rgba(9, 13, 23, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  display: grid;
+  gap: 16px;
+}
+
+.storefront-panel-header {
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.storefront-panel-eyebrow {
+  margin: 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  color: #92b8ff;
+}
+
+.storefront-panel h2,
+.storefront-panel h3,
+.storefront-panel h4 {
+  margin: 6px 0 0;
+}
+
+.storefront-field {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+  color: #a9b7d8;
+}
+
+.storefront-field input,
+.storefront-field select,
+.storefront-field textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(10, 15, 26, 0.9);
+  color: #e8edf7;
+  font-size: 14px;
+  outline: none;
+}
+
+.storefront-field textarea {
+  resize: vertical;
+}
+
+.storefront-form-error {
+  font-size: 12px;
+  color: #ff8fa3;
+}
+
+.storefront-field-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #8fa6c9;
+}
+
+.storefront-payment-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #eaf1ff;
+  border: 1px solid rgba(120, 160, 255, 0.22);
+  background: rgba(16, 22, 38, 0.8);
+}
+
+.storefront-payment-icon.stripe {
+  color: #91b7ff;
+  border-color: rgba(90, 140, 255, 0.35);
+  background: rgba(60, 98, 190, 0.18);
+}
+
+.storefront-payment-icon.cashapp {
+  color: #70f09a;
+  border-color: rgba(86, 220, 128, 0.35);
+  background: rgba(30, 120, 64, 0.22);
+}
+
+.storefront-payment-icon.paypal {
+  color: #74b3ff;
+  border-color: rgba(70, 130, 255, 0.35);
+  background: rgba(33, 78, 160, 0.2);
+}
+
+.storefront-payment-icon.venmo {
+  color: #6dd4ff;
+  border-color: rgba(80, 180, 255, 0.35);
+  background: rgba(20, 90, 140, 0.22);
+}
+
+.storefront-payment-icon.cash {
+  color: #ffd27a;
+  border-color: rgba(255, 196, 80, 0.35);
+  background: rgba(160, 110, 30, 0.2);
+}
+
+.btn.small {
+  padding: 6px 10px;
+  font-size: 12px;
+  border-radius: 10px;
+}
+
+.storefront-layout--payment {
+  padding: 28px 24px;
+}
+
+.storefront-payment-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.storefront-payment-header {
+  align-items: flex-start;
+}
+
+.storefront-payment-sub {
+  margin: 6px 0 0;
+  color: #8fa6c9;
+  font-size: 13px;
+}
+
+.storefront-payment-banner {
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(120, 170, 255, 0.2);
+  background: rgba(15, 22, 36, 0.75);
+  color: #c9d7f5;
+  display: grid;
+  gap: 6px;
+}
+
+.storefront-payment-banner strong {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #9db7ff;
+}
+
+.storefront-payment-banner p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.storefront-payment-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.storefront-payment-card {
+  width: 100%;
+  text-align: left;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(120, 170, 255, 0.16);
+  background: rgba(10, 16, 28, 0.8);
+  color: #e5efff;
+  cursor: pointer;
+  position: relative;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.storefront-payment-card:hover {
+  border-color: rgba(120, 170, 255, 0.4);
+  box-shadow: 0 12px 24px rgba(6, 12, 24, 0.45);
+  transform: translateY(-2px);
+}
+
+.storefront-payment-card strong {
+  display: block;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.storefront-payment-desc {
+  margin: 0;
+  font-size: 12px;
+  color: #9fb3d6;
+}
+
+.storefront-payment-card.is-active {
+  border-color: rgba(120, 170, 255, 0.65);
+  background: linear-gradient(145deg, rgba(18, 28, 50, 0.9), rgba(8, 12, 22, 0.85));
+  box-shadow: 0 16px 28px rgba(6, 12, 24, 0.5);
+}
+
+.storefront-payment-tag {
+  margin-left: auto;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(80, 200, 150, 0.18);
+  color: #8ef3a7;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid rgba(80, 200, 150, 0.35);
+}
+
+.storefront-payment-details {
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(120, 170, 255, 0.18);
+  background: rgba(10, 15, 26, 0.7);
+  display: grid;
+  gap: 14px;
+}
+
+.storefront-payment-paypal {
+  display: grid;
+  gap: 10px;
+}
+
+.storefront-payment-note {
+  margin: 0;
+  font-size: 12px;
+  color: #8fa6c9;
+}
+
+.storefront-payment-note.is-info {
+  color: #b6d2ff;
+}
+
+.storefront-payment-status {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(120, 170, 255, 0.2);
+  background: rgba(16, 24, 40, 0.7);
+  font-size: 12px;
+  color: #dbe7ff;
+}
+
+.storefront-payment-status strong {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #9db7ff;
+}
+
+.storefront-payment-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px dashed rgba(120, 170, 255, 0.35);
+  color: #cfe2ff;
+  font-size: 12px;
+  text-decoration: none;
+  width: fit-content;
+}
+
+.storefront-payment-link:hover {
+  border-color: rgba(120, 170, 255, 0.55);
+  color: #f1f6ff;
+}
+
+.storefront-payment-details-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.storefront-payment-details-header h3 {
+  margin: 0 0 4px;
+}
+
+.storefront-payment-details-header p {
+  margin: 0;
+  font-size: 12px;
+  color: #8fa6c9;
+}
+
+.storefront-payment-current {
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(120, 170, 255, 0.25);
+  background: rgba(22, 32, 52, 0.7);
+  color: #bcd1f4;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.storefront-payment-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.storefront-payment-saved {
+  font-size: 12px;
+  color: #8ef3a7;
+}
+
+.storefront-payment-loading {
+  font-size: 12px;
+  color: #9fb3d6;
+}
+
+@media (max-width: 768px) {
+  .storefront-layout--payment {
+    padding: 18px 16px 28px;
+  }
+
+  .storefront-payment-details-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .storefront-payment-actions {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

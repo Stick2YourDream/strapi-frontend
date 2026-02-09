@@ -15,6 +15,8 @@ const RELEASE_NOTES = [
   "Added Featured Wins to Dashboard",
   "You can now add friends to a trusted circle a create a trusted circle group to direct message",
   "Improved performance of video calls and messaging",
+  "Added AI Image Generation to Video Calling",
+  "Storefront COMING SOON!!!"
 ];
 
 export default function ReleaseNotesModal() {

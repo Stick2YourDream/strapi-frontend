@@ -47,7 +47,15 @@ const BIRTHDAY_MESSAGES = [
 ];
 
 type SidebarProps = {
-  active: "dashboard" | "friends" | "me" | "groups" | "moderation" | "news" | "forums";
+  active:
+    | "dashboard"
+    | "friends"
+    | "me"
+    | "groups"
+    | "moderation"
+    | "news"
+    | "forums"
+    | "storefront";
   settingsView?: "profile" | "settings";
   onSettingsViewChange?: (view: "profile" | "settings") => void;
   settingsSection?: SettingsSection;
@@ -241,6 +249,7 @@ export default function Sidebar({
   const isGroupSettingsView = groupView === "settings";
   const isStaff = user?.appRole === "admin" || user?.appRole === "moderator";
   const newsroomEnabled = appSettings?.newsroomEnabled !== false;
+  const storefrontEnabled = appSettings?.storefrontEnabled !== false;
 
   const handleSettingsToggle = () => {
     if (!onSettingsViewChange) return;
@@ -1007,6 +1016,20 @@ export default function Sidebar({
                 onClick={() => handleProfileAction("/forums")}
               >
                 Forums
+              </button>
+              <button
+                type="button"
+                className={`btn ghost sidebar-nav-link${
+                  !storefrontEnabled ? " sidebar-nav-link--disabled" : ""
+                }${active === "storefront" ? " is-active" : ""}`}
+                disabled={!storefrontEnabled}
+                aria-disabled={!storefrontEnabled}
+                onClick={() => {
+                  if (!storefrontEnabled) return;
+                  handleProfileAction("/storefront");
+                }}
+              >
+                {storefrontEnabled ? "StoreFront" : "StoreFront (Coming Soon!)"}
               </button>
               <button
                 type="button"

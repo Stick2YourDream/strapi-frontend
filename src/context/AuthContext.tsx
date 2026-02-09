@@ -79,6 +79,7 @@ interface ProfileSummary {
 
 interface AppSettings {
   newsroomEnabled: boolean;
+  storefrontEnabled: boolean;
 }
 
 interface AuthContextType {
@@ -273,7 +274,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [loading, setLoading] = useState(true); // Track if auth is initializing
   const [profile, setProfile] = useState<ProfileSummary | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
-  const [appSettings, setAppSettings] = useState<AppSettings>({ newsroomEnabled: true });
+  const [appSettings, setAppSettings] = useState<AppSettings>({
+    newsroomEnabled: true,
+    storefrontEnabled: true,
+  });
   const [authReady, setAuthReady] = useState(false);
   const [sessionActive, setSessionActive] = useState(false);
   const [sessionExpiresAt, setSessionExpiresAt] = useState<number | null>(null);
@@ -597,7 +601,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const refreshAppSettings = async () => {
     if (!user) {
-      setAppSettings({ newsroomEnabled: true });
+      setAppSettings({ newsroomEnabled: true, storefrontEnabled: true });
       return;
     }
     try {
@@ -605,6 +609,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       const data = res.data?.data;
       setAppSettings({
         newsroomEnabled: data?.newsroomEnabled !== false,
+        storefrontEnabled: data?.storefrontEnabled !== false,
       });
     } catch {
       // keep the existing settings if the request fails
@@ -769,7 +774,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   useEffect(() => {
     if (!user) {
-      setAppSettings({ newsroomEnabled: true });
+      setAppSettings({ newsroomEnabled: true, storefrontEnabled: true });
       return;
     }
     void refreshAppSettings();
@@ -977,7 +982,7 @@ export const StaticAuthProvider = ({ children }: { children: React.ReactNode }) 
       user: null,
       profile: null,
       profileLoading: false,
-      appSettings: { newsroomEnabled: true },
+      appSettings: { newsroomEnabled: true, storefrontEnabled: true },
       authReady: true,
       sessionActive: false,
       sessionExpiresAt: null,

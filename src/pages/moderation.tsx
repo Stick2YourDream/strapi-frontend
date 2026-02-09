@@ -46,6 +46,234 @@ type ModerationUser = {
 
 type ReportFilter = "all" | "open" | "reviewed" | "dismissed";
 
+const STOREFRONT_DEMO_ENABLED_KEY = "storefront:demoListingsEnabled";
+const STOREFRONT_DEMO_COUNT_KEY = "storefront:demoListingsCount";
+const STOREFRONT_DASHBOARD_MOCK_ENABLED_KEY = "storefront:sellerDashboardMockEnabled";
+const STOREFRONT_DASHBOARD_MOCK_DATA_KEY = "storefront:sellerDashboardMockData";
+const STOREFRONT_DEMO_MAX = 120;
+const DEFAULT_STOREFRONT_DEMO_ENABLED = import.meta.env.DEV;
+const DEFAULT_SELLER_DASHBOARD_MOCK = {
+  listings: [
+    {
+      id: "mock-listing-1",
+      rawId: 1101,
+      title: "Vintage film camera kit",
+      price: 420,
+      category: "Collectibles",
+      condition: "Like new",
+      location: "Seattle, WA",
+      description: "Includes lens, case, and original strap.",
+      images: [],
+      seller: {
+        id: "seller-1",
+        userId: 316,
+        name: "Jason Adams",
+        handle: "jason",
+        avatarUrl: "",
+        rating: 4.9,
+        responseTime: "Typically replies in under 1 hour",
+        verifiedLevel: "verified",
+        badges: ["Top seller"],
+      },
+      stock: 3,
+      shipping: "Delivery arranged privately",
+      shippingEnabled: false,
+      shippingCarriers: [],
+      shippingInternational: false,
+      localPickup: true,
+      cashAccepted: true,
+      shippingNotes: "",
+      noShippingRequired: true,
+      isDemo: true,
+    },
+    {
+      id: "mock-listing-2",
+      rawId: 1102,
+      title: "Minimalist desk setup bundle",
+      price: 320,
+      category: "Home & Garden",
+      condition: "Good",
+      location: "Portland, OR",
+      description: "Desk mat, lamp, and organizers.",
+      images: [],
+      seller: {
+        id: "seller-1",
+        userId: 316,
+        name: "Jason Adams",
+        handle: "jason",
+        avatarUrl: "",
+        rating: 4.9,
+        responseTime: "Typically replies in under 1 hour",
+        verifiedLevel: "verified",
+        badges: ["Top seller"],
+      },
+      stock: 2,
+      shipping: "Delivery arranged privately",
+      shippingEnabled: false,
+      shippingCarriers: [],
+      shippingInternational: false,
+      localPickup: true,
+      cashAccepted: true,
+      shippingNotes: "",
+      noShippingRequired: true,
+      isDemo: true,
+    },
+  ],
+  offers: [
+    {
+      id: "mock-offer-1",
+      listingId: 1101,
+      buyerId: 501,
+      sellerId: 316,
+      buyerName: "Taylor Morgan",
+      offeredPrice: 395,
+      currency: "USD",
+      status: "pending",
+      createdAt: new Date().toISOString(),
+    },
+  ],
+  orders: [
+    {
+      id: 2201,
+      listingId: 1102,
+      listingTitle: "Minimalist desk setup bundle",
+      buyerId: 502,
+      buyerName: "Alex Rivera",
+      sellerId: 316,
+      sellerName: "Jason Adams",
+      amount: 320,
+      currency: "USD",
+      platformFee: 9.6,
+      net: 310.4,
+      status: "paid",
+      createdAt: new Date().toISOString(),
+      payoutStatus: "pending",
+      shippingStatus: "delivery_arranged",
+      paymentProvider: "paypal",
+    },
+  ],
+  messages: [
+    {
+      id: 3301,
+      body: "Is the bundle still available this weekend?",
+      createdAt: new Date().toISOString(),
+      listingTitle: "Minimalist desk setup bundle",
+      senderName: "Alex Rivera",
+      recipientName: "Jason Adams",
+    },
+  ],
+  disputes: [
+    {
+      id: 4401,
+      status: "open",
+      reason: "Shipping delay",
+      createdAt: new Date().toISOString(),
+      buyerName: "Taylor Morgan",
+      sellerName: "Jason Adams",
+      listingTitle: "Vintage film camera kit",
+    },
+  ],
+  verification: {
+    sellerIdStatus: "verified",
+    sellerPayoutStatus: "verified",
+    buyerPaymentStatus: "verified",
+    buyerAddressStatus: "verified",
+    payoutProvider: "paypal",
+    payoutEmail: "seller@paypal.com",
+  },
+};
+
+const buildSellerDashboardMockEnabledKey = (userId?: number | null) =>
+  userId ? `${STOREFRONT_DASHBOARD_MOCK_ENABLED_KEY}:${userId}` : null;
+
+const buildSellerDashboardMockDataKey = (userId?: number | null) =>
+  userId ? `${STOREFRONT_DASHBOARD_MOCK_DATA_KEY}:${userId}` : null;
+
+const readStorefrontDemoEnabled = () => {
+  if (typeof window === "undefined") return DEFAULT_STOREFRONT_DEMO_ENABLED;
+  const raw = window.localStorage.getItem(STOREFRONT_DEMO_ENABLED_KEY);
+  if (raw === null) return DEFAULT_STOREFRONT_DEMO_ENABLED;
+  return raw === "true";
+};
+
+const readStorefrontDemoCount = () => {
+  if (typeof window === "undefined") return 0;
+  const raw = Number(window.localStorage.getItem(STOREFRONT_DEMO_COUNT_KEY) || 0);
+  if (!Number.isFinite(raw)) return 0;
+  return Math.max(0, Math.min(STOREFRONT_DEMO_MAX, raw));
+};
+
+const readSellerDashboardMockEnabled = (userId?: number | null) => {
+  if (typeof window === "undefined") return false;
+  const scopedKey = buildSellerDashboardMockEnabledKey(userId);
+  if (!scopedKey) return false;
+  const raw = window.localStorage.getItem(scopedKey);
+  if (raw !== null) return raw === "true";
+  const legacy = window.localStorage.getItem(STOREFRONT_DASHBOARD_MOCK_ENABLED_KEY);
+  if (legacy !== null) {
+    window.localStorage.setItem(scopedKey, legacy);
+    window.localStorage.removeItem(STOREFRONT_DASHBOARD_MOCK_ENABLED_KEY);
+    return legacy === "true";
+  }
+  return false;
+};
+
+const readSellerDashboardMockData = (userId?: number | null) => {
+  if (typeof window === "undefined") return null;
+  const scopedKey = buildSellerDashboardMockDataKey(userId);
+  if (!scopedKey) return null;
+  const raw = window.localStorage.getItem(scopedKey);
+  if (raw) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  const legacy = window.localStorage.getItem(STOREFRONT_DASHBOARD_MOCK_DATA_KEY);
+  if (legacy) {
+    try {
+      const parsed = JSON.parse(legacy);
+      window.localStorage.setItem(scopedKey, legacy);
+      window.localStorage.removeItem(STOREFRONT_DASHBOARD_MOCK_DATA_KEY);
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+};
+
+const clampStorefrontDemoCount = (value: number) => {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(STOREFRONT_DEMO_MAX, value));
+};
+
+const persistStorefrontDemoState = (enabled: boolean, count: number) => {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(STOREFRONT_DEMO_ENABLED_KEY, String(enabled));
+  window.localStorage.setItem(STOREFRONT_DEMO_COUNT_KEY, String(count));
+  window.dispatchEvent(new Event("storefront:demo-updated"));
+};
+
+const persistSellerDashboardMockState = (
+  userId: number | null | undefined,
+  enabled: boolean,
+  payload?: unknown
+) => {
+  if (typeof window === "undefined") return;
+  const enabledKey = buildSellerDashboardMockEnabledKey(userId);
+  const dataKey = buildSellerDashboardMockDataKey(userId);
+  if (!enabledKey || !dataKey) return;
+  window.localStorage.setItem(enabledKey, String(enabled));
+  if (payload) {
+    window.localStorage.setItem(dataKey, JSON.stringify(payload));
+  }
+  window.localStorage.removeItem(STOREFRONT_DASHBOARD_MOCK_ENABLED_KEY);
+  window.localStorage.removeItem(STOREFRONT_DASHBOARD_MOCK_DATA_KEY);
+  window.dispatchEvent(new Event("storefront:seller-dashboard-mock-updated"));
+};
+
 const formatDateTime = (value?: string | null) => {
   if (!value) return "";
   const date = new Date(value);
@@ -84,7 +312,28 @@ export default function Moderation() {
   const pageSize = 10;
   const [demoBusy, setDemoBusy] = useState(false);
   const [demoStatus, setDemoStatus] = useState<string | null>(null);
+  const [storefrontDemoEnabled, setStorefrontDemoEnabled] = useState(
+    readStorefrontDemoEnabled
+  );
+  const [storefrontDemoCount, setStorefrontDemoCount] = useState(
+    readStorefrontDemoCount
+  );
+  const [storefrontDemoStatus, setStorefrontDemoStatus] = useState<string | null>(null);
+  const [sellerDashboardMockEnabled, setSellerDashboardMockEnabled] = useState(() =>
+    readSellerDashboardMockEnabled(user?.id ?? null)
+  );
+  const [sellerDashboardMockPayload, setSellerDashboardMockPayload] = useState(() =>
+    JSON.stringify(
+      readSellerDashboardMockData(user?.id ?? null) || DEFAULT_SELLER_DASHBOARD_MOCK,
+      null,
+      2
+    )
+  );
+  const [sellerDashboardMockStatus, setSellerDashboardMockStatus] = useState<string | null>(
+    null
+  );
   const [newsroomEnabled, setNewsroomEnabled] = useState(true);
+  const [storefrontEnabled, setStorefrontEnabled] = useState(true);
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
@@ -118,6 +367,17 @@ export default function Moderation() {
       active = false;
     };
   }, [isStaff]);
+
+  useEffect(() => {
+    setSellerDashboardMockEnabled(readSellerDashboardMockEnabled(user?.id ?? null));
+    setSellerDashboardMockPayload(
+      JSON.stringify(
+        readSellerDashboardMockData(user?.id ?? null) || DEFAULT_SELLER_DASHBOARD_MOCK,
+        null,
+        2
+      )
+    );
+  }, [user?.id]);
 
   useEffect(() => {
     if (!isStaff) return;
@@ -171,6 +431,7 @@ export default function Moderation() {
         const res = await api.get("/moderation/settings");
         if (!active) return;
         setNewsroomEnabled(res.data?.data?.newsroomEnabled !== false);
+        setStorefrontEnabled(res.data?.data?.storefrontEnabled !== false);
       } catch {
         if (active) {
           setSettingsError("Unable to load moderation settings.");
@@ -348,19 +609,123 @@ export default function Moderation() {
     }
   };
 
-  const handleToggleNewsroom = async (nextValue: boolean) => {
+  const handleStorefrontDemoToggle = (nextValue: boolean) => {
+    setStorefrontDemoEnabled(nextValue);
+    persistStorefrontDemoState(nextValue, storefrontDemoCount);
+    setStorefrontDemoStatus(
+      nextValue ? "StoreFront mock listings enabled." : "StoreFront mock listings disabled."
+    );
+  };
+
+  const handleAddStorefrontDemoListings = () => {
+    const nextCount = clampStorefrontDemoCount(storefrontDemoCount + 20);
+    setStorefrontDemoEnabled(true);
+    setStorefrontDemoCount(nextCount);
+    persistStorefrontDemoState(true, nextCount);
+    setStorefrontDemoStatus(`StoreFront demo listings set to ${nextCount}.`);
+  };
+
+  const handleClearStorefrontDemoListings = () => {
+    setStorefrontDemoEnabled(false);
+    setStorefrontDemoCount(0);
+    persistStorefrontDemoState(false, 0);
+    setStorefrontDemoStatus("StoreFront demo listings cleared.");
+  };
+
+  const handleToggleSellerDashboardMock = (nextValue: boolean) => {
+    setSellerDashboardMockEnabled(nextValue);
+    let payload: unknown = null;
+    try {
+      payload = JSON.parse(sellerDashboardMockPayload);
+    } catch {
+      payload = DEFAULT_SELLER_DASHBOARD_MOCK;
+      setSellerDashboardMockPayload(JSON.stringify(DEFAULT_SELLER_DASHBOARD_MOCK, null, 2));
+    }
+    persistSellerDashboardMockState(user?.id ?? null, nextValue, payload);
+    setSellerDashboardMockStatus(
+      nextValue
+        ? "Seller dashboard mock data enabled."
+        : "Seller dashboard mock data disabled."
+    );
+  };
+
+  const handleApplySellerDashboardMock = () => {
+    try {
+      const payload = JSON.parse(sellerDashboardMockPayload);
+      persistSellerDashboardMockState(user?.id ?? null, sellerDashboardMockEnabled, payload);
+      setSellerDashboardMockStatus("Seller dashboard mock data saved.");
+    } catch {
+      setSellerDashboardMockStatus("Invalid JSON. Please fix and try again.");
+    }
+  };
+
+  const handleResetSellerDashboardMock = () => {
+    const nextPayload = JSON.stringify(DEFAULT_SELLER_DASHBOARD_MOCK, null, 2);
+    setSellerDashboardMockPayload(nextPayload);
+    persistSellerDashboardMockState(
+      user?.id ?? null,
+      sellerDashboardMockEnabled,
+      DEFAULT_SELLER_DASHBOARD_MOCK
+    );
+    setSellerDashboardMockStatus("Seller dashboard mock data reset to sample.");
+  };
+
+  const handleClearSellerDashboardMock = () => {
+    setSellerDashboardMockEnabled(false);
+    const enabledKey = buildSellerDashboardMockEnabledKey(user?.id ?? null);
+    const dataKey = buildSellerDashboardMockDataKey(user?.id ?? null);
+    if (enabledKey) {
+      window.localStorage.removeItem(enabledKey);
+    }
+    if (dataKey) {
+      window.localStorage.removeItem(dataKey);
+    }
+    window.localStorage.removeItem(STOREFRONT_DASHBOARD_MOCK_DATA_KEY);
+    window.localStorage.removeItem(STOREFRONT_DASHBOARD_MOCK_ENABLED_KEY);
+    window.dispatchEvent(new Event("storefront:seller-dashboard-mock-updated"));
+    setSellerDashboardMockStatus("Seller dashboard mock data cleared.");
+  };
+
+  const applyPlatformSettings = async (next: {
+    storefrontEnabled?: boolean;
+    newsroomEnabled?: boolean;
+  }) => {
     if (settingsSaving) return;
     setSettingsSaving(true);
     setSettingsError(null);
     try {
-      await api.put("/moderation/settings", { newsroomEnabled: nextValue });
-      setNewsroomEnabled(nextValue);
+      const res = await api.put("/moderation/settings", next);
+      const data = res.data?.data;
+      if (typeof data?.storefrontEnabled === "boolean") {
+        setStorefrontEnabled(data.storefrontEnabled);
+      } else if (next.storefrontEnabled !== undefined) {
+        setStorefrontEnabled(next.storefrontEnabled);
+      }
+      if (typeof data?.newsroomEnabled === "boolean") {
+        setNewsroomEnabled(data.newsroomEnabled);
+      } else if (next.newsroomEnabled !== undefined) {
+        setNewsroomEnabled(next.newsroomEnabled);
+      }
       await refreshAppSettings();
     } catch {
       setSettingsError("Unable to update moderation settings.");
     } finally {
       setSettingsSaving(false);
     }
+  };
+
+  const handleToggleNewsroom = async (nextValue: boolean) => {
+    await applyPlatformSettings({
+      newsroomEnabled: nextValue,
+      storefrontEnabled,
+    });
+  };
+
+  const handleToggleStorefront = async (nextValue: boolean) => {
+    await applyPlatformSettings({
+      storefrontEnabled: nextValue,
+      newsroomEnabled,
+    });
   };
 
   return (
@@ -611,37 +976,159 @@ export default function Moderation() {
             {demoStatus && <div className="status">{demoStatus}</div>}
           </section>
 
+          <section className="panel moderation-panel moderation-demo-panel">
+            <div className="moderation-panel-header">
+              <div>
+                <h3 className="moderation-panel-title">StoreFront mock listings</h3>
+                <p className="panel-sub">
+                  Manage demo listings that appear on the StoreFront cards.
+                </p>
+              </div>
+            </div>
+            <div className="moderation-settings-row">
+              <div>
+                <strong>Show StoreFront mock listings</strong>
+                <p className="moderation-report-meta">
+                  Toggle demo cards for layout and marketplace testing.
+                </p>
+              </div>
+              <label className="moderation-toggle">
+                <input
+                  type="checkbox"
+                  checked={storefrontDemoEnabled}
+                  onChange={(event) => handleStorefrontDemoToggle(event.target.checked)}
+                />
+                <span className="moderation-toggle-track" aria-hidden="true" />
+                <span className="moderation-toggle-label">
+                  {storefrontDemoEnabled ? "Enabled" : "Disabled"}
+                </span>
+              </label>
+            </div>
+            <div className="moderation-action-row">
+              <button
+                className="btn ghost"
+                type="button"
+                onClick={handleAddStorefrontDemoListings}
+              >
+                Add 20 StoreFront demo listings
+              </button>
+              <button
+                className="btn ghost"
+                type="button"
+                onClick={handleClearStorefrontDemoListings}
+              >
+                Clear StoreFront demo listings
+              </button>
+            </div>
+            <div className="moderation-report-meta">
+              Extra demo listings: {storefrontDemoCount}
+            </div>
+            {storefrontDemoStatus && <div className="status">{storefrontDemoStatus}</div>}
+          </section>
+
+          <section className="panel moderation-panel moderation-demo-panel">
+            <div className="moderation-panel-header">
+              <div>
+                <h3 className="moderation-panel-title">Seller dashboard mock data</h3>
+                <p className="panel-sub">
+                  Paste mock data for My Dashboard. Applies to this browser only.
+                </p>
+              </div>
+            </div>
+            <div className="moderation-settings-row">
+              <div>
+                <strong>Enable My Dashboard mock data</strong>
+                <p className="moderation-report-meta">
+                  When enabled, My Dashboard will render the mock data below.
+                </p>
+              </div>
+              <label className="moderation-toggle">
+                <input
+                  type="checkbox"
+                  checked={sellerDashboardMockEnabled}
+                  onChange={(event) => handleToggleSellerDashboardMock(event.target.checked)}
+                />
+                <span className="moderation-toggle-track" aria-hidden="true" />
+                <span className="moderation-toggle-label">
+                  {sellerDashboardMockEnabled ? "Enabled" : "Disabled"}
+                </span>
+              </label>
+            </div>
+            <textarea
+              className="auth-input"
+              rows={10}
+              value={sellerDashboardMockPayload}
+              onChange={(event) => setSellerDashboardMockPayload(event.target.value)}
+            />
+            <div className="moderation-action-row">
+              <button className="btn ghost" type="button" onClick={handleApplySellerDashboardMock}>
+                Apply mock data
+              </button>
+              <button className="btn ghost" type="button" onClick={handleResetSellerDashboardMock}>
+                Reset sample
+              </button>
+              <button className="btn ghost" type="button" onClick={handleClearSellerDashboardMock}>
+                Clear mock data
+              </button>
+            </div>
+            {sellerDashboardMockStatus && (
+              <div className="status">{sellerDashboardMockStatus}</div>
+            )}
+          </section>
+
           <section className="panel moderation-panel moderation-settings-panel">
             <div className="moderation-panel-header">
               <div>
                 <h3 className="moderation-panel-title">Platform settings</h3>
                 <p className="panel-sub">
-                  Control access to the Newsroom page and sidebar button.
+                  Control access to StoreFront and Newsroom routes + sidebar buttons.
                 </p>
               </div>
             </div>
             {settingsLoading && <div className="status">Loading settings...</div>}
             {!settingsLoading && (
-              <div className="moderation-settings-row">
-                <div>
-                  <strong>Newsroom availability</strong>
-                  <p className="moderation-report-meta">
-                    Toggle the Newsroom page, button, and route.
-                  </p>
+              <>
+                <div className="moderation-settings-row">
+                  <div>
+                    <strong>StoreFront availability</strong>
+                    <p className="moderation-report-meta">
+                      Toggle the StoreFront page, listing route, and sidebar button.
+                    </p>
+                  </div>
+                  <label className="moderation-toggle">
+                    <input
+                      type="checkbox"
+                      checked={storefrontEnabled}
+                      disabled={settingsSaving}
+                      onChange={(event) => handleToggleStorefront(event.target.checked)}
+                    />
+                    <span className="moderation-toggle-track" aria-hidden="true" />
+                    <span className="moderation-toggle-label">
+                      {storefrontEnabled ? "Enabled" : "Disabled"}
+                    </span>
+                  </label>
                 </div>
-                <label className="moderation-toggle">
-                  <input
-                    type="checkbox"
-                    checked={newsroomEnabled}
-                    disabled={settingsSaving}
-                    onChange={(event) => handleToggleNewsroom(event.target.checked)}
-                  />
-                  <span className="moderation-toggle-track" aria-hidden="true" />
-                  <span className="moderation-toggle-label">
-                    {newsroomEnabled ? "Enabled" : "Disabled"}
-                  </span>
-                </label>
-              </div>
+                <div className="moderation-settings-row">
+                  <div>
+                    <strong>Newsroom availability</strong>
+                    <p className="moderation-report-meta">
+                      Toggle the Newsroom page, button, and route.
+                    </p>
+                  </div>
+                  <label className="moderation-toggle">
+                    <input
+                      type="checkbox"
+                      checked={newsroomEnabled}
+                      disabled={settingsSaving}
+                      onChange={(event) => handleToggleNewsroom(event.target.checked)}
+                    />
+                    <span className="moderation-toggle-track" aria-hidden="true" />
+                    <span className="moderation-toggle-label">
+                      {newsroomEnabled ? "Enabled" : "Disabled"}
+                    </span>
+                  </label>
+                </div>
+              </>
             )}
             {settingsError && <div className="status status-error">{settingsError}</div>}
           </section>

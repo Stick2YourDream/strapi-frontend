@@ -187,6 +187,17 @@ const requestNews = async (
   }
 };
 
+const requestNewsMeta = async (path: string) => {
+  if (NEWS_ACCESS_MODE !== "direct") {
+    return requestNews(path, undefined, shouldUseDirectOnly ? "direct" : "proxy");
+  }
+  try {
+    return await requestNews(path, undefined, "proxy");
+  } catch {
+    return requestNews(path, undefined, "direct");
+  }
+};
+
 const normalizeAssetUrl = (value?: string) => {
   if (!value) return undefined;
   if (value.startsWith("/")) {
@@ -430,11 +441,7 @@ export const fetchNewsSources = async () => {
 };
 
 export const fetchNewsContentTypes = async () => {
-  const payload = await requestNews(
-    "/stats/content_types",
-    undefined,
-    shouldUseDirectOnly ? "direct" : "proxy"
-  );
+  const payload = await requestNewsMeta("/stats/content_types");
   throwIfError(payload);
   const record = asRecord(payload);
   const data = isRecord(record.data) ? record.data : record;
@@ -444,71 +451,43 @@ export const fetchNewsContentTypes = async () => {
 };
 
 export const fetchNewsAssetCount = async () => {
-  const payload = await requestNews(
-    "/stats/asset_count",
-    undefined,
-    shouldUseDirectOnly ? "direct" : "proxy"
-  );
+  const payload = await requestNewsMeta("/stats/asset_count");
   throwIfError(payload);
   return extractStatValue(payload);
 };
 
 export const fetchNewsArticleCount = async () => {
-  const payload = await requestNews(
-    "/stats/article_count",
-    undefined,
-    shouldUseDirectOnly ? "direct" : "proxy"
-  );
+  const payload = await requestNewsMeta("/stats/article_count");
   throwIfError(payload);
   return extractStatValue(payload);
 };
 
 export const fetchNewsPageCount = async () => {
-  const payload = await requestNews(
-    "/stats/page_count",
-    undefined,
-    shouldUseDirectOnly ? "direct" : "proxy"
-  );
+  const payload = await requestNewsMeta("/stats/page_count");
   throwIfError(payload);
   return extractStatValue(payload);
 };
 
 export const fetchNewsAssetSize = async () => {
-  const payload = await requestNews(
-    "/stats/asset_size",
-    undefined,
-    shouldUseDirectOnly ? "direct" : "proxy"
-  );
+  const payload = await requestNewsMeta("/stats/asset_size");
   throwIfError(payload);
   return extractStatValue(payload);
 };
 
 export const fetchNewsArticleSize = async () => {
-  const payload = await requestNews(
-    "/stats/article_size",
-    undefined,
-    shouldUseDirectOnly ? "direct" : "proxy"
-  );
+  const payload = await requestNewsMeta("/stats/article_size");
   throwIfError(payload);
   return extractStatValue(payload);
 };
 
 export const fetchNewsPageSize = async () => {
-  const payload = await requestNews(
-    "/stats/page_size",
-    undefined,
-    shouldUseDirectOnly ? "direct" : "proxy"
-  );
+  const payload = await requestNewsMeta("/stats/page_size");
   throwIfError(payload);
   return extractStatValue(payload);
 };
 
 export const fetchNewsLastUpdated = async () => {
-  const payload = await requestNews(
-    "/stats/last_updated",
-    undefined,
-    shouldUseDirectOnly ? "direct" : "proxy"
-  );
+  const payload = await requestNewsMeta("/stats/last_updated");
   throwIfError(payload);
   return extractStatString(payload);
 };

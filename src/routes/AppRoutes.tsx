@@ -19,6 +19,8 @@ import Terms from "../pages/terms";
 import Privacy from "../pages/privacy";
 import Guidelines from "../pages/guidelines";
 import Cookies from "../pages/cookies";
+import MarketplacePolicy from "../pages/marketplace-policy";
+import MarketplaceFeeDisclosure from "../pages/marketplace-fee-disclosure";
 import Safety from "../pages/safety";
 import Report from "../pages/report";
 import DeleteAccount from "../pages/delete-account";
@@ -32,12 +34,17 @@ import News from "../pages/news";
 import Apps from "../pages/apps";
 import Downloads from "../pages/downloads";
 import Forums from "../pages/forums";
+import Storefront from "../pages/storefront";
+import StorefrontListing from "../pages/storefront-listing";
+import StorefrontSeller from "../pages/storefront-seller";
+import StorefrontPaymentMethods from "../pages/storefront-payment-methods";
 
 export default function AppRoutes(): JSX.Element {
   const { user, appSettings, sessionActive } = useAuth();
   const isAuthed = Boolean(user) || sessionActive;
   const landingElement = isAuthed ? <Navigate to="/dashboard" replace /> : <Landing />;
   const newsroomEnabled = appSettings?.newsroomEnabled !== false;
+  const storefrontEnabled = appSettings?.storefrontEnabled !== false;
 
   return (
     <Routes>
@@ -52,6 +59,8 @@ export default function AppRoutes(): JSX.Element {
       <Route path="/register" element={<Register />} />
       <Route path="/verify-email" element={<VerifyEmail />} />
       <Route path="/terms" element={<Terms />} />
+      <Route path="/marketplace-policy" element={<MarketplacePolicy />} />
+      <Route path="/marketplace-fee-disclosure" element={<MarketplaceFeeDisclosure />} />
       <Route path="/privacy" element={<Privacy />} />
       <Route path="/delete-account" element={<DeleteAccount />} />
       <Route path="/delete-data" element={<DeleteData />} />
@@ -63,6 +72,38 @@ export default function AppRoutes(): JSX.Element {
       <Route path="/apps" element={<Apps />} />
       <Route path="/downloads" element={<Downloads />} />
       <Route path="/forums" element={<Forums />} />
+      <Route
+        path="/storefront"
+        element={
+          <ProtectedRoute>
+            {storefrontEnabled ? <Storefront /> : <Navigate to="/dashboard" replace />}
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/storefront/listing/:listingId"
+        element={
+          <ProtectedRoute>
+            {storefrontEnabled ? <StorefrontListing /> : <Navigate to="/dashboard" replace />}
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/storefront/seller"
+        element={
+          <ProtectedRoute>
+            <StorefrontSeller />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/storefront/payment-methods"
+        element={
+          <ProtectedRoute>
+            <StorefrontPaymentMethods />
+          </ProtectedRoute>
+        }
+      />
       <Route path="/share" element={<ShareTarget />} />
       <Route path="/protocol" element={<ProtocolHandler />} />
       <Route path="/notes/new" element={<NewNote />} />

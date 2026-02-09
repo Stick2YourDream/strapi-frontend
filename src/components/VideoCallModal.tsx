@@ -18,6 +18,7 @@ import {
   type WheelEventHandler,
 } from "react";
 import { createPortal } from "react-dom";
+import axios from "axios";
 import {
   useVideoCall,
   type VideoCallInvitee,
@@ -57,6 +58,7 @@ import {
   faTableColumns,
   faTrash,
   faUpRightFromSquare,
+  faUser,
   faUserPlus,
   faUsers,
   faVideo,
@@ -166,30 +168,7 @@ const faviconFor = (value: string) => {
 };
 const getEmoji3dUrl = (code: string) => `${EMOJI_3D_BASE_URL}/${code}/512.gif`;
 
-const formatScreenShareLabel = (rawLabel: string, fallbackLabel: string) => {
-  const trimmed = rawLabel.trim();
-  if (!trimmed) return fallbackLabel;
-  const lower = trimmed.toLowerCase();
-  const knownApps: Array<[string, string]> = [
-    ["visual studio code", "Visual Studio Code"],
-    ["microsoft edge", "Microsoft Edge"],
-    ["google chrome", "Google Chrome"],
-    ["chrome", "Google Chrome"],
-    ["firefox", "Firefox"],
-    ["safari", "Safari"],
-    ["figma", "Figma"],
-    ["slack", "Slack"],
-    ["discord", "Discord"],
-    ["zoom", "Zoom"],
-  ];
-  for (const [match, label] of knownApps) {
-    if (lower.includes(match)) return label;
-  }
-  const screenMatch = trimmed.match(/screen\s*\d+/i);
-  if (screenMatch) return screenMatch[0].replace(/\s+/g, " ");
-  const normalized = trimmed.replace(/^(window|screen)\s*[:\-]\s*/i, "");
-  return normalized || fallbackLabel;
-};
+const formatScreenShareLabel = (_rawLabel: string, fallbackLabel: string) => fallbackLabel;
 
 type FileWithPath = File & { path?: string };
 type RgbaColor = { r: number; g: number; b: number; a: number };
@@ -593,6 +572,7 @@ const GIF_CATEGORIES: GifCategory[] = [
 
 const BACKGROUND_OPTIONS = [
   { id: "none", label: "None" },
+  { id: "ai", label: "AI (Generate)" },
   { id: "backdrop1", label: "Bedroom" },
   { id: "backdrop2", label: "Dots" },
   { id: "backdrop3", label: "Futuristic Home" },
@@ -603,6 +583,17 @@ const BACKGROUND_OPTIONS = [
   { id: "backdrop8", label: "Stunning" },
   { id: "backdrop9", label: "Tech Lab" },
   { id: "backdrop10", label: "Wavy" },
+];
+
+const AVATAR_POSE_OPTIONS = [
+  { id: "neutral", label: "Neutral" },
+  { id: "wave", label: "Waving" },
+  { id: "thumbs-up", label: "Thumbs up" },
+  { id: "thinking", label: "Thinking" },
+  { id: "sitting", label: "Sitting" },
+  { id: "dancing", label: "Dancing" },
+  { id: "hero", label: "Superhero" },
+  { id: "custom", label: "Custom pose" },
 ];
 
 const FILTER_OPTIONS = [
@@ -1041,7 +1032,19 @@ export default function VideoCallModal({
   const [mobilePanel, setMobilePanel] = useState<"video" | "chat">("video");
   const [pipPosition, setPipPosition] = useState<{ x: number; y: number } | null>(null);
   const [isPipDragging, setIsPipDragging] = useState(false);
+  const [screenPipPosition, setScreenPipPosition] = useState<{ x: number; y: number } | null>(
+    null
+  );
+  const [isScreenPipDragging, setIsScreenPipDragging] = useState(false);
   const [isMobileLayout, setIsMobileLayout] = useState(false);
+  const [aiBackgroundPrompt, setAiBackgroundPrompt] = useState("");
+  const [aiBackgroundError, setAiBackgroundError] = useState<string | null>(null);
+  const [aiBackgroundLoading, setAiBackgroundLoading] = useState(false);
+  const [avatarPrompt, setAvatarPrompt] = useState("");
+  const [avatarPose, setAvatarPose] = useState(AVATAR_POSE_OPTIONS[0]?.id || "neutral");
+  const [avatarCustomPose, setAvatarCustomPose] = useState("");
+  const [avatarError, setAvatarError] = useState<string | null>(null);
+  const [avatarLoading, setAvatarLoading] = useState(false);
   const [showViewSelect, setShowViewSelect] = useState(false);
   const [showScreenSelect, setShowScreenSelect] = useState(false);
   const [showCameraSelect, setShowCameraSelect] = useState(false);
@@ -1116,6 +1119,7 @@ export default function VideoCallModal({
     maxY: number;
   } | null>(null);
   const pipDragRef = useRef({ active: false, offsetX: 0, offsetY: 0 });
+  const screenPipDragRef = useRef({ active: false, offsetX: 0, offsetY: 0 });
   const demoCleanupRef = useRef<Record<string, () => void>>({});
   const demoCounterRef = useRef(1);
 
@@ -1520,11 +1524,133 @@ export default function VideoCallModal({
     if (combined) return combined;
     return "You";
   }, [profile?.firstName, profile?.lastName]);
+  const avatarPoseLabel = useMemo(() => {
+    const match = AVATAR_POSE_OPTIONS.find((option) => option.id === avatarPose);
+    return match?.label || "Neutral";
+  }, [avatarPose]);
+  const resolvedAvatarPose =
+    avatarPose === "custom" ? avatarCustomPose.trim() : avatarPoseLabel;
+  const buildAiBackgroundPrompt = useCallback((prompt: string) => {
+    return [
+      "High detail cinematic background, no people, no text.",
+      prompt.trim(),
+      "Soft lighting, depth of field, 16:9 composition.",
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }, []);
+  const buildAvatarPrompt = useCallback(
+    (prompt: string, pose: string) => {
+      return [
+        "Full-body character avatar, centered, clean edges, no text.",
+        prompt.trim(),
+        pose ? `Pose: ${pose}.` : "",
+        "Studio lighting, high detail.",
+      ]
+        .filter(Boolean)
+        .join(" ");
+    },
+    []
+  );
   const hasRemoteMedia = useMemo(() => {
     if (remoteList.length > 0) return true;
     if (Object.keys(mergedRemoteStreams).length > 0) return true;
     return Object.keys(mergedRemoteScreenStreams).length > 0;
   }, [mergedRemoteScreenStreams, mergedRemoteStreams, remoteList.length]);
+
+  const requestAiImage = useCallback(
+    async (payload: { prompt: string; kind: "background" | "avatar"; pose?: string }) => {
+      const response = await api.post("/ai-images/generate", payload);
+      const image = response?.data?.image;
+      if (!image || typeof image !== "string") {
+        throw new Error("No image returned.");
+      }
+      return image;
+    },
+    []
+  );
+
+  const resolveAiErrorMessage = useCallback((err: unknown, fallback: string) => {
+    if (!axios.isAxiosError(err)) {
+      return (err as Error)?.message || fallback;
+    }
+    const data = err.response?.data as
+      | { error?: { message?: string } | string; message?: string }
+      | undefined;
+    const error = data?.error;
+    if (typeof error === "string" && error.trim()) return error;
+    if (typeof error === "object" && error?.message) return error.message;
+    if (typeof data?.message === "string" && data.message.trim()) return data.message;
+    return fallback;
+  }, []);
+
+  const handleGenerateAiBackground = useCallback(async () => {
+    const prompt = aiBackgroundPrompt.trim();
+    if (!prompt) {
+      setAiBackgroundError("Describe the background you want.");
+      return;
+    }
+    setAiBackgroundLoading(true);
+    setAiBackgroundError(null);
+    try {
+      const image = await requestAiImage({
+        kind: "background",
+        prompt: buildAiBackgroundPrompt(prompt),
+      });
+      setVideoEffects({
+        background: "ai",
+        backgroundImageUrl: image,
+      });
+    } catch (err) {
+      setAiBackgroundError(resolveAiErrorMessage(err, "Unable to generate background."));
+    } finally {
+      setAiBackgroundLoading(false);
+    }
+  }, [
+    aiBackgroundPrompt,
+    buildAiBackgroundPrompt,
+    requestAiImage,
+    resolveAiErrorMessage,
+    setVideoEffects,
+  ]);
+
+  const handleGenerateAvatar = useCallback(async () => {
+    const prompt = avatarPrompt.trim();
+    if (!prompt) {
+      setAvatarError("Describe the avatar you want.");
+      return;
+    }
+    const poseText = resolvedAvatarPose.trim();
+    if (avatarPose === "custom" && !poseText) {
+      setAvatarError("Describe the custom pose.");
+      return;
+    }
+    setAvatarLoading(true);
+    setAvatarError(null);
+    try {
+      const image = await requestAiImage({
+        kind: "avatar",
+        prompt: buildAvatarPrompt(prompt, poseText),
+        pose: poseText,
+      });
+      setVideoEffects({
+        avatarEnabled: true,
+        avatarImageUrl: image,
+      });
+    } catch (err) {
+      setAvatarError(resolveAiErrorMessage(err, "Unable to generate avatar."));
+    } finally {
+      setAvatarLoading(false);
+    }
+  }, [
+    avatarPose,
+    avatarPrompt,
+    buildAvatarPrompt,
+    requestAiImage,
+    resolveAiErrorMessage,
+    resolvedAvatarPose,
+    setVideoEffects,
+  ]);
 
   const screenShareEntries = useMemo(() => {
     const entries: Array<{
@@ -1536,9 +1662,7 @@ export default function VideoCallModal({
     }> = [];
     if (localScreenStream) {
       const trackLabel = localScreenStream.getVideoTracks()?.[0]?.label || "";
-      const defaultLabel =
-        localDisplayName === "You" ? "Your screen" : `${localDisplayName}'s screen`;
-      const localScreenLabel = formatScreenShareLabel(trackLabel, defaultLabel);
+      const localScreenLabel = formatScreenShareLabel(trackLabel, localDisplayName);
       entries.push({
         id: "local",
         stream: localScreenStream,
@@ -1556,7 +1680,7 @@ export default function VideoCallModal({
       entries.push({
         id: socketId,
         stream,
-        label: `${name}'s screen`,
+        label: name,
         isLocal: false,
         socketId,
       });
@@ -1569,6 +1693,13 @@ export default function VideoCallModal({
     mergedRemoteScreenStreams,
     resolveParticipantLabel,
   ]);
+
+  const mobileScreenShareEntry = useMemo(() => {
+    if (!isMobileLayout) return null;
+    if (screenShareEntries.length === 0) return null;
+    const remoteEntry = screenShareEntries.find((entry) => !entry.isLocal);
+    return remoteEntry || screenShareEntries[0] || null;
+  }, [isMobileLayout, screenShareEntries]);
 
   const getScreenFocusKey = useCallback(
     (entry: { id: string; socketId?: string; isLocal: boolean }) =>
@@ -1885,23 +2016,23 @@ export default function VideoCallModal({
     if (showViewSelect) setShowViewSelect(false);
     if (showScreenSelect) setShowScreenSelect(false);
     if (showCameraSelect) setShowCameraSelect(false);
-    if (isScreenSharing) stopScreenShare();
     setPipPosition(null);
     setIsPipDragging(false);
     pipDragRef.current.active = false;
+    setScreenPipPosition(null);
+    setIsScreenPipDragging(false);
+    screenPipDragRef.current.active = false;
   }, [
     focusedScreenId,
     focusedVideoId,
     isMobileLayout,
     isPopout,
     isScreenBorderless,
-    isScreenSharing,
     mobilePanel,
     screenViewMode,
     showCameraSelect,
     showScreenSelect,
     showViewSelect,
-    stopScreenShare,
   ]);
 
   useEffect(() => {
@@ -1944,6 +2075,14 @@ export default function VideoCallModal({
     }
   }, [isLocalPrimary, isMobileLayout, showCallUi]);
 
+  useEffect(() => {
+    if (!showCallUi || !isMobileLayout || !mobileScreenShareEntry) {
+      setScreenPipPosition(null);
+      setIsScreenPipDragging(false);
+      screenPipDragRef.current.active = false;
+    }
+  }, [isMobileLayout, mobileScreenShareEntry, showCallUi]);
+
   const handlePipPointerDown = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
       if (!isMobileLayout || isLocalPrimary || isMobileCameraOnly) return;
@@ -1964,6 +2103,28 @@ export default function VideoCallModal({
       tile.setPointerCapture?.(event.pointerId);
     },
     [isLocalPrimary, isMobileCameraOnly, isMobileLayout]
+  );
+
+  const handleScreenPipPointerDown = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (!isMobileLayout || !mobileScreenShareEntry) return;
+      const grid = gridRef.current;
+      if (!grid) return;
+      const tile = event.currentTarget;
+      const gridRect = grid.getBoundingClientRect();
+      const tileRect = tile.getBoundingClientRect();
+      if (!gridRect.width || !gridRect.height) return;
+      screenPipDragRef.current.active = true;
+      screenPipDragRef.current.offsetX = event.clientX - tileRect.left;
+      screenPipDragRef.current.offsetY = event.clientY - tileRect.top;
+      setScreenPipPosition({
+        x: tileRect.left - gridRect.left,
+        y: tileRect.top - gridRect.top,
+      });
+      setIsScreenPipDragging(true);
+      tile.setPointerCapture?.(event.pointerId);
+    },
+    [isMobileLayout, mobileScreenShareEntry]
   );
 
   const handlePipPointerMove = useCallback(
@@ -1991,12 +2152,38 @@ export default function VideoCallModal({
     [isLocalPrimary, isMobileCameraOnly, isMobileLayout]
   );
 
+  const handleScreenPipPointerMove = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (!screenPipDragRef.current.active || !isMobileLayout) return;
+      const grid = gridRef.current;
+      if (!grid) return;
+      const gridRect = grid.getBoundingClientRect();
+      const tile = event.currentTarget;
+      const width = tile.offsetWidth;
+      const height = tile.offsetHeight;
+      if (!gridRect.width || !gridRect.height || !width || !height) return;
+      let nextX = event.clientX - gridRect.left - screenPipDragRef.current.offsetX;
+      let nextY = event.clientY - gridRect.top - screenPipDragRef.current.offsetY;
+      nextX = Math.min(Math.max(0, nextX), gridRect.width - width);
+      nextY = Math.min(Math.max(0, nextY), gridRect.height - height);
+      setScreenPipPosition({ x: nextX, y: nextY });
+    },
+    [isMobileLayout]
+  );
+
   const handlePipPointerUp = useCallback((event: PointerEvent<HTMLDivElement>) => {
     if (!pipDragRef.current.active || isMobileCameraOnly) return;
     pipDragRef.current.active = false;
     setIsPipDragging(false);
     event.currentTarget.releasePointerCapture?.(event.pointerId);
   }, [isMobileCameraOnly]);
+
+  const handleScreenPipPointerUp = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    if (!screenPipDragRef.current.active) return;
+    screenPipDragRef.current.active = false;
+    setIsScreenPipDragging(false);
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+  }, []);
 
   const pipStyle = useMemo<CSSProperties | undefined>(() => {
     if (!isMobileLayout || isLocalPrimary || !pipPosition) return undefined;
@@ -2007,6 +2194,16 @@ export default function VideoCallModal({
       bottom: "auto",
     };
   }, [isLocalPrimary, isMobileLayout, pipPosition]);
+
+  const screenPipStyle = useMemo<CSSProperties | undefined>(() => {
+    if (!isMobileLayout || !mobileScreenShareEntry || !screenPipPosition) return undefined;
+    return {
+      left: `${screenPipPosition.x}px`,
+      top: `${screenPipPosition.y}px`,
+      right: "auto",
+      bottom: "auto",
+    };
+  }, [isMobileLayout, mobileScreenShareEntry, screenPipPosition]);
 
   const registerScreenTile = useCallback((id: string) => {
     return (node: HTMLDivElement | null) => {
@@ -2261,7 +2458,6 @@ export default function VideoCallModal({
   );
 
   const handleToggleScreenShare = useCallback(() => {
-    if (isMobileCameraOnly) return;
     if (isScreenSharing) {
       stopScreenShare();
       return;
@@ -2278,7 +2474,7 @@ export default function VideoCallModal({
       return;
     }
     void startScreenShare();
-  }, [isMobileCameraOnly, isPopout, isScreenSharing, startScreenShare, stopScreenShare]);
+  }, [isPopout, isScreenSharing, startScreenShare, stopScreenShare]);
 
   const handleOpenSettings = useCallback(() => {
     setShowSettingsPanel(true);
@@ -3074,6 +3270,22 @@ export default function VideoCallModal({
                         {videoEffects.mirror ? "On" : "Off"}
                       </span>
                     </button>
+                    <button
+                      type="button"
+                      className={`video-settings-tile${
+                        videoEffects.avatarEnabled ? " is-active" : ""
+                      }`}
+                      onClick={() =>
+                        setVideoEffects({ avatarEnabled: !videoEffects.avatarEnabled })
+                      }
+                      aria-pressed={videoEffects.avatarEnabled}
+                    >
+                      <FontAwesomeIcon icon={faUser} aria-hidden="true" />
+                      <span className="video-settings-label">Avatar pose</span>
+                      <span className="video-settings-status">
+                        {videoEffects.avatarEnabled ? "On" : "Off"}
+                      </span>
+                    </button>
                     <div className="video-settings-tile is-static is-select">
                       <FontAwesomeIcon icon={faSliders} aria-hidden="true" />
                       <span className="video-settings-label">Camera filter</span>
@@ -3105,6 +3317,10 @@ export default function VideoCallModal({
                           onChange={(event) =>
                             setVideoEffects({
                               background: event.target.value as typeof videoEffects.background,
+                              backgroundImageUrl:
+                                event.target.value === "ai"
+                                  ? videoEffects.backgroundImageUrl
+                                  : "",
                             })
                           }
                         >
@@ -3140,6 +3356,131 @@ export default function VideoCallModal({
                         </label>
                       </div>
                     )}
+                  </div>
+                  <div className="video-settings-stack">
+                    {videoEffects.background === "ai" && (
+                      <div className="video-settings-group">
+                        <div className="video-settings-row">
+                          <span className="video-settings-label">AI background</span>
+                          <span className="video-settings-hint">
+                            Describe the scene you want behind you.
+                          </span>
+                        </div>
+                        <textarea
+                          className="video-settings-input video-settings-textarea"
+                          rows={3}
+                          value={aiBackgroundPrompt}
+                          onChange={(event) => setAiBackgroundPrompt(event.target.value)}
+                          placeholder="Cozy library with warm lighting, cinematic bokeh."
+                        />
+                        {aiBackgroundError && (
+                          <p className="video-settings-error">{aiBackgroundError}</p>
+                        )}
+                        <div className="video-settings-row">
+                          <button
+                            type="button"
+                            className="btn primary small"
+                            onClick={handleGenerateAiBackground}
+                            disabled={aiBackgroundLoading}
+                          >
+                            {aiBackgroundLoading ? "Generating..." : "Generate background"}
+                          </button>
+                          {videoEffects.backgroundImageUrl && (
+                            <button
+                              type="button"
+                              className="btn ghost small"
+                              onClick={() =>
+                                setVideoEffects({
+                                  background: "none",
+                                  backgroundImageUrl: "",
+                                })
+                              }
+                            >
+                              Clear
+                            </button>
+                          )}
+                        </div>
+                        {videoEffects.backgroundImageUrl && (
+                          <img
+                            className="video-settings-preview"
+                            src={videoEffects.backgroundImageUrl}
+                            alt="AI background preview"
+                            loading="lazy"
+                          />
+                        )}
+                      </div>
+                    )}
+                    <div className="video-settings-group">
+                      <div className="video-settings-row">
+                        <span className="video-settings-label">Avatar pose system</span>
+                        <span className="video-settings-hint">
+                          Generate a custom avatar to replace your body.
+                        </span>
+                      </div>
+                      <div className="video-settings-row">
+                        <label className="video-settings-select">
+                          <span className="sr-only">Avatar pose</span>
+                          <select
+                            value={avatarPose}
+                            onChange={(event) => setAvatarPose(event.target.value)}
+                          >
+                            {AVATAR_POSE_OPTIONS.map((option) => (
+                              <option key={option.id} value={option.id}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        {avatarPose === "custom" && (
+                          <input
+                            className="video-settings-input"
+                            value={avatarCustomPose}
+                            onChange={(event) => setAvatarCustomPose(event.target.value)}
+                            placeholder="Describe the pose"
+                          />
+                        )}
+                      </div>
+                      <textarea
+                        className="video-settings-input video-settings-textarea"
+                        rows={3}
+                        value={avatarPrompt}
+                        onChange={(event) => setAvatarPrompt(event.target.value)}
+                        placeholder="A talking lollipop character with sprinkles."
+                      />
+                      {avatarError && <p className="video-settings-error">{avatarError}</p>}
+                      <div className="video-settings-row">
+                        <button
+                          type="button"
+                          className="btn primary small"
+                          onClick={handleGenerateAvatar}
+                          disabled={avatarLoading}
+                        >
+                          {avatarLoading ? "Generating..." : "Generate avatar"}
+                        </button>
+                        {videoEffects.avatarImageUrl && (
+                          <button
+                            type="button"
+                            className="btn ghost small"
+                            onClick={() =>
+                              setVideoEffects({
+                                avatarEnabled: false,
+                                avatarImageUrl: "",
+                              })
+                            }
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
+                      {videoEffects.avatarImageUrl && (
+                        <img
+                          className="video-settings-preview is-avatar"
+                          src={videoEffects.avatarImageUrl}
+                          alt="Avatar preview"
+                          loading="lazy"
+                        />
+                      )}
+                    </div>
                   </div>
                 </section>
                 </>
@@ -3458,23 +3799,21 @@ export default function VideoCallModal({
                     aria-hidden="true"
                   />
                 </button>
-                {!isMobileCameraOnly && (
-                  <button
-                    type="button"
-                    className={`video-control video-control-icon${
-                      isScreenSharing ? " is-active" : ""
-                    }`}
-                    onClick={handleToggleScreenShare}
-                    data-hint={isScreenSharing ? "Stop share" : "Share screen"}
-                    aria-label={isScreenSharing ? "Stop share" : "Share screen"}
-                    title={isScreenSharing ? "Stop share" : "Share screen"}
-                  >
-                    <FontAwesomeIcon
-                      icon={isScreenSharing ? faStop : faDesktop}
-                      aria-hidden="true"
-                    />
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className={`video-control video-control-icon${
+                    isScreenSharing ? " is-active" : ""
+                  }`}
+                  onClick={handleToggleScreenShare}
+                  data-hint={isScreenSharing ? "Stop share" : "Share screen"}
+                  aria-label={isScreenSharing ? "Stop share" : "Share screen"}
+                  title={isScreenSharing ? "Stop share" : "Share screen"}
+                >
+                  <FontAwesomeIcon
+                    icon={isScreenSharing ? faStop : faDesktop}
+                    aria-hidden="true"
+                  />
+                </button>
                 {!isMobileCameraOnly && (
                   <button
                     type="button"
@@ -4146,6 +4485,23 @@ export default function VideoCallModal({
                       </p>
                     </div>
                   </div>
+                )}
+                {isMobileLayout && mobileScreenShareEntry && (
+                  <VideoTile
+                    stream={mobileScreenShareEntry.stream}
+                    label={mobileScreenShareEntry.label}
+                    muted={mobileScreenShareEntry.isLocal || isRenderingInPopout}
+                    badge="Screen"
+                    className={`is-screen is-pip${
+                      isScreenPipDragging ? " is-dragging" : ""
+                    }`}
+                    style={screenPipStyle}
+                    mediaStyle={{ objectFit: "contain" }}
+                    onPointerDown={handleScreenPipPointerDown}
+                    onPointerMove={handleScreenPipPointerMove}
+                    onPointerUp={handleScreenPipPointerUp}
+                    onPointerLeave={handleScreenPipPointerUp}
+                  />
                 )}
                 {presenterMode ? (
                   <div className="video-call-presenter">

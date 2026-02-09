@@ -299,10 +299,6 @@ export default function News() {
     let active = true;
 
     const loadMeta = async () => {
-      if (isDirectNewsMode) {
-        setStatsError("Stats are unavailable in direct mode.");
-        return;
-      }
       try {
         const results = await Promise.allSettled([
           fetchNewsProviders(),
@@ -1119,7 +1115,7 @@ export default function News() {
   }, [activeArticle, handleCloseReader]);
 
   return (
-    <div className="dashboard-shell" style={getBackgroundStyle("dashboard")}>
+    <div className="dashboard-shell" style={newsModalBackground}>
       <Sidebar active="news" />
 
       <div className="main-content">

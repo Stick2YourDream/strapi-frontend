@@ -9,7 +9,14 @@ import {
   PROFILE_PII_CLEAR_FIELDS,
 } from "../utils/profile-e2ee";
 
-export type PageKey = "dashboard" | "profile" | "friends" | "forums" | "news";
+export type PageKey =
+  | "dashboard"
+  | "profile"
+  | "friends"
+  | "forums"
+  | "groups"
+  | "news"
+  | "storefront";
 
 type BackgroundPrefs = {
   color?: string;
@@ -50,7 +57,9 @@ const DEFAULT_PREFERENCES: UserPreferences = {
     profile: {},
     friends: {},
     forums: {},
+    groups: {},
     news: {},
+    storefront: {},
   },
   chat: {
     width: 360,

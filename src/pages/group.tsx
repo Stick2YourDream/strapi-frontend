@@ -7,6 +7,7 @@ import axios from "axios";
 import Sidebar from "../components/Sidebar";
 import TopbarSearch from "../components/TopbarSearch";
 import { useAuth } from "../context/AuthContext";
+import { useUserPreferences } from "../context/UserPreferencesContext";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { sanitizePostText } from "../utils/emoji";
 import { formatPostUpdateLabel } from "../utils/time";
@@ -236,10 +237,12 @@ export default function GroupDetail() {
   const { groupId } = useParams();
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { getBackgroundStyle } = useUserPreferences();
   usePageMeta({
     title: "Group | Your Social Place",
     description: "Share updates, media, and momentum with your group.",
   });
+  const pageBackground = getBackgroundStyle("groups") || getBackgroundStyle("dashboard");
 
   const [group, setGroup] = useState<GroupDetail | null>(null);
   const [members, setMembers] = useState<GroupMember[]>([]);
@@ -1016,7 +1019,7 @@ export default function GroupDetail() {
 
   if (loading) {
     return (
-      <div className="dashboard-shell">
+      <div className="dashboard-shell" style={pageBackground}>
         <Sidebar active="groups" />
         <div className="main-content">
           <p className="status">Loading group...</p>
@@ -1027,7 +1030,7 @@ export default function GroupDetail() {
 
   if (!group) {
     return (
-      <div className="dashboard-shell">
+      <div className="dashboard-shell" style={pageBackground}>
         <Sidebar active="groups" />
         <div className="main-content">
           <p className="status status-error">{error || "Group not found."}</p>
@@ -1049,7 +1052,7 @@ export default function GroupDetail() {
     : `${members.length} member${members.length === 1 ? "" : "s"}`;
 
   return (
-    <div className="dashboard-shell">
+    <div className="dashboard-shell" style={pageBackground}>
       <Sidebar
         active="groups"
         groupView={groupView}
