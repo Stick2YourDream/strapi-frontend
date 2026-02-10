@@ -6,6 +6,7 @@
   font-family: "Satoshi", "Inter", system-ui, -apple-system, sans-serif;
   overflow: hidden;
   border-radius: 24px;
+  font-size: var(--forums-font-size);
 }
 
 .forums-page::before,
@@ -80,8 +81,10 @@
 .forums-button {
   border: 1px solid transparent;
   border-radius: 14px;
-  padding: 12px 18px;
+  padding: calc(12px * var(--forums-btn-scale, 1))
+    calc(18px * var(--forums-btn-scale, 1));
   font-weight: 700;
+  font-size: calc(14px * var(--forums-btn-scale, 1));
   cursor: pointer;
   transition: transform 0.15s ease, box-shadow 0.2s ease, filter 0.2s ease;
   text-decoration: none;
@@ -721,4 +724,32 @@
   border: 1px solid rgba(92, 240, 199, 0.35);
   color: #d3fff1;
   font-size: 14px;
+}
+
+@media (min-width: 2560px) {
+  .forums-shell {
+    max-width: 1600px;
+  }
+}
+
+@media (min-width: 3840px) {
+  .forums-shell {
+    max-width: 2200px;
+  }
+  .forums-page {
+  }
+  .forums-hero h1 {
+    font-size: clamp(44px, 3.8vw, 64px);
+  }
+}
+
+@media (min-width: 7680px) {
+  .forums-shell {
+    max-width: 3600px;
+  }
+  .forums-page {
+  }
+  .forums-hero h1 {
+    font-size: clamp(64px, 3.4vw, 90px);
+  }
 }

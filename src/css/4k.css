@@ -1,0 +1,944 @@
+/* Centralized large-screen scaling controls (edit here). */
+:root {
+  --ui-font-size: 16px;
+  --ui-btn-scale: 1;
+  --landing-font-size: 16px;
+  --landing-btn-scale: 1;
+  --forums-font-size: 16px;
+  --forums-btn-scale: 1;
+  --downloads-font-size: 16px;
+  --downloads-btn-scale: 1;
+  --terms-font-size: 16px;
+  --terms-btn-scale: 1;
+  --pwa-font-size: 16px;
+  --pwa-btn-scale: 1;
+  --auth-font-size: 16px;
+  --auth-btn-scale: 1;
+}
+
+@media (min-width: 1920px) {
+  :root {
+    --ui-font-size: 17px;
+  }
+}
+
+@media (min-width: 2560px) {
+  :root {
+    --ui-font-size: 18px;
+    --ui-btn-scale: 1.1;
+    --landing-font-size: 18px;
+    --landing-btn-scale: 1.1;
+    --forums-font-size: 18px;
+    --forums-btn-scale: 1.1;
+    --downloads-font-size: 18px;
+    --downloads-btn-scale: 1.1;
+    --terms-font-size: 18px;
+    --terms-btn-scale: 1.1;
+    --pwa-font-size: 18px;
+    --pwa-btn-scale: 1.1;
+    --auth-font-size: 18px;
+    --auth-btn-scale: 1.1;
+  }
+}
+
+@media (min-width: 3840px) {
+  :root {
+    --ui-font-size: 24px;
+    --ui-btn-scale: 1.4;
+    --landing-font-size: 22px;
+    --landing-btn-scale: 1.4;
+    --forums-font-size: 22px;
+    --forums-btn-scale: 1.4;
+    --downloads-font-size: 22px;
+    --downloads-btn-scale: 1.4;
+    --terms-font-size: 22px;
+    --terms-btn-scale: 1.4;
+    --pwa-font-size: 22px;
+    --pwa-btn-scale: 1.4;
+    --auth-font-size: 22px;
+    --auth-btn-scale: 1.4;
+  }
+}
+
+@media (min-width: 7680px) {
+  :root {
+    --ui-font-size: 32px;
+    --ui-btn-scale: 1.8;
+    --landing-font-size: 30px;
+    --landing-btn-scale: 1.8;
+    --forums-font-size: 30px;
+    --forums-btn-scale: 1.8;
+    --downloads-font-size: 30px;
+    --downloads-btn-scale: 1.8;
+    --terms-font-size: 30px;
+    --terms-btn-scale: 1.8;
+    --pwa-font-size: 30px;
+    --pwa-btn-scale: 1.8;
+    --auth-font-size: 30px;
+    --auth-btn-scale: 1.8;
+  }
+}
+
+@media (min-width: 3840px) {
+  body .landing-page {
+    display: flex;
+    flex-direction: column;
+  }
+
+  body .landing-shell {
+    max-width: 3400px;
+    flex: 1;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  body .hero-copy {
+    max-width: 1300px;
+  }
+
+  body .hero-logo img {
+    width: min(780px, 60vw);
+  }
+
+  body .hero-title {
+    font-size: clamp(64px, 4vw, 96px);
+  }
+
+  body .hero-message {
+    max-width: 1200px;
+    font-size: 22px;
+  }
+
+  body .landing-links a,
+  body .pill,
+  body .pill2,
+  body .hero-intent-label {
+    font-size: 16px;
+  }
+
+  body .hero-intent-title {
+    font-size: 18px;
+  }
+
+  body .hero-intent-sub {
+    font-size: 16px;
+  }
+
+  body .landing-nav {
+    margin-bottom: 36px;
+  }
+
+  body .landing-brand {
+    gap: 16px;
+    padding: 4px 24px 4px 6px;
+    border-radius: 26px;
+    font-size: 18px;
+  }
+
+  body .landing-brand-mark {
+    width: 56px;
+    height: 56px;
+  }
+
+  body .landing-brand-text {
+    font-size: 18px;
+  }
+
+  body .landing-links {
+    gap: 16px;
+  }
+
+  body .landing-links a {
+    padding: 8px 14px;
+  }
+
+  body .landing-profile-button {
+    width: 62px;
+    height: 62px;
+  }
+
+  body .landing-profile-avatar,
+  body .landing-profile-fallback {
+    width: 52px;
+    height: 52px;
+  }
+
+  body .landing-profile-fallback {
+    font-size: 20px;
+  }
+
+  body .landing-bell {
+    width: 56px;
+    height: 56px;
+    border-radius: 16px;
+  }
+
+  body .landing-bell svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  body .landing-bell-badge {
+    font-size: 12px;
+    padding: 3px 8px;
+  }
+
+  body .landing-beta {
+    font-size: clamp(24px, 2.4vw, 36px);
+  }
+
+  body .landing-footer {
+    margin-top: auto;
+    padding: 40px 36px;
+  }
+
+  body .footer-logo {
+    width: 120px;
+    height: 120px;
+  }
+
+  body .footer-brand-text {
+    max-width: 460px;
+  }
+
+  body .footer-brand-text strong {
+    font-size: 20px;
+  }
+
+  body .footer-brand-text p,
+  body .footer-column a,
+  body .footer-contact a {
+    font-size: 16px;
+  }
+
+  body .footer-title {
+    font-size: 16px;
+  }
+
+  body .footer-meta,
+  body .footer-muted {
+    font-size: 14px;
+  }
+
+  body .footer-apps .footer-app-badge {
+    font-size: 0.95rem;
+    padding: 6px 12px;
+  }
+
+  body .dashboard-shell {
+    --sidebar-width: 560px;
+    --sidebar-gap: 72px;
+    --content-max: 3600px;
+  }
+
+  body .dash-hero {
+    padding: 34px clamp(28px, 2.6vw, 44px);
+  }
+
+  body .dash-hero__text h1 {
+    font-size: clamp(38px, 2.8vw, 60px);
+  }
+
+  body .subhead {
+    font-size: 20px;
+  }
+
+  body .eyebrow {
+    font-size: 14px;
+  }
+
+  body .hero-badge {
+    font-size: 16px;
+    padding: 12px 16px;
+  }
+
+  body .hero-badge-chip {
+    font-size: 14px;
+    padding: 8px 12px;
+  }
+
+  body .hero-insight strong {
+    font-size: 18px;
+  }
+
+  body .hero-insight span {
+    font-size: 12px;
+  }
+
+  body .panel-header h3 {
+    font-size: 24px;
+  }
+
+  body .panel-sub {
+    font-size: 16px;
+  }
+
+  body .post-meta-bar {
+    font-size: 14px;
+  }
+
+  body .post-meta-tag {
+    font-size: 13px;
+    padding: 5px 12px;
+  }
+
+  body .post-visibility-select {
+    font-size: 13px;
+  }
+
+  body .dash-nav {
+    padding: 28px 24px;
+    gap: 24px;
+    font-size: 18px;
+  }
+
+  body .brand-mark {
+    width: 64px;
+    height: 64px;
+  }
+
+  body .brand-text {
+    font-size: 18px;
+  }
+
+  body .sidebar-profile-button {
+    padding: 14px 16px;
+  }
+
+  body .sidebar-profile-button strong {
+    font-size: 18px;
+  }
+
+  body .sidebar-profile-button span[title] {
+    font-size: 14px !important;
+  }
+
+  body .sidebar-profile-button .avatar-octagon {
+    width: 64px !important;
+    height: 64px !important;
+  }
+
+  body .sidebar-profile-button > div[aria-hidden="true"] {
+    width: 64px !important;
+    height: 64px !important;
+    font-size: 22px;
+  }
+
+  body .sidebar-bell {
+    width: 58px;
+    height: 58px;
+  }
+
+  body .sidebar-bell svg {
+    width: 24px;
+    height: 24px;
+  }
+
+  body .sidebar-nav-link {
+    padding: 18px 20px;
+    font-size: 18px;
+  }
+
+  body .sidebar-settings-button {
+    padding: 16px 18px;
+    font-size: 17px;
+  }
+
+  body .sidebar-settings-link {
+    padding: 14px 16px;
+    font-size: 16px;
+  }
+
+  body .sidebar-profile-menu .nav-btn {
+    font-size: 16px;
+    padding: 14px 18px;
+  }
+
+  body .terms-shell {
+    max-width: 1800px;
+  }
+
+  body .terms-card {
+    padding: 40px;
+  }
+
+  body .terms-card h1 {
+    font-size: clamp(32px, 2.8vw, 48px);
+  }
+
+  body .terms-updated {
+    font-size: 16px;
+  }
+
+  body .terms-section h2 {
+    font-size: 22px;
+  }
+
+  body .terms-section p,
+  body .terms-contact,
+  body .terms-status {
+    font-size: 18px;
+  }
+
+  body .terms-field label,
+  body .terms-input,
+  body .terms-textarea,
+  body .terms-alert {
+    font-size: 16px;
+  }
+
+  body .terms-contact {
+    gap: 12px;
+  }
+
+  body .news-hero-meta,
+  body .news-pill,
+  body .news-updated,
+  body .news-topic-label,
+  body .news-search label,
+  body .news-selects label {
+    font-size: 14px;
+  }
+
+  body .news-filters-header h3 {
+    font-size: 24px;
+  }
+
+  body .news-stat-label {
+    font-size: 12px;
+  }
+
+  body .news-stat-value {
+    font-size: 26px;
+  }
+
+  body .news-stat-meta,
+  body .news-results-meta {
+    font-size: 14px;
+  }
+
+  body .news-topic-chip {
+    padding: 8px 16px;
+    font-size: 14px;
+  }
+
+  body .news-card-meta {
+    font-size: 14px;
+  }
+
+  body .news-card-body h3 {
+    font-size: 22px;
+  }
+
+  body .news-card-body p {
+    font-size: 16px;
+  }
+
+  body .news-card-fallback {
+    font-size: 14px;
+  }
+
+  body .news-page-btn {
+    font-size: 15px;
+    padding: 8px 16px;
+  }
+
+  body .news-reader-eyebrow {
+    font-size: 13px;
+  }
+
+  body .news-reader-header h2 {
+    font-size: 30px;
+  }
+
+  body .news-reader-meta,
+  body .news-reader-hint {
+    font-size: 14px;
+  }
+
+  body .news-reader-content p {
+    font-size: 18px;
+  }
+
+  body .news-reader-close {
+    width: 46px;
+    height: 46px;
+    font-size: 26px;
+  }
+
+  body .storefront-page {
+    font-size: var(--ui-font-size);
+  }
+
+  body .storefront-eyebrow {
+    font-size: 14px;
+  }
+
+  body .storefront-hero-copy h1 {
+    font-size: clamp(42px, 3.4vw, 64px);
+  }
+
+  body .storefront-hero-copy p {
+    font-size: 18px;
+  }
+
+  body .friend-avatar {
+    width: 60px;
+    height: 60px;
+  }
+
+  body .friend-name,
+  body .friend-activity {
+    font-size: 14px;
+  }
+
+  body .presence-dot {
+    width: 14px;
+    height: 14px;
+  }
+
+  body .forums-eyebrow {
+    font-size: 14px;
+  }
+
+  body .forums-hero h1 {
+    font-size: clamp(52px, 3.6vw, 76px);
+  }
+
+  body .forums-hero p {
+    font-size: 18px;
+  }
+}
+
+@media (min-width: 7680px) {
+  body .landing-page {
+    display: flex;
+    flex-direction: column;
+  }
+
+  body .landing-shell {
+    max-width: 6000px;
+    flex: 1;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  body .hero-copy {
+    max-width: 1900px;
+  }
+
+  body .hero-logo img {
+    width: min(1400px, 55vw);
+  }
+
+  body .hero-title {
+    font-size: clamp(84px, 3.4vw, 140px);
+  }
+
+  body .hero-message {
+    max-width: 1500px;
+    font-size: 28px;
+  }
+
+  body .landing-links a,
+  body .pill,
+  body .pill2,
+  body .hero-intent-label {
+    font-size: 20px;
+  }
+
+  body .hero-intent-title {
+    font-size: 22px;
+  }
+
+  body .hero-intent-sub {
+    font-size: 20px;
+  }
+
+  body .landing-nav {
+    margin-bottom: 44px;
+  }
+
+  body .landing-brand {
+    gap: 20px;
+    padding: 6px 30px 6px 8px;
+    border-radius: 32px;
+    font-size: 22px;
+  }
+
+  body .landing-brand-mark {
+    width: 78px;
+    height: 78px;
+  }
+
+  body .landing-brand-text {
+    font-size: 22px;
+  }
+
+  body .landing-links {
+    gap: 20px;
+  }
+
+  body .landing-links a {
+    padding: 10px 18px;
+  }
+
+  body .landing-profile-button {
+    width: 78px;
+    height: 78px;
+  }
+
+  body .landing-profile-avatar,
+  body .landing-profile-fallback {
+    width: 66px;
+    height: 66px;
+  }
+
+  body .landing-profile-fallback {
+    font-size: 26px;
+  }
+
+  body .landing-bell {
+    width: 70px;
+    height: 70px;
+    border-radius: 20px;
+  }
+
+  body .landing-bell svg {
+    width: 28px;
+    height: 28px;
+  }
+
+  body .landing-bell-badge {
+    font-size: 14px;
+    padding: 4px 10px;
+  }
+
+  body .landing-beta {
+    font-size: clamp(30px, 2.2vw, 46px);
+  }
+
+  body .landing-footer {
+    margin-top: auto;
+    padding: 52px 48px;
+  }
+
+  body .footer-logo {
+    width: 160px;
+    height: 160px;
+  }
+
+  body .footer-brand-text {
+    max-width: 620px;
+  }
+
+  body .footer-brand-text strong {
+    font-size: 26px;
+  }
+
+  body .footer-brand-text p,
+  body .footer-column a,
+  body .footer-contact a {
+    font-size: 20px;
+  }
+
+  body .footer-title {
+    font-size: 20px;
+  }
+
+  body .footer-meta,
+  body .footer-muted {
+    font-size: 18px;
+  }
+
+  body .footer-apps .footer-app-badge {
+    font-size: 1.1rem;
+    padding: 8px 16px;
+  }
+
+  body .dashboard-shell {
+    --sidebar-width: 720px;
+    --sidebar-gap: 110px;
+    --content-max: 6200px;
+  }
+
+  body .dash-hero {
+    padding: 42px clamp(36px, 2.8vw, 56px);
+  }
+
+  body .dash-hero__text h1 {
+    font-size: clamp(48px, 2.6vw, 76px);
+  }
+
+  body .subhead {
+    font-size: 24px;
+  }
+
+  body .eyebrow {
+    font-size: 16px;
+  }
+
+  body .hero-badge {
+    font-size: 20px;
+    padding: 14px 20px;
+  }
+
+  body .hero-badge-chip {
+    font-size: 16px;
+    padding: 10px 16px;
+  }
+
+  body .hero-insight strong {
+    font-size: 22px;
+  }
+
+  body .hero-insight span {
+    font-size: 14px;
+  }
+
+  body .panel-header h3 {
+    font-size: 28px;
+  }
+
+  body .panel-sub {
+    font-size: 18px;
+  }
+
+  body .post-meta-bar {
+    font-size: 16px;
+  }
+
+  body .post-meta-tag {
+    font-size: 15px;
+    padding: 6px 14px;
+  }
+
+  body .post-visibility-select {
+    font-size: 14px;
+  }
+
+  body .dash-nav {
+    padding: 34px 30px;
+    gap: 30px;
+    font-size: 21px;
+  }
+
+  body .brand-mark {
+    width: 82px;
+    height: 82px;
+  }
+
+  body .brand-text {
+    font-size: 22px;
+  }
+
+  body .sidebar-profile-button {
+    padding: 18px 20px;
+  }
+
+  body .sidebar-profile-button strong {
+    font-size: 22px;
+  }
+
+  body .sidebar-profile-button span[title] {
+    font-size: 16px !important;
+  }
+
+  body .sidebar-profile-button .avatar-octagon {
+    width: 82px !important;
+    height: 82px !important;
+  }
+
+  body .sidebar-profile-button > div[aria-hidden="true"] {
+    width: 82px !important;
+    height: 82px !important;
+    font-size: 28px;
+  }
+
+  body .sidebar-bell {
+    width: 72px;
+    height: 72px;
+  }
+
+  body .sidebar-bell svg {
+    width: 30px;
+    height: 30px;
+  }
+
+  body .sidebar-nav-link {
+    padding: 22px 26px;
+    font-size: 21px;
+  }
+
+  body .sidebar-settings-button {
+    padding: 20px 22px;
+    font-size: 20px;
+  }
+
+  body .sidebar-settings-link {
+    padding: 18px 20px;
+    font-size: 18px;
+  }
+
+  body .sidebar-profile-menu .nav-btn {
+    font-size: 18px;
+    padding: 18px 22px;
+  }
+
+  body .terms-shell {
+    max-width: 2600px;
+  }
+
+  body .terms-card {
+    padding: 56px;
+  }
+
+  body .terms-card h1 {
+    font-size: clamp(44px, 2.6vw, 64px);
+  }
+
+  body .terms-updated {
+    font-size: 18px;
+  }
+
+  body .terms-section h2 {
+    font-size: 26px;
+  }
+
+  body .terms-section p,
+  body .terms-contact,
+  body .terms-status {
+    font-size: 22px;
+  }
+
+  body .terms-field label,
+  body .terms-input,
+  body .terms-textarea,
+  body .terms-alert {
+    font-size: 18px;
+  }
+
+  body .terms-contact {
+    gap: 14px;
+  }
+
+  body .news-hero-meta,
+  body .news-pill,
+  body .news-updated,
+  body .news-topic-label,
+  body .news-search label,
+  body .news-selects label {
+    font-size: 18px;
+  }
+
+  body .news-filters-header h3 {
+    font-size: 30px;
+  }
+
+  body .news-stat-label {
+    font-size: 16px;
+  }
+
+  body .news-stat-value {
+    font-size: 34px;
+  }
+
+  body .news-stat-meta,
+  body .news-results-meta {
+    font-size: 18px;
+  }
+
+  body .news-topic-chip {
+    padding: 10px 20px;
+    font-size: 18px;
+  }
+
+  body .news-card-meta {
+    font-size: 18px;
+  }
+
+  body .news-card-body h3 {
+    font-size: 28px;
+  }
+
+  body .news-card-body p {
+    font-size: 20px;
+  }
+
+  body .news-card-fallback {
+    font-size: 18px;
+  }
+
+  body .news-page-btn {
+    font-size: 18px;
+    padding: 12px 20px;
+  }
+
+  body .news-reader-eyebrow {
+    font-size: 16px;
+  }
+
+  body .news-reader-header h2 {
+    font-size: 40px;
+  }
+
+  body .news-reader-meta,
+  body .news-reader-hint {
+    font-size: 18px;
+  }
+
+  body .news-reader-content p {
+    font-size: 22px;
+  }
+
+  body .news-reader-close {
+    width: 58px;
+    height: 58px;
+    font-size: 32px;
+  }
+
+  body .storefront-page {
+    font-size: var(--ui-font-size);
+  }
+
+  body .storefront-eyebrow {
+    font-size: 18px;
+  }
+
+  body .storefront-hero-copy h1 {
+    font-size: clamp(56px, 3.2vw, 84px);
+  }
+
+  body .storefront-hero-copy p {
+    font-size: 22px;
+  }
+
+  body .friend-avatar {
+    width: 78px;
+    height: 78px;
+  }
+
+  body .friend-name,
+  body .friend-activity {
+    font-size: 18px;
+  }
+
+  body .presence-dot {
+    width: 18px;
+    height: 18px;
+  }
+
+  body .forums-eyebrow {
+    font-size: 18px;
+  }
+
+  body .forums-hero h1 {
+    font-size: clamp(68px, 3.2vw, 100px);
+  }
+
+  body .forums-hero p {
+    font-size: 22px;
+  }
+}

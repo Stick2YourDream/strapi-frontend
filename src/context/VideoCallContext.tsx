@@ -119,8 +119,19 @@ type VideoCallEffects = {
     | "backdrop9"
     | "backdrop10";
   backgroundImageUrl: string;
+  maskStrength: number;
   avatarEnabled: boolean;
   avatarImageUrl: string;
+  avatarOffsetX: number;
+  avatarOffsetY: number;
+  avatarScale: number;
+  avatarEyeOffsetX: number;
+  avatarEyeOffsetY: number;
+  avatarEyeSpacing: number;
+  avatarMouthOffsetX: number;
+  avatarMouthOffsetY: number;
+  avatarEyeStyle: "classic" | "toon" | "sleepy" | "sparkle";
+  avatarMouthStyle: "natural" | "smile" | "round" | "line";
   filter:
     | "none"
     | "vivid"
@@ -155,6 +166,15 @@ type SelfieSegmentationInstance = {
 type SelfieSegmentationConstructor = new (config: {
   locateFile?: (file: string) => string;
 }) => SelfieSegmentationInstance;
+
+type FaceBlendshapeCategory = { categoryName: string; score: number };
+type FaceLandmarkerResults = {
+  faceBlendshapes?: Array<{ categories: FaceBlendshapeCategory[] }>;
+};
+type FaceLandmarkerInstance = {
+  detectForVideo: (video: HTMLVideoElement, timestamp: number) => FaceLandmarkerResults;
+  close?: () => void;
+};
 
 type VideoCallContextValue = {
   isOpen: boolean;
@@ -330,6 +350,12 @@ const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
 const mediapipeBase =
   String(import.meta.env.VITE_MEDIAPIPE_ASSETS_URL || "").trim() ||
   "https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation";
+const mediapipeVisionBase =
+  String(import.meta.env.VITE_MEDIAPIPE_VISION_URL || "").trim() ||
+  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm";
+const faceLandmarkerModelUrl =
+  String(import.meta.env.VITE_FACE_LANDMARKER_MODEL_URL || "").trim() ||
+  "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 const BACKDROP_ASSETS = {
   backdrop1: "/backdropsAI/bedroom.png",
   backdrop2: "/backdropsAI/dots.png",
@@ -372,6 +398,46 @@ const loadSelfieSegmentation = () => {
   return selfieSegmentationPromise;
 };
 
+let faceLandmarkerPromise: Promise<FaceLandmarkerInstance | null> | null = null;
+const loadFaceLandmarker = () => {
+  if (!faceLandmarkerPromise) {
+    faceLandmarkerPromise = (async () => {
+      if (typeof window === "undefined") return null;
+      try {
+        const vision = (await import("@mediapipe/tasks-vision")) as {
+          FaceLandmarker?: {
+            createFromOptions: (
+              resolver: unknown,
+              options: {
+                baseOptions: { modelAssetPath: string };
+                runningMode: "VIDEO";
+                numFaces: number;
+                outputFaceBlendshapes: boolean;
+                outputFaceLandmarks: boolean;
+              }
+            ) => Promise<FaceLandmarkerInstance>;
+          };
+          FilesetResolver?: {
+            forVisionTasks: (base: string) => Promise<unknown>;
+          };
+        };
+        if (!vision.FaceLandmarker || !vision.FilesetResolver) return null;
+        const resolver = await vision.FilesetResolver.forVisionTasks(mediapipeVisionBase);
+        return await vision.FaceLandmarker.createFromOptions(resolver, {
+          baseOptions: { modelAssetPath: faceLandmarkerModelUrl },
+          runningMode: "VIDEO",
+          numFaces: 1,
+          outputFaceBlendshapes: true,
+          outputFaceLandmarks: false,
+        });
+      } catch {
+        return null;
+      }
+    })();
+  }
+  return faceLandmarkerPromise;
+};
+
 const VideoCallContext = createContext<VideoCallContextValue | undefined>(undefined);
 
 export const VideoCallProvider = ({ children }: { children: React.ReactNode }) => {
@@ -410,8 +476,19 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     mirror: false,
     background: "none",
     backgroundImageUrl: "",
+    maskStrength: 0.85,
     avatarEnabled: false,
     avatarImageUrl: "",
+    avatarOffsetX: 0,
+    avatarOffsetY: 0,
+    avatarScale: 1,
+    avatarEyeOffsetX: 0,
+    avatarEyeOffsetY: 0,
+    avatarEyeSpacing: 1,
+    avatarMouthOffsetX: 0,
+    avatarMouthOffsetY: 0,
+    avatarEyeStyle: "classic",
+    avatarMouthStyle: "natural",
     filter: "none",
   });
   const [onlineUserIds, setOnlineUserIds] = useState<Set<number>>(new Set());
@@ -1628,17 +1705,27 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       const foregroundCtx = foregroundCanvas.getContext("2d");
       const maskCanvas = document.createElement("canvas");
       const maskCtx = maskCanvas.getContext("2d");
+      const maskScratchCanvas = document.createElement("canvas");
+      const maskScratchCtx = maskScratchCanvas.getContext("2d");
+      const maskHistoryCanvas = document.createElement("canvas");
+      const maskHistoryCtx = maskHistoryCanvas.getContext("2d");
+      const avatarMaskCanvas = document.createElement("canvas");
+      const avatarMaskCtx = avatarMaskCanvas.getContext("2d", { willReadFrequently: true });
       let rafId = 0;
       let maskSource: CanvasImageSource | null = null;
       let lastSegmentationTs = 0;
       let segmenting = false;
       let segmentationFailed = false;
       let segmentationLoading = false;
+      const avatarFrame = { x: 0, y: 0, width: 0, height: 0, valid: false };
+      let lastAvatarFrameTs = 0;
       const segmentationIntervalMs = 1000 / 30;
-      const maskBlurPx = 3;
-      const maskShrinkPx = 0;
       let segmenter: SelfieSegmentationInstance | null = null;
       let closed = false;
+      let faceLandmarker: FaceLandmarkerInstance | null = null;
+      let faceLandmarkerLoading = false;
+      let lastFaceTs = 0;
+      const avatarRig = { mouth: 0, blink: 0, lastSeen: 0 };
 
       const ensureSegmentation = () => {
         if (segmenter || segmentationFailed || segmentationLoading) return;
@@ -1704,23 +1791,339 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         });
       };
 
-      const drawCoverImage = (
+      const drawContainImage = (
         context: CanvasRenderingContext2D,
         image: HTMLImageElement,
-        width: number,
-        height: number,
-        mirror: boolean
+        bounds: { x: number; y: number; width: number; height: number },
+        mirror: boolean,
+        canvasWidth: number
       ) => {
-        const vw = image.naturalWidth || width;
-        const vh = image.naturalHeight || height;
-        const scale = Math.max(width / vw, height / vh);
-        const sw = width / scale;
-        const sh = height / scale;
-        const sx = Math.max(0, (vw - sw) / 2);
-        const sy = Math.max(0, (vh - sh) / 2);
-        withMirror(context, width, mirror, () => {
-          context.drawImage(image, sx, sy, sw, sh, 0, 0, width, height);
+        const vw = image.naturalWidth || bounds.width;
+        const vh = image.naturalHeight || bounds.height;
+        if (!vw || !vh) return;
+        const scale = Math.min(bounds.width / vw, bounds.height / vh);
+        const dw = vw * scale;
+        const dh = vh * scale;
+        const dx = bounds.x + (bounds.width - dw) / 2;
+        const dy = bounds.y + (bounds.height - dh) / 2;
+        withMirror(context, canvasWidth, mirror, () => {
+          context.drawImage(image, 0, 0, vw, vh, dx, dy, dw, dh);
         });
+      };
+
+      const updateAvatarFrame = (width: number, height: number) => {
+        if (!avatarMaskCtx || !maskSource) return;
+        const now = performance.now();
+        if (now - lastAvatarFrameTs < segmentationIntervalMs) return;
+        lastAvatarFrameTs = now;
+
+        const sampleWidth = 96;
+        const sampleHeight = Math.max(54, Math.round((sampleWidth * height) / width));
+        if (
+          avatarMaskCanvas.width !== sampleWidth ||
+          avatarMaskCanvas.height !== sampleHeight
+        ) {
+          avatarMaskCanvas.width = sampleWidth;
+          avatarMaskCanvas.height = sampleHeight;
+        }
+        avatarMaskCtx.clearRect(0, 0, sampleWidth, sampleHeight);
+        avatarMaskCtx.drawImage(maskSource, 0, 0, sampleWidth, sampleHeight);
+
+        const data = avatarMaskCtx.getImageData(0, 0, sampleWidth, sampleHeight).data;
+        let minX = sampleWidth;
+        let minY = sampleHeight;
+        let maxX = -1;
+        let maxY = -1;
+        for (let y = 0; y < sampleHeight; y += 1) {
+          for (let x = 0; x < sampleWidth; x += 1) {
+            const idx = (y * sampleWidth + x) * 4;
+            const alpha = data[idx + 3];
+            const intensity = alpha < 255 ? alpha : data[idx];
+            if (intensity > 32) {
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+            }
+          }
+        }
+
+        if (maxX < 0 || maxY < 0) return;
+
+        const scaleX = width / sampleWidth;
+        const scaleY = height / sampleHeight;
+        let nextX = minX * scaleX;
+        let nextY = minY * scaleY;
+        let nextWidth = (maxX - minX + 1) * scaleX;
+        let nextHeight = (maxY - minY + 1) * scaleY;
+
+        if (nextWidth < width * 0.15 || nextHeight < height * 0.15) return;
+
+        const expandX = nextWidth * 0.28;
+        const expandTop = nextHeight * 0.28;
+        const expandBottom = nextHeight * 0.45;
+        nextX = Math.max(0, nextX - expandX / 2);
+        nextY = Math.max(0, nextY - expandTop);
+        nextWidth = Math.min(width - nextX, nextWidth + expandX);
+        nextHeight = Math.min(height - nextY, nextHeight + expandTop + expandBottom);
+
+        if (!avatarFrame.valid) {
+          avatarFrame.x = nextX;
+          avatarFrame.y = nextY;
+          avatarFrame.width = nextWidth;
+          avatarFrame.height = nextHeight;
+          avatarFrame.valid = true;
+          return;
+        }
+
+        const lerp = (from: number, to: number) => from + (to - from) * 0.25;
+        avatarFrame.x = lerp(avatarFrame.x, nextX);
+        avatarFrame.y = lerp(avatarFrame.y, nextY);
+        avatarFrame.width = lerp(avatarFrame.width, nextWidth);
+        avatarFrame.height = lerp(avatarFrame.height, nextHeight);
+      };
+
+      const drawAvatarFace = (
+        context: CanvasRenderingContext2D,
+        bounds: { x: number; y: number; width: number; height: number },
+        options: {
+          eyeOffsetX: number;
+          eyeOffsetY: number;
+          eyeSpacing: number;
+          mouthOffsetX: number;
+          mouthOffsetY: number;
+          eyeStyle: VideoCallEffects["avatarEyeStyle"];
+          mouthStyle: VideoCallEffects["avatarMouthStyle"];
+        }
+      ) => {
+        const mouthOpen = Math.min(1, Math.max(0, avatarRig.mouth || 0));
+        const blink = Math.min(1, Math.max(0, avatarRig.blink || 0));
+
+        const centerX = bounds.x + bounds.width * 0.5 + bounds.width * options.eyeOffsetX;
+        const eyeSpacing = bounds.width * 0.18 * options.eyeSpacing;
+        const eyeY = bounds.y + bounds.height * (0.34 + options.eyeOffsetY);
+        const eyeRadiusX = Math.max(2, bounds.width * 0.055);
+        const eyeRadiusY = Math.max(1.5, bounds.height * 0.03 * (1 - blink * 0.9));
+        const mouthCenterX = centerX + bounds.width * options.mouthOffsetX;
+        const mouthY = bounds.y + bounds.height * (0.58 + options.mouthOffsetY);
+        const mouthWidth = bounds.width * 0.26;
+        const mouthHeight = Math.max(2, bounds.height * (0.02 + mouthOpen * 0.12));
+
+        context.save();
+        const ink = "rgba(10, 10, 12, 0.85)";
+        context.fillStyle = ink;
+        context.strokeStyle = ink;
+        context.lineWidth = Math.max(1, bounds.width * 0.008);
+
+        const leftX = centerX - eyeSpacing;
+        const rightX = centerX + eyeSpacing;
+        if (blink > 0.75 || eyeRadiusY <= 1.2) {
+          context.beginPath();
+          context.moveTo(leftX - eyeRadiusX, eyeY);
+          context.lineTo(leftX + eyeRadiusX, eyeY);
+          context.moveTo(rightX - eyeRadiusX, eyeY);
+          context.lineTo(rightX + eyeRadiusX, eyeY);
+          context.stroke();
+        } else {
+          switch (options.eyeStyle) {
+            case "toon": {
+              context.beginPath();
+              context.ellipse(leftX, eyeY, eyeRadiusX, eyeRadiusY, 0, 0, Math.PI * 2);
+              context.ellipse(rightX, eyeY, eyeRadiusX, eyeRadiusY, 0, 0, Math.PI * 2);
+              context.fill();
+              break;
+            }
+            case "sleepy": {
+              const lidHeight = eyeRadiusY * 0.55;
+              context.beginPath();
+              context.ellipse(leftX, eyeY + eyeRadiusY * 0.15, eyeRadiusX, lidHeight, 0, 0, Math.PI * 2);
+              context.ellipse(rightX, eyeY + eyeRadiusY * 0.15, eyeRadiusX, lidHeight, 0, 0, Math.PI * 2);
+              context.fill();
+              break;
+            }
+            case "sparkle":
+            case "classic":
+            default: {
+              const sclera = "rgba(248, 250, 252, 0.92)";
+              const iris = "rgba(30, 41, 59, 0.9)";
+              const pupil = "rgba(15, 23, 42, 0.95)";
+              const highlight = "rgba(255, 255, 255, 0.8)";
+              const irisRadius = eyeRadiusX * (options.eyeStyle === "sparkle" ? 0.85 : 0.7);
+              const pupilRadius = eyeRadiusX * (options.eyeStyle === "sparkle" ? 0.35 : 0.28);
+              const drawEye = (x: number) => {
+                context.beginPath();
+                context.fillStyle = sclera;
+                context.ellipse(x, eyeY, eyeRadiusX, eyeRadiusY, 0, 0, Math.PI * 2);
+                context.fill();
+                context.strokeStyle = "rgba(15, 23, 42, 0.5)";
+                context.stroke();
+
+                context.beginPath();
+                context.fillStyle = iris;
+                context.ellipse(x, eyeY, irisRadius, irisRadius * 0.9, 0, 0, Math.PI * 2);
+                context.fill();
+
+                context.beginPath();
+                context.fillStyle = pupil;
+                context.ellipse(x, eyeY, pupilRadius, pupilRadius, 0, 0, Math.PI * 2);
+                context.fill();
+
+                context.beginPath();
+                context.fillStyle = highlight;
+                context.ellipse(
+                  x - irisRadius * 0.35,
+                  eyeY - irisRadius * 0.35,
+                  irisRadius * 0.2,
+                  irisRadius * 0.2,
+                  0,
+                  0,
+                  Math.PI * 2
+                );
+                context.fill();
+              };
+              drawEye(leftX);
+              drawEye(rightX);
+              break;
+            }
+          }
+        }
+
+        switch (options.mouthStyle) {
+          case "line": {
+            context.beginPath();
+            context.strokeStyle = ink;
+            context.lineWidth = Math.max(1.5, bounds.width * 0.01);
+            context.moveTo(mouthCenterX - mouthWidth * 0.5, mouthY);
+            context.quadraticCurveTo(
+              mouthCenterX,
+              mouthY + mouthHeight * 0.4,
+              mouthCenterX + mouthWidth * 0.5,
+              mouthY
+            );
+            context.stroke();
+            break;
+          }
+          case "smile": {
+            context.beginPath();
+            context.strokeStyle = ink;
+            context.lineWidth = Math.max(2, bounds.width * 0.012);
+            context.moveTo(mouthCenterX - mouthWidth * 0.55, mouthY);
+            context.quadraticCurveTo(
+              mouthCenterX,
+              mouthY + mouthHeight * 0.9,
+              mouthCenterX + mouthWidth * 0.55,
+              mouthY
+            );
+            context.stroke();
+            break;
+          }
+          case "round": {
+            context.beginPath();
+            context.fillStyle = "rgba(20, 6, 8, 0.85)";
+            context.ellipse(
+              mouthCenterX,
+              mouthY,
+              mouthWidth * 0.45,
+              Math.max(2, mouthHeight * 0.9),
+              0,
+              0,
+              Math.PI * 2
+            );
+            context.fill();
+            break;
+          }
+          case "natural":
+          default: {
+            const lipColor = "rgba(74, 28, 38, 0.78)";
+            const lipDark = "rgba(44, 16, 22, 0.6)";
+            const innerColor = "rgba(18, 6, 10, 0.88)";
+            const teethColor = "rgba(248, 250, 252, 0.9)";
+            const lipWidth = Math.max(1.6, bounds.width * 0.012);
+            if (mouthOpen < 0.1) {
+              context.beginPath();
+              context.strokeStyle = lipColor;
+              context.lineWidth = lipWidth;
+              context.moveTo(mouthCenterX - mouthWidth * 0.55, mouthY);
+              context.quadraticCurveTo(mouthCenterX, mouthY + mouthHeight * 0.4, mouthCenterX + mouthWidth * 0.55, mouthY);
+              context.stroke();
+
+              context.beginPath();
+              context.strokeStyle = lipDark;
+              context.lineWidth = Math.max(1.2, lipWidth * 0.8);
+              const lowerY = mouthY + mouthHeight * 0.35;
+              context.moveTo(mouthCenterX - mouthWidth * 0.4, lowerY);
+              context.quadraticCurveTo(mouthCenterX, lowerY + mouthHeight * 0.25, mouthCenterX + mouthWidth * 0.4, lowerY);
+              context.stroke();
+              break;
+            }
+
+            context.beginPath();
+            context.fillStyle = innerColor;
+            context.ellipse(
+              mouthCenterX,
+              mouthY,
+              mouthWidth * 0.48,
+              Math.max(2, mouthHeight * 1.05),
+              0,
+              0,
+              Math.PI * 2
+            );
+            context.fill();
+
+            if (mouthOpen < 0.55) {
+              context.beginPath();
+              context.fillStyle = teethColor;
+              context.ellipse(
+                mouthCenterX,
+                mouthY - mouthHeight * 0.15,
+                mouthWidth * 0.34,
+                Math.max(1.5, mouthHeight * 0.25),
+                0,
+                0,
+                Math.PI * 2
+              );
+              context.fill();
+            }
+
+            context.beginPath();
+            context.strokeStyle = lipColor;
+            context.lineWidth = lipWidth;
+            context.moveTo(mouthCenterX - mouthWidth * 0.58, mouthY);
+            context.quadraticCurveTo(mouthCenterX, mouthY - mouthHeight * 0.35, mouthCenterX + mouthWidth * 0.58, mouthY);
+            context.stroke();
+
+            context.beginPath();
+            context.strokeStyle = lipDark;
+            context.lineWidth = Math.max(1.2, lipWidth * 0.8);
+            const lowerLipY = mouthY + mouthHeight * 0.35;
+            context.moveTo(mouthCenterX - mouthWidth * 0.52, lowerLipY);
+            context.quadraticCurveTo(mouthCenterX, lowerLipY + mouthHeight * 0.5, mouthCenterX + mouthWidth * 0.52, lowerLipY);
+            context.stroke();
+            break;
+          }
+        }
+
+        context.restore();
+      };
+
+      const alignBounds = (
+        bounds: { x: number; y: number; width: number; height: number },
+        offsetX: number,
+        offsetY: number,
+        scale: number,
+        maxWidth: number,
+        maxHeight: number
+      ) => {
+        const safeScale = Math.min(1.6, Math.max(0.4, scale || 1));
+        const width = bounds.width * safeScale;
+        const height = bounds.height * safeScale;
+        const dx = bounds.x + (bounds.width - width) / 2 + maxWidth * offsetX * 0.45;
+        const dy = bounds.y + (bounds.height - height) / 2 + maxHeight * offsetY * 0.45;
+        const marginX = width * 0.35;
+        const marginY = height * 0.35;
+        const x = Math.max(-marginX, Math.min(maxWidth - width + marginX, dx));
+        const y = Math.max(-marginY, Math.min(maxHeight - height + marginY, dy));
+        return { x, y, width, height };
       };
 
       const maybeSegment = (shouldSegment: boolean) => {
@@ -1739,6 +2142,58 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           .finally(() => {
             segmenting = false;
           });
+      };
+
+      const ensureFaceLandmarker = () => {
+        if (faceLandmarker || faceLandmarkerLoading) return;
+        faceLandmarkerLoading = true;
+        loadFaceLandmarker()
+          .then((instance) => {
+            if (!instance || closed) return;
+            faceLandmarker = instance;
+          })
+          .finally(() => {
+            faceLandmarkerLoading = false;
+          });
+      };
+
+      const getBlendshapeScore = (
+        categories: FaceBlendshapeCategory[] | undefined,
+        name: string
+      ) => {
+        if (!categories) return 0;
+        const match = categories.find((entry) => entry.categoryName === name);
+        return match ? match.score : 0;
+      };
+
+      const updateAvatarRig = () => {
+        if (!faceLandmarker) return;
+        const now = performance.now();
+        if (now - lastFaceTs < 80) return;
+        lastFaceTs = now;
+        try {
+          const result = faceLandmarker.detectForVideo(video, now);
+          const blendshapes = result.faceBlendshapes?.[0]?.categories;
+          if (!blendshapes || blendshapes.length === 0) {
+            avatarRig.mouth = avatarRig.mouth * 0.85;
+            avatarRig.blink = avatarRig.blink * 0.85;
+            return;
+          }
+          const jawOpen = getBlendshapeScore(blendshapes, "jawOpen");
+          const mouthOpen = getBlendshapeScore(blendshapes, "mouthOpen");
+          const mouth = Math.min(1, Math.max(jawOpen, mouthOpen) * 1.2);
+          const blinkLeft = getBlendshapeScore(blendshapes, "eyeBlinkLeft");
+          const blinkRight = getBlendshapeScore(blendshapes, "eyeBlinkRight");
+          const blink = Math.min(1, Math.max(blinkLeft, blinkRight));
+
+          const lerp = (from: number, to: number, speed: number) =>
+            from + (to - from) * speed;
+          avatarRig.mouth = lerp(avatarRig.mouth, mouth, 0.35);
+          avatarRig.blink = lerp(avatarRig.blink, blink, 0.5);
+          avatarRig.lastSeen = now;
+        } catch {
+          // ignore face tracking errors
+        }
       };
 
       const drawFrame = () => {
@@ -1764,9 +2219,67 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
             maskCtx.imageSmoothingEnabled = true;
           }
         }
+        if (
+          maskScratchCanvas.width !== width ||
+          maskScratchCanvas.height !== height
+        ) {
+          maskScratchCanvas.width = width;
+          maskScratchCanvas.height = height;
+          if (maskScratchCtx) {
+            maskScratchCtx.imageSmoothingEnabled = true;
+          }
+        }
+        if (
+          maskHistoryCanvas.width !== width ||
+          maskHistoryCanvas.height !== height
+        ) {
+          maskHistoryCanvas.width = width;
+          maskHistoryCanvas.height = height;
+          if (maskHistoryCtx) {
+            maskHistoryCtx.imageSmoothingEnabled = true;
+          }
+        }
 
         const effects = effectsRef.current;
         const useAvatar = effects.avatarEnabled && Boolean(effects.avatarImageUrl);
+        const maskStrength = Math.min(
+          1,
+          Math.max(0.2, Number.isFinite(effects.maskStrength) ? effects.maskStrength : 0.85)
+        );
+        const avatarOffsetX = Math.min(
+          0.5,
+          Math.max(-0.5, Number.isFinite(effects.avatarOffsetX) ? effects.avatarOffsetX : 0)
+        );
+        const avatarOffsetY = Math.min(
+          0.5,
+          Math.max(-0.5, Number.isFinite(effects.avatarOffsetY) ? effects.avatarOffsetY : 0)
+        );
+        const avatarScale = Math.min(
+          1.6,
+          Math.max(0.4, Number.isFinite(effects.avatarScale) ? effects.avatarScale : 1)
+        );
+        const avatarEyeOffsetX = Math.min(
+          0.35,
+          Math.max(-0.35, Number.isFinite(effects.avatarEyeOffsetX) ? effects.avatarEyeOffsetX : 0)
+        );
+        const avatarEyeOffsetY = Math.min(
+          0.3,
+          Math.max(-0.3, Number.isFinite(effects.avatarEyeOffsetY) ? effects.avatarEyeOffsetY : 0)
+        );
+        const avatarEyeSpacing = Math.min(
+          1,
+          Math.max(0.25, Number.isFinite(effects.avatarEyeSpacing) ? effects.avatarEyeSpacing : 1)
+        );
+        const avatarMouthOffsetX = Math.min(
+          0.35,
+          Math.max(-0.35, Number.isFinite(effects.avatarMouthOffsetX) ? effects.avatarMouthOffsetX : 0)
+        );
+        const avatarMouthOffsetY = Math.min(
+          0.3,
+          Math.max(-0.3, Number.isFinite(effects.avatarMouthOffsetY) ? effects.avatarMouthOffsetY : 0)
+        );
+        const avatarEyeStyle = effects.avatarEyeStyle || "classic";
+        const avatarMouthStyle = effects.avatarMouthStyle || "natural";
         const needsSegmentation =
           effects.blur || effects.background !== "none" || useAvatar;
         if (needsSegmentation) {
@@ -1776,9 +2289,23 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         }
         const cameraFilter = getCameraFilter(effects.filter);
         const mirror = effects.mirror;
+        const maskBlurPx = useAvatar
+          ? 0.8
+          : effects.blur
+            ? 1.6 + (1 - maskStrength) * 2.4
+            : 0.8 + (1 - maskStrength) * 1.6;
+        const maskShrinkPx = useAvatar ? 0 : Math.round(1 + maskStrength * 6);
         const shouldBlurBackground = effects.blur && effects.background === "none";
         const blurFilter = shouldBlurBackground ? "blur(10px)" : "none";
         const baseFilter = cameraFilter !== "none" ? cameraFilter : "none";
+
+        if (useAvatar) {
+          ensureFaceLandmarker();
+          updateAvatarRig();
+        } else if (avatarRig.mouth > 0 || avatarRig.blink > 0) {
+          avatarRig.mouth *= 0.85;
+          avatarRig.blink *= 0.85;
+        }
 
         if (!needsSegmentation) {
           ctx.clearRect(0, 0, width, height);
@@ -1801,10 +2328,27 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         }
 
         if (maskCtx) {
+          const historyAlpha = 0.08 + (1 - maskStrength) * 0.25;
+          if (maskScratchCtx) {
+            maskScratchCtx.clearRect(0, 0, width, height);
+            maskScratchCtx.filter = `blur(${maskBlurPx}px) contrast(${1 + maskStrength})`;
+            maskScratchCtx.drawImage(maskSource, 0, 0, width, height);
+            maskScratchCtx.filter = "none";
+          }
+
           maskCtx.clearRect(0, 0, width, height);
-          maskCtx.filter = `blur(${maskBlurPx}px)`;
-          maskCtx.drawImage(maskSource, 0, 0, width, height);
-          maskCtx.filter = "none";
+          if (historyAlpha > 0.001 && maskHistoryCtx) {
+            maskCtx.globalAlpha = historyAlpha;
+            maskCtx.drawImage(maskHistoryCanvas, 0, 0, width, height);
+            maskCtx.globalAlpha = 1;
+          }
+          if (maskScratchCtx) {
+            maskCtx.drawImage(maskScratchCanvas, 0, 0, width, height);
+          } else {
+            maskCtx.filter = `blur(${maskBlurPx}px) contrast(${1 + maskStrength})`;
+            maskCtx.drawImage(maskSource, 0, 0, width, height);
+            maskCtx.filter = "none";
+          }
           if (maskShrinkPx > 0) {
             const shrinkX = Math.min(maskShrinkPx, width / 2);
             const shrinkY = Math.min(maskShrinkPx, height / 2);
@@ -1822,6 +2366,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
             );
             maskCtx.globalCompositeOperation = "source-over";
           }
+          if (maskHistoryCtx) {
+            maskHistoryCtx.clearRect(0, 0, width, height);
+            maskHistoryCtx.drawImage(maskCanvas, 0, 0, width, height);
+          }
         }
 
         foregroundCtx.clearRect(0, 0, width, height);
@@ -1830,8 +2378,40 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
             ? getBackdropImage(effects.avatarImageUrl)
             : null;
           if (avatarImage && avatarImage.complete && avatarImage.naturalWidth) {
+            updateAvatarFrame(width, height);
+            const fallbackBounds = {
+              x: width * 0.15,
+              y: height * 0.05,
+              width: width * 0.7,
+              height: height * 0.9,
+            };
+            const bounds = avatarFrame.valid
+              ? {
+                  x: avatarFrame.x,
+                  y: avatarFrame.y,
+                  width: avatarFrame.width,
+                  height: avatarFrame.height,
+                }
+              : fallbackBounds;
+            const alignedBounds = alignBounds(
+              bounds,
+              avatarOffsetX,
+              avatarOffsetY,
+              avatarScale,
+              width,
+              height
+            );
             foregroundCtx.filter = "none";
-            drawCoverImage(foregroundCtx, avatarImage, width, height, false);
+            drawContainImage(foregroundCtx, avatarImage, alignedBounds, false, width);
+            drawAvatarFace(foregroundCtx, alignedBounds, {
+              eyeOffsetX: avatarEyeOffsetX,
+              eyeOffsetY: avatarEyeOffsetY,
+              eyeSpacing: avatarEyeSpacing,
+              mouthOffsetX: avatarMouthOffsetX,
+              mouthOffsetY: avatarMouthOffsetY,
+              eyeStyle: avatarEyeStyle,
+              mouthStyle: avatarMouthStyle,
+            });
           } else {
             foregroundCtx.filter = cameraFilter;
             drawCover(foregroundCtx, width, height, false);
@@ -1841,15 +2421,17 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           drawCover(foregroundCtx, width, height, false);
         }
         foregroundCtx.filter = "none";
-        foregroundCtx.globalCompositeOperation = "destination-in";
-        if (maskCtx) {
-          foregroundCtx.drawImage(maskCanvas, 0, 0, width, height);
-        } else {
-          foregroundCtx.filter = `blur(${maskBlurPx}px)`;
-          foregroundCtx.drawImage(maskSource, 0, 0, width, height);
-          foregroundCtx.filter = "none";
+        if (!useAvatar) {
+          foregroundCtx.globalCompositeOperation = "destination-in";
+          if (maskCtx) {
+            foregroundCtx.drawImage(maskCanvas, 0, 0, width, height);
+          } else {
+            foregroundCtx.filter = `blur(${maskBlurPx}px)`;
+            foregroundCtx.drawImage(maskSource, 0, 0, width, height);
+            foregroundCtx.filter = "none";
+          }
+          foregroundCtx.globalCompositeOperation = "source-over";
         }
-        foregroundCtx.globalCompositeOperation = "source-over";
 
         const drawBackdropFrame = (
           mode: VideoCallEffects["background"],
@@ -1977,7 +2559,13 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         effects.filter
       }-${effects.mirror ? "1" : "0"}-${hasAvatar ? "1" : "0"}-${
         effects.backgroundImageUrl
-      }-${effects.avatarImageUrl}`;
+      }-${effects.avatarImageUrl}-${effects.maskStrength}-${effects.avatarOffsetX}-${
+        effects.avatarOffsetY
+      }-${effects.avatarScale}-${effects.avatarEyeOffsetX}-${effects.avatarEyeOffsetY}-${
+        effects.avatarEyeSpacing
+      }-${effects.avatarMouthOffsetX}-${effects.avatarMouthOffsetY}-${
+        effects.avatarEyeStyle
+      }-${effects.avatarMouthStyle}`;
       return current.track;
     }
 
@@ -1995,7 +2583,13 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           effects.filter
         }-${effects.mirror ? "1" : "0"}-${hasAvatar ? "1" : "0"}-${
           effects.backgroundImageUrl
-        }-${effects.avatarImageUrl}`,
+        }-${effects.avatarImageUrl}-${effects.maskStrength}-${effects.avatarOffsetX}-${
+          effects.avatarOffsetY
+        }-${effects.avatarScale}-${effects.avatarEyeOffsetX}-${effects.avatarEyeOffsetY}-${
+          effects.avatarEyeSpacing
+        }-${effects.avatarMouthOffsetX}-${effects.avatarMouthOffsetY}-${
+          effects.avatarEyeStyle
+        }-${effects.avatarMouthStyle}`,
       };
       return track;
     } catch {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import api from "../api/strapi";
@@ -62,6 +62,9 @@ type SidebarProps = {
   onSettingsSectionChange?: (section: SettingsSection) => void;
   groupView?: "feed" | "settings";
   onGroupViewChange?: (view: "feed" | "settings") => void;
+  sidebarContent?: ReactNode;
+  hideNavLinks?: boolean;
+  hideBio?: boolean;
 };
 
 const trimPreviewText = (value?: string, max = 72) => {
@@ -80,6 +83,9 @@ export default function Sidebar({
   onSettingsSectionChange,
   groupView = "feed",
   onGroupViewChange,
+  sidebarContent,
+  hideNavLinks = false,
+  hideBio = false,
 }: SidebarProps) {
   const navigate = useNavigate();
   const { user, profile, logout, appSettings } = useAuth();
@@ -250,6 +256,8 @@ export default function Sidebar({
   const isStaff = user?.appRole === "admin" || user?.appRole === "moderator";
   const newsroomEnabled = appSettings?.newsroomEnabled !== false;
   const storefrontEnabled = appSettings?.storefrontEnabled !== false;
+  const showNavLinks = !hideNavLinks;
+  const showBio = !hideBio;
 
   const handleSettingsToggle = () => {
     if (!onSettingsViewChange) return;
@@ -970,7 +978,7 @@ export default function Sidebar({
               )}
             </div>
           )}
-          {profileCard && (
+          {profileCard && showNavLinks && (
             <div className="sidebar-nav-links">
               <button
                 type="button"
@@ -1153,7 +1161,8 @@ export default function Sidebar({
             </div>
           )}
         </div>
-        {user && (
+        {sidebarContent && <div className="sidebar-custom-content">{sidebarContent}</div>}
+        {user && showBio && (
           <div style={{ marginTop: "12px", width: "100%" }}>
             <button
               className="btn ghost biobutton"

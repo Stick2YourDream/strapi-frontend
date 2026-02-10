@@ -12,6 +12,7 @@
   --sidebar-width: 300px;
   --sidebar-gap: 24px;
   --content-max: 1056px;
+  font-size: var(--ui-font-size);
 }
 
 .dash-hero {
@@ -125,34 +126,33 @@
     --sidebar-width: 320px;
     --sidebar-gap: 32px;
     --content-max: 1338px;
-    font-size: 17px;
   }
 }
 
 @media (min-width: 2560px) {
   .dashboard-shell {
-    --sidebar-width: 340px;
+    --sidebar-width: 500px;
     --sidebar-gap: 40px;
-    --content-max: 1549px;
-    font-size: 18px;
+    --content-max: 2000px;
+  }
+  .news-card {
+   min-height: 500px;
   }
 }
 
 @media (min-width: 3840px) {
   .dashboard-shell {
-    --sidebar-width: 380px;
-    --sidebar-gap: 48px;
-    --content-max: 1936px;
-    font-size: 19px;
+    --sidebar-width: 420px;
+    --sidebar-gap: 56px;
+    --content-max: 3200px;
   }
 }
 
 @media (min-width: 7680px) {
   .dashboard-shell {
-    --sidebar-width: 440px;
-    --sidebar-gap: 64px;
-    --content-max: 2464px;
-    font-size: 20px;
+    --sidebar-width: 520px;
+    --sidebar-gap: 80px;
+    --content-max: 5600px;
   }
 }
 
@@ -231,7 +231,9 @@
 .btn {
   border: none;
   border-radius: 12px;
-  padding: 10px 14px;
+  padding: calc(10px * var(--ui-btn-scale, 1))
+    calc(14px * var(--ui-btn-scale, 1));
+  font-size: calc(14px * var(--ui-btn-scale, 1));
   font-weight: 700;
   cursor: pointer;
   transition: transform 0.15s ease, box-shadow 0.2s ease, background 0.2s ease;

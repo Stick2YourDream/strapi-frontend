@@ -7,6 +7,7 @@ import VideoAppRoutes from "./routes/VideoAppRoutes";
 import UpdateNotice from "./components/UpdateNotice";
 import AuthDebugOverlay from "./components/AuthDebugOverlay";
 import "./index.css";
+import "./css/4k.css";
 import "./css/chatbox.css";
 import "./css/video-app.css";
 

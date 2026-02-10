@@ -596,6 +596,20 @@ const AVATAR_POSE_OPTIONS = [
   { id: "custom", label: "Custom pose" },
 ];
 
+const AVATAR_EYE_STYLE_OPTIONS = [
+  { id: "classic", label: "Classic" },
+  { id: "toon", label: "Toon" },
+  { id: "sleepy", label: "Sleepy" },
+  { id: "sparkle", label: "Sparkle" },
+];
+
+const AVATAR_MOUTH_STYLE_OPTIONS = [
+  { id: "natural", label: "Natural" },
+  { id: "smile", label: "Smile" },
+  { id: "round", label: "Round" },
+  { id: "line", label: "Line" },
+];
+
 const FILTER_OPTIONS = [
   { id: "none", label: "Clean" },
   { id: "neon", label: "Neon Pop" },
@@ -1530,6 +1544,33 @@ export default function VideoCallModal({
   }, [avatarPose]);
   const resolvedAvatarPose =
     avatarPose === "custom" ? avatarCustomPose.trim() : avatarPoseLabel;
+  const maskStrengthValue = Number.isFinite(videoEffects.maskStrength)
+    ? Math.min(1, Math.max(0.2, videoEffects.maskStrength))
+    : 0.85;
+  const avatarOffsetXValue = Number.isFinite(videoEffects.avatarOffsetX)
+    ? Math.min(0.5, Math.max(-0.5, videoEffects.avatarOffsetX))
+    : 0;
+  const avatarOffsetYValue = Number.isFinite(videoEffects.avatarOffsetY)
+    ? Math.min(0.5, Math.max(-0.5, videoEffects.avatarOffsetY))
+    : 0;
+  const avatarScaleValue = Number.isFinite(videoEffects.avatarScale)
+    ? Math.min(1.6, Math.max(0.4, videoEffects.avatarScale))
+    : 1;
+  const avatarEyeOffsetXValue = Number.isFinite(videoEffects.avatarEyeOffsetX)
+    ? Math.min(0.35, Math.max(-0.35, videoEffects.avatarEyeOffsetX))
+    : 0;
+  const avatarEyeOffsetYValue = Number.isFinite(videoEffects.avatarEyeOffsetY)
+    ? Math.min(0.3, Math.max(-0.3, videoEffects.avatarEyeOffsetY))
+    : 0;
+  const avatarEyeSpacingValue = Number.isFinite(videoEffects.avatarEyeSpacing)
+    ? Math.min(1, Math.max(0.25, videoEffects.avatarEyeSpacing))
+    : 1;
+  const avatarMouthOffsetXValue = Number.isFinite(videoEffects.avatarMouthOffsetX)
+    ? Math.min(0.35, Math.max(-0.35, videoEffects.avatarMouthOffsetX))
+    : 0;
+  const avatarMouthOffsetYValue = Number.isFinite(videoEffects.avatarMouthOffsetY)
+    ? Math.min(0.3, Math.max(-0.3, videoEffects.avatarMouthOffsetY))
+    : 0;
   const buildAiBackgroundPrompt = useCallback((prompt: string) => {
     return [
       "High detail cinematic background, no people, no text.",
@@ -3358,6 +3399,33 @@ export default function VideoCallModal({
                     )}
                   </div>
                   <div className="video-settings-stack">
+                    <div className="video-settings-group">
+                      <div className="video-settings-row">
+                        <span className="video-settings-label">Mask strength</span>
+                        <span className="video-settings-hint">
+                          Sharpen edges to reduce ghosting.
+                        </span>
+                      </div>
+                      <div className="video-settings-alpha">
+                        <input
+                          className="video-settings-range"
+                          type="range"
+                          min={0.2}
+                          max={1}
+                          step={0.05}
+                          value={maskStrengthValue}
+                          onChange={(event) =>
+                            setVideoEffects({
+                              maskStrength: Number(event.target.value),
+                            })
+                          }
+                          aria-label="Mask strength"
+                        />
+                        <span className="video-settings-alpha-value">
+                          {Math.round(maskStrengthValue * 100)}%
+                        </span>
+                      </div>
+                    </div>
                     {videoEffects.background === "ai" && (
                       <div className="video-settings-group">
                         <div className="video-settings-row">
@@ -3481,7 +3549,235 @@ export default function VideoCallModal({
                         />
                       )}
                     </div>
-                  </div>
+                    {videoEffects.avatarEnabled && (
+                      <div className="video-settings-group">
+                        <div className="video-settings-row">
+                          <span className="video-settings-label">Avatar alignment</span>
+                          <span className="video-settings-hint">
+                            Nudge and scale your avatar so it lines up.
+                          </span>
+                        </div>
+                        <div className="video-settings-row">
+                          <span className="video-settings-label">Eye style</span>
+                          <label className="video-settings-select">
+                            <span className="sr-only">Eye style</span>
+                            <select
+                              value={videoEffects.avatarEyeStyle}
+                              onChange={(event) =>
+                                setVideoEffects({
+                                  avatarEyeStyle:
+                                    event.target.value as typeof videoEffects.avatarEyeStyle,
+                                })
+                              }
+                            >
+                              {AVATAR_EYE_STYLE_OPTIONS.map((option) => (
+                                <option key={option.id} value={option.id}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                        <div className="video-settings-row">
+                          <span className="video-settings-label">Mouth style</span>
+                          <label className="video-settings-select">
+                            <span className="sr-only">Mouth style</span>
+                            <select
+                              value={videoEffects.avatarMouthStyle}
+                              onChange={(event) =>
+                                setVideoEffects({
+                                  avatarMouthStyle:
+                                    event.target.value as typeof videoEffects.avatarMouthStyle,
+                                })
+                              }
+                            >
+                              {AVATAR_MOUTH_STYLE_OPTIONS.map((option) => (
+                                <option key={option.id} value={option.id}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                        <div className="video-settings-row">
+                          <span className="video-settings-label">Eye spacing</span>
+                          <div className="video-settings-alpha">
+                            <input
+                              className="video-settings-range"
+                              type="range"
+                              min={0.25}
+                              max={1}
+                              step={0.05}
+                              value={avatarEyeSpacingValue}
+                              onChange={(event) =>
+                                setVideoEffects({
+                                  avatarEyeSpacing: Number(event.target.value),
+                                })
+                              }
+                              aria-label="Avatar eye spacing"
+                            />
+                            <span className="video-settings-alpha-value">
+                              {Math.round(avatarEyeSpacingValue * 100)}%
+                            </span>
+                          </div>
+                        </div>
+                        <div className="video-settings-row">
+                          <span className="video-settings-label">X</span>
+                          <div className="video-settings-alpha">
+                            <input
+                              className="video-settings-range"
+                              type="range"
+                              min={-0.5}
+                              max={0.5}
+                              step={0.02}
+                              value={avatarOffsetXValue}
+                              onChange={(event) =>
+                                setVideoEffects({
+                                  avatarOffsetX: Number(event.target.value),
+                                })
+                              }
+                              aria-label="Avatar horizontal alignment"
+                            />
+                            <span className="video-settings-alpha-value">
+                              {Math.round(avatarOffsetXValue * 100)}%
+                            </span>
+                          </div>
+                        </div>
+                        <div className="video-settings-row">
+                          <span className="video-settings-label">Y</span>
+                          <div className="video-settings-alpha">
+                            <input
+                              className="video-settings-range"
+                              type="range"
+                              min={-0.5}
+                              max={0.5}
+                              step={0.02}
+                              value={avatarOffsetYValue}
+                              onChange={(event) =>
+                                setVideoEffects({
+                                  avatarOffsetY: Number(event.target.value),
+                                })
+                              }
+                              aria-label="Avatar vertical alignment"
+                            />
+                            <span className="video-settings-alpha-value">
+                              {Math.round(avatarOffsetYValue * 100)}%
+                            </span>
+                          </div>
+                        </div>
+                        <div className="video-settings-row">
+                          <span className="video-settings-label">Eye X</span>
+                          <div className="video-settings-alpha">
+                            <input
+                              className="video-settings-range"
+                              type="range"
+                              min={-0.35}
+                              max={0.35}
+                              step={0.02}
+                              value={avatarEyeOffsetXValue}
+                              onChange={(event) =>
+                                setVideoEffects({
+                                  avatarEyeOffsetX: Number(event.target.value),
+                                })
+                              }
+                              aria-label="Avatar eye horizontal offset"
+                            />
+                            <span className="video-settings-alpha-value">
+                              {Math.round(avatarEyeOffsetXValue * 100)}%
+                            </span>
+                          </div>
+                        </div>
+                        <div className="video-settings-row">
+                          <span className="video-settings-label">Eye Y</span>
+                          <div className="video-settings-alpha">
+                            <input
+                              className="video-settings-range"
+                              type="range"
+                              min={-0.3}
+                              max={0.3}
+                              step={0.02}
+                              value={avatarEyeOffsetYValue}
+                              onChange={(event) =>
+                                setVideoEffects({
+                                  avatarEyeOffsetY: Number(event.target.value),
+                                })
+                              }
+                              aria-label="Avatar eye vertical offset"
+                            />
+                            <span className="video-settings-alpha-value">
+                              {Math.round(avatarEyeOffsetYValue * 100)}%
+                            </span>
+                          </div>
+                        </div>
+                        <div className="video-settings-row">
+                          <span className="video-settings-label">Scale</span>
+                          <div className="video-settings-alpha">
+                            <input
+                              className="video-settings-range"
+                              type="range"
+                              min={0.4}
+                              max={1.6}
+                              step={0.05}
+                              value={avatarScaleValue}
+                              onChange={(event) =>
+                                setVideoEffects({
+                                  avatarScale: Number(event.target.value),
+                                })
+                              }
+                              aria-label="Avatar scale"
+                            />
+                            <span className="video-settings-alpha-value">
+                              {Math.round(avatarScaleValue * 100)}%
+                            </span>
+                          </div>
+                        </div>
+                        <div className="video-settings-row">
+                          <span className="video-settings-label">Mouth X</span>
+                          <div className="video-settings-alpha">
+                            <input
+                              className="video-settings-range"
+                              type="range"
+                              min={-0.35}
+                              max={0.35}
+                              step={0.02}
+                              value={avatarMouthOffsetXValue}
+                              onChange={(event) =>
+                                setVideoEffects({
+                                  avatarMouthOffsetX: Number(event.target.value),
+                                })
+                              }
+                              aria-label="Avatar mouth horizontal offset"
+                            />
+                            <span className="video-settings-alpha-value">
+                              {Math.round(avatarMouthOffsetXValue * 100)}%
+                            </span>
+                          </div>
+                        </div>
+                        <div className="video-settings-row">
+                          <span className="video-settings-label">Mouth Y</span>
+                          <div className="video-settings-alpha">
+                            <input
+                              className="video-settings-range"
+                              type="range"
+                              min={-0.3}
+                              max={0.3}
+                              step={0.02}
+                              value={avatarMouthOffsetYValue}
+                              onChange={(event) =>
+                                setVideoEffects({
+                                  avatarMouthOffsetY: Number(event.target.value),
+                                })
+                              }
+                              aria-label="Avatar mouth vertical offset"
+                            />
+                            <span className="video-settings-alpha-value">
+                              {Math.round(avatarMouthOffsetYValue * 100)}%
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    </div>
                 </section>
                 </>
                 )}

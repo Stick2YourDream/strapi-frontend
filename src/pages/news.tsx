@@ -618,6 +618,129 @@ export default function News() {
     setEndDate("");
   };
 
+  const renderFilters = (variant: "sidebar" | "inline") => {
+    const idPrefix = variant === "sidebar" ? "news-sidebar" : "news-inline";
+    return (
+      <section
+        className={`panel news-controls news-filters news-filters--${variant}`}
+      >
+        <div className="news-filters-header">
+          <p className="eyebrow">Filters</p>
+          <h3>Refine results</h3>
+        </div>
+        <div className="news-controls-row">
+          <div className="news-search">
+            <label htmlFor={`${idPrefix}-search-input`}>Search headlines</label>
+            <input
+              id={`${idPrefix}-search-input`}
+              className="auth-input"
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by keyword, headline, or phrase"
+            />
+          </div>
+          <div className="news-selects">
+            <label>
+              <span>Provider</span>
+              <select
+                className="auth-input"
+                value={provider}
+                onChange={(e) => setProvider(e.target.value)}
+              >
+                <option value="">All providers</option>
+                {providerOptions.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Source</span>
+              <select
+                className="auth-input"
+                value={source}
+                onChange={(e) => setSource(e.target.value)}
+              >
+                <option value="">All sources</option>
+                {sourceOptions.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <span>Sort</span>
+              <select
+                className="auth-input"
+                value={sortOrder}
+                onChange={(e) =>
+                  setSortOrder(e.target.value as "newest" | "oldest")
+                }
+              >
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div className="news-controls-row news-controls-row--compact">
+          <label>
+            <span>Start date</span>
+            <input
+              className="auth-input"
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+            />
+          </label>
+          <label>
+            <span>End date</span>
+            <input
+              className="auth-input"
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+            />
+          </label>
+          <button className="btn ghost" type="button" onClick={clearFilters}>
+            Clear filters
+          </button>
+        </div>
+        <div className="news-topics">
+          <span className="news-topic-label">Quick topics</span>
+          <div className="news-topic-list">
+            {QUICK_TOPICS.map((topic) => (
+              <button
+                key={topic}
+                className={`news-topic-chip${query === topic ? " is-active" : ""}`}
+                type="button"
+                onClick={() => setQuery(topic)}
+              >
+                {topic}
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+    );
+  };
+
+  const renderSidebarContent = () => (
+    <>
+      <button
+        className="btn ghost sidebar-nav-link news-sidebar-link"
+        type="button"
+        onClick={() => navigate("/dashboard")}
+      >
+        My Dashboard
+      </button>
+      {renderFilters("sidebar")}
+    </>
+  );
+
   const filterSummary = useMemo(() => {
     const parts = [];
     if (provider) parts.push(provider);
@@ -719,7 +842,7 @@ export default function News() {
       readableArticle?.source || activeArticle?.source,
       readableArticle?.provider || activeArticle?.provider,
     ].filter(Boolean);
-    return meta.length ? meta.join(" | ") : "Daily Signal";
+    return meta.length ? meta.join(" | ") : "The Current Scope";
   }, [activeArticle?.provider, activeArticle?.source, readableArticle?.provider, readableArticle?.source]);
   const readableTime = formatNewsTime(
     readableArticle?.publishedAt || activeArticle?.publishedAt
@@ -1116,7 +1239,12 @@ export default function News() {
 
   return (
     <div className="dashboard-shell" style={newsModalBackground}>
-      <Sidebar active="news" />
+      <Sidebar
+        active="news"
+        hideNavLinks
+        hideBio
+        sidebarContent={newsEnabled ? renderSidebarContent() : null}
+      />
 
       <div className="main-content">
         <TopbarSearch />
@@ -1124,7 +1252,7 @@ export default function News() {
         <div className="dash-hero news-hero">
           <div className="dash-hero__text">
             <p className="eyebrow">Newsroom</p>
-            <h1>Powered By Daily Signal</h1>
+            <h1>Powered By The Current Scope</h1>
             <p className="subhead">
               Discover the latest stories, trending topics, and conversation starters.
             </p>
@@ -1143,7 +1271,7 @@ export default function News() {
                   <p className="eyebrow">Newsroom</p>
                   <h3>Enable the news feed</h3>
                   <p className="panel-sub">
-                    Turn on Newsroom in your notification settings to view Daily Signal
+                    Turn on Newsroom in your notification settings to view The Current Scope
                     stories on your dashboard.
                   </p>
                 </div>
@@ -1169,7 +1297,7 @@ export default function News() {
 
         {newsEnabled && (
           <>
-            <section className="news-stats">
+            <section className="news-stats is-hidden" aria-hidden="true">
               <div className="news-stat-card">
                 <span className="news-stat-label">Articles</span>
                 <span className="news-stat-value">{articleCountDisplay}</span>
@@ -1201,243 +1329,158 @@ export default function News() {
             </section>
             {statsError && <p className="status status-error">{statsError}</p>}
 
-            <section className="panel news-controls">
-              <div className="news-controls-row">
-                <div className="news-search">
-                  <label htmlFor="news-search-input">Search headlines</label>
-                  <input
-                    id="news-search-input"
-                    className="auth-input"
-                    type="search"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Search by keyword, headline, or phrase"
-                  />
-                </div>
-                <div className="news-selects">
-                  <label>
-                    <span>Provider</span>
-                    <select
-                      className="auth-input"
-                      value={provider}
-                      onChange={(e) => setProvider(e.target.value)}
-                    >
-                      <option value="">All providers</option>
-                      {providerOptions.map((item) => (
-                        <option key={item} value={item}>
-                          {item}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    <span>Source</span>
-                    <select
-                      className="auth-input"
-                      value={source}
-                      onChange={(e) => setSource(e.target.value)}
-                    >
-                      <option value="">All sources</option>
-                      {sourceOptions.map((item) => (
-                        <option key={item} value={item}>
-                          {item}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    <span>Sort</span>
-                    <select
-                      className="auth-input"
-                      value={sortOrder}
-                      onChange={(e) =>
-                        setSortOrder(e.target.value as "newest" | "oldest")
-                      }
-                    >
-                      <option value="newest">Newest first</option>
-                      <option value="oldest">Oldest first</option>
-                    </select>
-                  </label>
-                </div>
-              </div>
-              <div className="news-controls-row news-controls-row--compact">
-                <label>
-                  <span>Start date</span>
-                  <input
-                    className="auth-input"
-                    type="date"
-                    value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
-                  />
-                </label>
-                <label>
-                  <span>End date</span>
-                  <input
-                    className="auth-input"
-                    type="date"
-                    value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
-                  />
-                </label>
-                <button className="btn ghost" type="button" onClick={clearFilters}>
-                  Clear filters
-                </button>
-              </div>
-              <div className="news-topics">
-                <span className="news-topic-label">Quick topics</span>
-                <div className="news-topic-list">
-                  {QUICK_TOPICS.map((topic) => (
-                    <button
-                      key={topic}
-                      className={`news-topic-chip${query === topic ? " is-active" : ""}`}
-                      type="button"
-                      onClick={() => setQuery(topic)}
-                    >
-                      {topic}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </section>
+            {renderFilters("inline")}
 
             <div className="news-results">
-              <div className="news-results-header">
-                <div>
-                  <p className="eyebrow">Headlines</p>
-                  <h3>Top stories</h3>
-                </div>
-                <span className="news-results-meta">{filterSummary}</span>
-              </div>
-
-              {error && <p className="status status-error">{error}</p>}
-              {loading && articles.length === 0 && (
-                <p className="status">Loading headlines...</p>
-              )}
-              {!loading && !error && articles.length === 0 && (
-                <p className="status">No headlines match your filters yet.</p>
-              )}
-
-              {topStories.length > 0 && (
-                <div className="news-top-grid">
-                  {topStories.map((article) => {
-                    const metaParts = [article.source, article.provider].filter(Boolean);
-                    const metaLine = metaParts.length
-                      ? metaParts.join(" | ")
-                      : "Daily Signal";
-                    const timeLabel = formatNewsTime(article.publishedAt);
-                    return (
-                      <article key={article.id} className="news-card is-top">
-                        <button
-                          type="button"
-                          className="news-card-link"
-                          onClick={() => setActiveArticle(article)}
-                        >
-                          <div className="news-card-media">
-                            {article.image ? (
-                              <img src={article.image} alt={article.title} loading="lazy" />
-                            ) : (
-                              <div className="news-card-fallback">NEWS</div>
-                            )}
-                          </div>
-                          <div className="news-card-body">
-                            <div className="news-card-meta">
-                              <span>{metaLine}</span>
-                              {timeLabel && <span>{timeLabel}</span>}
-                            </div>
-                            <h3>{article.title}</h3>
-                            {article.summary && <p>{article.summary}</p>}
-                            <span className="news-card-cta">Read story -&gt;</span>
-                          </div>
-                        </button>
-                      </article>
-                    );
-                  })}
-                </div>
-              )}
-
-              {topStories.length > 0 && (
-                <div className="news-results-header">
-                  <div>
-                    <p className="eyebrow">More</p>
-                    <h3>More stories</h3>
+                  <div className="news-results-header">
+                    <div>
+                      <p className="eyebrow">Headlines</p>
+                      <h3>Top stories</h3>
+                    </div>
+                    <span className="news-results-meta">{filterSummary}</span>
                   </div>
-                  <span className="news-results-meta">
-                    Sorted {sortOrder === "newest" ? "newest first" : "oldest first"}
-                  </span>
-                </div>
-              )}
 
-              <div className="news-grid">
-                {(topStories.length > 0 ? mainArticles : articles).map((article) => {
-                  const metaParts = [article.source, article.provider].filter(Boolean);
-                  const metaLine = metaParts.length ? metaParts.join(" | ") : "Daily Signal";
-                  const timeLabel = formatNewsTime(article.publishedAt);
-                  return (
-                    <article key={article.id} className="news-card">
-                      <button
-                        type="button"
-                        className="news-card-link"
-                        onClick={() => setActiveArticle(article)}
-                      >
-                        <div className="news-card-media">
-                          {article.image ? (
-                            <img src={article.image} alt={article.title} loading="lazy" />
-                          ) : (
-                            <div className="news-card-fallback">NEWS</div>
-                          )}
-                        </div>
-                        <div className="news-card-body">
-                          <div className="news-card-meta">
-                            <span>{metaLine}</span>
-                            {timeLabel && <span>{timeLabel}</span>}
-                          </div>
-                          <h3>{article.title}</h3>
-                          {article.summary && <p>{article.summary}</p>}
-                          <span className="news-card-cta">Read story -&gt;</span>
-                        </div>
-                      </button>
-                    </article>
-                  );
-                })}
-              </div>
-
-              {totalPages > 1 && (
-                <nav className="news-pagination" aria-label="News results pages">
-                  <button
-                    className="news-page-btn"
-                    type="button"
-                    onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
-                    disabled={currentPage === 1 || loading}
-                  >
-                    Prev
-                  </button>
-                  {pageItems.map((item, index) =>
-                    item === "ellipsis" ? (
-                      <span key={`ellipsis-${index}`} className="news-page-ellipsis">
-                        …
-                      </span>
-                    ) : (
-                      <button
-                        key={item}
-                        className={`news-page-btn${item === currentPage ? " is-active" : ""}`}
-                        type="button"
-                        onClick={() => setCurrentPage(item)}
-                        disabled={item === currentPage || loading}
-                      >
-                        {item}
-                      </button>
-                    )
+                  {error && <p className="status status-error">{error}</p>}
+                  {loading && articles.length === 0 && (
+                    <p className="status">Loading headlines...</p>
                   )}
-                  <button
-                    className="news-page-btn"
-                    type="button"
-                    onClick={() => setCurrentPage((prev) => prev + 1)}
-                    disabled={!canGoNext || loading}
-                  >
-                    Next
-                  </button>
-                </nav>
-              )}
+                  {!loading && !error && articles.length === 0 && (
+                    <p className="status">No headlines match your filters yet.</p>
+                  )}
+
+                  {topStories.length > 0 && (
+                    <div className="news-top-grid">
+                      {topStories.map((article) => {
+                        const metaParts = [article.source, article.provider].filter(Boolean);
+                        const metaLine = metaParts.length
+                          ? metaParts.join(" | ")
+                          : "The Current Scope";
+                        const timeLabel = formatNewsTime(article.publishedAt);
+                        return (
+                          <article key={article.id} className="news-card is-top">
+                            <button
+                              type="button"
+                              className="news-card-link"
+                              onClick={() => setActiveArticle(article)}
+                            >
+                              <div className="news-card-media">
+                                {article.image ? (
+                                  <img
+                                    src={article.image}
+                                    alt={article.title}
+                                    loading="lazy"
+                                  />
+                                ) : (
+                                  <div className="news-card-fallback">NEWS</div>
+                                )}
+                              </div>
+                              <div className="news-card-body">
+                                <div className="news-card-meta">
+                                  <span>{metaLine}</span>
+                                  {timeLabel && <span>{timeLabel}</span>}
+                                </div>
+                                <h3>{article.title}</h3>
+                                {article.summary && <p>{article.summary}</p>}
+                                <span className="news-card-cta">Read story -&gt;</span>
+                              </div>
+                            </button>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {topStories.length > 0 && (
+                    <div className="news-results-header">
+                      <div>
+                        <p className="eyebrow">More</p>
+                        <h3>More stories</h3>
+                      </div>
+                      <span className="news-results-meta">
+                        Sorted {sortOrder === "newest" ? "newest first" : "oldest first"}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="news-grid">
+                    {(topStories.length > 0 ? mainArticles : articles).map((article) => {
+                      const metaParts = [article.source, article.provider].filter(Boolean);
+                      const metaLine = metaParts.length
+                        ? metaParts.join(" | ")
+                        : "The Current Scopel";
+                      const timeLabel = formatNewsTime(article.publishedAt);
+                      return (
+                        <article key={article.id} className="news-card">
+                          <button
+                            type="button"
+                            className="news-card-link"
+                            onClick={() => setActiveArticle(article)}
+                          >
+                            <div className="news-card-media">
+                              {article.image ? (
+                                <img
+                                  src={article.image}
+                                  alt={article.title}
+                                  loading="lazy"
+                                />
+                              ) : (
+                                <div className="news-card-fallback">NEWS</div>
+                              )}
+                            </div>
+                            <div className="news-card-body">
+                              <div className="news-card-meta">
+                                <span>{metaLine}</span>
+                                {timeLabel && <span>{timeLabel}</span>}
+                              </div>
+                              <h3>{article.title}</h3>
+                              {article.summary && <p>{article.summary}</p>}
+                              <span className="news-card-cta">Read story -&gt;</span>
+                            </div>
+                          </button>
+                        </article>
+                      );
+                    })}
+                  </div>
+
+                  {totalPages > 1 && (
+                    <nav className="news-pagination" aria-label="News results pages">
+                      <button
+                        className="news-page-btn"
+                        type="button"
+                        onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                        disabled={currentPage === 1 || loading}
+                      >
+                        Prev
+                      </button>
+                      {pageItems.map((item, index) =>
+                        item === "ellipsis" ? (
+                          <span key={`ellipsis-${index}`} className="news-page-ellipsis">
+                            …
+                          </span>
+                        ) : (
+                          <button
+                            key={item}
+                            className={`news-page-btn${
+                              item === currentPage ? " is-active" : ""
+                            }`}
+                            type="button"
+                            onClick={() => setCurrentPage(item)}
+                            disabled={item === currentPage || loading}
+                          >
+                            {item}
+                          </button>
+                        )
+                      )}
+                      <button
+                        className="news-page-btn"
+                        type="button"
+                        onClick={() => setCurrentPage((prev) => prev + 1)}
+                        disabled={!canGoNext || loading}
+                      >
+                        Next
+                      </button>
+                    </nav>
+                  )}
             </div>
           </>
         )}

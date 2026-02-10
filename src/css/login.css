@@ -16,6 +16,7 @@
   gap: 10px;
   place-items: center; /* center on all screens */
   box-sizing: border-box;
+  font-size: var(--auth-font-size);
 }
 
 .auth-hero {
@@ -278,8 +279,10 @@
 .btn {
   border: none;
   border-radius: 12px;
-  padding: 12px 14px;
+  padding: calc(12px * var(--auth-btn-scale, 1))
+    calc(14px * var(--auth-btn-scale, 1));
   font-weight: 700;
+  font-size: calc(14px * var(--auth-btn-scale, 1));
   cursor: pointer;
   text-decoration: none;
   display: inline-flex;
@@ -375,5 +378,41 @@
 
   .sms-actions {
     flex-direction: column;
+  }
+}
+
+@media (min-width: 2560px) {
+  .auth-hero {
+    max-width: 900px;
+  }
+
+  .auth-card {
+    width: min(560px, 100%);
+  }
+}
+
+@media (min-width: 3840px) {
+  .auth-shell {
+  }
+
+  .auth-hero {
+    max-width: 1100px;
+  }
+
+  .auth-card {
+    width: min(640px, 100%);
+  }
+}
+
+@media (min-width: 7680px) {
+  .auth-shell {
+  }
+
+  .auth-hero {
+    max-width: 1400px;
+  }
+
+  .auth-card {
+    width: min(760px, 100%);
   }
 }

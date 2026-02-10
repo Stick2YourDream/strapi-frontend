@@ -7,6 +7,7 @@
   display: grid;
   place-items: center;
   box-sizing: border-box;
+  font-size: var(--pwa-font-size);
 }
 
 .pwa-card {
@@ -132,8 +133,10 @@
 .pwa-button {
   border: none;
   border-radius: 12px;
-  padding: 12px 14px;
+  padding: calc(12px * var(--pwa-btn-scale, 1))
+    calc(14px * var(--pwa-btn-scale, 1));
   font-weight: 700;
+  font-size: calc(14px * var(--pwa-btn-scale, 1));
   cursor: pointer;
   background: linear-gradient(135deg, #5f8bff, #44d2ff);
   color: #0b0d14;
@@ -180,5 +183,29 @@
 
   .pwa-actions {
     flex-direction: column;
+  }
+}
+
+@media (min-width: 2560px) {
+  .pwa-card {
+    width: min(900px, 100%);
+  }
+}
+
+@media (min-width: 3840px) {
+  .pwa-shell {
+  }
+
+  .pwa-card {
+    width: min(1100px, 100%);
+  }
+}
+
+@media (min-width: 7680px) {
+  .pwa-shell {
+  }
+
+  .pwa-card {
+    width: min(1400px, 100%);
   }
 }

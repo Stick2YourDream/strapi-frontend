@@ -12,6 +12,7 @@
   color: #eef2ff;
   overflow: hidden;
   font-family: "Satoshi", "Inter", system-ui, -apple-system, sans-serif;
+  font-size: var(--downloads-font-size);
 }
 
 .downloads-page::before,
@@ -89,8 +90,10 @@
   align-items: center;
   justify-content: center;
   border-radius: 14px;
-  padding: 12px 18px;
+  padding: calc(12px * var(--downloads-btn-scale, 1))
+    calc(18px * var(--downloads-btn-scale, 1));
   font-weight: 700;
+  font-size: calc(14px * var(--downloads-btn-scale, 1));
   text-decoration: none;
   border: 1px solid transparent;
   transition: transform 0.15s ease, box-shadow 0.2s ease, filter 0.2s ease;
@@ -361,5 +364,33 @@
   .downloads-support {
     flex-direction: column;
     align-items: flex-start;
+  }
+}
+
+@media (min-width: 2560px) {
+  .downloads-shell {
+    max-width: 1800px;
+  }
+}
+
+@media (min-width: 3840px) {
+  .downloads-shell {
+    max-width: 2600px;
+  }
+  .downloads-page {
+  }
+  .downloads-hero__content h1 {
+    font-size: clamp(44px, 3.8vw, 64px);
+  }
+}
+
+@media (min-width: 7680px) {
+  .downloads-shell {
+    max-width: 4200px;
+  }
+  .downloads-page {
+  }
+  .downloads-hero__content h1 {
+    font-size: clamp(64px, 3.4vw, 90px);
   }
 }
