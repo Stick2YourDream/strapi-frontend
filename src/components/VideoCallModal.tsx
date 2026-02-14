@@ -52,13 +52,13 @@ import {
   faPhoneSlash,
   faPlay,
   faPlus,
-  faRightFromBracket,
   faSliders,
   faStop,
   faTableColumns,
   faTrash,
   faUpRightFromSquare,
   faUser,
+  faUserMinus,
   faUserPlus,
   faUsers,
   faVideo,
@@ -89,6 +89,13 @@ type VideoAppSettings = {
 type PanOffset = {
   x: number;
   y: number;
+};
+
+type SettingsModalBounds = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 };
 
 type EmojiCategory = {
@@ -185,6 +192,213 @@ const getFileDisplayName = (file: File) => {
 
 const clampValue = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
+
+const formatPercentValue = (value: number, options?: { signed?: boolean }) => {
+  const rounded = Math.round(value * 100);
+  if (options?.signed && rounded > 0) return `+${rounded}%`;
+  return `${rounded}%`;
+};
+
+const AVATAR_BASE_EYE_X = 0.5;
+const AVATAR_BASE_EYE_Y = 0.34;
+const AVATAR_BASE_EYE_SPACING = 0.18;
+const AVATAR_BASE_MOUTH_Y = 0.58;
+const AVATAR_DEFAULT_OFFSET_X = 0;
+const AVATAR_DEFAULT_OFFSET_Y = 0;
+const AVATAR_DEFAULT_SCALE = 1;
+const AVATAR_DEFAULT_EYE_SPACING = 0.45;
+const AVATAR_DEFAULT_EYE_OFFSET_X = 0;
+const AVATAR_DEFAULT_EYE_OFFSET_Y = 0;
+const AVATAR_DEFAULT_EYE_SIZE = 1;
+const AVATAR_DEFAULT_MOUTH_OFFSET_X = 0;
+const AVATAR_DEFAULT_MOUTH_OFFSET_Y = -0.08;
+const AVATAR_DEFAULT_MOUTH_SIZE = 1;
+const CHAT_TEXT_SIZE_MIN_REM = 0.6;
+const CHAT_TEXT_SIZE_MAX_REM = 4;
+const CHAT_TEXT_SIZE_STEP_REM = 0.1;
+const SETTINGS_MODAL_MIN_WIDTH = 500;
+const SETTINGS_MODAL_MIN_HEIGHT = 460;
+
+type AvatarFeatureCalibration = {
+  avatarEyeOffsetX: number;
+  avatarEyeOffsetY: number;
+  avatarEyeSpacing: number;
+  avatarMouthOffsetX: number;
+  avatarMouthOffsetY: number;
+};
+
+type FaceDetectorPoint = { x?: number; y?: number };
+type FaceDetectorLandmark = {
+  type?: string;
+  x?: number;
+  y?: number;
+  locations?: FaceDetectorPoint[];
+};
+type FaceDetectorBoundingBox = {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  left?: number;
+  top?: number;
+};
+type FaceDetectorResult = {
+  boundingBox?: FaceDetectorBoundingBox;
+  landmarks?: FaceDetectorLandmark[];
+};
+type FaceDetectorInstance = {
+  detect: (source: CanvasImageSource) => Promise<FaceDetectorResult[]>;
+};
+type FaceDetectorConstructor = new (options?: {
+  fastMode?: boolean;
+  maxDetectedFaces?: number;
+}) => FaceDetectorInstance;
+
+const normalizeLandmarkType = (value: string | undefined) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z]/g, "");
+
+const toFiniteNumber = (value: unknown) =>
+  typeof value === "number" && Number.isFinite(value) ? value : null;
+
+const pointIsValid = (point: FaceDetectorPoint): point is { x: number; y: number } =>
+  Number.isFinite(point.x) && Number.isFinite(point.y);
+
+const averagePoint = (points: Array<{ x: number; y: number }>) => {
+  if (!points.length) return null;
+  const total = points.reduce(
+    (acc, point) => ({
+      x: acc.x + point.x,
+      y: acc.y + point.y,
+    }),
+    { x: 0, y: 0 }
+  );
+  return {
+    x: total.x / points.length,
+    y: total.y / points.length,
+  };
+};
+
+const collectLandmarkPoints = (
+  landmarks: FaceDetectorLandmark[],
+  acceptedTypes: string[]
+) => {
+  const accepted = new Set(acceptedTypes.map((type) => normalizeLandmarkType(type)));
+  const points: Array<{ x: number; y: number }> = [];
+  landmarks.forEach((landmark) => {
+    const normalizedType = normalizeLandmarkType(landmark.type);
+    if (!accepted.has(normalizedType)) return;
+    if (Array.isArray(landmark.locations) && landmark.locations.length) {
+      landmark.locations.forEach((location) => {
+        if (pointIsValid(location)) {
+          points.push({ x: location.x, y: location.y });
+        }
+      });
+      return;
+    }
+    if (pointIsValid(landmark)) {
+      points.push({ x: landmark.x, y: landmark.y });
+    }
+  });
+  return points;
+};
+
+const loadImageForAvatarCalibration = (source: string) =>
+  new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.decoding = "async";
+    image.crossOrigin = "anonymous";
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Unable to load avatar image."));
+    image.src = source;
+  });
+
+const detectAvatarFeatureCalibration = async (
+  avatarUrl: string
+): Promise<AvatarFeatureCalibration | null> => {
+  if (typeof window === "undefined") return null;
+  const detectorCtor = (
+    window as Window & {
+      FaceDetector?: FaceDetectorConstructor;
+    }
+  ).FaceDetector;
+  if (!detectorCtor) return null;
+
+  const image = await loadImageForAvatarCalibration(avatarUrl);
+  const width = image.naturalWidth;
+  const height = image.naturalHeight;
+  if (!width || !height) return null;
+
+  const detector = new detectorCtor({ fastMode: true, maxDetectedFaces: 1 });
+  const faces = await detector.detect(image);
+  const firstFace = faces[0];
+  if (!firstFace) return null;
+
+  const landmarks = Array.isArray(firstFace.landmarks) ? firstFace.landmarks : [];
+  const leftEyePoints = collectLandmarkPoints(landmarks, ["leftEye"]);
+  const rightEyePoints = collectLandmarkPoints(landmarks, ["rightEye"]);
+  const allEyePoints = collectLandmarkPoints(landmarks, ["eye", "leftEye", "rightEye"]);
+  const mouthPoints = collectLandmarkPoints(landmarks, [
+    "mouth",
+    "upperLip",
+    "lowerLip",
+    "lips",
+  ]);
+
+  let leftEye = averagePoint(leftEyePoints);
+  let rightEye = averagePoint(rightEyePoints);
+  if ((!leftEye || !rightEye) && allEyePoints.length >= 2) {
+    const sortedEyes = [...allEyePoints].sort((a, b) => a.x - b.x);
+    leftEye = leftEye || sortedEyes[0];
+    rightEye = rightEye || sortedEyes[sortedEyes.length - 1];
+  }
+  let mouth = averagePoint(mouthPoints);
+
+  const box = firstFace.boundingBox;
+  const boxX = toFiniteNumber(box?.x) ?? toFiniteNumber(box?.left);
+  const boxY = toFiniteNumber(box?.y) ?? toFiniteNumber(box?.top);
+  const boxWidth = toFiniteNumber(box?.width);
+  const boxHeight = toFiniteNumber(box?.height);
+  if (
+    (!leftEye || !rightEye || !mouth) &&
+    boxX !== null &&
+    boxY !== null &&
+    boxWidth !== null &&
+    boxHeight !== null &&
+    boxWidth > 0 &&
+    boxHeight > 0
+  ) {
+    leftEye = leftEye || { x: boxX + boxWidth * 0.32, y: boxY + boxHeight * 0.38 };
+    rightEye = rightEye || { x: boxX + boxWidth * 0.68, y: boxY + boxHeight * 0.38 };
+    mouth = mouth || { x: boxX + boxWidth * 0.5, y: boxY + boxHeight * 0.7 };
+  }
+
+  if (!leftEye || !rightEye || !mouth) return null;
+
+  const eyeDistanceNormalized = Math.abs(rightEye.x - leftEye.x) / width;
+  const eyeCenterXNormalized = (leftEye.x + rightEye.x) / 2 / width;
+  const eyeYNormalized = (leftEye.y + rightEye.y) / 2 / height;
+  const mouthXNormalized = mouth.x / width;
+  const mouthYNormalized = mouth.y / height;
+
+  return {
+    avatarEyeOffsetX: clampValue(eyeCenterXNormalized - AVATAR_BASE_EYE_X, -0.35, 0.35),
+    avatarEyeOffsetY: clampValue(eyeYNormalized - AVATAR_BASE_EYE_Y, -0.3, 0.3),
+    avatarEyeSpacing: clampValue(
+      eyeDistanceNormalized / (AVATAR_BASE_EYE_SPACING * 2),
+      0.25,
+      1
+    ),
+    avatarMouthOffsetX: clampValue(
+      mouthXNormalized - eyeCenterXNormalized,
+      -0.35,
+      0.35
+    ),
+    avatarMouthOffsetY: clampValue(mouthYNormalized - AVATAR_BASE_MOUTH_Y, -0.3, 0.3),
+  };
+};
 
 const parseRgbChannel = (value: string) => {
   const trimmed = value.trim();
@@ -585,30 +799,186 @@ const BACKGROUND_OPTIONS = [
   { id: "backdrop10", label: "Wavy" },
 ];
 
-const AVATAR_POSE_OPTIONS = [
-  { id: "neutral", label: "Neutral" },
-  { id: "wave", label: "Waving" },
-  { id: "thumbs-up", label: "Thumbs up" },
-  { id: "thinking", label: "Thinking" },
-  { id: "sitting", label: "Sitting" },
-  { id: "dancing", label: "Dancing" },
-  { id: "hero", label: "Superhero" },
-  { id: "custom", label: "Custom pose" },
+const AVATAR_PRESET_OPTIONS = [
+  {
+    id: "human-alex",
+    label: "Human - Alex",
+    url: "/avatar-presets/human-alex.svg",
+  },
+  {
+    id: "human-maya",
+    label: "Human - Maya",
+    url: "/avatar-presets/human-maya.svg",
+  },
+  {
+    id: "human-jordan",
+    label: "Human - Jordan",
+    url: "/avatar-presets/human-jordan.svg",
+  },
+  {
+    id: "human-sofia",
+    label: "Human - Sofia",
+    url: "/avatar-presets/human-sofia.svg",
+  },
+  {
+    id: "human-ethan",
+    label: "Human - Ethan",
+    url: "/avatar-presets/human-ethan.svg",
+  },
+  {
+    id: "human-ava",
+    label: "Human - Ava",
+    url: "/avatar-presets/human-ava.svg",
+  },
+  {
+    id: "human-noah",
+    label: "Human - Noah",
+    url: "/avatar-presets/human-noah.svg",
+  },
+  {
+    id: "human-chloe",
+    label: "Human - Chloe",
+    url: "/avatar-presets/human-chloe.svg",
+  },
+  {
+    id: "dog-scout",
+    label: "Dog - Scout",
+    url: "/avatar-presets/dog-scout.svg",
+  },
+  {
+    id: "dog-nova",
+    label: "Dog - Nova",
+    url: "/avatar-presets/dog-nova.svg",
+  },
+  {
+    id: "cat-luna",
+    label: "Cat - Luna",
+    url: "/avatar-presets/cat-luna.svg",
+  },
+  {
+    id: "cat-milo",
+    label: "Cat - Milo",
+    url: "/avatar-presets/cat-milo.svg",
+  },
+  {
+    id: "horse-comet",
+    label: "Horse - Comet",
+    url: "/avatar-presets/horse-comet.svg",
+  },
+  {
+    id: "horse-willow",
+    label: "Horse - Willow",
+    url: "/avatar-presets/horse-willow.svg",
+  },
+  {
+    id: "fun-lollipop",
+    label: "Talking Lollipop",
+    url: "/avatar-presets/fun-lollipop.svg",
+  },
+  {
+    id: "fun-robot",
+    label: "Robot Buddy",
+    url: "/avatar-presets/fun-robot.svg",
+  },
+  {
+    id: "fun-unicorn",
+    label: "Unicorn Pop",
+    url: "/avatar-presets/fun-unicorn.svg",
+  },
+  {
+    id: "fun-alien",
+    label: "Alien Host",
+    url: "/avatar-presets/fun-alien.svg",
+  },
+  {
+    id: "fun-panda",
+    label: "Panda Pal",
+    url: "/avatar-presets/fun-panda.svg",
+  },
+  {
+    id: "fun-fox",
+    label: "Fox Friend",
+    url: "/avatar-presets/fun-fox.svg",
+  },
 ];
 
 const AVATAR_EYE_STYLE_OPTIONS = [
-  { id: "classic", label: "Classic" },
-  { id: "toon", label: "Toon" },
-  { id: "sleepy", label: "Sleepy" },
-  { id: "sparkle", label: "Sparkle" },
+  { id: "almond", label: "Almond" },
+  { id: "hooded", label: "Hooded" },
+  { id: "deep-set", label: "Deep Set" },
+  { id: "monolid", label: "Monolid" },
+  { id: "cat-eye", label: "Cat Eye" },
+  { id: "doe", label: "Doe" },
+  { id: "narrow", label: "Narrow" },
+  { id: "bright-hazel", label: "Bright Hazel" },
 ];
 
 const AVATAR_MOUTH_STYLE_OPTIONS = [
   { id: "natural", label: "Natural" },
-  { id: "smile", label: "Smile" },
-  { id: "round", label: "Round" },
-  { id: "line", label: "Line" },
+  { id: "rose", label: "Rose" },
+  { id: "mauve", label: "Mauve" },
+  { id: "berry", label: "Berry" },
+  { id: "caramel", label: "Caramel" },
+  { id: "ruby-smile", label: "Ruby Smile" },
+  { id: "mocha", label: "Mocha" },
+  { id: "plum-gloss", label: "Plum Gloss" },
 ];
+
+const normalizeAvatarEyeStyle = (value: string) => {
+  switch (value) {
+    case "almond":
+    case "hooded":
+    case "deep-set":
+    case "monolid":
+    case "cat-eye":
+    case "doe":
+    case "narrow":
+    case "bright-hazel":
+      return value;
+    case "natural":
+    case "classic":
+      return "almond";
+    case "soft":
+    case "sleepy":
+      return "hooded";
+    case "defined":
+    case "toon":
+      return "deep-set";
+    case "bright":
+    case "sparkle":
+      return "bright-hazel";
+    default:
+      return "almond";
+  }
+};
+
+const normalizeAvatarMouthStyle = (value: string) => {
+  switch (value) {
+    case "natural":
+    case "rose":
+    case "mauve":
+    case "berry":
+    case "caramel":
+    case "ruby-smile":
+    case "mocha":
+    case "plum-gloss":
+      return value;
+    case "nude":
+      return "natural";
+    case "smile":
+      return "ruby-smile";
+    case "neutral":
+      return "caramel";
+    case "defined":
+      return "mocha";
+    case "round":
+      return "plum-gloss";
+    case "line":
+      return "mocha";
+    default:
+      return "natural";
+  }
+};
 
 const FILTER_OPTIONS = [
   { id: "none", label: "Clean" },
@@ -899,6 +1269,7 @@ export default function VideoCallModal({
     toggleHold,
     muteAllParticipants,
     stopAllScreenShares,
+    removeParticipantFromCall,
   } = useVideoCall();
   const { user, profile } = useAuth();
   const settingsStorageKey = useMemo(
@@ -910,6 +1281,7 @@ export default function VideoCallModal({
     return loadSettings(localStorage.getItem(settingsStorageKey));
   });
   const effectiveSettings = appSettings ?? localSettings;
+  const isStandaloneVideoApp = Boolean(appSettings) && import.meta.env.MODE === "video";
   const backgroundColorRgba = useMemo(
     () => parseRgbaColor(effectiveSettings.backgroundColor, { r: 5, g: 7, b: 15, a: 1 }),
     [effectiveSettings.backgroundColor]
@@ -1016,7 +1388,7 @@ export default function VideoCallModal({
   const [chatInput, setChatInput] = useState("");
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showGifPicker, setShowGifPicker] = useState(false);
-  const [chatTextSize, setChatTextSize] = useState<"sm" | "md" | "lg">("md");
+  const [chatTextSizeRem, setChatTextSizeRem] = useState(1);
   const [emojiMode, setEmojiMode] = useState<"2d" | "3d">("2d");
   const [emojiCategoryId, setEmojiCategoryId] = useState(EMOJI_CATEGORIES[0]?.id || "smileys");
   const [emoji3dCategoryId, setEmoji3dCategoryId] = useState(
@@ -1033,6 +1405,10 @@ export default function VideoCallModal({
   const linkMetaRef = useRef(linkMeta);
   const [isRemoteMuted, setIsRemoteMuted] = useState(false);
   const [showSettingsPanel, setShowSettingsPanel] = useState(false);
+  const [settingsModalBounds, setSettingsModalBounds] = useState<SettingsModalBounds | null>(
+    null
+  );
+  const [isSettingsModalDragging, setIsSettingsModalDragging] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"call" | "theme">("call");
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [screenViewMode, setScreenViewMode] = useState<"split" | "screen" | "video">("split");
@@ -1054,17 +1430,22 @@ export default function VideoCallModal({
   const [aiBackgroundPrompt, setAiBackgroundPrompt] = useState("");
   const [aiBackgroundError, setAiBackgroundError] = useState<string | null>(null);
   const [aiBackgroundLoading, setAiBackgroundLoading] = useState(false);
-  const [avatarPrompt, setAvatarPrompt] = useState("");
-  const [avatarPose, setAvatarPose] = useState(AVATAR_POSE_OPTIONS[0]?.id || "neutral");
-  const [avatarCustomPose, setAvatarCustomPose] = useState("");
-  const [avatarError, setAvatarError] = useState<string | null>(null);
-  const [avatarLoading, setAvatarLoading] = useState(false);
   const [showViewSelect, setShowViewSelect] = useState(false);
   const [showScreenSelect, setShowScreenSelect] = useState(false);
   const [showCameraSelect, setShowCameraSelect] = useState(false);
+  const [showWebMicDeviceSelect, setShowWebMicDeviceSelect] = useState(false);
+  const [showWebCameraDeviceSelect, setShowWebCameraDeviceSelect] = useState(false);
+  const [showDesktopMicSelect, setShowDesktopMicSelect] = useState(false);
+  const [showDesktopCameraSelect, setShowDesktopCameraSelect] = useState(false);
+  const [showDesktopFilterSelect, setShowDesktopFilterSelect] = useState(false);
   const viewSelectRef = useRef<HTMLDivElement | null>(null);
   const screenSelectRef = useRef<HTMLDivElement | null>(null);
   const cameraSelectRef = useRef<HTMLDivElement | null>(null);
+  const webMicDeviceSelectRef = useRef<HTMLDivElement | null>(null);
+  const webCameraDeviceSelectRef = useRef<HTMLDivElement | null>(null);
+  const desktopMicSelectRef = useRef<HTMLDivElement | null>(null);
+  const desktopCameraSelectRef = useRef<HTMLDivElement | null>(null);
+  const desktopFilterSelectRef = useRef<HTMLDivElement | null>(null);
   const [screenZoomLevels, setScreenZoomLevels] = useState<Record<string, number>>({});
   const [screenPanOffsets, setScreenPanOffsets] = useState<Record<string, PanOffset>>({});
   const [activePanTarget, setActivePanTarget] = useState<string | null>(null);
@@ -1089,6 +1470,20 @@ export default function VideoCallModal({
   const [demoParticipants, setDemoParticipants] = useState<VideoCallParticipant[]>([]);
   const [demoStreams, setDemoStreams] = useState<Record<string, MediaStream>>({});
   const [demoScreenStreams, setDemoScreenStreams] = useState<Record<string, MediaStream>>({});
+  const settingsOverlayRef = useRef<HTMLDivElement | null>(null);
+  const settingsModalRef = useRef<HTMLDivElement | null>(null);
+  const settingsDragRef = useRef<{
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+  } | null>(null);
+  const settingsResizeRef = useRef<{
+    startX: number;
+    startY: number;
+    originWidth: number;
+    originHeight: number;
+  } | null>(null);
   const gifGridRef = useRef<HTMLDivElement | null>(null);
   const ringtoneRef = useRef<{ audio: HTMLAudioElement | null }>({
     audio: null,
@@ -1136,20 +1531,15 @@ export default function VideoCallModal({
   const screenPipDragRef = useRef({ active: false, offsetX: 0, offsetY: 0 });
   const demoCleanupRef = useRef<Record<string, () => void>>({});
   const demoCounterRef = useRef(1);
+  const avatarAutoAlignedUrlRef = useRef("");
+  const avatarCalibrationCacheRef = useRef<Record<string, AvatarFeatureCalibration | null>>({});
 
   const showModal = isOpen || status === "incoming";
   const showCallUi = status === "in-call" || status === "connecting";
   const showChat = showCallUi && (isChatVisible || mobilePanel === "chat");
   const isChatHidden = showCallUi && !isChatVisible && mobilePanel !== "chat";
-  const isRenderingInPopout = Boolean(isPopout && popoutContainer);
-  const overlayClassName = `video-call-overlay video-theme${
-    isRenderingInPopout ? " is-popout" : ""
-  }`;
-  const modalClassName = `video-call-modal${showCallUi ? "" : " is-setup"}${
-    isChatHidden ? " is-chat-hidden" : ""
-  }${mobilePanel === "chat" ? " is-mobile-chat" : " is-mobile-video"}${
-    isRenderingInPopout ? " is-popout" : ""
-  }`;
+  const popoutEnabled = !isStandaloneVideoApp;
+  const isRenderingInPopout = Boolean(popoutEnabled && isPopout && popoutContainer);
   const apiBase = useMemo(
     () => String(import.meta.env.VITE_API_URL || "").replace(/\/api$/, ""),
     []
@@ -1162,15 +1552,101 @@ export default function VideoCallModal({
   const desktopBridge =
     typeof window !== "undefined" ? window.yspDesktop ?? null : null;
   const isDesktopApp = Boolean(desktopBridge?.isAvailable);
+  const isLikelyMobileDevice = useMemo(() => {
+    if (typeof navigator === "undefined") return false;
+    const uaData = (
+      navigator as Navigator & {
+        userAgentData?: { mobile?: boolean };
+      }
+    ).userAgentData;
+    if (uaData?.mobile) return true;
+    return /Android|webOS|iPhone|iPad|iPod|Opera Mini|IEMobile|Mobile/i.test(
+      navigator.userAgent || ""
+    );
+  }, []);
   const isWindows = useMemo(() => {
     if (typeof navigator === "undefined") return false;
     return /Win/i.test(navigator.userAgent || "");
   }, []);
+  const showDesktopTitlebar =
+    isStandaloneVideoApp &&
+    isDesktopApp &&
+    !isRenderingInPopout &&
+    !isMobileLayout &&
+    !isLikelyMobileDevice;
+  const showDesktopTitlebarControls = showDesktopTitlebar && showCallUi;
+  const overlayClassName = `video-call-overlay video-theme${
+    isRenderingInPopout ? " is-popout" : ""
+  }`;
+  const modalClassName = `video-call-modal${showCallUi ? "" : " is-setup"}${
+    isChatHidden ? " is-chat-hidden" : ""
+  }${mobilePanel === "chat" ? " is-mobile-chat" : " is-mobile-video"}${
+    isRenderingInPopout ? " is-popout" : ""
+  }${showDesktopTitlebar ? " has-desktop-titlebar" : ""}`;
   const windowsHelperDownloadUrl = "https://yoursocialplace.com/downloads/ysphelper.exe";
 
   useEffect(() => {
     screenPanOffsetsRef.current = screenPanOffsets;
   }, [screenPanOffsets]);
+
+  useEffect(() => {
+    const avatarUrl = String(videoEffects.avatarImageUrl || "").trim();
+    if (!avatarUrl) {
+      avatarAutoAlignedUrlRef.current = "";
+      return;
+    }
+    if (avatarAutoAlignedUrlRef.current === avatarUrl) return;
+    avatarAutoAlignedUrlRef.current = avatarUrl;
+
+    let presetAvatar = avatarUrl.startsWith("/avatar-presets/");
+    if (!presetAvatar) {
+      try {
+        const parsedUrl = new URL(avatarUrl, window.location.origin);
+        presetAvatar = parsedUrl.pathname.startsWith("/avatar-presets/");
+      } catch {
+        presetAvatar = false;
+      }
+    }
+
+    if (presetAvatar) {
+      avatarCalibrationCacheRef.current[avatarUrl] = null;
+      setVideoEffects({
+        avatarOffsetX: AVATAR_DEFAULT_OFFSET_X,
+        avatarOffsetY: AVATAR_DEFAULT_OFFSET_Y,
+        avatarScale: AVATAR_DEFAULT_SCALE,
+        avatarEyeOffsetX: 0,
+        avatarEyeOffsetY: 0,
+        avatarEyeSpacing: AVATAR_DEFAULT_EYE_SPACING,
+        avatarEyeSize: AVATAR_DEFAULT_EYE_SIZE,
+        avatarMouthOffsetX: 0,
+        avatarMouthOffsetY: AVATAR_DEFAULT_MOUTH_OFFSET_Y,
+        avatarMouthSize: AVATAR_DEFAULT_MOUTH_SIZE,
+      });
+      return;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(avatarCalibrationCacheRef.current, avatarUrl)) {
+      const cached = avatarCalibrationCacheRef.current[avatarUrl];
+      if (cached) {
+        setVideoEffects(cached);
+      }
+      return;
+    }
+
+    let cancelled = false;
+    void detectAvatarFeatureCalibration(avatarUrl)
+      .then((calibration) => {
+        if (cancelled) return;
+        avatarCalibrationCacheRef.current[avatarUrl] = calibration || null;
+        if (!calibration) return;
+        setVideoEffects(calibration);
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [setVideoEffects, videoEffects.avatarImageUrl]);
 
   useEffect(() => {
     if (!showCallUi) {
@@ -1180,12 +1656,33 @@ export default function VideoCallModal({
   }, [showCallUi]);
 
   useEffect(() => {
+    if (showDesktopTitlebarControls) return;
+    setShowDesktopMicSelect(false);
+    setShowDesktopCameraSelect(false);
+    setShowDesktopFilterSelect(false);
+  }, [showDesktopTitlebarControls]);
+
+  useEffect(() => {
+    if (!popoutEnabled && isPopout) {
+      setIsPopout(false);
+    }
+  }, [isPopout, popoutEnabled]);
+
+  useEffect(() => {
     if (!isRenderingInPopout) {
       setPopoutAudioBlocked(false);
     }
   }, [isRenderingInPopout]);
 
   useEffect(() => {
+    if (!popoutEnabled) {
+      if (popoutWindowRef.current && !popoutWindowRef.current.closed) {
+        popoutWindowRef.current.close();
+      }
+      popoutWindowRef.current = null;
+      setPopoutContainer(null);
+      return;
+    }
     if (!isPopout) {
       if (popoutWindowRef.current && !popoutWindowRef.current.closed) {
         popoutWindowRef.current.close();
@@ -1233,7 +1730,7 @@ export default function VideoCallModal({
         nextWindow.close();
       }
     };
-  }, [isPopout]);
+  }, [isPopout, popoutEnabled]);
 
   useEffect(() => {
     if (!showGifPicker) return;
@@ -1531,6 +2028,10 @@ export default function VideoCallModal({
       handle: incomingCall.hostHandle,
     });
   }, [incomingCall, resolveParticipantLabel]);
+  const incomingIsCurrentRoom = Boolean(
+    incomingCall?.roomId && activeRoomId && incomingCall.roomId === activeRoomId
+  );
+  const incomingAcceptLabel = incomingIsCurrentRoom ? "Join call" : "Switch and accept";
   const localDisplayName = useMemo(() => {
     const first = String(profile?.firstName || "").trim();
     const last = String(profile?.lastName || "").trim();
@@ -1538,12 +2039,34 @@ export default function VideoCallModal({
     if (combined) return combined;
     return "You";
   }, [profile?.firstName, profile?.lastName]);
-  const avatarPoseLabel = useMemo(() => {
-    const match = AVATAR_POSE_OPTIONS.find((option) => option.id === avatarPose);
-    return match?.label || "Neutral";
-  }, [avatarPose]);
-  const resolvedAvatarPose =
-    avatarPose === "custom" ? avatarCustomPose.trim() : avatarPoseLabel;
+  const selectedAvatarPresetId = useMemo(() => {
+    const currentAvatarUrl = String(videoEffects.avatarImageUrl || "").trim();
+    if (!currentAvatarUrl) return "";
+    const matchedPreset = AVATAR_PRESET_OPTIONS.find((option) => option.url === currentAvatarUrl);
+    return matchedPreset?.id || "";
+  }, [videoEffects.avatarImageUrl]);
+  const handleAvatarPresetChange = useCallback(
+    (event: ChangeEvent<HTMLSelectElement>) => {
+      const selectedPresetId = event.target.value;
+      const selectedPreset = AVATAR_PRESET_OPTIONS.find((option) => option.id === selectedPresetId);
+      if (!selectedPreset) return;
+      setVideoEffects({
+        avatarEnabled: true,
+        avatarImageUrl: selectedPreset.url,
+        avatarOffsetX: 0,
+        avatarOffsetY: 0,
+        avatarScale: 1,
+        avatarEyeOffsetX: 0,
+        avatarEyeOffsetY: 0,
+        avatarEyeSpacing: AVATAR_DEFAULT_EYE_SPACING,
+        avatarEyeSize: AVATAR_DEFAULT_EYE_SIZE,
+        avatarMouthOffsetX: 0,
+        avatarMouthOffsetY: AVATAR_DEFAULT_MOUTH_OFFSET_Y,
+        avatarMouthSize: AVATAR_DEFAULT_MOUTH_SIZE,
+      });
+    },
+    [setVideoEffects]
+  );
   const maskStrengthValue = Number.isFinite(videoEffects.maskStrength)
     ? Math.min(1, Math.max(0.2, videoEffects.maskStrength))
     : 0.85;
@@ -1564,13 +2087,451 @@ export default function VideoCallModal({
     : 0;
   const avatarEyeSpacingValue = Number.isFinite(videoEffects.avatarEyeSpacing)
     ? Math.min(1, Math.max(0.25, videoEffects.avatarEyeSpacing))
-    : 1;
+    : AVATAR_DEFAULT_EYE_SPACING;
+  const avatarEyeSizeValue = Number.isFinite(videoEffects.avatarEyeSize)
+    ? Math.min(1.8, Math.max(0.5, videoEffects.avatarEyeSize))
+    : AVATAR_DEFAULT_EYE_SIZE;
   const avatarMouthOffsetXValue = Number.isFinite(videoEffects.avatarMouthOffsetX)
     ? Math.min(0.35, Math.max(-0.35, videoEffects.avatarMouthOffsetX))
     : 0;
   const avatarMouthOffsetYValue = Number.isFinite(videoEffects.avatarMouthOffsetY)
     ? Math.min(0.3, Math.max(-0.3, videoEffects.avatarMouthOffsetY))
-    : 0;
+    : AVATAR_DEFAULT_MOUTH_OFFSET_Y;
+  const avatarMouthSizeValue = Number.isFinite(videoEffects.avatarMouthSize)
+    ? Math.min(1.8, Math.max(0.5, videoEffects.avatarMouthSize))
+    : AVATAR_DEFAULT_MOUTH_SIZE;
+  const avatarPreviewLayerStyle = useMemo<CSSProperties>(
+    () => ({
+      transform: `translate(${avatarOffsetXValue * 45}%, ${avatarOffsetYValue * 45}%) scale(${avatarScaleValue})`,
+    }),
+    [avatarOffsetXValue, avatarOffsetYValue, avatarScaleValue]
+  );
+  const avatarPreviewFaceMetrics = useMemo(() => {
+    const eyeCenterX = clampValue(AVATAR_BASE_EYE_X + avatarEyeOffsetXValue, 0.12, 0.88) * 100;
+    const eyeY = clampValue(AVATAR_BASE_EYE_Y + avatarEyeOffsetYValue, 0.1, 0.78) * 100;
+    const eyeSpacing = AVATAR_BASE_EYE_SPACING * avatarEyeSpacingValue * 100;
+    const leftEyeX = clampValue(eyeCenterX - eyeSpacing, 6, 94);
+    const rightEyeX = clampValue(eyeCenterX + eyeSpacing, 6, 94);
+    const mouthX = clampValue(eyeCenterX + avatarMouthOffsetXValue * 100, 8, 92);
+    const mouthY = clampValue((AVATAR_BASE_MOUTH_Y + avatarMouthOffsetYValue) * 100, 22, 94);
+    return {
+      leftEyeX,
+      rightEyeX,
+      eyeY,
+      mouthX,
+      mouthY,
+    };
+  }, [
+    avatarEyeOffsetXValue,
+    avatarEyeOffsetYValue,
+    avatarEyeSpacingValue,
+    avatarMouthOffsetXValue,
+    avatarMouthOffsetYValue,
+  ]);
+  const renderAvatarPreviewEyes = () => {
+    const left = avatarPreviewFaceMetrics.leftEyeX;
+    const right = avatarPreviewFaceMetrics.rightEyeX;
+    const eyeY = avatarPreviewFaceMetrics.eyeY;
+    const eyeStyle = normalizeAvatarEyeStyle(videoEffects.avatarEyeStyle);
+    const eyePresets: Record<
+      string,
+      {
+        iris: string;
+        width: number;
+        height: number;
+        upperLift: number;
+        lowerLift: number;
+        tilt: number;
+        irisScale: number;
+        pupilScale: number;
+        lidAlpha: number;
+        irisShift: number;
+      }
+    > = {
+      almond: {
+        iris: "rgba(78, 58, 38, 0.95)",
+        width: 6.2,
+        height: 2.7,
+        upperLift: 0.22,
+        lowerLift: 0.08,
+        tilt: 0.02,
+        irisScale: 0.43,
+        pupilScale: 0.22,
+        lidAlpha: 0.56,
+        irisShift: 0,
+      },
+      hooded: {
+        iris: "rgba(86, 72, 54, 0.96)",
+        width: 6.15,
+        height: 2.3,
+        upperLift: 0.33,
+        lowerLift: 0.03,
+        tilt: 0.01,
+        irisScale: 0.4,
+        pupilScale: 0.2,
+        lidAlpha: 0.62,
+        irisShift: 0,
+      },
+      "deep-set": {
+        iris: "rgba(62, 74, 82, 0.95)",
+        width: 6.05,
+        height: 2.45,
+        upperLift: 0.27,
+        lowerLift: 0.06,
+        tilt: 0.03,
+        irisScale: 0.42,
+        pupilScale: 0.21,
+        lidAlpha: 0.66,
+        irisShift: 0,
+      },
+      monolid: {
+        iris: "rgba(74, 84, 62, 0.96)",
+        width: 6.2,
+        height: 2.05,
+        upperLift: 0.38,
+        lowerLift: 0.02,
+        tilt: 0,
+        irisScale: 0.38,
+        pupilScale: 0.2,
+        lidAlpha: 0.72,
+        irisShift: 0,
+      },
+      "cat-eye": {
+        iris: "rgba(56, 76, 66, 0.95)",
+        width: 6.25,
+        height: 2.35,
+        upperLift: 0.28,
+        lowerLift: 0.04,
+        tilt: 0.17,
+        irisScale: 0.4,
+        pupilScale: 0.2,
+        lidAlpha: 0.7,
+        irisShift: 0.16,
+      },
+      doe: {
+        iris: "rgba(98, 74, 48, 0.95)",
+        width: 6.15,
+        height: 2.95,
+        upperLift: 0.16,
+        lowerLift: 0.12,
+        tilt: 0,
+        irisScale: 0.46,
+        pupilScale: 0.24,
+        lidAlpha: 0.48,
+        irisShift: 0,
+      },
+      narrow: {
+        iris: "rgba(74, 72, 62, 0.96)",
+        width: 6.4,
+        height: 1.95,
+        upperLift: 0.4,
+        lowerLift: 0.01,
+        tilt: 0.05,
+        irisScale: 0.34,
+        pupilScale: 0.18,
+        lidAlpha: 0.75,
+        irisShift: 0,
+      },
+      "bright-hazel": {
+        iris: "rgba(112, 90, 42, 0.97)",
+        width: 6.15,
+        height: 2.6,
+        upperLift: 0.2,
+        lowerLift: 0.07,
+        tilt: 0.02,
+        irisScale: 0.45,
+        pupilScale: 0.22,
+        lidAlpha: 0.58,
+        irisShift: 0,
+      },
+    };
+    const preset = eyePresets[eyeStyle] || eyePresets.almond;
+    const eyeSize = avatarEyeSizeValue;
+    const renderDetailedEye = (centerX: number, side: -1 | 1) => {
+      const eyeWidth = preset.width * eyeSize;
+      const eyeHeight = preset.height * eyeSize;
+      const topY = eyeY - eyeHeight * (1 + preset.upperLift) + eyeHeight * preset.tilt * side;
+      const bottomY =
+        eyeY + eyeHeight * (1 + preset.lowerLift) - eyeHeight * preset.tilt * side * 0.4;
+      const irisRadius = eyeWidth * preset.irisScale;
+      const pupilRadius = eyeWidth * preset.pupilScale;
+      const irisX = centerX + eyeWidth * preset.irisShift * side;
+      return (
+        <g>
+          <path
+            d={`M ${centerX - eyeWidth} ${eyeY} Q ${centerX} ${topY} ${centerX + eyeWidth} ${eyeY} Q ${centerX} ${bottomY} ${centerX - eyeWidth} ${eyeY} Z`}
+            fill="rgba(248, 250, 252, 0.95)"
+            stroke={`rgba(15, 23, 42, ${preset.lidAlpha})`}
+            strokeWidth={0.5}
+          />
+          <ellipse
+            cx={irisX}
+            cy={eyeY + eyeHeight * 0.02}
+            rx={irisRadius}
+            ry={irisRadius * 0.9}
+            fill={preset.iris}
+          />
+          <circle cx={irisX} cy={eyeY + eyeHeight * 0.05} r={pupilRadius} fill="rgba(7, 10, 14, 0.96)" />
+          <circle
+            cx={irisX - irisRadius * 0.34}
+            cy={eyeY - irisRadius * 0.28}
+            r={irisRadius * 0.2}
+            fill="rgba(255, 255, 255, 0.86)"
+          />
+          <path
+            d={`M ${centerX - eyeWidth} ${eyeY} Q ${centerX} ${topY} ${centerX + eyeWidth} ${eyeY}`}
+            fill="none"
+            stroke={`rgba(10, 12, 18, ${Math.min(0.86, preset.lidAlpha + 0.2)})`}
+            strokeWidth={0.8}
+            strokeLinecap="round"
+          />
+          <path
+            d={`M ${centerX - eyeWidth * 0.85} ${eyeY + eyeHeight * 0.45} Q ${centerX} ${bottomY - eyeHeight * 0.08} ${centerX + eyeWidth * 0.85} ${eyeY + eyeHeight * 0.45}`}
+            fill="none"
+            stroke={`rgba(28, 36, 46, ${Math.max(0.3, preset.lidAlpha - 0.18)})`}
+            strokeWidth={0.5}
+            strokeLinecap="round"
+          />
+        </g>
+      );
+    };
+    return (
+      <>
+        {renderDetailedEye(left, -1)}
+        {renderDetailedEye(right, 1)}
+      </>
+    );
+  };
+  const renderAvatarPreviewMouth = () => {
+    const mouthX = avatarPreviewFaceMetrics.mouthX;
+    const mouthY = avatarPreviewFaceMetrics.mouthY;
+    const mouthStyle = normalizeAvatarMouthStyle(videoEffects.avatarMouthStyle);
+    const mouthPresets: Record<
+      string,
+      {
+        topLip: string;
+        lowerLip: string;
+        lipLine: string;
+        lipShadow: string;
+        inner: string;
+        teeth: string;
+        tongue: string;
+        width: number;
+        openness: number;
+        smile: number;
+        showTeeth: boolean;
+        showTongue: boolean;
+      }
+    > = {
+      natural: {
+        topLip: "rgba(124, 72, 70, 0.62)",
+        lowerLip: "rgba(108, 62, 62, 0.54)",
+        lipLine: "rgba(76, 34, 36, 0.84)",
+        lipShadow: "rgba(48, 22, 24, 0.66)",
+        inner: "rgba(30, 10, 14, 0.92)",
+        teeth: "rgba(246, 247, 250, 0.9)",
+        tongue: "rgba(136, 48, 58, 0.84)",
+        width: 0.95,
+        openness: 3.4,
+        smile: 0.08,
+        showTeeth: true,
+        showTongue: true,
+      },
+      rose: {
+        topLip: "rgba(162, 74, 92, 0.68)",
+        lowerLip: "rgba(144, 64, 84, 0.58)",
+        lipLine: "rgba(94, 34, 52, 0.86)",
+        lipShadow: "rgba(58, 20, 34, 0.68)",
+        inner: "rgba(34, 8, 18, 0.94)",
+        teeth: "rgba(248, 248, 252, 0.92)",
+        tongue: "rgba(156, 48, 76, 0.86)",
+        width: 0.96,
+        openness: 3.7,
+        smile: 0.12,
+        showTeeth: true,
+        showTongue: true,
+      },
+      mauve: {
+        topLip: "rgba(130, 86, 112, 0.66)",
+        lowerLip: "rgba(114, 72, 98, 0.56)",
+        lipLine: "rgba(76, 46, 68, 0.86)",
+        lipShadow: "rgba(48, 30, 44, 0.7)",
+        inner: "rgba(28, 14, 26, 0.94)",
+        teeth: "rgba(245, 246, 250, 0.9)",
+        tongue: "rgba(132, 66, 102, 0.84)",
+        width: 0.97,
+        openness: 3.5,
+        smile: 0.04,
+        showTeeth: true,
+        showTongue: true,
+      },
+      berry: {
+        topLip: "rgba(116, 40, 66, 0.76)",
+        lowerLip: "rgba(100, 34, 58, 0.66)",
+        lipLine: "rgba(64, 18, 36, 0.9)",
+        lipShadow: "rgba(38, 10, 22, 0.74)",
+        inner: "rgba(20, 4, 12, 0.96)",
+        teeth: "rgba(246, 247, 250, 0.9)",
+        tongue: "rgba(124, 34, 66, 0.88)",
+        width: 0.94,
+        openness: 3.9,
+        smile: 0.05,
+        showTeeth: true,
+        showTongue: true,
+      },
+      caramel: {
+        topLip: "rgba(136, 86, 72, 0.68)",
+        lowerLip: "rgba(118, 72, 60, 0.58)",
+        lipLine: "rgba(82, 46, 36, 0.86)",
+        lipShadow: "rgba(54, 28, 22, 0.68)",
+        inner: "rgba(30, 14, 10, 0.92)",
+        teeth: "rgba(245, 245, 248, 0.9)",
+        tongue: "rgba(146, 70, 58, 0.84)",
+        width: 0.98,
+        openness: 3.3,
+        smile: 0.06,
+        showTeeth: true,
+        showTongue: true,
+      },
+      "ruby-smile": {
+        topLip: "rgba(168, 42, 56, 0.76)",
+        lowerLip: "rgba(148, 34, 48, 0.66)",
+        lipLine: "rgba(96, 16, 28, 0.9)",
+        lipShadow: "rgba(56, 8, 18, 0.74)",
+        inner: "rgba(28, 4, 10, 0.96)",
+        teeth: "rgba(250, 250, 252, 0.94)",
+        tongue: "rgba(170, 44, 62, 0.9)",
+        width: 1,
+        openness: 4.2,
+        smile: 0.24,
+        showTeeth: true,
+        showTongue: true,
+      },
+      mocha: {
+        topLip: "rgba(96, 56, 52, 0.74)",
+        lowerLip: "rgba(82, 48, 46, 0.64)",
+        lipLine: "rgba(52, 28, 28, 0.9)",
+        lipShadow: "rgba(30, 16, 18, 0.76)",
+        inner: "rgba(18, 10, 10, 0.96)",
+        teeth: "rgba(243, 243, 246, 0.88)",
+        tongue: "rgba(118, 62, 62, 0.84)",
+        width: 0.94,
+        openness: 3.8,
+        smile: 0.02,
+        showTeeth: true,
+        showTongue: true,
+      },
+      "plum-gloss": {
+        topLip: "rgba(118, 54, 98, 0.78)",
+        lowerLip: "rgba(104, 44, 88, 0.68)",
+        lipLine: "rgba(68, 24, 58, 0.92)",
+        lipShadow: "rgba(40, 12, 34, 0.76)",
+        inner: "rgba(22, 6, 20, 0.96)",
+        teeth: "rgba(248, 248, 252, 0.92)",
+        tongue: "rgba(136, 52, 108, 0.88)",
+        width: 0.96,
+        openness: 4.1,
+        smile: 0.1,
+        showTeeth: true,
+        showTongue: true,
+      },
+    };
+    const preset = mouthPresets[mouthStyle] || mouthPresets.natural;
+    const mouthSize = avatarMouthSizeValue;
+    const mouthWidth = 13.8 * preset.width * mouthSize;
+    const openness = preset.openness * mouthSize;
+    const smileLift = openness * preset.smile;
+    const leftX = mouthX - mouthWidth;
+    const rightX = mouthX + mouthWidth;
+
+    return (
+      <>
+        <path
+          d={`M ${leftX} ${mouthY} Q ${mouthX} ${mouthY - openness * (0.54 + preset.smile * 0.3)} ${rightX} ${mouthY} Q ${mouthX} ${mouthY + openness * 0.2} ${leftX} ${mouthY} Z`}
+          fill={preset.topLip}
+        />
+        <path
+          d={`M ${leftX * 0.985 + mouthX * 0.015} ${mouthY + openness * 0.08} Q ${mouthX} ${mouthY + openness * (1.12 + preset.smile * 0.2)} ${rightX * 0.985 + mouthX * 0.015} ${mouthY + openness * 0.08} Q ${mouthX} ${mouthY + openness * 0.24} ${leftX * 0.985 + mouthX * 0.015} ${mouthY + openness * 0.08} Z`}
+          fill={preset.lowerLip}
+        />
+        <ellipse
+          cx={mouthX}
+          cy={mouthY + openness * (0.36 - preset.smile * 0.16)}
+          rx={mouthWidth * 0.82}
+          ry={openness * 0.92}
+          fill={preset.inner}
+        />
+        {preset.showTeeth && (
+          <rect
+            x={mouthX - mouthWidth * 0.5}
+            y={mouthY - openness * 0.02 - smileLift}
+            width={mouthWidth}
+            height={Math.max(1.2, openness * 0.38)}
+            rx={1.1}
+            fill={preset.teeth}
+          />
+        )}
+        {preset.showTongue && (
+          <ellipse
+            cx={mouthX}
+            cy={mouthY + openness * 0.85}
+            rx={mouthWidth * 0.38}
+            ry={Math.max(1.1, openness * 0.42)}
+            fill={preset.tongue}
+          />
+        )}
+        <path
+          d={`M ${leftX} ${mouthY} Q ${mouthX} ${mouthY - openness * (0.58 + preset.smile * 0.34)} ${rightX} ${mouthY}`}
+          fill="none"
+          stroke={preset.lipLine}
+          strokeWidth={1.9}
+          strokeLinecap="round"
+        />
+        <path
+          d={`M ${leftX * 0.9 + mouthX * 0.1} ${mouthY + openness * 0.5} Q ${mouthX} ${mouthY + openness * (1.16 + preset.smile * 0.2)} ${rightX * 0.9 + mouthX * 0.1} ${mouthY + openness * 0.5}`}
+          fill="none"
+          stroke={preset.lipShadow}
+          strokeWidth={1.35}
+          strokeLinecap="round"
+        />
+      </>
+    );
+  };
+  const handleResetAvatarPlacement = useCallback(() => {
+    setVideoEffects({
+      avatarOffsetX: AVATAR_DEFAULT_OFFSET_X,
+      avatarOffsetY: AVATAR_DEFAULT_OFFSET_Y,
+      avatarScale: AVATAR_DEFAULT_SCALE,
+    });
+  }, [setVideoEffects]);
+
+  const handleResetAvatarFace = useCallback(() => {
+    setVideoEffects({
+      avatarEyeSpacing: AVATAR_DEFAULT_EYE_SPACING,
+      avatarEyeOffsetX: AVATAR_DEFAULT_EYE_OFFSET_X,
+      avatarEyeOffsetY: AVATAR_DEFAULT_EYE_OFFSET_Y,
+      avatarEyeSize: AVATAR_DEFAULT_EYE_SIZE,
+      avatarMouthOffsetX: AVATAR_DEFAULT_MOUTH_OFFSET_X,
+      avatarMouthOffsetY: AVATAR_DEFAULT_MOUTH_OFFSET_Y,
+      avatarMouthSize: AVATAR_DEFAULT_MOUTH_SIZE,
+    });
+  }, [setVideoEffects]);
+
+  const handleResetAvatarAlignment = useCallback(() => {
+    setVideoEffects({
+      avatarOffsetX: AVATAR_DEFAULT_OFFSET_X,
+      avatarOffsetY: AVATAR_DEFAULT_OFFSET_Y,
+      avatarScale: AVATAR_DEFAULT_SCALE,
+      avatarEyeSpacing: AVATAR_DEFAULT_EYE_SPACING,
+      avatarEyeOffsetX: AVATAR_DEFAULT_EYE_OFFSET_X,
+      avatarEyeOffsetY: AVATAR_DEFAULT_EYE_OFFSET_Y,
+      avatarEyeSize: AVATAR_DEFAULT_EYE_SIZE,
+      avatarMouthOffsetX: AVATAR_DEFAULT_MOUTH_OFFSET_X,
+      avatarMouthOffsetY: AVATAR_DEFAULT_MOUTH_OFFSET_Y,
+      avatarMouthSize: AVATAR_DEFAULT_MOUTH_SIZE,
+    });
+  }, [setVideoEffects]);
+
   const buildAiBackgroundPrompt = useCallback((prompt: string) => {
     return [
       "High detail cinematic background, no people, no text.",
@@ -1580,19 +2541,6 @@ export default function VideoCallModal({
       .filter(Boolean)
       .join(" ");
   }, []);
-  const buildAvatarPrompt = useCallback(
-    (prompt: string, pose: string) => {
-      return [
-        "Full-body character avatar, centered, clean edges, no text.",
-        prompt.trim(),
-        pose ? `Pose: ${pose}.` : "",
-        "Studio lighting, high detail.",
-      ]
-        .filter(Boolean)
-        .join(" ");
-    },
-    []
-  );
   const hasRemoteMedia = useMemo(() => {
     if (remoteList.length > 0) return true;
     if (Object.keys(mergedRemoteStreams).length > 0) return true;
@@ -1652,44 +2600,6 @@ export default function VideoCallModal({
     buildAiBackgroundPrompt,
     requestAiImage,
     resolveAiErrorMessage,
-    setVideoEffects,
-  ]);
-
-  const handleGenerateAvatar = useCallback(async () => {
-    const prompt = avatarPrompt.trim();
-    if (!prompt) {
-      setAvatarError("Describe the avatar you want.");
-      return;
-    }
-    const poseText = resolvedAvatarPose.trim();
-    if (avatarPose === "custom" && !poseText) {
-      setAvatarError("Describe the custom pose.");
-      return;
-    }
-    setAvatarLoading(true);
-    setAvatarError(null);
-    try {
-      const image = await requestAiImage({
-        kind: "avatar",
-        prompt: buildAvatarPrompt(prompt, poseText),
-        pose: poseText,
-      });
-      setVideoEffects({
-        avatarEnabled: true,
-        avatarImageUrl: image,
-      });
-    } catch (err) {
-      setAvatarError(resolveAiErrorMessage(err, "Unable to generate avatar."));
-    } finally {
-      setAvatarLoading(false);
-    }
-  }, [
-    avatarPose,
-    avatarPrompt,
-    buildAvatarPrompt,
-    requestAiImage,
-    resolveAiErrorMessage,
-    resolvedAvatarPose,
     setVideoEffects,
   ]);
 
@@ -1980,6 +2890,16 @@ export default function VideoCallModal({
     }
     return classes.join(" ");
   }, [videoEffects.background]);
+  const localAvatarMediaStyle = useMemo<CSSProperties | undefined>(
+    () =>
+      videoEffects.avatarEnabled
+        ? {
+            objectFit: "contain",
+            background: "#05070f",
+          }
+        : undefined,
+    [videoEffects.avatarEnabled]
+  );
 
   const isFullscreenUi = isFullscreenActive || Boolean(fullscreenTargetId);
   const showFocusControls = !isFullscreenUi && !isMobileCameraOnly;
@@ -2003,6 +2923,7 @@ export default function VideoCallModal({
           avatarUrl={participant.avatarUrl}
           muted={participant.isLocal || isRenderingInPopout}
           status={participant.status}
+          mediaStyle={participant.isLocal ? localAvatarMediaStyle : undefined}
           className={`${baseClass}${options?.className ? ` ${options.className}` : ""}`}
           style={options?.style}
         >
@@ -2016,6 +2937,27 @@ export default function VideoCallModal({
               >
                 {isFocused ? "Show all" : "Focus"}
               </button>
+              {isCallHost && !participant.isLocal && (
+                <button
+                  type="button"
+                  className="video-tile-focus is-remove"
+                  onClick={() => {
+                    const normalizedLabel =
+                      String(participant.label || "this participant").trim() ||
+                      "this participant";
+                    const shouldRemove = window.confirm(
+                      `Remove ${normalizedLabel} from this call?`
+                    );
+                    if (!shouldRemove) return;
+                    removeParticipantFromCall(participant.id);
+                  }}
+                  aria-label={`Remove ${participant.label} from call`}
+                  title="Remove from call"
+                >
+                  <FontAwesomeIcon icon={faUserMinus} aria-hidden="true" />
+                  <span>Remove</span>
+                </button>
+              )}
             </div>
           )}
         </VideoTile>
@@ -2024,8 +2966,11 @@ export default function VideoCallModal({
     [
       focusedVideoKey,
       isRenderingInPopout,
+      isCallHost,
+      localAvatarMediaStyle,
       localEffectClass,
       primaryVideoSocketId,
+      removeParticipantFromCall,
       showFocusControls,
       toggleVideoFocus,
     ]
@@ -2057,6 +3002,9 @@ export default function VideoCallModal({
     if (showViewSelect) setShowViewSelect(false);
     if (showScreenSelect) setShowScreenSelect(false);
     if (showCameraSelect) setShowCameraSelect(false);
+    if (showWebMicDeviceSelect) setShowWebMicDeviceSelect(false);
+    if (showWebCameraDeviceSelect) setShowWebCameraDeviceSelect(false);
+    if (showDesktopFilterSelect) setShowDesktopFilterSelect(false);
     setPipPosition(null);
     setIsPipDragging(false);
     pipDragRef.current.active = false;
@@ -2072,6 +3020,9 @@ export default function VideoCallModal({
     mobilePanel,
     screenViewMode,
     showCameraSelect,
+    showWebCameraDeviceSelect,
+    showDesktopFilterSelect,
+    showWebMicDeviceSelect,
     showScreenSelect,
     showViewSelect,
   ]);
@@ -2312,14 +3263,51 @@ export default function VideoCallModal({
   const micSelectionValue = selectedAudioInputId || "default";
   const showMicSelector = audioInputs.length > 1;
   const cameraSelectionValue = selectedVideoInputId || "default";
-  const showCameraSelector = videoInputs.length > 1;
-  const chatFontSize = chatTextSize === "sm" ? 13 : chatTextSize === "lg" ? 17 : 15;
+  const callMenuAudioDevices = useMemo(
+    () => [
+      { id: "default", label: "Default mic" },
+      ...audioInputs
+        .filter((device) => Boolean(device.deviceId) && device.deviceId !== "default")
+        .map((device, index) => ({
+          id: device.deviceId,
+          label: device.label || `Microphone ${index + 1}`,
+        })),
+    ],
+    [audioInputs]
+  );
+  const callMenuVideoDevices = useMemo(
+    () => [
+      { id: "default", label: "Default camera" },
+      ...videoInputs
+        .filter((device) => Boolean(device.deviceId) && device.deviceId !== "default")
+        .map((device, index) => ({
+          id: device.deviceId,
+          label: device.label || `Camera ${index + 1}`,
+        })),
+    ],
+    [videoInputs]
+  );
+  const selectedMicLabel = useMemo(() => {
+    const selected =
+      callMenuAudioDevices.find((device) => device.id === micSelectionValue) ||
+      callMenuAudioDevices[0];
+    return selected?.label || "Default mic";
+  }, [callMenuAudioDevices, micSelectionValue]);
+  const selectedCameraLabel = useMemo(() => {
+    const selected =
+      callMenuVideoDevices.find((device) => device.id === cameraSelectionValue) ||
+      callMenuVideoDevices[0];
+    return selected?.label || "Default camera";
+  }, [callMenuVideoDevices, cameraSelectionValue]);
+  const chatFontSizeRem = Number.isFinite(chatTextSizeRem)
+    ? Math.min(CHAT_TEXT_SIZE_MAX_REM, Math.max(CHAT_TEXT_SIZE_MIN_REM, chatTextSizeRem))
+    : 1;
   const chatStyle = useMemo(
     () =>
       ({
-        "--video-chat-text-size": `${chatFontSize}px`,
+        "--video-chat-text-size": `${chatFontSizeRem}rem`,
       }) as CSSProperties,
-    [chatFontSize]
+    [chatFontSizeRem]
   );
   const orderedMessages = useMemo(
     () =>
@@ -2518,12 +3506,125 @@ export default function VideoCallModal({
   }, [isPopout, isScreenSharing, startScreenShare, stopScreenShare]);
 
   const handleOpenSettings = useCallback(() => {
+    if (typeof window !== "undefined") {
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      const safeViewportWidth = Math.max(320, viewportWidth);
+      const safeViewportHeight = Math.max(260, viewportHeight);
+      const minWidth = Math.min(SETTINGS_MODAL_MIN_WIDTH, safeViewportWidth - 16);
+      const minHeight = Math.min(SETTINGS_MODAL_MIN_HEIGHT, safeViewportHeight - 16);
+      const targetWidth = Math.min(760, Math.max(420, safeViewportWidth - 28));
+      const targetHeight = Math.min(780, Math.max(480, safeViewportHeight - 28));
+      const width = clampValue(
+        targetWidth,
+        Math.max(300, minWidth),
+        safeViewportWidth - 8
+      );
+      const height = clampValue(
+        targetHeight,
+        Math.max(260, minHeight),
+        safeViewportHeight - 8
+      );
+      const x = clampValue(Math.max(0, (safeViewportWidth - width) / 2), 0, safeViewportWidth - width);
+      const y = clampValue(
+        Math.max(0, (safeViewportHeight - height) / 2),
+        0,
+        safeViewportHeight - height
+      );
+      setSettingsModalBounds({ x, y, width, height });
+    }
     setShowSettingsPanel(true);
   }, []);
 
   const handleCloseSettings = useCallback(() => {
+    settingsDragRef.current = null;
+    settingsResizeRef.current = null;
+    setIsSettingsModalDragging(false);
     setShowSettingsPanel(false);
   }, []);
+
+  const clampSettingsModalBounds = useCallback(
+    (next: SettingsModalBounds, overlayWidth: number, overlayHeight: number) => {
+      const safeOverlayWidth = Math.max(320, overlayWidth);
+      const safeOverlayHeight = Math.max(260, overlayHeight);
+      const minWidth = Math.min(SETTINGS_MODAL_MIN_WIDTH, safeOverlayWidth - 16);
+      const minHeight = Math.min(SETTINGS_MODAL_MIN_HEIGHT, safeOverlayHeight - 16);
+      const width = clampValue(next.width, Math.max(300, minWidth), safeOverlayWidth - 8);
+      const height = clampValue(next.height, Math.max(260, minHeight), safeOverlayHeight - 8);
+      const maxX = Math.max(0, safeOverlayWidth - width);
+      const maxY = Math.max(0, safeOverlayHeight - height);
+      return {
+        x: clampValue(next.x, 0, maxX),
+        y: clampValue(next.y, 0, maxY),
+        width,
+        height,
+      };
+    },
+    []
+  );
+
+  const ensureSettingsModalBounds = useCallback(
+    (forceCenter = false) => {
+      const overlay = settingsOverlayRef.current;
+      if (!overlay) return;
+      const overlayRect = overlay.getBoundingClientRect();
+      const centeredWidth = Math.min(760, Math.max(420, overlayRect.width - 28));
+      const centeredHeight = Math.min(780, Math.max(480, overlayRect.height - 28));
+      setSettingsModalBounds((prev) => {
+        if (!prev || forceCenter) {
+          const centered: SettingsModalBounds = {
+            x: Math.max(0, (overlayRect.width - centeredWidth) / 2),
+            y: Math.max(0, (overlayRect.height - centeredHeight) / 2),
+            width: centeredWidth,
+            height: centeredHeight,
+          };
+          return clampSettingsModalBounds(centered, overlayRect.width, overlayRect.height);
+        }
+        return clampSettingsModalBounds(prev, overlayRect.width, overlayRect.height);
+      });
+    },
+    [clampSettingsModalBounds]
+  );
+
+  const handleSettingsModalHeaderPointerDown = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (isMobileLayout) return;
+      if (event.button !== 0) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("button, input, select, textarea, a")) return;
+      if (!settingsModalBounds) return;
+      settingsResizeRef.current = null;
+      settingsDragRef.current = {
+        startX: event.clientX,
+        startY: event.clientY,
+        originX: settingsModalBounds.x,
+        originY: settingsModalBounds.y,
+      };
+      setIsSettingsModalDragging(true);
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      event.preventDefault();
+    },
+    [isMobileLayout, settingsModalBounds]
+  );
+
+  const handleSettingsModalResizePointerDown = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (isMobileLayout) return;
+      if (event.button !== 0) return;
+      if (!settingsModalBounds) return;
+      settingsDragRef.current = null;
+      settingsResizeRef.current = {
+        startX: event.clientX,
+        startY: event.clientY,
+        originWidth: settingsModalBounds.width,
+        originHeight: settingsModalBounds.height,
+      };
+      setIsSettingsModalDragging(true);
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      event.preventDefault();
+    },
+    [isMobileLayout, settingsModalBounds]
+  );
 
   const toggleScreenSettings = useCallback((targetId: string) => {
     setActiveScreenSettingsId((prev) => (prev === targetId ? null : targetId));
@@ -2566,6 +3667,92 @@ export default function VideoCallModal({
 
   const isAdmin = user?.appRole === "admin";
   const isCallAdmin = Boolean(isCallHost);
+  const callExitLabel = isCallAdmin ? "End call" : "Leave call";
+
+  useEffect(() => {
+    if (!isDesktopApp || !desktopBridge?.setCallMenuState) return;
+    if (!isStandaloneVideoApp || !showCallUi) {
+      void desktopBridge.setCallMenuState({ visible: false });
+      return;
+    }
+    void desktopBridge.setCallMenuState({
+      visible: true,
+      canManageCall: isCallAdmin,
+      canMuteEveryone: isCallAdmin && remoteList.length > 0,
+      canStopAllScreens: isCallAdmin && hasRemoteScreenShares,
+      audioDevices: callMenuAudioDevices,
+      videoDevices: callMenuVideoDevices,
+      selectedAudioInputId: micSelectionValue,
+      selectedVideoInputId: cameraSelectionValue,
+    });
+  }, [
+    callMenuAudioDevices,
+    callMenuVideoDevices,
+    cameraSelectionValue,
+    desktopBridge,
+    hasRemoteScreenShares,
+    isCallAdmin,
+    isDesktopApp,
+    isStandaloneVideoApp,
+    micSelectionValue,
+    remoteList.length,
+    showCallUi,
+  ]);
+
+  useEffect(() => {
+    if (!isDesktopApp || !desktopBridge?.setCallMenuState) return;
+    return () => {
+      void desktopBridge?.setCallMenuState?.({ visible: false });
+    };
+  }, [desktopBridge, isDesktopApp]);
+
+  useEffect(() => {
+    if (!isDesktopApp || !desktopBridge?.onMenuAction) return;
+    const unsubscribe = desktopBridge.onMenuAction((event) => {
+      if (!isStandaloneVideoApp || !showCallUi) return;
+      if (!event || typeof event !== "object") return;
+      const action = String(event.action || "");
+      if (action === "open-settings") {
+        handleOpenSettings();
+        return;
+      }
+      if (action === "mute-everyone") {
+        if (isCallAdmin) {
+          muteAllParticipants();
+        }
+        return;
+      }
+      if (action === "stop-all-screens") {
+        if (isCallAdmin) {
+          stopAllScreenShares();
+        }
+        return;
+      }
+      if (action === "select-audio-input") {
+        const deviceId = String(event.deviceId || "default");
+        void setAudioInputDevice(deviceId);
+        return;
+      }
+      if (action === "select-video-input") {
+        const deviceId = String(event.deviceId || "default");
+        void setVideoInputDevice(deviceId);
+      }
+    });
+    return () => {
+      unsubscribe?.();
+    };
+  }, [
+    desktopBridge,
+    handleOpenSettings,
+    isCallAdmin,
+    isDesktopApp,
+    isStandaloneVideoApp,
+    muteAllParticipants,
+    setAudioInputDevice,
+    setVideoInputDevice,
+    showCallUi,
+    stopAllScreenShares,
+  ]);
 
   const createDemoCanvasStream = useCallback(
     (label: string, type: "camera" | "screen") => {
@@ -2988,6 +4175,26 @@ export default function VideoCallModal({
     }
   };
 
+  const handleExitCall = useCallback(() => {
+    if (isCallAdmin) {
+      void playEndCallTone();
+      endCall();
+      return;
+    }
+    leaveCall();
+  }, [endCall, isCallAdmin, leaveCall, playEndCallTone]);
+
+  const handleRemoveParticipant = useCallback(
+    (socketId: string, label: string) => {
+      if (!isCallAdmin) return;
+      const normalizedLabel = String(label || "this participant").trim() || "this participant";
+      const shouldRemove = window.confirm(`Remove ${normalizedLabel} from this call?`);
+      if (!shouldRemove) return;
+      removeParticipantFromCall(socketId);
+    },
+    [isCallAdmin, removeParticipantFromCall]
+  );
+
   useEffect(() => {
     const stopRingtone = () => {
       const audio = ringtoneRef.current.audio;
@@ -3128,32 +4335,137 @@ export default function VideoCallModal({
   }, [showSettingsPanel]);
 
   useEffect(() => {
+    if (!showSettingsPanel) return;
+    ensureSettingsModalBounds(false);
+  }, [ensureSettingsModalBounds, showSettingsPanel]);
+
+  useEffect(() => {
+    if (!showSettingsPanel) return;
+    const handleResize = () => ensureSettingsModalBounds(false);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [ensureSettingsModalBounds, showSettingsPanel]);
+
+  useEffect(() => {
+    if (!showSettingsPanel) return;
+    const handlePointerMove = (event: globalThis.PointerEvent) => {
+      const overlay = settingsOverlayRef.current;
+      if (!overlay) return;
+      const overlayRect = overlay.getBoundingClientRect();
+      const dragState = settingsDragRef.current;
+      if (dragState) {
+        const deltaX = event.clientX - dragState.startX;
+        const deltaY = event.clientY - dragState.startY;
+        setSettingsModalBounds((prev) => {
+          if (!prev) return prev;
+          return clampSettingsModalBounds(
+            {
+              ...prev,
+              x: dragState.originX + deltaX,
+              y: dragState.originY + deltaY,
+            },
+            overlayRect.width,
+            overlayRect.height
+          );
+        });
+        return;
+      }
+
+      const resizeState = settingsResizeRef.current;
+      if (!resizeState) return;
+      const deltaX = event.clientX - resizeState.startX;
+      const deltaY = event.clientY - resizeState.startY;
+      setSettingsModalBounds((prev) => {
+        if (!prev) return prev;
+        return clampSettingsModalBounds(
+          {
+            ...prev,
+            width: resizeState.originWidth + deltaX,
+            height: resizeState.originHeight + deltaY,
+          },
+          overlayRect.width,
+          overlayRect.height
+        );
+      });
+    };
+
+    const handlePointerUp = () => {
+      if (!settingsDragRef.current && !settingsResizeRef.current) return;
+      settingsDragRef.current = null;
+      settingsResizeRef.current = null;
+      setIsSettingsModalDragging(false);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
+    };
+  }, [clampSettingsModalBounds, showSettingsPanel]);
+
+  useEffect(() => {
     if (showSettingsPanel) {
       setSettingsTab("call");
     }
   }, [showSettingsPanel]);
 
   useEffect(() => {
-    if (!showViewSelect && !showScreenSelect && !showCameraSelect) return;
+    if (showSettingsPanel) return;
+    settingsDragRef.current = null;
+    settingsResizeRef.current = null;
+    setIsSettingsModalDragging(false);
+  }, [showSettingsPanel]);
+
+  useEffect(() => {
+    if (
+      !showViewSelect &&
+      !showScreenSelect &&
+      !showCameraSelect &&
+      !showWebMicDeviceSelect &&
+      !showWebCameraDeviceSelect &&
+      !showDesktopMicSelect &&
+      !showDesktopCameraSelect &&
+      !showDesktopFilterSelect
+    ) {
+      return;
+    }
     const handleClick = (event: globalThis.MouseEvent) => {
       const target = event.target as Node | null;
       if (!target) return;
       if (
         viewSelectRef.current?.contains(target) ||
         screenSelectRef.current?.contains(target) ||
-        cameraSelectRef.current?.contains(target)
+        cameraSelectRef.current?.contains(target) ||
+        webMicDeviceSelectRef.current?.contains(target) ||
+        webCameraDeviceSelectRef.current?.contains(target) ||
+        desktopMicSelectRef.current?.contains(target) ||
+        desktopCameraSelectRef.current?.contains(target) ||
+        desktopFilterSelectRef.current?.contains(target)
       ) {
         return;
       }
       setShowViewSelect(false);
       setShowScreenSelect(false);
       setShowCameraSelect(false);
+      setShowWebMicDeviceSelect(false);
+      setShowWebCameraDeviceSelect(false);
+      setShowDesktopMicSelect(false);
+      setShowDesktopCameraSelect(false);
+      setShowDesktopFilterSelect(false);
     };
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
         setShowViewSelect(false);
         setShowScreenSelect(false);
         setShowCameraSelect(false);
+        setShowWebMicDeviceSelect(false);
+        setShowWebCameraDeviceSelect(false);
+        setShowDesktopMicSelect(false);
+        setShowDesktopCameraSelect(false);
+        setShowDesktopFilterSelect(false);
       }
     };
     document.addEventListener("mousedown", handleClick);
@@ -3162,7 +4474,27 @@ export default function VideoCallModal({
       document.removeEventListener("mousedown", handleClick);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [showCameraSelect, showScreenSelect, showViewSelect]);
+  }, [
+    showCameraSelect,
+    showWebCameraDeviceSelect,
+    showWebMicDeviceSelect,
+    showDesktopCameraSelect,
+    showDesktopFilterSelect,
+    showDesktopMicSelect,
+    showScreenSelect,
+    showViewSelect,
+  ]);
+
+  const settingsModalStyle = useMemo<CSSProperties | undefined>(() => {
+    if (isMobileLayout) return undefined;
+    if (!settingsModalBounds) return undefined;
+    return {
+      left: settingsModalBounds.x,
+      top: settingsModalBounds.y,
+      width: settingsModalBounds.width,
+      height: settingsModalBounds.height,
+    };
+  }, [isMobileLayout, settingsModalBounds]);
 
   if (!showModal) return null;
 
@@ -3192,16 +4524,20 @@ export default function VideoCallModal({
           <div
             className="video-settings-overlay"
             role="presentation"
-            onClick={handleCloseSettings}
+            ref={settingsOverlayRef}
           >
             <div
-              className="video-settings-modal"
+              className={`video-settings-modal${isSettingsModalDragging ? " is-dragging" : ""}${
+                isMobileLayout ? "" : " is-draggable"
+              }`}
               role="dialog"
               aria-modal="true"
               aria-label="Call settings"
+              ref={settingsModalRef}
+              style={settingsModalStyle}
               onClick={(event) => event.stopPropagation()}
             >
-              <div className="video-settings-header">
+              <div className="video-settings-header" onPointerDown={handleSettingsModalHeaderPointerDown}>
                 <div>
                   <p className="video-settings-eyebrow">Settings</p>
                   <h3>Call settings</h3>
@@ -3254,7 +4590,7 @@ export default function VideoCallModal({
                         {noiseSuppressionEnabled ? "On" : "Off"}
                       </span>
                     </button>
-                    {showMicSelector && (
+                    {isStandaloneVideoApp && showMicSelector && (
                       <div className="video-settings-tile is-static is-select">
                         <FontAwesomeIcon icon={faMicrophone} aria-hidden="true" />
                         <span className="video-settings-label">Microphone</span>
@@ -3277,6 +4613,46 @@ export default function VideoCallModal({
                           </select>
                         </label>
                       </div>
+                    )}
+                    {!isStandaloneVideoApp && (
+                      <>
+                        <div className="video-settings-tile is-static is-select">
+                          <FontAwesomeIcon icon={faMicrophone} aria-hidden="true" />
+                          <span className="video-settings-label">Microphone</span>
+                          <label className="video-settings-select">
+                            <span className="sr-only">Microphone</span>
+                            <select
+                              value={micSelectionValue}
+                              onChange={(event) => void setAudioInputDevice(event.target.value)}
+                              title="Select microphone"
+                            >
+                              {callMenuAudioDevices.map((device) => (
+                                <option key={`web-mic-${device.id}`} value={device.id}>
+                                  {device.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                        <div className="video-settings-tile is-static is-select">
+                          <FontAwesomeIcon icon={faCamera} aria-hidden="true" />
+                          <span className="video-settings-label">Camera</span>
+                          <label className="video-settings-select">
+                            <span className="sr-only">Camera</span>
+                            <select
+                              value={cameraSelectionValue}
+                              onChange={(event) => void setVideoInputDevice(event.target.value)}
+                              title="Select camera"
+                            >
+                              {callMenuVideoDevices.map((device) => (
+                                <option key={`web-camera-${device.id}`} value={device.id}>
+                                  {device.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                      </>
                     )}
                   </div>
                 </section>
@@ -3373,30 +4749,6 @@ export default function VideoCallModal({
                         </select>
                       </label>
                     </div>
-                    {showCameraSelector && (
-                      <div className="video-settings-tile is-static is-select">
-                        <FontAwesomeIcon icon={faVideo} aria-hidden="true" />
-                        <span className="video-settings-label">Camera</span>
-                        <label className="video-settings-select">
-                          <span className="sr-only">Camera</span>
-                          <select
-                            value={cameraSelectionValue}
-                            onChange={(e) => void setVideoInputDevice(e.target.value)}
-                            title="Select camera"
-                          >
-                            <option value="default">Default camera</option>
-                            {videoInputs.map((device, index) => (
-                              <option
-                                key={device.deviceId || String(index)}
-                                value={device.deviceId}
-                              >
-                                {device.label || `Camera ${index + 1}`}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      </div>
-                    )}
                   </div>
                   <div className="video-settings-stack">
                     <div className="video-settings-group">
@@ -3480,51 +4832,30 @@ export default function VideoCallModal({
                     )}
                     <div className="video-settings-group">
                       <div className="video-settings-row">
-                        <span className="video-settings-label">Avatar pose system</span>
+                        <span className="video-settings-label">Avatar library</span>
                         <span className="video-settings-hint">
-                          Generate a custom avatar to replace your body.
+                          Choose from 20 pre-built avatars.
                         </span>
                       </div>
                       <div className="video-settings-row">
                         <label className="video-settings-select">
-                          <span className="sr-only">Avatar pose</span>
+                          <span className="sr-only">Avatar preset</span>
                           <select
-                            value={avatarPose}
-                            onChange={(event) => setAvatarPose(event.target.value)}
+                            value={selectedAvatarPresetId}
+                            onChange={handleAvatarPresetChange}
                           >
-                            {AVATAR_POSE_OPTIONS.map((option) => (
+                            <option value="">
+                              {videoEffects.avatarImageUrl
+                                ? "Current custom avatar"
+                                : "Choose preset avatar"}
+                            </option>
+                            {AVATAR_PRESET_OPTIONS.map((option) => (
                               <option key={option.id} value={option.id}>
                                 {option.label}
                               </option>
                             ))}
                           </select>
                         </label>
-                        {avatarPose === "custom" && (
-                          <input
-                            className="video-settings-input"
-                            value={avatarCustomPose}
-                            onChange={(event) => setAvatarCustomPose(event.target.value)}
-                            placeholder="Describe the pose"
-                          />
-                        )}
-                      </div>
-                      <textarea
-                        className="video-settings-input video-settings-textarea"
-                        rows={3}
-                        value={avatarPrompt}
-                        onChange={(event) => setAvatarPrompt(event.target.value)}
-                        placeholder="A talking lollipop character with sprinkles."
-                      />
-                      {avatarError && <p className="video-settings-error">{avatarError}</p>}
-                      <div className="video-settings-row">
-                        <button
-                          type="button"
-                          className="btn primary small"
-                          onClick={handleGenerateAvatar}
-                          disabled={avatarLoading}
-                        >
-                          {avatarLoading ? "Generating..." : "Generate avatar"}
-                        </button>
                         {videoEffects.avatarImageUrl && (
                           <button
                             type="button"
@@ -3540,241 +4871,365 @@ export default function VideoCallModal({
                           </button>
                         )}
                       </div>
-                      {videoEffects.avatarImageUrl && (
-                        <img
-                          className="video-settings-preview is-avatar"
-                          src={videoEffects.avatarImageUrl}
-                          alt="Avatar preview"
-                          loading="lazy"
-                        />
-                      )}
                     </div>
                     {videoEffects.avatarEnabled && (
                       <div className="video-settings-group">
                         <div className="video-settings-row">
                           <span className="video-settings-label">Avatar alignment</span>
                           <span className="video-settings-hint">
-                            Nudge and scale your avatar so it lines up.
+                            Use Quick align first, then open Fine tune for eyes and mouth.
                           </span>
                         </div>
-                        <div className="video-settings-row">
-                          <span className="video-settings-label">Eye style</span>
-                          <label className="video-settings-select">
-                            <span className="sr-only">Eye style</span>
-                            <select
-                              value={videoEffects.avatarEyeStyle}
-                              onChange={(event) =>
-                                setVideoEffects({
-                                  avatarEyeStyle:
-                                    event.target.value as typeof videoEffects.avatarEyeStyle,
-                                })
-                              }
-                            >
-                              {AVATAR_EYE_STYLE_OPTIONS.map((option) => (
-                                <option key={option.id} value={option.id}>
-                                  {option.label}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        </div>
-                        <div className="video-settings-row">
-                          <span className="video-settings-label">Mouth style</span>
-                          <label className="video-settings-select">
-                            <span className="sr-only">Mouth style</span>
-                            <select
-                              value={videoEffects.avatarMouthStyle}
-                              onChange={(event) =>
-                                setVideoEffects({
-                                  avatarMouthStyle:
-                                    event.target.value as typeof videoEffects.avatarMouthStyle,
-                                })
-                              }
-                            >
-                              {AVATAR_MOUTH_STYLE_OPTIONS.map((option) => (
-                                <option key={option.id} value={option.id}>
-                                  {option.label}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        </div>
-                        <div className="video-settings-row">
-                          <span className="video-settings-label">Eye spacing</span>
-                          <div className="video-settings-alpha">
-                            <input
-                              className="video-settings-range"
-                              type="range"
-                              min={0.25}
-                              max={1}
-                              step={0.05}
-                              value={avatarEyeSpacingValue}
-                              onChange={(event) =>
-                                setVideoEffects({
-                                  avatarEyeSpacing: Number(event.target.value),
-                                })
-                              }
-                              aria-label="Avatar eye spacing"
-                            />
-                            <span className="video-settings-alpha-value">
-                              {Math.round(avatarEyeSpacingValue * 100)}%
-                            </span>
+                        {videoEffects.avatarImageUrl ? (
+                          <div className="video-settings-avatar-align-layout">
+                            <div className="video-settings-avatar-preview">
+                              <div className="video-settings-avatar-preview-stage">
+                                <div className="video-settings-avatar-guides" aria-hidden="true">
+                                  <span className="video-settings-avatar-guide-line is-vertical" />
+                                  <span className="video-settings-avatar-guide-line is-horizontal" />
+                                </div>
+                                <div
+                                  className="video-settings-avatar-preview-layer"
+                                  style={avatarPreviewLayerStyle}
+                                >
+                                  <img
+                                    className="video-settings-avatar-preview-image"
+                                    src={videoEffects.avatarImageUrl}
+                                    alt="Avatar alignment preview"
+                                    loading="lazy"
+                                  />
+                                  <svg
+                                    className="video-settings-avatar-overlay"
+                                    viewBox="0 0 100 100"
+                                    preserveAspectRatio="none"
+                                    aria-hidden="true"
+                                  >
+                                    {renderAvatarPreviewEyes()}
+                                    {renderAvatarPreviewMouth()}
+                                  </svg>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="video-settings-avatar-controls">
+                              <div className="video-settings-avatar-style-row">
+                                <label className="video-settings-avatar-style">
+                                  <span>Eye style</span>
+                                  <select
+                                    value={normalizeAvatarEyeStyle(videoEffects.avatarEyeStyle)}
+                                    onChange={(event) =>
+                                      setVideoEffects({
+                                        avatarEyeStyle:
+                                          event.target.value as typeof videoEffects.avatarEyeStyle,
+                                      })
+                                    }
+                                  >
+                                    {AVATAR_EYE_STYLE_OPTIONS.map((option) => (
+                                      <option key={option.id} value={option.id}>
+                                        {option.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                                <label className="video-settings-avatar-style">
+                                  <span>Mouth style</span>
+                                  <select
+                                    value={normalizeAvatarMouthStyle(videoEffects.avatarMouthStyle)}
+                                    onChange={(event) =>
+                                      setVideoEffects({
+                                        avatarMouthStyle:
+                                          event.target.value as typeof videoEffects.avatarMouthStyle,
+                                      })
+                                    }
+                                  >
+                                    {AVATAR_MOUTH_STYLE_OPTIONS.map((option) => (
+                                      <option key={option.id} value={option.id}>
+                                        {option.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                              </div>
+
+                              <div className="video-settings-avatar-panels">
+                                <div className="video-settings-avatar-section">
+                                  <div className="video-settings-row">
+                                    <span className="video-settings-label">Quick align</span>
+                                    <button
+                                      type="button"
+                                      className="video-settings-reset"
+                                      onClick={handleResetAvatarPlacement}
+                                    >
+                                      Reset position
+                                    </button>
+                                  </div>
+
+                                  <div className="video-settings-avatar-control">
+                                    <div className="video-settings-avatar-control-head">
+                                      <span className="video-settings-label">Position X</span>
+                                      <span className="video-settings-avatar-value">
+                                        {formatPercentValue(avatarOffsetXValue, { signed: true })}
+                                      </span>
+                                    </div>
+                                    <input
+                                      className="video-settings-range"
+                                      type="range"
+                                      min={-0.5}
+                                      max={0.5}
+                                      step={0.02}
+                                      value={avatarOffsetXValue}
+                                      onChange={(event) =>
+                                        setVideoEffects({
+                                          avatarOffsetX: Number(event.target.value),
+                                        })
+                                      }
+                                      aria-label="Avatar horizontal alignment"
+                                    />
+                                  </div>
+
+                                  <div className="video-settings-avatar-control">
+                                    <div className="video-settings-avatar-control-head">
+                                      <span className="video-settings-label">Position Y</span>
+                                      <span className="video-settings-avatar-value">
+                                        {formatPercentValue(avatarOffsetYValue, { signed: true })}
+                                      </span>
+                                    </div>
+                                    <input
+                                      className="video-settings-range"
+                                      type="range"
+                                      min={-0.5}
+                                      max={0.5}
+                                      step={0.02}
+                                      value={avatarOffsetYValue}
+                                      onChange={(event) =>
+                                        setVideoEffects({
+                                          avatarOffsetY: Number(event.target.value),
+                                        })
+                                      }
+                                      aria-label="Avatar vertical alignment"
+                                    />
+                                  </div>
+
+                                  <div className="video-settings-avatar-control">
+                                    <div className="video-settings-avatar-control-head">
+                                      <span className="video-settings-label">Scale</span>
+                                      <span className="video-settings-avatar-value">
+                                        {formatPercentValue(avatarScaleValue)}
+                                      </span>
+                                    </div>
+                                    <input
+                                      className="video-settings-range"
+                                      type="range"
+                                      min={0.4}
+                                      max={1.6}
+                                      step={0.05}
+                                      value={avatarScaleValue}
+                                      onChange={(event) =>
+                                        setVideoEffects({
+                                          avatarScale: Number(event.target.value),
+                                        })
+                                      }
+                                      aria-label="Avatar scale"
+                                    />
+                                  </div>
+                                </div>
+
+                                <details className="video-settings-avatar-advanced">
+                                  <summary>Fine tune eyes and mouth</summary>
+                                  <div className="video-settings-avatar-section is-advanced">
+                                    <div className="video-settings-row">
+                                      <span className="video-settings-hint">
+                                        Use these only if the face overlay needs extra adjustment.
+                                      </span>
+                                      <button
+                                        type="button"
+                                        className="video-settings-reset"
+                                        onClick={handleResetAvatarFace}
+                                      >
+                                        Reset face
+                                      </button>
+                                    </div>
+
+                                    <div className="video-settings-avatar-control">
+                                      <div className="video-settings-avatar-control-head">
+                                        <span className="video-settings-label">Eye spacing</span>
+                                        <span className="video-settings-avatar-value">
+                                          {formatPercentValue(avatarEyeSpacingValue)}
+                                        </span>
+                                      </div>
+                                      <input
+                                        className="video-settings-range"
+                                        type="range"
+                                        min={0.25}
+                                        max={1}
+                                        step={0.05}
+                                        value={avatarEyeSpacingValue}
+                                        onChange={(event) =>
+                                          setVideoEffects({
+                                            avatarEyeSpacing: Number(event.target.value),
+                                          })
+                                        }
+                                        aria-label="Avatar eye spacing"
+                                      />
+                                    </div>
+
+                                    <div className="video-settings-avatar-control">
+                                      <div className="video-settings-avatar-control-head">
+                                        <span className="video-settings-label">Eye size</span>
+                                        <span className="video-settings-avatar-value">
+                                          {formatPercentValue(avatarEyeSizeValue)}
+                                        </span>
+                                      </div>
+                                      <input
+                                        className="video-settings-range"
+                                        type="range"
+                                        min={0.5}
+                                        max={1.8}
+                                        step={0.05}
+                                        value={avatarEyeSizeValue}
+                                        onChange={(event) =>
+                                          setVideoEffects({
+                                            avatarEyeSize: Number(event.target.value),
+                                          })
+                                        }
+                                        aria-label="Avatar eye size"
+                                      />
+                                    </div>
+
+                                    <div className="video-settings-avatar-control">
+                                      <div className="video-settings-avatar-control-head">
+                                        <span className="video-settings-label">Eye X</span>
+                                        <span className="video-settings-avatar-value">
+                                          {formatPercentValue(avatarEyeOffsetXValue, { signed: true })}
+                                        </span>
+                                      </div>
+                                      <input
+                                        className="video-settings-range"
+                                        type="range"
+                                        min={-0.35}
+                                        max={0.35}
+                                        step={0.02}
+                                        value={avatarEyeOffsetXValue}
+                                        onChange={(event) =>
+                                          setVideoEffects({
+                                            avatarEyeOffsetX: Number(event.target.value),
+                                          })
+                                        }
+                                        aria-label="Avatar eye horizontal offset"
+                                      />
+                                    </div>
+
+                                    <div className="video-settings-avatar-control">
+                                      <div className="video-settings-avatar-control-head">
+                                        <span className="video-settings-label">Eye Y</span>
+                                        <span className="video-settings-avatar-value">
+                                          {formatPercentValue(avatarEyeOffsetYValue, { signed: true })}
+                                        </span>
+                                      </div>
+                                      <input
+                                        className="video-settings-range"
+                                        type="range"
+                                        min={-0.3}
+                                        max={0.3}
+                                        step={0.02}
+                                        value={avatarEyeOffsetYValue}
+                                        onChange={(event) =>
+                                          setVideoEffects({
+                                            avatarEyeOffsetY: Number(event.target.value),
+                                          })
+                                        }
+                                        aria-label="Avatar eye vertical offset"
+                                      />
+                                    </div>
+
+                                    <div className="video-settings-avatar-control">
+                                      <div className="video-settings-avatar-control-head">
+                                        <span className="video-settings-label">Mouth X</span>
+                                        <span className="video-settings-avatar-value">
+                                          {formatPercentValue(avatarMouthOffsetXValue, { signed: true })}
+                                        </span>
+                                      </div>
+                                      <input
+                                        className="video-settings-range"
+                                        type="range"
+                                        min={-0.35}
+                                        max={0.35}
+                                        step={0.02}
+                                        value={avatarMouthOffsetXValue}
+                                        onChange={(event) =>
+                                          setVideoEffects({
+                                            avatarMouthOffsetX: Number(event.target.value),
+                                          })
+                                        }
+                                        aria-label="Avatar mouth horizontal offset"
+                                      />
+                                    </div>
+
+                                    <div className="video-settings-avatar-control">
+                                      <div className="video-settings-avatar-control-head">
+                                        <span className="video-settings-label">Mouth size</span>
+                                        <span className="video-settings-avatar-value">
+                                          {formatPercentValue(avatarMouthSizeValue)}
+                                        </span>
+                                      </div>
+                                      <input
+                                        className="video-settings-range"
+                                        type="range"
+                                        min={0.5}
+                                        max={1.8}
+                                        step={0.05}
+                                        value={avatarMouthSizeValue}
+                                        onChange={(event) =>
+                                          setVideoEffects({
+                                            avatarMouthSize: Number(event.target.value),
+                                          })
+                                        }
+                                        aria-label="Avatar mouth size"
+                                      />
+                                    </div>
+
+                                    <div className="video-settings-avatar-control">
+                                      <div className="video-settings-avatar-control-head">
+                                        <span className="video-settings-label">Mouth Y</span>
+                                        <span className="video-settings-avatar-value">
+                                          {formatPercentValue(avatarMouthOffsetYValue, { signed: true })}
+                                        </span>
+                                      </div>
+                                      <input
+                                        className="video-settings-range"
+                                        type="range"
+                                        min={-0.3}
+                                        max={0.3}
+                                        step={0.02}
+                                        value={avatarMouthOffsetYValue}
+                                        onChange={(event) =>
+                                          setVideoEffects({
+                                            avatarMouthOffsetY: Number(event.target.value),
+                                          })
+                                        }
+                                        aria-label="Avatar mouth vertical offset"
+                                      />
+                                    </div>
+                                  </div>
+                                </details>
+                              </div>
+
+                              <div className="video-settings-row">
+                                <button
+                                  type="button"
+                                  className="video-settings-reset"
+                                  onClick={handleResetAvatarAlignment}
+                                >
+                                  Reset all alignment
+                                </button>
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                        <div className="video-settings-row">
-                          <span className="video-settings-label">X</span>
-                          <div className="video-settings-alpha">
-                            <input
-                              className="video-settings-range"
-                              type="range"
-                              min={-0.5}
-                              max={0.5}
-                              step={0.02}
-                              value={avatarOffsetXValue}
-                              onChange={(event) =>
-                                setVideoEffects({
-                                  avatarOffsetX: Number(event.target.value),
-                                })
-                              }
-                              aria-label="Avatar horizontal alignment"
-                            />
-                            <span className="video-settings-alpha-value">
-                              {Math.round(avatarOffsetXValue * 100)}%
-                            </span>
-                          </div>
-                        </div>
-                        <div className="video-settings-row">
-                          <span className="video-settings-label">Y</span>
-                          <div className="video-settings-alpha">
-                            <input
-                              className="video-settings-range"
-                              type="range"
-                              min={-0.5}
-                              max={0.5}
-                              step={0.02}
-                              value={avatarOffsetYValue}
-                              onChange={(event) =>
-                                setVideoEffects({
-                                  avatarOffsetY: Number(event.target.value),
-                                })
-                              }
-                              aria-label="Avatar vertical alignment"
-                            />
-                            <span className="video-settings-alpha-value">
-                              {Math.round(avatarOffsetYValue * 100)}%
-                            </span>
-                          </div>
-                        </div>
-                        <div className="video-settings-row">
-                          <span className="video-settings-label">Eye X</span>
-                          <div className="video-settings-alpha">
-                            <input
-                              className="video-settings-range"
-                              type="range"
-                              min={-0.35}
-                              max={0.35}
-                              step={0.02}
-                              value={avatarEyeOffsetXValue}
-                              onChange={(event) =>
-                                setVideoEffects({
-                                  avatarEyeOffsetX: Number(event.target.value),
-                                })
-                              }
-                              aria-label="Avatar eye horizontal offset"
-                            />
-                            <span className="video-settings-alpha-value">
-                              {Math.round(avatarEyeOffsetXValue * 100)}%
-                            </span>
-                          </div>
-                        </div>
-                        <div className="video-settings-row">
-                          <span className="video-settings-label">Eye Y</span>
-                          <div className="video-settings-alpha">
-                            <input
-                              className="video-settings-range"
-                              type="range"
-                              min={-0.3}
-                              max={0.3}
-                              step={0.02}
-                              value={avatarEyeOffsetYValue}
-                              onChange={(event) =>
-                                setVideoEffects({
-                                  avatarEyeOffsetY: Number(event.target.value),
-                                })
-                              }
-                              aria-label="Avatar eye vertical offset"
-                            />
-                            <span className="video-settings-alpha-value">
-                              {Math.round(avatarEyeOffsetYValue * 100)}%
-                            </span>
-                          </div>
-                        </div>
-                        <div className="video-settings-row">
-                          <span className="video-settings-label">Scale</span>
-                          <div className="video-settings-alpha">
-                            <input
-                              className="video-settings-range"
-                              type="range"
-                              min={0.4}
-                              max={1.6}
-                              step={0.05}
-                              value={avatarScaleValue}
-                              onChange={(event) =>
-                                setVideoEffects({
-                                  avatarScale: Number(event.target.value),
-                                })
-                              }
-                              aria-label="Avatar scale"
-                            />
-                            <span className="video-settings-alpha-value">
-                              {Math.round(avatarScaleValue * 100)}%
-                            </span>
-                          </div>
-                        </div>
-                        <div className="video-settings-row">
-                          <span className="video-settings-label">Mouth X</span>
-                          <div className="video-settings-alpha">
-                            <input
-                              className="video-settings-range"
-                              type="range"
-                              min={-0.35}
-                              max={0.35}
-                              step={0.02}
-                              value={avatarMouthOffsetXValue}
-                              onChange={(event) =>
-                                setVideoEffects({
-                                  avatarMouthOffsetX: Number(event.target.value),
-                                })
-                              }
-                              aria-label="Avatar mouth horizontal offset"
-                            />
-                            <span className="video-settings-alpha-value">
-                              {Math.round(avatarMouthOffsetXValue * 100)}%
-                            </span>
-                          </div>
-                        </div>
-                        <div className="video-settings-row">
-                          <span className="video-settings-label">Mouth Y</span>
-                          <div className="video-settings-alpha">
-                            <input
-                              className="video-settings-range"
-                              type="range"
-                              min={-0.3}
-                              max={0.3}
-                              step={0.02}
-                              value={avatarMouthOffsetYValue}
-                              onChange={(event) =>
-                                setVideoEffects({
-                                  avatarMouthOffsetY: Number(event.target.value),
-                                })
-                              }
-                              aria-label="Avatar mouth vertical offset"
-                            />
-                            <span className="video-settings-alpha-value">
-                              {Math.round(avatarMouthOffsetYValue * 100)}%
-                            </span>
-                          </div>
-                        </div>
+                        ) : (
+                          <span className="video-settings-hint">
+                            Choose an avatar to unlock live alignment controls.
+                          </span>
+                        )}
                       </div>
                     )}
                     </div>
@@ -4058,13 +5513,224 @@ export default function VideoCallModal({
                   </>
                 )}
               </div>
+              {!isMobileLayout && (
+                <div
+                  className="video-settings-resize-handle"
+                  role="presentation"
+                  onPointerDown={handleSettingsModalResizePointerDown}
+                />
+              )}
             </div>
+          </div>
+        )}
+        {showDesktopTitlebar && (
+          <div
+            className={`video-desktop-titlebar${showDesktopTitlebarControls ? "" : " is-empty"}`}
+            role={showDesktopTitlebarControls ? "toolbar" : undefined}
+            aria-label={showDesktopTitlebarControls ? "Call title bar" : undefined}
+          >
+            {showDesktopTitlebarControls && (
+              <>
+                <div className="video-desktop-titlebar__brand">
+                  <img src="/logo2.png" alt="" />
+                  <span className="video-desktop-titlebar__brand-name">YSP Live</span>
+                  <span className="video-desktop-titlebar__badge">
+                    Live {totalParticipants}/{maxParticipants}
+                  </span>
+                </div>
+                <div className="video-desktop-titlebar__controls">
+                  <div className="video-desktop-titlebar__group is-actions">
+                    <button
+                      type="button"
+                      className="video-desktop-titlebar__button is-settings"
+                      onClick={handleOpenSettings}
+                      data-hint="Call settings"
+                      aria-label="Settings"
+                      title="Settings"
+                    >
+                      <FontAwesomeIcon icon={faSliders} aria-hidden="true" />
+                      <span className="video-desktop-titlebar__button-text">Settings</span>
+                    </button>
+                    {isCallAdmin && (
+                      <>
+                        <button
+                          type="button"
+                          className="video-desktop-titlebar__button is-mute-all"
+                          onClick={muteAllParticipants}
+                          disabled={remoteList.length === 0}
+                          data-hint="Mute everyone"
+                          aria-label="Mute everyone"
+                          title="Mute everyone"
+                        >
+                          <FontAwesomeIcon icon={faMicrophoneSlash} aria-hidden="true" />
+                          <span className="video-desktop-titlebar__button-text">Mute everyone</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="video-desktop-titlebar__button is-stop-screens"
+                          onClick={stopAllScreenShares}
+                          disabled={!hasRemoteScreenShares}
+                          data-hint="Stop all screens"
+                          aria-label="Stop all screens"
+                          title="Stop all screens"
+                        >
+                          <FontAwesomeIcon icon={faDisplay} aria-hidden="true" />
+                          <span className="video-desktop-titlebar__button-text">Stop all screens</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  <div className="video-desktop-titlebar__group is-devices">
+                    <div
+                      className={`video-desktop-titlebar__device-menu${
+                        showDesktopMicSelect ? " is-open" : ""
+                      }`}
+                      ref={desktopMicSelectRef}
+                    >
+                      <button
+                        type="button"
+                        className="video-desktop-titlebar__device-trigger is-mic"
+                        data-hint={selectedMicLabel}
+                        aria-label="Microphone devices"
+                        title={selectedMicLabel}
+                        aria-expanded={showDesktopMicSelect}
+                        onClick={() => {
+                          setShowDesktopMicSelect((prev) => !prev);
+                          setShowDesktopCameraSelect(false);
+                          setShowDesktopFilterSelect(false);
+                          setShowViewSelect(false);
+                          setShowScreenSelect(false);
+                          setShowCameraSelect(false);
+                        }}
+                      >
+                        <FontAwesomeIcon icon={faMicrophone} aria-hidden="true" />
+                      </button>
+                      {showDesktopMicSelect && (
+                        <div className="video-desktop-titlebar__device-dropdown">
+                          <div className="video-desktop-titlebar__device-list">
+                            {callMenuAudioDevices.map((device) => (
+                              <button
+                                type="button"
+                                key={device.id}
+                                className={`video-desktop-titlebar__device-option${
+                                  micSelectionValue === device.id ? " is-active" : ""
+                                }`}
+                                onClick={() => {
+                                  void setAudioInputDevice(device.id);
+                                  setShowDesktopMicSelect(false);
+                                }}
+                              >
+                                {device.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <div
+                      className={`video-desktop-titlebar__device-menu${
+                        showDesktopCameraSelect ? " is-open" : ""
+                      }`}
+                      ref={desktopCameraSelectRef}
+                    >
+                      <button
+                        type="button"
+                        className="video-desktop-titlebar__device-trigger is-camera"
+                        data-hint={selectedCameraLabel}
+                        aria-label="Camera devices"
+                        title={selectedCameraLabel}
+                        aria-expanded={showDesktopCameraSelect}
+                        onClick={() => {
+                          setShowDesktopCameraSelect((prev) => !prev);
+                          setShowDesktopMicSelect(false);
+                          setShowDesktopFilterSelect(false);
+                          setShowViewSelect(false);
+                          setShowScreenSelect(false);
+                          setShowCameraSelect(false);
+                        }}
+                      >
+                        <FontAwesomeIcon icon={faCamera} aria-hidden="true" />
+                      </button>
+                      {showDesktopCameraSelect && (
+                        <div className="video-desktop-titlebar__device-dropdown">
+                          <div className="video-desktop-titlebar__device-list">
+                            {callMenuVideoDevices.map((device) => (
+                              <button
+                                type="button"
+                                key={device.id}
+                                className={`video-desktop-titlebar__device-option${
+                                  cameraSelectionValue === device.id ? " is-active" : ""
+                                }`}
+                                onClick={() => {
+                                  void setVideoInputDevice(device.id);
+                                  setShowDesktopCameraSelect(false);
+                                }}
+                              >
+                                {device.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <div
+                      className={`video-desktop-titlebar__device-menu${
+                        showDesktopFilterSelect ? " is-open" : ""
+                      }`}
+                      ref={desktopFilterSelectRef}
+                    >
+                      <button
+                        type="button"
+                        className="video-desktop-titlebar__device-trigger is-filter"
+                        data-hint="Camera Filter Options"
+                        aria-label="Camera filter options"
+                        title="Camera Filter Options"
+                        aria-expanded={showDesktopFilterSelect}
+                        onClick={() => {
+                          setShowDesktopFilterSelect((prev) => !prev);
+                          setShowDesktopMicSelect(false);
+                          setShowDesktopCameraSelect(false);
+                          setShowViewSelect(false);
+                          setShowScreenSelect(false);
+                          setShowCameraSelect(false);
+                        }}
+                      >
+                        <FontAwesomeIcon icon={faSliders} aria-hidden="true" />
+                      </button>
+                      {showDesktopFilterSelect && (
+                        <div className="video-desktop-titlebar__device-dropdown">
+                          <div className="video-desktop-titlebar__device-list">
+                            {FILTER_OPTIONS.map((option) => (
+                              <button
+                                type="button"
+                                key={option.id}
+                                className={`video-desktop-titlebar__device-option${
+                                  videoEffects.filter === option.id ? " is-active" : ""
+                                }`}
+                                onClick={() => {
+                                  setVideoEffects({
+                                    filter: option.id as typeof videoEffects.filter,
+                                  });
+                                  setShowDesktopFilterSelect(false);
+                                }}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         )}
         <div className="video-call-main">
           {showCallUi && (
             <div className="video-call-controls-top">
-              <div className="video-call-controls-group">
+              <div className="video-call-controls-group is-media">
                 <button
                   type="button"
                   className={`video-control video-control-icon${
@@ -4097,7 +5763,7 @@ export default function VideoCallModal({
                 </button>
                 <button
                   type="button"
-                  className={`video-control video-control-icon${
+                  className={`video-control video-control-icon is-share${
                     isScreenSharing ? " is-active" : ""
                   }`}
                   onClick={handleToggleScreenShare}
@@ -4113,7 +5779,7 @@ export default function VideoCallModal({
                 {!isMobileCameraOnly && (
                   <button
                     type="button"
-                    className={`video-control video-control-icon ghost${
+                    className={`video-control video-control-icon ghost is-speaker${
                       isRemoteMuted ? " is-active" : ""
                     }`}
                     onClick={() => setIsRemoteMuted((prev) => !prev)}
@@ -4132,43 +5798,6 @@ export default function VideoCallModal({
                     />
                   </button>
                 )}
-                {isCallAdmin && !isMobileCameraOnly && (
-                  <>
-                    <button
-                      type="button"
-                      className="video-control video-control-icon ghost"
-                      onClick={muteAllParticipants}
-                      data-hint="Mute everyone"
-                      aria-label="Mute everyone"
-                      title="Mute everyone"
-                      disabled={remoteList.length === 0}
-                    >
-                      <FontAwesomeIcon icon={faMicrophoneSlash} aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="video-control video-control-icon ghost"
-                      onClick={stopAllScreenShares}
-                      data-hint="Stop all screens"
-                      aria-label="Stop all screens"
-                      title="Stop all screens"
-                      disabled={!hasRemoteScreenShares}
-                    >
-                      <FontAwesomeIcon icon={faDisplay} aria-hidden="true" />
-                    </button>
-                  </>
-                )}
-                <button
-                  type="button"
-                  className="video-control video-control-settings"
-                  onClick={handleOpenSettings}
-                  data-hint="Settings"
-                  aria-label="Settings"
-                  title="Settings"
-                >
-                  <FontAwesomeIcon icon={faSliders} aria-hidden="true" />
-                  <span className="video-control-settings-label">Settings</span>
-                </button>
                 {isMobileLayout && (
                   <button
                     type="button"
@@ -4182,11 +5811,50 @@ export default function VideoCallModal({
                   </button>
                 )}
               </div>
-              <div className="video-call-controls-group">
+              <div className="video-call-controls-group is-call-actions">
+                {!isStandaloneVideoApp && (
+                  <button
+                    type="button"
+                    className="video-control video-control-settings"
+                    onClick={handleOpenSettings}
+                    data-hint="Settings"
+                    aria-label="Settings"
+                    title="Settings"
+                  >
+                    <FontAwesomeIcon icon={faSliders} aria-hidden="true" />
+                    <span className="video-control-settings-label">Settings</span>
+                  </button>
+                )}
+                {!isStandaloneVideoApp && isCallAdmin && !isMobileCameraOnly && (
+                  <>
+                    <button
+                      type="button"
+                      className="video-control video-control-icon ghost is-admin-action"
+                      onClick={muteAllParticipants}
+                      data-hint="Mute everyone"
+                      aria-label="Mute everyone"
+                      title="Mute everyone"
+                      disabled={remoteList.length === 0}
+                    >
+                      <FontAwesomeIcon icon={faMicrophoneSlash} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="video-control video-control-icon ghost is-admin-action"
+                      onClick={stopAllScreenShares}
+                      data-hint="Stop all screens"
+                      aria-label="Stop all screens"
+                      title="Stop all screens"
+                      disabled={!hasRemoteScreenShares}
+                    >
+                      <FontAwesomeIcon icon={faDisplay} aria-hidden="true" />
+                    </button>
+                  </>
+                )}
                 {!isMobileCameraOnly && (
                   <button
                     type="button"
-                    className={`video-control video-control-icon ghost${
+                    className={`video-control video-control-icon ghost is-hold${
                       isHolding ? " is-active" : ""
                     }`}
                     onClick={toggleHold}
@@ -4200,32 +5868,378 @@ export default function VideoCallModal({
                     />
                   </button>
                 )}
-                {!isMobileCameraOnly && (
-                  <button
-                    type="button"
-                    className="video-control video-control-icon ghost"
-                    onClick={leaveCall}
-                    data-hint="Leave call"
-                    aria-label="Leave call"
-                    title="Leave call"
-                  >
-                    <FontAwesomeIcon icon={faRightFromBracket} aria-hidden="true" />
-                  </button>
-                )}
                 <button
                   type="button"
-                  className="video-control video-control-icon end"
-                  onClick={() => {
-                    void playEndCallTone();
-                    endCall();
-                  }}
-                  data-hint="End call"
-                  aria-label="End call"
-                  title="End call"
+                  className={`video-control video-control-icon${
+                    isCallAdmin ? " end" : " leave"
+                  }`}
+                  onClick={handleExitCall}
+                  data-hint={callExitLabel}
+                  aria-label={callExitLabel}
+                  title={callExitLabel}
                 >
-                  <FontAwesomeIcon icon={faPhoneSlash} aria-hidden="true" />
+                  <FontAwesomeIcon
+                    icon={faPhoneSlash}
+                    aria-hidden="true"
+                  />
                 </button>
               </div>
+              {!isMobileLayout && !isMobileCameraOnly && (
+                <div className="video-call-controls-group is-relocated-toolbar is-view-tools">
+                  {!isStandaloneVideoApp && (
+                    <>
+                      <div
+                        className={`video-call-toolbar-group is-dropdown${
+                          showWebMicDeviceSelect ? " is-open" : ""
+                        }`}
+                        ref={webMicDeviceSelectRef}
+                      >
+                        <button
+                          type="button"
+                          className="video-view-button is-icon is-dropdown-trigger"
+                          data-hint={selectedMicLabel}
+                          aria-label="Microphone devices"
+                          title={selectedMicLabel}
+                          aria-expanded={showWebMicDeviceSelect}
+                          onClick={() => {
+                            setShowWebMicDeviceSelect((prev) => !prev);
+                            setShowWebCameraDeviceSelect(false);
+                            setShowViewSelect(false);
+                            setShowScreenSelect(false);
+                            setShowCameraSelect(false);
+                            setShowDesktopMicSelect(false);
+                            setShowDesktopCameraSelect(false);
+                            setShowDesktopFilterSelect(false);
+                          }}
+                        >
+                          <FontAwesomeIcon icon={faMicrophone} aria-hidden="true" />
+                        </button>
+                        {showWebMicDeviceSelect && (
+                          <div className="video-call-dropdown is-open">
+                            <div className="video-call-dropdown-list">
+                              {callMenuAudioDevices.map((device) => (
+                                <button
+                                  type="button"
+                                  key={`web-callbar-mic-${device.id}`}
+                                  className={`video-call-dropdown-option${
+                                    micSelectionValue === device.id ? " is-active" : ""
+                                  }`}
+                                  onClick={() => {
+                                    void setAudioInputDevice(device.id);
+                                    setShowWebMicDeviceSelect(false);
+                                  }}
+                                >
+                                  {device.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      <div
+                        className={`video-call-toolbar-group is-dropdown${
+                          showWebCameraDeviceSelect ? " is-open" : ""
+                        }`}
+                        ref={webCameraDeviceSelectRef}
+                      >
+                        <button
+                          type="button"
+                          className="video-view-button is-icon is-dropdown-trigger"
+                          data-hint={selectedCameraLabel}
+                          aria-label="Camera devices"
+                          title={selectedCameraLabel}
+                          aria-expanded={showWebCameraDeviceSelect}
+                          onClick={() => {
+                            setShowWebCameraDeviceSelect((prev) => !prev);
+                            setShowWebMicDeviceSelect(false);
+                            setShowViewSelect(false);
+                            setShowScreenSelect(false);
+                            setShowCameraSelect(false);
+                            setShowDesktopMicSelect(false);
+                            setShowDesktopCameraSelect(false);
+                            setShowDesktopFilterSelect(false);
+                          }}
+                        >
+                          <FontAwesomeIcon icon={faVideo} aria-hidden="true" />
+                        </button>
+                        {showWebCameraDeviceSelect && (
+                          <div className="video-call-dropdown is-open">
+                            <div className="video-call-dropdown-list">
+                              {callMenuVideoDevices.map((device) => (
+                                <button
+                                  type="button"
+                                  key={`web-callbar-camera-${device.id}`}
+                                  className={`video-call-dropdown-option${
+                                    cameraSelectionValue === device.id ? " is-active" : ""
+                                  }`}
+                                  onClick={() => {
+                                    void setVideoInputDevice(device.id);
+                                    setShowWebCameraDeviceSelect(false);
+                                  }}
+                                >
+                                  {device.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
+                  {!isFullscreenUi && (
+                    <div
+                      className={`video-call-toolbar-group is-dropdown${
+                        showViewSelect ? " is-open" : ""
+                      }`}
+                      ref={viewSelectRef}
+                    >
+                      <button
+                        type="button"
+                        className="video-view-button is-icon is-dropdown-trigger"
+                        data-hint="View"
+                        aria-label="View options"
+                        title="View"
+                        aria-expanded={showViewSelect}
+                        onClick={() => {
+                          setShowViewSelect((prev) => !prev);
+                          setShowScreenSelect(false);
+                          setShowCameraSelect(false);
+                          setShowWebMicDeviceSelect(false);
+                          setShowWebCameraDeviceSelect(false);
+                          setShowDesktopMicSelect(false);
+                          setShowDesktopCameraSelect(false);
+                          setShowDesktopFilterSelect(false);
+                        }}
+                      >
+                        <FontAwesomeIcon icon={faTableColumns} aria-hidden="true" />
+                      </button>
+                      {showViewSelect && (
+                        <div className="video-call-dropdown is-open">
+                          <div className="video-call-dropdown-list">
+                            <button
+                              type="button"
+                              className={`video-call-dropdown-option${
+                                effectiveViewMode === "split" ? " is-active" : ""
+                              }`}
+                              onClick={() => {
+                                setScreenViewMode("split");
+                                setShowViewSelect(false);
+                              }}
+                            >
+                              Split view
+                            </button>
+                            {hasScreenShares && (
+                              <button
+                                type="button"
+                                className={`video-call-dropdown-option${
+                                  effectiveViewMode === "screen" ? " is-active" : ""
+                                }`}
+                                onClick={() => {
+                                  setScreenViewMode("screen");
+                                  setShowViewSelect(false);
+                                }}
+                              >
+                                Screen focus
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className={`video-call-dropdown-option${
+                                effectiveViewMode === "video" ? " is-active" : ""
+                              }`}
+                              onClick={() => {
+                                setScreenViewMode("video");
+                                setShowViewSelect(false);
+                              }}
+                            >
+                              All cameras
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {videoParticipants.length > 0 && (
+                    <div
+                      className={`video-call-toolbar-group is-dropdown${
+                        showCameraSelect ? " is-open" : ""
+                      }`}
+                      ref={cameraSelectRef}
+                    >
+                      <button
+                        type="button"
+                        className="video-view-button is-icon is-dropdown-trigger"
+                        data-hint="Camera feed"
+                        aria-label="Camera feed"
+                        title="Camera feed"
+                        aria-expanded={showCameraSelect}
+                        onClick={() => {
+                          setShowCameraSelect((prev) => !prev);
+                          setShowViewSelect(false);
+                          setShowScreenSelect(false);
+                          setShowWebMicDeviceSelect(false);
+                          setShowWebCameraDeviceSelect(false);
+                          setShowDesktopMicSelect(false);
+                          setShowDesktopCameraSelect(false);
+                          setShowDesktopFilterSelect(false);
+                        }}
+                      >
+                        <FontAwesomeIcon icon={faCamera} aria-hidden="true" />
+                      </button>
+                      {showCameraSelect && (
+                        <div className="video-call-dropdown is-open">
+                          <div className="video-call-dropdown-list">
+                            <button
+                              type="button"
+                              className={`video-call-dropdown-option${
+                                !focusedVideoId ? " is-active" : ""
+                              }`}
+                              onClick={() => {
+                                selectVideoFeedFocus(null);
+                                setShowCameraSelect(false);
+                              }}
+                            >
+                              All cameras
+                            </button>
+                            {videoParticipants.map((participant) => (
+                              <button
+                                type="button"
+                                key={participant.id}
+                                className={`video-call-dropdown-option${
+                                  focusedVideoId === participant.id ? " is-active" : ""
+                                }`}
+                                onClick={() => {
+                                  selectVideoFeedFocus(participant.id);
+                                  setShowCameraSelect(false);
+                                }}
+                              >
+                                {participant.isLocal ? localDisplayName : participant.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {hasScreenShares && (
+                    <div
+                      className={`video-call-toolbar-group is-dropdown${
+                        showScreenSelect ? " is-open" : ""
+                      }`}
+                      ref={screenSelectRef}
+                    >
+                      <button
+                        type="button"
+                        className="video-view-button is-icon is-dropdown-trigger"
+                        data-hint="Choose a Screen to View"
+                        aria-label="Choose a Screen to View"
+                        title="Choose a Screen to View"
+                        aria-expanded={showScreenSelect}
+                        onClick={() => {
+                          setShowScreenSelect((prev) => !prev);
+                          setShowViewSelect(false);
+                          setShowCameraSelect(false);
+                          setShowWebMicDeviceSelect(false);
+                          setShowWebCameraDeviceSelect(false);
+                          setShowDesktopMicSelect(false);
+                          setShowDesktopCameraSelect(false);
+                          setShowDesktopFilterSelect(false);
+                        }}
+                      >
+                        <FontAwesomeIcon icon={faMagnifyingGlass} aria-hidden="true" />
+                      </button>
+                      {showScreenSelect && (
+                        <div className="video-call-dropdown is-open">
+                          <div className="video-call-dropdown-list">
+                            <button
+                              type="button"
+                              className={`video-call-dropdown-option${
+                                !focusedScreenId ? " is-active" : ""
+                              }`}
+                              onClick={() => {
+                                selectScreenShareFocus(null);
+                                setShowScreenSelect(false);
+                              }}
+                            >
+                              All screens
+                            </button>
+                            {screenShareEntries.map((entry) => {
+                              const entryKey = getScreenFocusKey(entry);
+                              return (
+                                <button
+                                  type="button"
+                                  key={entryKey}
+                                  className={`video-call-dropdown-option${
+                                    focusedScreenId === entryKey ? " is-active" : ""
+                                  }`}
+                                  title={entry.label}
+                                  onClick={() => {
+                                    selectScreenShareFocus(entryKey);
+                                    setShowScreenSelect(false);
+                                  }}
+                                >
+                                  {entry.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {hasScreenShares && (
+                    <div className="video-call-toolbar-group">
+                      <button
+                        type="button"
+                        className={`video-view-button is-icon${
+                          isScreenBorderless ? " is-active" : ""
+                        }`}
+                        onClick={() => setIsScreenBorderless((prev) => !prev)}
+                        data-hint={isScreenBorderless ? "Windowed" : "Borderless"}
+                        aria-label={isScreenBorderless ? "Windowed" : "Borderless"}
+                        title={isScreenBorderless ? "Windowed" : "Borderless"}
+                      >
+                        <FontAwesomeIcon
+                          icon={isScreenBorderless ? faWindowRestore : faWindowMaximize}
+                          aria-hidden="true"
+                        />
+                      </button>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    className={`video-view-button is-icon is-chat-toggle${
+                      showChat ? " is-active" : ""
+                    }`}
+                    onClick={handleToggleChatVisibility}
+                    disabled={!showCallUi}
+                    data-hint={showChat ? "Hide chat" : "Show chat"}
+                    aria-label={showChat ? "Hide chat" : "Show chat"}
+                    title={showChat ? "Hide chat" : "Show chat"}
+                  >
+                    <FontAwesomeIcon
+                      icon={showChat ? faCommentSlash : faComments}
+                      aria-hidden="true"
+                    />
+                  </button>
+                  {popoutEnabled && (
+                    <button
+                      type="button"
+                      className={`video-view-button is-icon${isPopout ? " is-active" : ""}`}
+                      onClick={() => setIsPopout((prev) => !prev)}
+                      aria-pressed={isPopout}
+                      data-hint={isPopout ? "Dock" : "Pop out"}
+                      aria-label={isPopout ? "Dock" : "Pop out"}
+                      title={isPopout ? "Dock" : "Pop out"}
+                    >
+                      <FontAwesomeIcon
+                        icon={isPopout ? faCompress : faUpRightFromSquare}
+                        aria-hidden="true"
+                      />
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           )}
           {(audioInputError || videoInputError) && (
@@ -4275,251 +6289,8 @@ export default function VideoCallModal({
                 )}
               </h3>
             </div>
-            {showCallUi && (
+            {showCallUi && isMobileLayout && (
               <div className="video-call-header-controls">
-                {!isMobileCameraOnly && (
-                  <div className="video-call-header-controls-group">
-                    {!isFullscreenUi && (
-                      <div
-                        className={`video-call-toolbar-group is-dropdown${
-                          showViewSelect ? " is-open" : ""
-                        }`}
-                        ref={viewSelectRef}
-                      >
-                        <button
-                          type="button"
-                          className="video-view-button is-icon is-dropdown-trigger"
-                          data-hint="View"
-                          aria-label="View options"
-                          title="View"
-                          aria-expanded={showViewSelect}
-                          onClick={() => {
-                            setShowViewSelect((prev) => !prev);
-                            setShowScreenSelect(false);
-                            setShowCameraSelect(false);
-                          }}
-                        >
-                          <FontAwesomeIcon icon={faTableColumns} aria-hidden="true" />
-                        </button>
-                        {showViewSelect && (
-                          <div className="video-call-dropdown is-open">
-                            <div className="video-call-dropdown-list">
-                              <button
-                                type="button"
-                                className={`video-call-dropdown-option${
-                                  effectiveViewMode === "split" ? " is-active" : ""
-                                }`}
-                                onClick={() => {
-                                  setScreenViewMode("split");
-                                  setShowViewSelect(false);
-                                }}
-                              >
-                                Split view
-                              </button>
-                              {hasScreenShares && (
-                                <button
-                                  type="button"
-                                  className={`video-call-dropdown-option${
-                                    effectiveViewMode === "screen" ? " is-active" : ""
-                                  }`}
-                                  onClick={() => {
-                                    setScreenViewMode("screen");
-                                    setShowViewSelect(false);
-                                  }}
-                                >
-                                  Screen focus
-                                </button>
-                              )}
-                              <button
-                                type="button"
-                                className={`video-call-dropdown-option${
-                                  effectiveViewMode === "video" ? " is-active" : ""
-                                }`}
-                                onClick={() => {
-                                  setScreenViewMode("video");
-                                  setShowViewSelect(false);
-                                }}
-                              >
-                                All cameras
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    {videoParticipants.length > 0 && (
-                      <div
-                        className={`video-call-toolbar-group is-dropdown${
-                          showCameraSelect ? " is-open" : ""
-                        }`}
-                        ref={cameraSelectRef}
-                      >
-                        <button
-                          type="button"
-                          className="video-view-button is-icon is-dropdown-trigger"
-                          data-hint="Camera feed"
-                          aria-label="Camera feed"
-                          title="Camera feed"
-                          aria-expanded={showCameraSelect}
-                          onClick={() => {
-                            setShowCameraSelect((prev) => !prev);
-                            setShowViewSelect(false);
-                            setShowScreenSelect(false);
-                          }}
-                        >
-                          <FontAwesomeIcon icon={faCamera} aria-hidden="true" />
-                        </button>
-                        {showCameraSelect && (
-                          <div className="video-call-dropdown is-open">
-                            <div className="video-call-dropdown-list">
-                              <button
-                                type="button"
-                                className={`video-call-dropdown-option${
-                                  !focusedVideoId ? " is-active" : ""
-                                }`}
-                                onClick={() => {
-                                  selectVideoFeedFocus(null);
-                                  setShowCameraSelect(false);
-                                }}
-                              >
-                                All cameras
-                              </button>
-                              {videoParticipants.map((participant) => (
-                                <button
-                                  type="button"
-                                  key={participant.id}
-                                  className={`video-call-dropdown-option${
-                                    focusedVideoId === participant.id ? " is-active" : ""
-                                  }`}
-                                  onClick={() => {
-                                    selectVideoFeedFocus(participant.id);
-                                    setShowCameraSelect(false);
-                                  }}
-                                >
-                                  {participant.isLocal ? localDisplayName : participant.label}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    {hasScreenShares && (
-                      <div
-                        className={`video-call-toolbar-group is-dropdown${
-                          showScreenSelect ? " is-open" : ""
-                        }`}
-                        ref={screenSelectRef}
-                      >
-                        <button
-                          type="button"
-                          className="video-view-button is-icon is-dropdown-trigger"
-                          data-hint="Screen share"
-                          aria-label="Screen share"
-                          title="Screen share"
-                          aria-expanded={showScreenSelect}
-                          onClick={() => {
-                            setShowScreenSelect((prev) => !prev);
-                            setShowViewSelect(false);
-                            setShowCameraSelect(false);
-                          }}
-                        >
-                          <FontAwesomeIcon icon={faDisplay} aria-hidden="true" />
-                        </button>
-                        {showScreenSelect && (
-                          <div className="video-call-dropdown is-open">
-                            <div className="video-call-dropdown-list">
-                              <button
-                                type="button"
-                                className={`video-call-dropdown-option${
-                                  !focusedScreenId ? " is-active" : ""
-                                }`}
-                                onClick={() => {
-                                  selectScreenShareFocus(null);
-                                  setShowScreenSelect(false);
-                                }}
-                              >
-                                All screens
-                              </button>
-                              {screenShareEntries.map((entry) => {
-                                const entryKey = getScreenFocusKey(entry);
-                                return (
-                                  <button
-                                    type="button"
-                                    key={entryKey}
-                                    className={`video-call-dropdown-option${
-                                      focusedScreenId === entryKey ? " is-active" : ""
-                                    }`}
-                                    title={entry.label}
-                                    onClick={() => {
-                                      selectScreenShareFocus(entryKey);
-                                      setShowScreenSelect(false);
-                                    }}
-                                  >
-                                    {entry.label}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    {hasScreenShares && (
-                      <div className="video-call-toolbar-group">
-                        <button
-                          type="button"
-                          className={`video-view-button is-icon${
-                            isScreenBorderless ? " is-active" : ""
-                          }`}
-                          onClick={() => setIsScreenBorderless((prev) => !prev)}
-                          data-hint={isScreenBorderless ? "Windowed" : "Borderless"}
-                          aria-label={isScreenBorderless ? "Windowed" : "Borderless"}
-                          title={isScreenBorderless ? "Windowed" : "Borderless"}
-                        >
-                          <FontAwesomeIcon
-                            icon={isScreenBorderless ? faWindowRestore : faWindowMaximize}
-                            aria-hidden="true"
-                          />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-                <div className="video-call-header-controls-group is-actions">
-                  <button
-                    type="button"
-                    className={`video-view-button is-icon is-chat-toggle${
-                      showChat ? " is-active" : ""
-                    }`}
-                    onClick={handleToggleChatVisibility}
-                    disabled={!showCallUi}
-                    data-hint={showChat ? "Hide chat" : "Show chat"}
-                    aria-label={showChat ? "Hide chat" : "Show chat"}
-                    title={showChat ? "Hide chat" : "Show chat"}
-                  >
-                    <FontAwesomeIcon
-                      icon={showChat ? faCommentSlash : faComments}
-                      aria-hidden="true"
-                    />
-                  </button>
-                  {!isMobileCameraOnly && (
-                    <button
-                      type="button"
-                      className={`video-view-button is-icon${isPopout ? " is-active" : ""}`}
-                      onClick={() => setIsPopout((prev) => !prev)}
-                      aria-pressed={isPopout}
-                      data-hint={isPopout ? "Dock" : "Pop out"}
-                      aria-label={isPopout ? "Dock" : "Pop out"}
-                      title={isPopout ? "Dock" : "Pop out"}
-                    >
-                      <FontAwesomeIcon
-                        icon={isPopout ? faCompress : faUpRightFromSquare}
-                        aria-hidden="true"
-                      />
-                    </button>
-                  )}
-                </div>
                 <div className="video-call-header-controls-group is-mobile-only">
                   <span className="video-call-toolbar-label">Panel</span>
                   <button
@@ -4734,6 +6505,32 @@ export default function VideoCallModal({
 
           {showCallUi && (
             <>
+              {incomingCall && (
+                <div className="video-control-status info">
+                  <span>
+                    Incoming call from <strong>{incomingHostName}</strong>.
+                    {incomingIsCurrentRoom
+                      ? " Tap join to reconnect to this room."
+                      : " Accept to switch without ending your current call automatically."}
+                  </span>
+                  <div className="video-control-status-actions">
+                    <button
+                      type="button"
+                      className="video-control-status-btn ghost"
+                      onClick={declineCall}
+                    >
+                      Decline
+                    </button>
+                    <button
+                      type="button"
+                      className="video-control-status-btn"
+                      onClick={() => void acceptCall()}
+                    >
+                      {incomingAcceptLabel}
+                    </button>
+                  </div>
+                </div>
+              )}
               {error && <p className="status status-error video-call-error">{error}</p>}
               {e2eeDebug && <div className="video-call-debug">{e2eeDebug}</div>}
               {localScreenStream && screenControlRequests.length > 0 && (
@@ -4786,7 +6583,7 @@ export default function VideoCallModal({
                   <VideoTile
                     stream={mobileScreenShareEntry.stream}
                     label={mobileScreenShareEntry.label}
-                    muted={mobileScreenShareEntry.isLocal || isRenderingInPopout}
+                    muted
                     badge="Screen"
                     className={`is-screen is-pip${
                       isScreenPipDragging ? " is-dragging" : ""
@@ -5274,6 +7071,7 @@ export default function VideoCallModal({
                         key={entry.id}
                         stream={entry.stream}
                         label={entry.label}
+                        muted
                         badge="Screen"
                         className={`is-screen${isControlling ? " is-controlling" : ""}${
                           isPrimary ? " is-primary" : ""
@@ -5495,6 +7293,7 @@ export default function VideoCallModal({
                         label="You"
                         muted
                         status={!localStream ? "Camera off" : isVideoEnabled ? "" : "Camera off"}
+                        mediaStyle={localAvatarMediaStyle}
                         className={`is-local is-self-video${
                           isLocalPrimary ? " is-primary" : ""
                         }${
@@ -5528,15 +7327,16 @@ export default function VideoCallModal({
                     )}
                     {visibleVideoParticipants.map((participant) => {
                       const isFocused = focusedVideoKey === participant.socketId;
+                      const participantLabel = resolveParticipantLabel({
+                        userId: participant.userId,
+                        displayName: participant.displayName,
+                        handle: participant.handle,
+                      });
                       return (
                         <VideoTile
                           key={participant.socketId}
                           stream={mergedRemoteStreams[participant.socketId] || null}
-                          label={resolveParticipantLabel({
-                            userId: participant.userId,
-                            displayName: participant.displayName,
-                            handle: participant.handle,
-                          })}
+                          label={participantLabel}
                           avatarUrl={participant.avatarUrl}
                           muted={isRenderingInPopout}
                           status={
@@ -5560,6 +7360,20 @@ export default function VideoCallModal({
                               >
                                 {isFocused ? "Show all" : "Focus"}
                               </button>
+                              {isCallAdmin && (
+                                <button
+                                  type="button"
+                                  className="video-tile-focus is-remove"
+                                  onClick={() =>
+                                    handleRemoveParticipant(participant.socketId, participantLabel)
+                                  }
+                                  aria-label={`Remove ${participantLabel} from call`}
+                                  title="Remove from call"
+                                >
+                                  <FontAwesomeIcon icon={faUserMinus} aria-hidden="true" />
+                                  <span>Remove</span>
+                                </button>
+                              )}
                             </div>
                           )}
                         </VideoTile>
@@ -5580,13 +7394,10 @@ export default function VideoCallModal({
                 )}
                 <button
                   type="button"
-                  className="video-call-end-mobile"
-                  onClick={() => {
-                    void playEndCallTone();
-                    endCall();
-                  }}
+                  className={`video-call-end-mobile${isCallAdmin ? "" : " is-leave"}`}
+                  onClick={handleExitCall}
                 >
-                  End call
+                  {callExitLabel}
                 </button>
               </div>
             </>
@@ -5751,7 +7562,7 @@ export default function VideoCallModal({
             <div className="video-chat-tools">
               <button
                 type="button"
-                className="video-chat-tool"
+                className={`video-chat-tool is-emoji${showEmojiPicker ? " is-active" : ""}`}
                 onClick={() => {
                   setShowEmojiPicker((prev) => !prev);
                   setShowGifPicker(false);
@@ -5762,28 +7573,30 @@ export default function VideoCallModal({
               </button>
               <button
                 type="button"
-                className="video-chat-tool"
+                className={`video-chat-tool is-gif${showGifPicker ? " is-active" : ""}`}
                 onClick={() => {
                   setShowGifPicker((prev) => !prev);
                   setShowEmojiPicker(false);
                 }}
                 aria-label="Pick GIF"
               >
-                GIF
+                <FontAwesomeIcon icon={faBolt} aria-hidden="true" />
+                <span className="video-chat-tool__label">GIF</span>
               </button>
-              <label className="video-chat-size">
-                <span>Text</span>
-                <select
-                  value={chatTextSize}
-                  onChange={(event) =>
-                    setChatTextSize(event.target.value as "sm" | "md" | "lg")
-                  }
+              <label className="video-chat-size-slider">
+                <span className="video-chat-size-slider__label">Text size</span>
+                <input
+                  type="range"
+                  min={CHAT_TEXT_SIZE_MIN_REM}
+                  max={CHAT_TEXT_SIZE_MAX_REM}
+                  step={CHAT_TEXT_SIZE_STEP_REM}
+                  value={chatFontSizeRem}
+                  onChange={(event) => setChatTextSizeRem(Number(event.target.value))}
                   aria-label="Chat text size"
-                >
-                  <option value="sm">Small</option>
-                  <option value="md">Medium</option>
-                  <option value="lg">Large</option>
-                </select>
+                />
+                <span className="video-chat-size-slider__value">
+                  {chatFontSizeRem.toFixed(1)}rem
+                </span>
               </label>
             </div>
             {showEmojiPicker && (

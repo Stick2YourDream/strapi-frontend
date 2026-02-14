@@ -1,10 +1,8 @@
 import {
   useEffect,
   useMemo,
-  useRef,
   useState,
   type CSSProperties,
-  type ChangeEvent,
 } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
@@ -55,104 +53,6 @@ const loadSettings = (raw: string | null): VideoAppSettings => {
   }
 };
 
-type FileWithPath = File & { path?: string };
-type RgbaColor = { r: number; g: number; b: number; a: number };
-
-const getFileDisplayName = (file: File) => {
-  if (file.name) return file.name;
-  const fileWithPath = file as FileWithPath;
-  if (typeof fileWithPath.path === "string" && fileWithPath.path) {
-    const parts = fileWithPath.path.split(/[/\\]+/);
-    return parts[parts.length - 1] || "";
-  }
-  return "";
-};
-
-const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
-
-const parseRgbChannel = (value: string) => {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  if (trimmed.endsWith("%")) {
-    const percent = Number.parseFloat(trimmed);
-    if (Number.isNaN(percent)) return null;
-    return clamp(Math.round((percent / 100) * 255), 0, 255);
-  }
-  const numeric = Number.parseFloat(trimmed);
-  if (Number.isNaN(numeric)) return null;
-  return clamp(Math.round(numeric), 0, 255);
-};
-
-const parseAlphaChannel = (value?: string) => {
-  if (!value) return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  if (trimmed.endsWith("%")) {
-    const percent = Number.parseFloat(trimmed);
-    if (Number.isNaN(percent)) return null;
-    return clamp(percent / 100, 0, 1);
-  }
-  const numeric = Number.parseFloat(trimmed);
-  if (Number.isNaN(numeric)) return null;
-  return clamp(numeric, 0, 1);
-};
-
-const parseHexColor = (value: string) => {
-  const hex = value.replace("#", "").trim();
-  if (hex.length === 3) {
-    const r = Number.parseInt(hex[0] + hex[0], 16);
-    const g = Number.parseInt(hex[1] + hex[1], 16);
-    const b = Number.parseInt(hex[2] + hex[2], 16);
-    if ([r, g, b].some(Number.isNaN)) return null;
-    return { r, g, b };
-  }
-  if (hex.length === 6) {
-    const r = Number.parseInt(hex.slice(0, 2), 16);
-    const g = Number.parseInt(hex.slice(2, 4), 16);
-    const b = Number.parseInt(hex.slice(4, 6), 16);
-    if ([r, g, b].some(Number.isNaN)) return null;
-    return { r, g, b };
-  }
-  return null;
-};
-
-const parseRgbaColor = (value: string, fallback: RgbaColor): RgbaColor => {
-  const normalized = value.trim().toLowerCase();
-  if (!normalized) return fallback;
-  if (normalized === "transparent") {
-    return { r: 0, g: 0, b: 0, a: 0 };
-  }
-  if (normalized.startsWith("#")) {
-    const hex = parseHexColor(normalized);
-    if (hex) return { ...hex, a: 1 };
-    return fallback;
-  }
-  if (normalized.startsWith("rgb")) {
-    const parts = normalized.replace(/rgba?\(|\)/g, "").split(",");
-    const r = parseRgbChannel(parts[0] || "");
-    const g = parseRgbChannel(parts[1] || "");
-    const b = parseRgbChannel(parts[2] || "");
-    const a = parseAlphaChannel(parts[3]);
-    if ([r, g, b].some((channel) => channel === null)) return fallback;
-    return {
-      r: r ?? fallback.r,
-      g: g ?? fallback.g,
-      b: b ?? fallback.b,
-      a: a ?? 1,
-    };
-  }
-  return fallback;
-};
-
-const toHex = (value: number) => clamp(Math.round(value), 0, 255).toString(16).padStart(2, "0");
-
-const rgbaToHex = (color: RgbaColor) => `#${toHex(color.r)}${toHex(color.g)}${toHex(color.b)}`;
-
-const rgbaToString = (color: RgbaColor) => {
-  const alpha = clamp(Number(color.a.toFixed(2)), 0, 1);
-  return `rgba(${color.r}, ${color.g}, ${color.b}, ${alpha})`;
-};
-
 const getInitials = (value: string) => {
   const parts = value.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "YS";
@@ -188,9 +88,6 @@ export default function VideoCallHome() {
     removeGroup,
   } = useFriendGroups();
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const settingsPanelRef = useRef<HTMLDivElement | null>(null);
-  const settingsTriggerRef = useRef<HTMLButtonElement | null>(null);
   const settingsStorageKey = useMemo(
     () => `${SETTINGS_STORAGE_PREFIX}:${user?.id ?? "anon"}`,
     [user?.id]
@@ -199,6 +96,23 @@ export default function VideoCallHome() {
     if (typeof window === "undefined") return { ...DEFAULT_SETTINGS };
     return loadSettings(localStorage.getItem(settingsStorageKey));
   });
+  const isLikelyMobileDevice = useMemo(() => {
+    if (typeof navigator === "undefined") return false;
+    const uaData = (
+      navigator as Navigator & {
+        userAgentData?: { mobile?: boolean };
+      }
+    ).userAgentData;
+    if (uaData?.mobile) return true;
+    return /Android|webOS|iPhone|iPad|iPod|Opera Mini|IEMobile|Mobile/i.test(
+      navigator.userAgent || ""
+    );
+  }, []);
+  const isDesktopShell =
+    typeof window !== "undefined" &&
+    import.meta.env.MODE === "video" &&
+    Boolean(window.yspDesktop?.isAvailable) &&
+    !isLikelyMobileDevice;
 
   const displayName = useMemo(
     () =>
@@ -212,14 +126,6 @@ export default function VideoCallHome() {
 
   const initials = useMemo(() => getInitials(displayName), [displayName]);
   const avatarUrl = profile?.avatarUrl || "";
-  const backgroundColorRgba = useMemo(
-    () => parseRgbaColor(settings.backgroundColor, { r: 5, g: 7, b: 15, a: 1 }),
-    [settings.backgroundColor]
-  );
-  const boxColorRgba = useMemo(
-    () => parseRgbaColor(settings.boxColor, { r: 15, g: 23, b: 42, a: 1 }),
-    [settings.boxColor]
-  );
   const onlineCount = useMemo(
     () => friends.filter((friend) => onlineUserIds.has(friend.userId)).length,
     [friends, onlineUserIds]
@@ -281,26 +187,6 @@ export default function VideoCallHome() {
     openCallComposer([friend]);
   };
 
-  const handleBackgroundImageFile = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file || !file.type.startsWith("image/")) {
-      return;
-    }
-    const fileName = getFileDisplayName(file);
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = typeof reader.result === "string" ? reader.result : "";
-      if (!result) return;
-      setSettings((prev) => ({
-        ...prev,
-        backgroundImage: result,
-        backgroundImageName: fileName,
-      }));
-    };
-    reader.readAsDataURL(file);
-    event.target.value = "";
-  };
-
   useEffect(() => {
     if (typeof document === "undefined") return;
     if (user) {
@@ -320,57 +206,41 @@ export default function VideoCallHome() {
     localStorage.setItem(SETTINGS_GLOBAL_KEY, JSON.stringify(settings));
   }, [settings, settingsStorageKey]);
 
-  useEffect(() => {
-    if (!settingsOpen) return;
-    const handleClick = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      if (!target) return;
-      if (
-        settingsPanelRef.current?.contains(target) ||
-        settingsTriggerRef.current?.contains(target)
-      ) {
-        return;
-      }
-      setSettingsOpen(false);
-    };
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setSettingsOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClick);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("mousedown", handleClick);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [settingsOpen]);
-
   const showRealtimeBanner = Boolean(user) && realtimeStatus !== "connected";
 
   return (
-    <div className="video-app" data-theme={settings.theme} style={appStyle}>
-      <header className="video-app__header">
-        <div className="video-app__brand">
-          <span className="video-app__mark" aria-hidden="true">
-            <img src="/logo2.png" alt="" />
-          </span>
-          <div>
-            <p className="video-app__eyebrow">{brandName}</p>
-            <strong className="video-app__title">Video Call</strong>
-          </div>
+    <div
+      className={`video-app${isDesktopShell ? " is-desktop-shell" : ""}${
+        status !== "idle" ? " is-call-active" : ""
+      }`}
+      data-theme={settings.theme}
+      style={appStyle}
+    >
+      {isDesktopShell && (
+        <div className="video-app__titlebar-actions">
+          <button
+            className="video-app__titlebar-logout"
+            type="button"
+            onClick={handleLogout}
+            title="Log out"
+          >
+            Log out
+          </button>
         </div>
-        <div className="video-app__user">
-          <div className="video-app__user-menu">
-            <button
-              className="video-app__avatar-btn"
-              type="button"
-              ref={settingsTriggerRef}
-              onClick={() => setSettingsOpen((prev) => !prev)}
-              aria-haspopup="menu"
-              aria-expanded={settingsOpen}
-              aria-label="Open settings"
-            >
+      )}
+      {!isDesktopShell && (
+        <header className="video-app__header">
+          <div className="video-app__brand">
+            <span className="video-app__mark" aria-hidden="true">
+              <img src="/logo2.png" alt="" />
+            </span>
+            <div>
+              <p className="video-app__eyebrow">{brandName}</p>
+              <strong className="video-app__title">Video Call</strong>
+            </div>
+          </div>
+          <div className="video-app__user">
+            <div className="video-app__user-menu">
               <div
                 className="video-app__avatar"
                 aria-hidden="true"
@@ -378,216 +248,17 @@ export default function VideoCallHome() {
               >
                 {!avatarUrl && initials}
               </div>
+            </div>
+            <div className="video-app__user-meta">
+              <span className="video-app__user-name">{displayName}</span>
+              <span className="video-app__user-email">{user?.email}</span>
+            </div>
+            <button className="video-app__ghost" type="button" onClick={handleLogout}>
+              Log out
             </button>
-            {settingsOpen && (
-              <div className="video-app__settings-panel" ref={settingsPanelRef}>
-                <div className="video-app__settings-header">
-                  <span>Settings</span>
-                  <button
-                    className="video-app__ghost video-app__settings-close"
-                    type="button"
-                    onClick={() => setSettingsOpen(false)}
-                  >
-                    Close
-                  </button>
-                </div>
-                <div className="video-app__settings-group">
-                  <span className="video-app__settings-label">Theme</span>
-                  <div className="video-app__settings-toggle" role="group">
-                    <button
-                      type="button"
-                      className={
-                        settings.theme === "dark"
-                          ? "video-app__settings-toggle-btn is-active"
-                          : "video-app__settings-toggle-btn"
-                      }
-                      onClick={() => setSettings((prev) => ({ ...prev, theme: "dark" }))}
-                    >
-                      Dark
-                    </button>
-                    <button
-                      type="button"
-                      className={
-                        settings.theme === "light"
-                          ? "video-app__settings-toggle-btn is-active"
-                          : "video-app__settings-toggle-btn"
-                      }
-                      onClick={() => setSettings((prev) => ({ ...prev, theme: "light" }))}
-                    >
-                      Light
-                    </button>
-                  </div>
-                </div>
-                <div className="video-app__settings-group">
-                  <span className="video-app__settings-label">Background color</span>
-                  <div className="video-app__settings-row">
-                    <input
-                      className="video-app__settings-color"
-                      type="color"
-                      value={rgbaToHex(backgroundColorRgba)}
-                      onChange={(event) =>
-                        setSettings((prev) => {
-                          const rgb = parseHexColor(event.target.value);
-                          if (!rgb) return prev;
-                          return {
-                            ...prev,
-                            backgroundColor: rgbaToString({
-                              ...rgb,
-                              a: backgroundColorRgba.a,
-                            }),
-                          };
-                        })
-                      }
-                      aria-label="Background color"
-                    />
-                    <div className="video-app__settings-alpha">
-                      <input
-                        className="video-app__settings-range"
-                        type="range"
-                        min="0"
-                        max="1"
-                        step="0.01"
-                        value={backgroundColorRgba.a}
-                        onChange={(event) =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            backgroundColor: rgbaToString({
-                              ...backgroundColorRgba,
-                              a: Number.parseFloat(event.target.value),
-                            }),
-                          }))
-                        }
-                        aria-label="Background color transparency"
-                      />
-                      <span className="video-app__settings-alpha-value">
-                        {Math.round(backgroundColorRgba.a * 100)}%
-                      </span>
-                    </div>
-                    <button
-                      className="video-app__ghost video-app__settings-action"
-                      type="button"
-                      onClick={() =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          backgroundColor: DEFAULT_BACKGROUND_COLOR,
-                        }))
-                      }
-                    >
-                      Reset
-                    </button>
-                  </div>
-                </div>
-                <div className="video-app__settings-group">
-                  <span className="video-app__settings-label">Background image</span>
-                  <div className="video-app__settings-row">
-                    <label className="video-app__settings-file">
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={handleBackgroundImageFile}
-                      />
-                      {settings.backgroundImage ? "Change Image" : "Choose image"}
-                    </label>
-                    <button
-                      className="video-app__ghost video-app__settings-action"
-                      type="button"
-                      onClick={() =>
-                        setSettings((prev) => ({
-                          ...prev,
-                          backgroundImage: "",
-                          backgroundImageName: "",
-                        }))
-                      }
-                    >
-                      Clear
-                    </button>
-                  </div>
-                  <span
-                    className={`video-app__settings-hint${
-                      settings.backgroundImage ? " is-file" : ""
-                    }`}
-                  >
-                    {settings.backgroundImage ? (
-                      <>
-                        <span className="video-app__settings-hint-label">Image:</span>
-                        <span
-                          className="video-app__settings-filename"
-                          title={settings.backgroundImageName || "Selected image"}
-                        >
-                          {settings.backgroundImageName || "Selected image"}
-                        </span>
-                      </>
-                    ) : (
-                      "No image selected"
-                    )}
-                  </span>
-                </div>
-                <div className="video-app__settings-group">
-                  <span className="video-app__settings-label">Box color</span>
-                  <div className="video-app__settings-row">
-                    <input
-                      className="video-app__settings-color"
-                      type="color"
-                      value={rgbaToHex(boxColorRgba)}
-                      onChange={(event) =>
-                        setSettings((prev) => {
-                          const rgb = parseHexColor(event.target.value);
-                          if (!rgb) return prev;
-                          return {
-                            ...prev,
-                            boxColor: rgbaToString({ ...rgb, a: boxColorRgba.a }),
-                          };
-                        })
-                      }
-                      aria-label="Box color"
-                    />
-                    <div className="video-app__settings-alpha">
-                      <input
-                        className="video-app__settings-range"
-                        type="range"
-                        min="0"
-                        max="1"
-                        step="0.01"
-                        value={boxColorRgba.a}
-                        onChange={(event) =>
-                          setSettings((prev) => ({
-                            ...prev,
-                            boxColor: rgbaToString({
-                              ...boxColorRgba,
-                              a: Number.parseFloat(event.target.value),
-                            }),
-                          }))
-                        }
-                        aria-label="Box color transparency"
-                      />
-                      <span className="video-app__settings-alpha-value">
-                        {Math.round(boxColorRgba.a * 100)}%
-                      </span>
-                    </div>
-                    <button
-                      className="video-app__ghost video-app__settings-action"
-                      type="button"
-                      onClick={() => setSettings((prev) => ({ ...prev, boxColor: "" }))}
-                    >
-                      Reset
-                    </button>
-                  </div>
-                  <span className="video-app__settings-hint">
-                    Applies to Groups and Friends panels.
-                  </span>
-                </div>
-              </div>
-            )}
           </div>
-          <div className="video-app__user-meta">
-            <span className="video-app__user-name">{displayName}</span>
-            <span className="video-app__user-email">{user?.email}</span>
-          </div>
-          <button className="video-app__ghost" type="button" onClick={handleLogout}>
-            Log out
-          </button>
-        </div>
-      </header>
+        </header>
+      )}
 
       <main className="video-app__main">
         {showRealtimeBanner && (

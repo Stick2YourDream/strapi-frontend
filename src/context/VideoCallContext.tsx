@@ -11,8 +11,10 @@ import { io, type Socket } from "socket.io-client";
 import api from "../api/strapi";
 import { useAuth } from "./AuthContext";
 import {
+  decryptJson,
   decryptWrappedKey,
   deriveSharedKey,
+  encryptJson,
   encryptKeyForRecipient,
   exportPublicKey,
   generateCallKey,
@@ -40,6 +42,7 @@ type VideoCallParticipant = {
   displayName: string;
   handle?: string;
   avatarUrl?: string;
+  e2eeCapable?: boolean;
 };
 
 type IncomingCall = {
@@ -66,8 +69,49 @@ type VideoCallMessage = {
   at: string;
 };
 
+type VideoCallChatEnvelope = {
+  body: string;
+  kind: VideoCallMessage["kind"];
+  gifUrl?: string;
+};
+
+type VideoCallChatWirePayload = {
+  roomId?: string;
+  body?: string;
+  kind?: VideoCallMessage["kind"] | string;
+  gifUrl?: string;
+  encryptedMessage?: string;
+  from?: {
+    userId?: number;
+    displayName?: string;
+    handle?: string;
+    avatarUrl?: string;
+  };
+  at?: string;
+};
+
 type VideoCallStatus = "idle" | "setup" | "incoming" | "connecting" | "in-call";
 type RealtimeStatus = "disconnected" | "connecting" | "connected";
+
+type AvatarEyeStyle =
+  | "almond"
+  | "hooded"
+  | "deep-set"
+  | "monolid"
+  | "cat-eye"
+  | "doe"
+  | "narrow"
+  | "bright-hazel";
+
+type AvatarMouthStyle =
+  | "natural"
+  | "rose"
+  | "mauve"
+  | "berry"
+  | "caramel"
+  | "ruby-smile"
+  | "mocha"
+  | "plum-gloss";
 
 type ScreenControlRequest = {
   socketId: string;
@@ -128,10 +172,12 @@ type VideoCallEffects = {
   avatarEyeOffsetX: number;
   avatarEyeOffsetY: number;
   avatarEyeSpacing: number;
+  avatarEyeSize: number;
   avatarMouthOffsetX: number;
   avatarMouthOffsetY: number;
-  avatarEyeStyle: "classic" | "toon" | "sleepy" | "sparkle";
-  avatarMouthStyle: "natural" | "smile" | "round" | "line";
+  avatarMouthSize: number;
+  avatarEyeStyle: AvatarEyeStyle;
+  avatarMouthStyle: AvatarMouthStyle;
   filter:
     | "none"
     | "vivid"
@@ -241,6 +287,7 @@ type VideoCallContextValue = {
   toggleHold: () => void;
   muteAllParticipants: () => void;
   stopAllScreenShares: () => void;
+  removeParticipantFromCall: (socketId: string) => void;
 };
 
 const MAX_VIDEO_PARTICIPANTS = 8;
@@ -248,9 +295,13 @@ const CALL_CONNECT_TIMEOUT_MS = 20000;
 const E2EE_VERSION = 1;
 const E2EE_IV_BYTES = 12;
 const E2EE_HEADER_BYTES = 1 + E2EE_IV_BYTES;
-const CALL_KEY_GRACE_MS = 2000;
-const CALL_E2EE_ENABLED = ["1", "true", "on", "yes"].includes(
-  String(import.meta.env.VITE_CALL_E2EE || "").toLowerCase()
+const CALL_E2EE_ENABLED = !["0", "false", "off", "no"].includes(
+  String(import.meta.env.VITE_CALL_E2EE ?? "1").trim().toLowerCase()
+);
+// Media (video/audio/screen-share) E2EE via insertable streams is still experimental.
+// Keep it separately toggleable from chat/profile encryption so we can fall back safely.
+const CALL_MEDIA_E2EE_ENABLED = !["0", "false", "off", "no"].includes(
+  String(import.meta.env.VITE_CALL_MEDIA_E2EE ?? "0").trim().toLowerCase()
 );
 const REALTIME_URL =
   String(import.meta.env.VITE_SOCKET_URL || "").trim() ||
@@ -269,33 +320,31 @@ const SOCKET_AUTH_REFRESH_INTERVAL_MS = Number(
   import.meta.env.VITE_SOCKET_AUTH_REFRESH_INTERVAL || 10 * 60 * 1000
 );
 
-const isChromeOrEdge = () => {
-  if (typeof navigator === "undefined") return false;
-  const ua = navigator.userAgent || "";
-  const uaData = (navigator as any).userAgentData as { brands?: { brand: string }[] } | undefined;
-  if (uaData?.brands?.length) {
-    const brands = uaData.brands
-      .map((brand) => brand.brand.toLowerCase())
-      .join(" ");
-    return brands.includes("edge") || brands.includes("chrome");
-  }
-  if (/\bEdg\//.test(ua)) return true;
-  if (/\bChrome\//.test(ua) && !/\bOPR\//.test(ua) && !/\bOpera\//.test(ua)) {
-    return true;
-  }
-  return false;
-};
-
 const supportsCallE2ee = () => {
   if (typeof window === "undefined") return false;
   if (!CALL_E2EE_ENABLED) return false;
+  if (!CALL_MEDIA_E2EE_ENABLED) return false;
   const sender = (window as any).RTCRtpSender?.prototype;
   const receiver = (window as any).RTCRtpReceiver?.prototype;
+  const senderHasStreams =
+    typeof sender?.createEncodedStreams === "function" ||
+    (typeof sender?.createEncodedAudioStreams === "function" &&
+      typeof sender?.createEncodedVideoStreams === "function");
+  const receiverHasStreams =
+    typeof receiver?.createEncodedStreams === "function" ||
+    (typeof receiver?.createEncodedAudioStreams === "function" &&
+      typeof receiver?.createEncodedVideoStreams === "function");
   const hasInsertable =
-    typeof sender?.createEncodedStreams === "function" &&
-    typeof receiver?.createEncodedStreams === "function" &&
+    senderHasStreams &&
+    receiverHasStreams &&
     typeof (window as any).TransformStream === "function";
-  return isChromeOrEdge() && hasInsertable && Boolean(window.crypto?.subtle);
+  return hasInsertable && Boolean(window.crypto?.subtle);
+};
+
+const supportsCallCrypto = () => {
+  if (typeof window === "undefined") return false;
+  if (!CALL_E2EE_ENABLED) return false;
+  return Boolean(window.crypto?.subtle);
 };
 
 const TURN_URLS = String(
@@ -345,6 +394,21 @@ const createMessageId = () => {
   return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 };
 
+const LOCAL_CHAT_DEDUPE_WINDOW_MS = 5000;
+
+const buildChatMessageSignature = (message: {
+  userId: number;
+  kind: VideoCallMessage["kind"];
+  body: string;
+  gifUrl?: string;
+}) =>
+  [
+    Number.isFinite(message.userId) ? message.userId : 0,
+    message.kind,
+    String(message.body || ""),
+    String(message.gifUrl || ""),
+  ].join("|");
+
 const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
 const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
 const mediapipeBase =
@@ -375,9 +439,22 @@ const getBackdropImage = (src: string) => {
   if (cached) return cached;
   const img = new Image();
   img.decoding = "async";
+  img.crossOrigin = "anonymous";
   img.src = src;
   backdropImageCache.set(src, img);
   return img;
+};
+
+const isPresetAvatarSource = (src: string) => {
+  const value = String(src || "").trim();
+  if (!value) return false;
+  if (value.includes("/avatar-presets/")) return true;
+  try {
+    const parsed = new URL(value, "http://localhost");
+    return parsed.pathname.includes("/avatar-presets/");
+  } catch {
+    return false;
+  }
 };
 let selfieSegmentationPromise: Promise<SelfieSegmentationConstructor | null> | null = null;
 const loadSelfieSegmentation = () => {
@@ -397,6 +474,85 @@ const loadSelfieSegmentation = () => {
   }
   return selfieSegmentationPromise;
 };
+
+const isCallActiveStatus = (status: VideoCallStatus) =>
+  status === "in-call" || status === "connecting";
+
+const normalizeAvatarEyeStyle = (style: AvatarEyeStyle | string): AvatarEyeStyle => {
+  switch (style) {
+    case "almond":
+    case "hooded":
+    case "deep-set":
+    case "monolid":
+    case "cat-eye":
+    case "doe":
+    case "narrow":
+    case "bright-hazel":
+      return style;
+    case "natural":
+    case "classic":
+      return "almond";
+    case "soft":
+    case "sleepy":
+      return "hooded";
+    case "defined":
+    case "toon":
+      return "deep-set";
+    case "bright":
+    case "sparkle":
+      return "bright-hazel";
+    default:
+      return "almond";
+  }
+};
+
+const normalizeAvatarMouthStyle = (style: AvatarMouthStyle | string): AvatarMouthStyle => {
+  switch (style) {
+    case "natural":
+    case "rose":
+    case "mauve":
+    case "berry":
+    case "caramel":
+    case "ruby-smile":
+    case "mocha":
+    case "plum-gloss":
+      return style;
+    case "nude":
+      return "natural";
+    case "smile":
+      return "ruby-smile";
+    case "neutral":
+      return "caramel";
+    case "defined":
+      return "mocha";
+    case "round":
+      return "plum-gloss";
+    case "line":
+      return "mocha";
+    default:
+      return "natural";
+  }
+};
+
+const buildVideoEffectsKey = (
+  effects: VideoCallEffects,
+  hasAvatar: boolean
+) =>
+  {
+    const eyeStyle = normalizeAvatarEyeStyle(effects.avatarEyeStyle);
+    const mouthStyle = normalizeAvatarMouthStyle(effects.avatarMouthStyle);
+    return (
+  `${effects.blur ? "1" : "0"}-${effects.background}-${effects.filter}-${
+    effects.mirror ? "1" : "0"
+  }-${hasAvatar ? "1" : "0"}-${effects.backgroundImageUrl}-${effects.avatarImageUrl}-${
+    effects.maskStrength
+  }-${effects.avatarOffsetX}-${effects.avatarOffsetY}-${effects.avatarScale}-${
+    effects.avatarEyeOffsetX
+  }-${effects.avatarEyeOffsetY}-${effects.avatarEyeSpacing}-${effects.avatarEyeSize}-${
+    effects.avatarMouthOffsetX
+  }-${effects.avatarMouthOffsetY}-${effects.avatarMouthSize}-${eyeStyle}-${mouthStyle}`
+    );
+  };
 
 let faceLandmarkerPromise: Promise<FaceLandmarkerInstance | null> | null = null;
 const loadFaceLandmarker = () => {
@@ -484,10 +640,12 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     avatarScale: 1,
     avatarEyeOffsetX: 0,
     avatarEyeOffsetY: 0,
-    avatarEyeSpacing: 1,
+    avatarEyeSpacing: 0.45,
+    avatarEyeSize: 1,
     avatarMouthOffsetX: 0,
-    avatarMouthOffsetY: 0,
-    avatarEyeStyle: "classic",
+    avatarMouthOffsetY: -0.08,
+    avatarMouthSize: 1,
+    avatarEyeStyle: "almond",
     avatarMouthStyle: "natural",
     filter: "none",
   });
@@ -523,6 +681,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const remoteStreamsRef = useRef<Record<string, MediaStream>>({});
   const remoteScreenStreamsRef = useRef<Record<string, MediaStream>>({});
   const remoteParticipantsRef = useRef<Record<string, VideoCallParticipant>>({});
+  const peerE2eeCapableRef = useRef<Map<string, boolean>>(new Map());
   const hadRemoteParticipantsRef = useRef(false);
   const rawStreamRef = useRef<MediaStream | null>(null);
   const screenShareSendersRef = useRef<
@@ -531,6 +690,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const screenShareOwnersRef = useRef<Map<string, string>>(new Map());
   const screenShareByOwnerRef = useRef<Map<string, string>>(new Map());
   const disconnectTimersRef = useRef<Map<string, number>>(new Map());
+  // Trickle ICE can arrive before SDP is applied; queue per-peer candidates until `remoteDescription` exists.
+  const pendingIceCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
   const rtcConfigRef = useRef<RTCConfiguration>(RTC_CONFIG);
   const iceServersLoadingRef = useRef<
     Promise<{ servers: RTCIceServer[]; ttlSeconds: number; updated: boolean }> | null
@@ -580,15 +741,25 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const activeScreenControllerRef = useRef<ScreenControlRequest | null>(null);
   const presenceTargetsRef = useRef<number[]>([]);
   const e2eeSupported = useMemo(() => supportsCallE2ee(), []);
-  const callEncryptionEnabledRef = useRef<boolean>(e2eeSupported);
+  const e2eeCryptoSupported = useMemo(() => supportsCallCrypto(), []);
+  // Desired room E2EE mode (may be true even if this client can't do media transforms).
+  const callEncryptionEnabledRef = useRef<boolean>(CALL_E2EE_ENABLED);
   const callKeyRef = useRef<CryptoKey | null>(null);
   const callKeyRoomRef = useRef<string | null>(null);
   const callKeyRecipientsRef = useRef<Set<number>>(new Set());
+  const callKeyShareThrottleRef = useRef<Map<number, number>>(new Map());
   const isCallHostRef = useRef(false);
   const missingCallKeySinceRef = useRef<number | null>(null);
   const senderE2eeRef = useRef<WeakSet<RTCRtpSender>>(new WeakSet());
   const receiverE2eeRef = useRef<WeakSet<RTCRtpReceiver>>(new WeakSet());
   const lastCallKeyRequestRef = useRef(0);
+  const localChatEchoRef = useRef<Map<string, number>>(new Map());
+  const pendingEncryptedChatOutboxRef = useRef<
+    Array<{ roomId: string; payload: VideoCallChatEnvelope }>
+  >([]);
+  const pendingEncryptedChatInboxRef = useRef<
+    Map<string, { roomId: string; encryptedMessage: string }>
+  >(new Map());
 
   const clearCallTimeout = useCallback(() => {
     if (callTimeoutRef.current) {
@@ -754,7 +925,25 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
 
   const setVideoEffects = useCallback((effects: Partial<VideoCallEffects>) => {
     setVideoEffectsState((prev) => {
-      const next = { ...prev, ...effects };
+      const next = {
+        ...prev,
+        ...effects,
+        avatarEyeStyle: normalizeAvatarEyeStyle(
+          (effects.avatarEyeStyle as string | undefined) ?? prev.avatarEyeStyle
+        ),
+        avatarMouthStyle: normalizeAvatarMouthStyle(
+          (effects.avatarMouthStyle as string | undefined) ?? prev.avatarMouthStyle
+        ),
+      };
+      const changedKeys = new Set<keyof VideoCallEffects>(
+        Object.keys(effects) as Array<keyof VideoCallEffects>
+      );
+      changedKeys.add("avatarEyeStyle");
+      changedKeys.add("avatarMouthStyle");
+      const hasChanges = Array.from(changedKeys).some((key) => !Object.is(prev[key], next[key]));
+      if (!hasChanges) {
+        return prev;
+      }
       videoEffectsRef.current = next;
       return next;
     });
@@ -913,6 +1102,30 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     });
   }, [tuneSenderForLowLatency]);
 
+  const queueIceCandidate = useCallback((socketId: string, candidate: RTCIceCandidateInit) => {
+    if (!socketId || !candidate) return;
+    const map = pendingIceCandidatesRef.current;
+    const queued = map.get(socketId) || [];
+    queued.push(candidate);
+    map.set(socketId, queued);
+  }, []);
+
+  const flushQueuedIceCandidates = useCallback(async (socketId: string, pc: RTCPeerConnection) => {
+    if (!socketId) return;
+    if (!pc?.remoteDescription) return;
+    const map = pendingIceCandidatesRef.current;
+    const queued = map.get(socketId);
+    if (!queued?.length) return;
+    map.delete(socketId);
+    for (const candidate of queued) {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch {
+        // ignore ICE errors (candidates can become invalid after restarts)
+      }
+    }
+  }, []);
+
   const getPeerNegotiationState = useCallback((socketId: string) => {
     const existing = peerNegotiationRef.current.get(socketId);
     if (existing) return existing;
@@ -983,13 +1196,17 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     callKeyRef.current = null;
     callKeyRoomRef.current = null;
     callKeyRecipientsRef.current = new Set();
+    callKeyShareThrottleRef.current.clear();
     isCallHostRef.current = false;
     setIsCallHost(false);
     senderE2eeRef.current = new WeakSet();
     receiverE2eeRef.current = new WeakSet();
-    callEncryptionEnabledRef.current = e2eeSupported;
+    callEncryptionEnabledRef.current = CALL_E2EE_ENABLED;
     missingCallKeySinceRef.current = null;
-  }, [e2eeSupported]);
+    peerE2eeCapableRef.current.clear();
+    pendingEncryptedChatOutboxRef.current = [];
+    pendingEncryptedChatInboxRef.current.clear();
+  }, []);
 
   const setCallEncryptionMode = useCallback(
     (
@@ -997,12 +1214,24 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       reason?: string,
       options?: { broadcast?: boolean; suppressBanner?: boolean }
     ) => {
-      const nextEnabled = Boolean(enabled && e2eeSupported);
+      const nextEnabled = Boolean(enabled);
       callEncryptionEnabledRef.current = nextEnabled;
       if (!nextEnabled) {
         callKeyRef.current = null;
         callKeyRoomRef.current = null;
         callKeyRecipientsRef.current = new Set();
+        pendingEncryptedChatOutboxRef.current = [];
+        if (pendingEncryptedChatInboxRef.current.size) {
+          const pendingIds = new Set(pendingEncryptedChatInboxRef.current.keys());
+          pendingEncryptedChatInboxRef.current.clear();
+          setMessages((prev) =>
+            prev.map((message) =>
+              pendingIds.has(message.id) ? { ...message, body: "[Encrypted message]" } : message
+            )
+          );
+        } else {
+          pendingEncryptedChatInboxRef.current.clear();
+        }
         if (options?.suppressBanner) {
           setE2eeDebug(null);
         } else {
@@ -1019,11 +1248,11 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         });
       }
     },
-    [e2eeSupported, setE2eeDebug]
+    [setE2eeDebug]
   );
 
   const maybeRequestCallKey = useCallback(async (roomIdOverride?: string) => {
-    if (!e2eeSupported || !callEncryptionEnabledRef.current) return;
+    if (!e2eeCryptoSupported || !callEncryptionEnabledRef.current) return;
     if (isCallHostRef.current || callKeyRef.current) return;
     const roomId = roomIdOverride || activeRoomRef.current;
     if (!roomId) return;
@@ -1043,116 +1272,230 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       const detail = err instanceof Error ? err.message : "Key request failed";
       setE2eeDebug(`E2EE: ${detail}`);
     }
-  }, [e2eeSupported, user?.id, setE2eeDebug]);
+  }, [e2eeCryptoSupported, user?.id, setE2eeDebug]);
+
+  const flushPendingEncryptedChatOutbox = useCallback(
+    async (roomId: string, key: CryptoKey) => {
+      const socket = socketRef.current;
+      if (!socket || !roomId || !key) return;
+      if (!CALL_E2EE_ENABLED || !callEncryptionEnabledRef.current) {
+        pendingEncryptedChatOutboxRef.current = [];
+        return;
+      }
+
+      const queued = pendingEncryptedChatOutboxRef.current;
+      if (!queued.length) return;
+
+      const remaining: Array<{ roomId: string; payload: VideoCallChatEnvelope }> = [];
+      for (const entry of queued) {
+        if (!entry?.roomId || entry.roomId !== roomId) {
+          remaining.push(entry);
+          continue;
+        }
+        try {
+          const encryptedMessage = await encryptJson(key, entry.payload);
+          socket.emit("call:chat", { roomId, encryptedMessage });
+        } catch {
+          remaining.push(entry);
+        }
+      }
+      pendingEncryptedChatOutboxRef.current = remaining;
+    },
+    []
+  );
+
+  const flushPendingEncryptedChatInbox = useCallback(async (roomId: string, key: CryptoKey) => {
+    if (!roomId || !key) return;
+    const pending = pendingEncryptedChatInboxRef.current;
+    if (!pending.size) return;
+
+    const entries = Array.from(pending.entries()).filter(([, entry]) => entry.roomId === roomId);
+    if (!entries.length) return;
+
+    const updates = new Map<string, VideoCallChatEnvelope>();
+    await Promise.all(
+      entries.map(async ([messageId, entry]) => {
+        try {
+          const decrypted = await decryptJson<VideoCallChatEnvelope>(key, entry.encryptedMessage);
+          const nextKind =
+            decrypted?.kind === "emoji" || decrypted?.kind === "gif" ? decrypted.kind : "text";
+          updates.set(messageId, {
+            body: String(decrypted?.body || ""),
+            kind: nextKind,
+            gifUrl: String(decrypted?.gifUrl || ""),
+          });
+        } catch {
+          updates.set(messageId, { body: "[Unable to decrypt message]", kind: "text", gifUrl: "" });
+        }
+      })
+    );
+
+    entries.forEach(([messageId]) => pending.delete(messageId));
+
+    if (!updates.size) return;
+    setMessages((prev) =>
+      prev.map((message) => {
+        const update = updates.get(message.id);
+        if (!update) return message;
+        const safeKind =
+          update.kind === "emoji" || update.kind === "gif" ? update.kind : "text";
+        const safeGifUrl = String(update.gifUrl || "");
+        return {
+          ...message,
+          body: String(update.body || ""),
+          kind: safeKind,
+          gifUrl: safeGifUrl ? safeGifUrl : undefined,
+        };
+      })
+    );
+  }, []);
+
+  const shouldUsePeerE2ee = useCallback(
+    (peerSocketId: string) => {
+      if (!callEncryptionEnabledRef.current) return false;
+      if (!e2eeSupported) return false;
+      return peerE2eeCapableRef.current.get(peerSocketId) === true;
+    },
+    [e2eeSupported]
+  );
 
   const setupSenderE2ee = useCallback(
-    (sender?: RTCRtpSender | null) => {
-      if (!sender || !e2eeSupported) return;
-      if (!callEncryptionEnabledRef.current) return;
-      if (senderE2eeRef.current.has(sender)) return;
-      const streams = (sender as any).createEncodedStreams?.();
-      if (!streams?.readable || !streams?.writable) return;
-      const transform = new TransformStream({
-        async transform(encodedFrame, controller) {
-          if (!encodedFrame) return;
-          if (!callEncryptionEnabledRef.current) {
-            controller.enqueue(encodedFrame);
-            return;
-          }
-          if (!encodedFrame?.data) return;
-          const key = callKeyRef.current;
-          if (!key) {
-            const now = Date.now();
-            if (!missingCallKeySinceRef.current) {
-              missingCallKeySinceRef.current = now;
+    (peerSocketId: string, sender?: RTCRtpSender | null) => {
+      try {
+        if (!sender || !e2eeSupported) return;
+        if (!shouldUsePeerE2ee(peerSocketId)) return;
+        if (senderE2eeRef.current.has(sender)) return;
+        const senderAny = sender as any;
+        let streams: { readable?: ReadableStream; writable?: WritableStream } | null = null;
+        try {
+          streams =
+            senderAny.createEncodedStreams?.() ||
+            (sender.track?.kind === "audio" ? senderAny.createEncodedAudioStreams?.() : null) ||
+            (sender.track?.kind === "video" ? senderAny.createEncodedVideoStreams?.() : null);
+        } catch {
+          // If insertable streams aren't actually enabled for this sender, keep media flowing.
+          return;
+        }
+        if (!streams?.readable || !streams?.writable) return;
+        const transform = new TransformStream({
+          async transform(encodedFrame, controller) {
+            if (!encodedFrame) return;
+            if (!shouldUsePeerE2ee(peerSocketId)) {
+              controller.enqueue(encodedFrame);
+              return;
             }
-            void maybeRequestCallKey();
-            if (now - (missingCallKeySinceRef.current ?? now) >= CALL_KEY_GRACE_MS) {
-              setCallEncryptionMode(false, "missing call key", { broadcast: true });
+            if (!encodedFrame?.data) {
+              controller.enqueue(encodedFrame);
+              return;
+            }
+            const key = callKeyRef.current;
+            if (!key) {
+              // Never block media while waiting for keys; fall back to unencrypted frames.
+              if (!missingCallKeySinceRef.current) {
+                missingCallKeySinceRef.current = Date.now();
+              }
+              void maybeRequestCallKey();
+              controller.enqueue(encodedFrame);
+              return;
+            }
+            missingCallKeySinceRef.current = null;
+            try {
+              const encrypted = await encryptFrame(key, encodedFrame.data);
+              encodedFrame.data = encrypted;
+              controller.enqueue(encodedFrame);
+            } catch {
               controller.enqueue(encodedFrame);
             }
-            return;
-          }
-          missingCallKeySinceRef.current = null;
-          try {
-            const encrypted = await encryptFrame(key, encodedFrame.data);
-            encodedFrame.data = encrypted;
-            controller.enqueue(encodedFrame);
-          } catch (err) {
-            if (callEncryptionEnabledRef.current) {
-              const detail = err instanceof Error ? err.message : "Encryption failed";
-              setCallEncryptionMode(false, detail, { broadcast: true });
-            }
-            controller.enqueue(encodedFrame);
-          }
-        },
-      });
-      streams.readable
-        .pipeThrough(transform)
-        .pipeTo(streams.writable)
-        .catch(() => undefined);
-      senderE2eeRef.current.add(sender);
+          },
+        });
+        streams.readable
+          .pipeThrough(transform)
+          .pipeTo(streams.writable)
+          .catch(() => undefined);
+        senderE2eeRef.current.add(sender);
+      } catch {
+        // Never break media setup due to E2EE wiring failures.
+      }
     },
-    [e2eeSupported, encryptFrame, maybeRequestCallKey, setCallEncryptionMode]
+    [e2eeSupported, encryptFrame, maybeRequestCallKey, shouldUsePeerE2ee]
   );
 
   const setupReceiverE2ee = useCallback(
-    (receiver?: RTCRtpReceiver | null) => {
-      if (!receiver || !e2eeSupported) return;
-      if (!callEncryptionEnabledRef.current) return;
-      if (receiverE2eeRef.current.has(receiver)) return;
-      const streams = (receiver as any).createEncodedStreams?.();
-      if (!streams?.readable || !streams?.writable) return;
-      const transform = new TransformStream({
-        async transform(encodedFrame, controller) {
-          if (!encodedFrame) return;
-          if (!callEncryptionEnabledRef.current) {
-            controller.enqueue(encodedFrame);
-            return;
-          }
-          const key = callKeyRef.current;
-          if (!encodedFrame?.data) return;
-          if (!key) {
-            const now = Date.now();
-            if (!missingCallKeySinceRef.current) {
-              missingCallKeySinceRef.current = now;
-            }
-            void maybeRequestCallKey();
-            if (now - (missingCallKeySinceRef.current ?? now) >= CALL_KEY_GRACE_MS) {
-              setCallEncryptionMode(false, "missing call key", { broadcast: true });
+    (peerSocketId: string, receiver?: RTCRtpReceiver | null) => {
+      try {
+        if (!receiver || !e2eeSupported) return;
+        if (!shouldUsePeerE2ee(peerSocketId)) return;
+        if (receiverE2eeRef.current.has(receiver)) return;
+        const receiverAny = receiver as any;
+        let streams: { readable?: ReadableStream; writable?: WritableStream } | null = null;
+        try {
+          streams =
+            receiverAny.createEncodedStreams?.() ||
+            (receiver.track?.kind === "audio" ? receiverAny.createEncodedAudioStreams?.() : null) ||
+            (receiver.track?.kind === "video" ? receiverAny.createEncodedVideoStreams?.() : null);
+        } catch {
+          // If insertable streams aren't actually enabled for this receiver, keep media flowing.
+          return;
+        }
+        if (!streams?.readable || !streams?.writable) return;
+        const transform = new TransformStream({
+          async transform(encodedFrame, controller) {
+            if (!encodedFrame) return;
+            if (!shouldUsePeerE2ee(peerSocketId)) {
               controller.enqueue(encodedFrame);
+              return;
             }
-            return;
-          }
-          missingCallKeySinceRef.current = null;
-          const dataBuffer = toArrayBuffer(encodedFrame.data);
-          const bytes = new Uint8Array(dataBuffer);
-          const isEncryptedFrame =
-            bytes.length > E2EE_HEADER_BYTES && bytes[0] === E2EE_VERSION;
-          if (!isEncryptedFrame) {
-            setCallEncryptionMode(false, "unencrypted media detected", { broadcast: true });
-            controller.enqueue(encodedFrame);
-            return;
-          }
+            const key = callKeyRef.current;
+            if (!encodedFrame?.data) {
+              controller.enqueue(encodedFrame);
+              return;
+            }
+            let dataBuffer: ArrayBuffer;
+            try {
+              dataBuffer = toArrayBuffer(encodedFrame.data);
+            } catch {
+              // If we can't read the frame bytes, let the frame continue unmodified.
+              controller.enqueue(encodedFrame);
+              return;
+            }
+            const bytes = new Uint8Array(dataBuffer);
+            const isEncryptedFrame =
+              bytes.length > E2EE_HEADER_BYTES && bytes[0] === E2EE_VERSION;
+            if (!key) {
+              if (!missingCallKeySinceRef.current) {
+                missingCallKeySinceRef.current = Date.now();
+              }
+              void maybeRequestCallKey();
+              // If the sender isn't encrypting, allow the frame through even without a key.
+              if (!isEncryptedFrame) controller.enqueue(encodedFrame);
+              return;
+            }
+            missingCallKeySinceRef.current = null;
+            if (!isEncryptedFrame) {
+              controller.enqueue(encodedFrame);
+              return;
+            }
           try {
             const decrypted = await decryptFrame(key, dataBuffer);
             encodedFrame.data = decrypted;
             controller.enqueue(encodedFrame);
-          } catch (err) {
-            if (callEncryptionEnabledRef.current) {
-              const detail = err instanceof Error ? err.message : "Decryption failed";
-              setCallEncryptionMode(false, detail, { broadcast: true });
-            }
+          } catch {
+              // If this frame wasn't actually encrypted (false positive) or the key is briefly
+              // out-of-sync, passing through is safer than hard-dropping (black video).
+              controller.enqueue(encodedFrame);
           }
         },
       });
-      streams.readable
-        .pipeThrough(transform)
-        .pipeTo(streams.writable)
-        .catch(() => undefined);
-      receiverE2eeRef.current.add(receiver);
+        streams.readable
+          .pipeThrough(transform)
+          .pipeTo(streams.writable)
+          .catch(() => undefined);
+        receiverE2eeRef.current.add(receiver);
+      } catch {
+        // Never break media setup due to E2EE wiring failures.
+      }
     },
-    [decryptFrame, e2eeSupported, maybeRequestCallKey, setCallEncryptionMode, toArrayBuffer]
+    [decryptFrame, e2eeSupported, maybeRequestCallKey, shouldUsePeerE2ee, toArrayBuffer]
   );
 
   const requestVideoKeyFrame = useCallback((sender?: RTCRtpSender | null) => {
@@ -1211,7 +1554,9 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       if (!callKeyRef.current || !targetUserId || !publicKeyText) return;
       if (callKeyRoomRef.current && callKeyRoomRef.current !== roomId) return;
       if (targetUserId === user.id) return;
-      if (callKeyRecipientsRef.current.has(targetUserId)) return;
+      const now = Date.now();
+      const lastSent = callKeyShareThrottleRef.current.get(targetUserId) ?? 0;
+      if (now - lastSent < 1500) return;
       try {
         const { privateKey, publicKey } = await getOrCreateIdentityKeyPair();
         const targetPublicKey = await importPublicKey(publicKeyText);
@@ -1225,6 +1570,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           keyVersion: 1,
           senderPublicKey,
         });
+        callKeyShareThrottleRef.current.set(targetUserId, now);
         callKeyRecipientsRef.current.add(targetUserId);
       } catch {
         // ignore key share errors
@@ -1461,12 +1807,12 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           if (existing.video.track?.id !== videoTrack.id) {
             existing.video.replaceTrack(videoTrack).catch(() => undefined);
           }
-          setupSenderE2ee(existing.video);
+          setupSenderE2ee(socketId, existing.video);
           requestVideoKeyFrame(existing.video);
         } else {
           try {
             existing.video = pc.addTrack(videoTrack, screenStream);
-            setupSenderE2ee(existing.video);
+            setupSenderE2ee(socketId, existing.video);
             requestVideoKeyFrame(existing.video);
           } catch {
             // ignore share attach errors
@@ -1478,11 +1824,11 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           if (existing.audio.track?.id !== audioTrack.id) {
             existing.audio.replaceTrack(audioTrack).catch(() => undefined);
           }
-          setupSenderE2ee(existing.audio);
+          setupSenderE2ee(socketId, existing.audio);
         } else {
           try {
             existing.audio = pc.addTrack(audioTrack, screenStream);
-            setupSenderE2ee(existing.audio);
+            setupSenderE2ee(socketId, existing.audio);
           } catch {
             // ignore share attach errors
           }
@@ -1559,7 +1905,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       };
       const displayOptions: DisplayMediaStreamOptions = {
         video: videoConstraints,
-        audio: true,
+        // Avoid requesting system audio by default (improves reliability and prevents echo).
+        audio: false,
       };
       let lastError: Error | null = null;
       const attemptGetDisplayMedia = async (
@@ -1578,7 +1925,6 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       };
       let stream =
         (await attemptGetDisplayMedia(displayOptions)) ||
-        (await attemptGetDisplayMedia({ video: true, audio: true })) ||
         (await attemptGetDisplayMedia({ video: true }));
       if (!stream) {
         throw lastError || new Error("Unable to start screen sharing.");
@@ -1798,16 +2144,19 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         mirror: boolean,
         canvasWidth: number
       ) => {
-        const vw = image.naturalWidth || bounds.width;
-        const vh = image.naturalHeight || bounds.height;
-        if (!vw || !vh) return;
-        const scale = Math.min(bounds.width / vw, bounds.height / vh);
-        const dw = vw * scale;
-        const dh = vh * scale;
+        const sourceWidth = image.naturalWidth || bounds.width;
+        const sourceHeight = image.naturalHeight || bounds.height;
+        if (!sourceWidth || !sourceHeight) return;
+        const scale = Math.min(bounds.width / sourceWidth, bounds.height / sourceHeight);
+        const dw = sourceWidth * scale;
+        const dh = sourceHeight * scale;
         const dx = bounds.x + (bounds.width - dw) / 2;
         const dy = bounds.y + (bounds.height - dh) / 2;
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = "high";
         withMirror(context, canvasWidth, mirror, () => {
-          context.drawImage(image, 0, 0, vw, vh, dx, dy, dw, dh);
+          // Use whole-image draw for SVG assets; source-rect draw can crop in some runtimes.
+          context.drawImage(image, dx, dy, dw, dh);
         });
       };
 
@@ -1890,24 +2239,36 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           eyeOffsetX: number;
           eyeOffsetY: number;
           eyeSpacing: number;
+          eyeSize: number;
           mouthOffsetX: number;
           mouthOffsetY: number;
+          mouthSize: number;
           eyeStyle: VideoCallEffects["avatarEyeStyle"];
           mouthStyle: VideoCallEffects["avatarMouthStyle"];
         }
       ) => {
         const mouthOpen = Math.min(1, Math.max(0, avatarRig.mouth || 0));
         const blink = Math.min(1, Math.max(0, avatarRig.blink || 0));
+        const safeEyeSize = Math.min(
+          1.8,
+          Math.max(0.5, Number.isFinite(options.eyeSize) ? options.eyeSize : 1)
+        );
+        const safeMouthSize = Math.min(
+          1.8,
+          Math.max(0.5, Number.isFinite(options.mouthSize) ? options.mouthSize : 1)
+        );
 
         const centerX = bounds.x + bounds.width * 0.5 + bounds.width * options.eyeOffsetX;
         const eyeSpacing = bounds.width * 0.18 * options.eyeSpacing;
         const eyeY = bounds.y + bounds.height * (0.34 + options.eyeOffsetY);
-        const eyeRadiusX = Math.max(2, bounds.width * 0.055);
-        const eyeRadiusY = Math.max(1.5, bounds.height * 0.03 * (1 - blink * 0.9));
+        const eyeRadiusX = Math.max(2, bounds.width * 0.055 * safeEyeSize);
+        const eyeRadiusY = Math.max(
+          1.5,
+          bounds.height * 0.03 * safeEyeSize * (1 - blink * 0.9)
+        );
         const mouthCenterX = centerX + bounds.width * options.mouthOffsetX;
         const mouthY = bounds.y + bounds.height * (0.58 + options.mouthOffsetY);
-        const mouthWidth = bounds.width * 0.26;
-        const mouthHeight = Math.max(2, bounds.height * (0.02 + mouthOpen * 0.12));
+        const mouthWidth = bounds.width * 0.26 * safeMouthSize;
 
         context.save();
         const ink = "rgba(10, 10, 12, 0.85)";
@@ -1915,193 +2276,472 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         context.strokeStyle = ink;
         context.lineWidth = Math.max(1, bounds.width * 0.008);
 
+        const eyeStyle = normalizeAvatarEyeStyle(options.eyeStyle);
+        const mouthStyle = normalizeAvatarMouthStyle(options.mouthStyle);
         const leftX = centerX - eyeSpacing;
         const rightX = centerX + eyeSpacing;
-        if (blink > 0.75 || eyeRadiusY <= 1.2) {
+        const eyePresets: Record<
+          AvatarEyeStyle,
+          {
+            iris: string;
+            width: number;
+            height: number;
+            upperLift: number;
+            lowerLift: number;
+            tilt: number;
+            irisScale: number;
+            pupilScale: number;
+            lidAlpha: number;
+            irisShift: number;
+          }
+        > = {
+          almond: {
+            iris: "rgba(78, 58, 38, 0.95)",
+            width: 1.02,
+            height: 0.74,
+            upperLift: 0.22,
+            lowerLift: 0.08,
+            tilt: 0.02,
+            irisScale: 0.43,
+            pupilScale: 0.22,
+            lidAlpha: 0.56,
+            irisShift: 0,
+          },
+          hooded: {
+            iris: "rgba(86, 72, 54, 0.96)",
+            width: 1.01,
+            height: 0.64,
+            upperLift: 0.34,
+            lowerLift: 0.03,
+            tilt: 0.01,
+            irisScale: 0.4,
+            pupilScale: 0.2,
+            lidAlpha: 0.62,
+            irisShift: 0,
+          },
+          "deep-set": {
+            iris: "rgba(62, 74, 82, 0.95)",
+            width: 1,
+            height: 0.69,
+            upperLift: 0.28,
+            lowerLift: 0.06,
+            tilt: 0.03,
+            irisScale: 0.42,
+            pupilScale: 0.21,
+            lidAlpha: 0.66,
+            irisShift: 0,
+          },
+          monolid: {
+            iris: "rgba(74, 84, 62, 0.96)",
+            width: 1.03,
+            height: 0.58,
+            upperLift: 0.4,
+            lowerLift: 0.02,
+            tilt: 0,
+            irisScale: 0.38,
+            pupilScale: 0.2,
+            lidAlpha: 0.72,
+            irisShift: 0,
+          },
+          "cat-eye": {
+            iris: "rgba(56, 76, 66, 0.95)",
+            width: 1.04,
+            height: 0.66,
+            upperLift: 0.3,
+            lowerLift: 0.04,
+            tilt: 0.17,
+            irisScale: 0.4,
+            pupilScale: 0.2,
+            lidAlpha: 0.7,
+            irisShift: 0.15,
+          },
+          doe: {
+            iris: "rgba(98, 74, 48, 0.95)",
+            width: 1,
+            height: 0.82,
+            upperLift: 0.16,
+            lowerLift: 0.12,
+            tilt: 0,
+            irisScale: 0.46,
+            pupilScale: 0.24,
+            lidAlpha: 0.48,
+            irisShift: 0,
+          },
+          narrow: {
+            iris: "rgba(74, 72, 62, 0.96)",
+            width: 1.08,
+            height: 0.54,
+            upperLift: 0.42,
+            lowerLift: 0.01,
+            tilt: 0.05,
+            irisScale: 0.34,
+            pupilScale: 0.18,
+            lidAlpha: 0.75,
+            irisShift: 0,
+          },
+          "bright-hazel": {
+            iris: "rgba(112, 90, 42, 0.97)",
+            width: 1.01,
+            height: 0.72,
+            upperLift: 0.2,
+            lowerLift: 0.07,
+            tilt: 0.02,
+            irisScale: 0.45,
+            pupilScale: 0.22,
+            lidAlpha: 0.58,
+            irisShift: 0,
+          },
+        };
+        const eyePreset = eyePresets[eyeStyle];
+
+        if (blink > 0.78 || eyeRadiusY <= 1.2) {
+          const half = eyeRadiusX * eyePreset.width;
           context.beginPath();
-          context.moveTo(leftX - eyeRadiusX, eyeY);
-          context.lineTo(leftX + eyeRadiusX, eyeY);
-          context.moveTo(rightX - eyeRadiusX, eyeY);
-          context.lineTo(rightX + eyeRadiusX, eyeY);
+          context.strokeStyle = `rgba(10, 12, 16, ${Math.min(0.9, eyePreset.lidAlpha + 0.2)})`;
+          context.lineWidth = Math.max(1.4, bounds.width * 0.008);
+          context.moveTo(leftX - half, eyeY);
+          context.lineTo(leftX + half, eyeY);
+          context.moveTo(rightX - half, eyeY);
+          context.lineTo(rightX + half, eyeY);
           context.stroke();
         } else {
-          switch (options.eyeStyle) {
-            case "toon": {
-              context.beginPath();
-              context.ellipse(leftX, eyeY, eyeRadiusX, eyeRadiusY, 0, 0, Math.PI * 2);
-              context.ellipse(rightX, eyeY, eyeRadiusX, eyeRadiusY, 0, 0, Math.PI * 2);
-              context.fill();
-              break;
-            }
-            case "sleepy": {
-              const lidHeight = eyeRadiusY * 0.55;
-              context.beginPath();
-              context.ellipse(leftX, eyeY + eyeRadiusY * 0.15, eyeRadiusX, lidHeight, 0, 0, Math.PI * 2);
-              context.ellipse(rightX, eyeY + eyeRadiusY * 0.15, eyeRadiusX, lidHeight, 0, 0, Math.PI * 2);
-              context.fill();
-              break;
-            }
-            case "sparkle":
-            case "classic":
-            default: {
-              const sclera = "rgba(248, 250, 252, 0.92)";
-              const iris = "rgba(30, 41, 59, 0.9)";
-              const pupil = "rgba(15, 23, 42, 0.95)";
-              const highlight = "rgba(255, 255, 255, 0.8)";
-              const irisRadius = eyeRadiusX * (options.eyeStyle === "sparkle" ? 0.85 : 0.7);
-              const pupilRadius = eyeRadiusX * (options.eyeStyle === "sparkle" ? 0.35 : 0.28);
-              const drawEye = (x: number) => {
-                context.beginPath();
-                context.fillStyle = sclera;
-                context.ellipse(x, eyeY, eyeRadiusX, eyeRadiusY, 0, 0, Math.PI * 2);
-                context.fill();
-                context.strokeStyle = "rgba(15, 23, 42, 0.5)";
-                context.stroke();
-
-                context.beginPath();
-                context.fillStyle = iris;
-                context.ellipse(x, eyeY, irisRadius, irisRadius * 0.9, 0, 0, Math.PI * 2);
-                context.fill();
-
-                context.beginPath();
-                context.fillStyle = pupil;
-                context.ellipse(x, eyeY, pupilRadius, pupilRadius, 0, 0, Math.PI * 2);
-                context.fill();
-
-                context.beginPath();
-                context.fillStyle = highlight;
-                context.ellipse(
-                  x - irisRadius * 0.35,
-                  eyeY - irisRadius * 0.35,
-                  irisRadius * 0.2,
-                  irisRadius * 0.2,
-                  0,
-                  0,
-                  Math.PI * 2
-                );
-                context.fill();
-              };
-              drawEye(leftX);
-              drawEye(rightX);
-              break;
-            }
-          }
-        }
-
-        switch (options.mouthStyle) {
-          case "line": {
+          const drawEye = (x: number, side: -1 | 1) => {
+            const eyeWidth = eyeRadiusX * eyePreset.width;
+            const eyeHeight = Math.max(1.2, eyeRadiusY * eyePreset.height);
+            const topY =
+              eyeY - eyeHeight * (1 + eyePreset.upperLift) + eyeHeight * eyePreset.tilt * side;
+            const bottomY =
+              eyeY +
+              eyeHeight * (1 + eyePreset.lowerLift) -
+              eyeHeight * eyePreset.tilt * side * 0.4;
+            context.save();
             context.beginPath();
-            context.strokeStyle = ink;
-            context.lineWidth = Math.max(1.5, bounds.width * 0.01);
-            context.moveTo(mouthCenterX - mouthWidth * 0.5, mouthY);
-            context.quadraticCurveTo(
-              mouthCenterX,
-              mouthY + mouthHeight * 0.4,
-              mouthCenterX + mouthWidth * 0.5,
-              mouthY
-            );
-            context.stroke();
-            break;
-          }
-          case "smile": {
-            context.beginPath();
-            context.strokeStyle = ink;
-            context.lineWidth = Math.max(2, bounds.width * 0.012);
-            context.moveTo(mouthCenterX - mouthWidth * 0.55, mouthY);
-            context.quadraticCurveTo(
-              mouthCenterX,
-              mouthY + mouthHeight * 0.9,
-              mouthCenterX + mouthWidth * 0.55,
-              mouthY
-            );
-            context.stroke();
-            break;
-          }
-          case "round": {
-            context.beginPath();
-            context.fillStyle = "rgba(20, 6, 8, 0.85)";
-            context.ellipse(
-              mouthCenterX,
-              mouthY,
-              mouthWidth * 0.45,
-              Math.max(2, mouthHeight * 0.9),
-              0,
-              0,
-              Math.PI * 2
-            );
+            context.moveTo(x - eyeWidth, eyeY);
+            context.quadraticCurveTo(x, topY, x + eyeWidth, eyeY);
+            context.quadraticCurveTo(x, bottomY, x - eyeWidth, eyeY);
+            context.closePath();
+            context.fillStyle = "rgba(248, 250, 252, 0.95)";
             context.fill();
-            break;
-          }
-          case "natural":
-          default: {
-            const lipColor = "rgba(74, 28, 38, 0.78)";
-            const lipDark = "rgba(44, 16, 22, 0.6)";
-            const innerColor = "rgba(18, 6, 10, 0.88)";
-            const teethColor = "rgba(248, 250, 252, 0.9)";
-            const lipWidth = Math.max(1.6, bounds.width * 0.012);
-            if (mouthOpen < 0.1) {
-              context.beginPath();
-              context.strokeStyle = lipColor;
-              context.lineWidth = lipWidth;
-              context.moveTo(mouthCenterX - mouthWidth * 0.55, mouthY);
-              context.quadraticCurveTo(mouthCenterX, mouthY + mouthHeight * 0.4, mouthCenterX + mouthWidth * 0.55, mouthY);
-              context.stroke();
+            context.strokeStyle = `rgba(15, 23, 42, ${eyePreset.lidAlpha})`;
+            context.lineWidth = Math.max(1, bounds.width * 0.007);
+            context.stroke();
+            context.clip();
 
-              context.beginPath();
-              context.strokeStyle = lipDark;
-              context.lineWidth = Math.max(1.2, lipWidth * 0.8);
-              const lowerY = mouthY + mouthHeight * 0.35;
-              context.moveTo(mouthCenterX - mouthWidth * 0.4, lowerY);
-              context.quadraticCurveTo(mouthCenterX, lowerY + mouthHeight * 0.25, mouthCenterX + mouthWidth * 0.4, lowerY);
-              context.stroke();
-              break;
-            }
-
+            const irisRadius = eyeWidth * eyePreset.irisScale;
+            const irisX = x + eyeWidth * eyePreset.irisShift * side;
             context.beginPath();
-            context.fillStyle = innerColor;
+            context.fillStyle = eyePreset.iris;
             context.ellipse(
-              mouthCenterX,
-              mouthY,
-              mouthWidth * 0.48,
-              Math.max(2, mouthHeight * 1.05),
+              irisX,
+              eyeY + eyeHeight * 0.02,
+              irisRadius,
+              irisRadius * 0.9,
               0,
               0,
               Math.PI * 2
             );
             context.fill();
 
-            if (mouthOpen < 0.55) {
-              context.beginPath();
-              context.fillStyle = teethColor;
-              context.ellipse(
-                mouthCenterX,
-                mouthY - mouthHeight * 0.15,
-                mouthWidth * 0.34,
-                Math.max(1.5, mouthHeight * 0.25),
-                0,
-                0,
-                Math.PI * 2
-              );
-              context.fill();
-            }
+            const pupilRadius = eyeWidth * eyePreset.pupilScale;
+            context.beginPath();
+            context.fillStyle = "rgba(7, 10, 14, 0.96)";
+            context.ellipse(
+              irisX,
+              eyeY + eyeHeight * 0.05,
+              pupilRadius,
+              pupilRadius,
+              0,
+              0,
+              Math.PI * 2
+            );
+            context.fill();
 
             context.beginPath();
-            context.strokeStyle = lipColor;
-            context.lineWidth = lipWidth;
-            context.moveTo(mouthCenterX - mouthWidth * 0.58, mouthY);
-            context.quadraticCurveTo(mouthCenterX, mouthY - mouthHeight * 0.35, mouthCenterX + mouthWidth * 0.58, mouthY);
-            context.stroke();
+            context.fillStyle = "rgba(255, 255, 255, 0.86)";
+            context.ellipse(
+              irisX - irisRadius * 0.34,
+              eyeY - irisRadius * 0.28,
+              irisRadius * 0.2,
+              irisRadius * 0.2,
+              0,
+              0,
+              Math.PI * 2
+            );
+            context.fill();
+            context.restore();
 
             context.beginPath();
-            context.strokeStyle = lipDark;
-            context.lineWidth = Math.max(1.2, lipWidth * 0.8);
-            const lowerLipY = mouthY + mouthHeight * 0.35;
-            context.moveTo(mouthCenterX - mouthWidth * 0.52, lowerLipY);
-            context.quadraticCurveTo(mouthCenterX, lowerLipY + mouthHeight * 0.5, mouthCenterX + mouthWidth * 0.52, lowerLipY);
+            context.strokeStyle = `rgba(10, 12, 18, ${Math.min(0.88, eyePreset.lidAlpha + 0.2)})`;
+            context.lineWidth = Math.max(1.2, bounds.width * 0.007);
+            context.moveTo(x - eyeWidth, eyeY);
+            context.quadraticCurveTo(x, topY, x + eyeWidth, eyeY);
             context.stroke();
-            break;
-          }
+            context.beginPath();
+            context.strokeStyle = `rgba(28, 36, 46, ${Math.max(0.28, eyePreset.lidAlpha - 0.18)})`;
+            context.lineWidth = Math.max(1, bounds.width * 0.006);
+            context.moveTo(x - eyeWidth * 0.85, eyeY + eyeHeight * 0.45);
+            context.quadraticCurveTo(
+              x,
+              bottomY - eyeHeight * 0.08,
+              x + eyeWidth * 0.85,
+              eyeY + eyeHeight * 0.45
+            );
+            context.stroke();
+          };
+          drawEye(leftX, -1);
+          drawEye(rightX, 1);
         }
+
+        const mouthPresets: Record<
+          AvatarMouthStyle,
+          {
+            topLip: string;
+            lowerLip: string;
+            lipLine: string;
+            lipShadow: string;
+            inner: string;
+            teeth: string;
+            tongue: string;
+            width: number;
+            baseOpen: number;
+            rigOpen: number;
+            smile: number;
+            showTeeth: boolean;
+            showTongue: boolean;
+          }
+        > = {
+          natural: {
+            topLip: "rgba(124, 72, 70, 0.62)",
+            lowerLip: "rgba(108, 62, 62, 0.54)",
+            lipLine: "rgba(76, 34, 36, 0.84)",
+            lipShadow: "rgba(48, 22, 24, 0.66)",
+            inner: "rgba(30, 10, 14, 0.92)",
+            teeth: "rgba(246, 247, 250, 0.9)",
+            tongue: "rgba(136, 48, 58, 0.84)",
+            width: 0.95,
+            baseOpen: 0.018,
+            rigOpen: 0.08,
+            smile: 0.08,
+            showTeeth: true,
+            showTongue: true,
+          },
+          rose: {
+            topLip: "rgba(162, 74, 92, 0.68)",
+            lowerLip: "rgba(144, 64, 84, 0.58)",
+            lipLine: "rgba(94, 34, 52, 0.86)",
+            lipShadow: "rgba(58, 20, 34, 0.68)",
+            inner: "rgba(34, 8, 18, 0.94)",
+            teeth: "rgba(248, 248, 252, 0.92)",
+            tongue: "rgba(156, 48, 76, 0.86)",
+            width: 0.96,
+            baseOpen: 0.02,
+            rigOpen: 0.084,
+            smile: 0.12,
+            showTeeth: true,
+            showTongue: true,
+          },
+          mauve: {
+            topLip: "rgba(130, 86, 112, 0.66)",
+            lowerLip: "rgba(114, 72, 98, 0.56)",
+            lipLine: "rgba(76, 46, 68, 0.86)",
+            lipShadow: "rgba(48, 30, 44, 0.7)",
+            inner: "rgba(28, 14, 26, 0.94)",
+            teeth: "rgba(245, 246, 250, 0.9)",
+            tongue: "rgba(132, 66, 102, 0.84)",
+            width: 0.97,
+            baseOpen: 0.019,
+            rigOpen: 0.08,
+            smile: 0.04,
+            showTeeth: true,
+            showTongue: true,
+          },
+          berry: {
+            topLip: "rgba(116, 40, 66, 0.76)",
+            lowerLip: "rgba(100, 34, 58, 0.66)",
+            lipLine: "rgba(64, 18, 36, 0.9)",
+            lipShadow: "rgba(38, 10, 22, 0.74)",
+            inner: "rgba(20, 4, 12, 0.96)",
+            teeth: "rgba(246, 247, 250, 0.9)",
+            tongue: "rgba(124, 34, 66, 0.88)",
+            width: 0.94,
+            baseOpen: 0.022,
+            rigOpen: 0.088,
+            smile: 0.05,
+            showTeeth: true,
+            showTongue: true,
+          },
+          caramel: {
+            topLip: "rgba(136, 86, 72, 0.68)",
+            lowerLip: "rgba(118, 72, 60, 0.58)",
+            lipLine: "rgba(82, 46, 36, 0.86)",
+            lipShadow: "rgba(54, 28, 22, 0.68)",
+            inner: "rgba(30, 14, 10, 0.92)",
+            teeth: "rgba(245, 245, 248, 0.9)",
+            tongue: "rgba(146, 70, 58, 0.84)",
+            width: 0.98,
+            baseOpen: 0.017,
+            rigOpen: 0.08,
+            smile: 0.06,
+            showTeeth: true,
+            showTongue: true,
+          },
+          "ruby-smile": {
+            topLip: "rgba(168, 42, 56, 0.76)",
+            lowerLip: "rgba(148, 34, 48, 0.66)",
+            lipLine: "rgba(96, 16, 28, 0.9)",
+            lipShadow: "rgba(56, 8, 18, 0.74)",
+            inner: "rgba(28, 4, 10, 0.96)",
+            teeth: "rgba(250, 250, 252, 0.94)",
+            tongue: "rgba(170, 44, 62, 0.9)",
+            width: 1,
+            baseOpen: 0.024,
+            rigOpen: 0.094,
+            smile: 0.22,
+            showTeeth: true,
+            showTongue: true,
+          },
+          mocha: {
+            topLip: "rgba(96, 56, 52, 0.74)",
+            lowerLip: "rgba(82, 48, 46, 0.64)",
+            lipLine: "rgba(52, 28, 28, 0.9)",
+            lipShadow: "rgba(30, 16, 18, 0.76)",
+            inner: "rgba(18, 10, 10, 0.96)",
+            teeth: "rgba(243, 243, 246, 0.88)",
+            tongue: "rgba(118, 62, 62, 0.84)",
+            width: 0.94,
+            baseOpen: 0.021,
+            rigOpen: 0.086,
+            smile: 0.02,
+            showTeeth: true,
+            showTongue: true,
+          },
+          "plum-gloss": {
+            topLip: "rgba(118, 54, 98, 0.78)",
+            lowerLip: "rgba(104, 44, 88, 0.68)",
+            lipLine: "rgba(68, 24, 58, 0.92)",
+            lipShadow: "rgba(40, 12, 34, 0.76)",
+            inner: "rgba(22, 6, 20, 0.96)",
+            teeth: "rgba(248, 248, 252, 0.92)",
+            tongue: "rgba(136, 52, 108, 0.88)",
+            width: 0.96,
+            baseOpen: 0.023,
+            rigOpen: 0.09,
+            smile: 0.1,
+            showTeeth: true,
+            showTongue: true,
+          },
+        };
+        const mouthPreset = mouthPresets[mouthStyle];
+        const mouthHalfWidth = mouthWidth * mouthPreset.width;
+        const dynamicOpen = Math.max(
+          2,
+          bounds.height * (mouthPreset.baseOpen + mouthPreset.rigOpen * mouthOpen) * safeMouthSize
+        );
+        const smileLift = dynamicOpen * mouthPreset.smile;
+        const leftM = mouthCenterX - mouthHalfWidth;
+        const rightM = mouthCenterX + mouthHalfWidth;
+
+        context.beginPath();
+        context.fillStyle = mouthPreset.topLip;
+        context.moveTo(leftM, mouthY);
+        context.quadraticCurveTo(
+          mouthCenterX,
+          mouthY - dynamicOpen * (0.56 + mouthPreset.smile * 0.35),
+          rightM,
+          mouthY
+        );
+        context.quadraticCurveTo(
+          mouthCenterX,
+          mouthY + dynamicOpen * 0.2,
+          leftM,
+          mouthY
+        );
+        context.closePath();
+        context.fill();
+
+        const leftLower = mouthCenterX - mouthHalfWidth * 0.96;
+        const rightLower = mouthCenterX + mouthHalfWidth * 0.96;
+        context.beginPath();
+        context.fillStyle = mouthPreset.lowerLip;
+        context.moveTo(leftLower, mouthY + dynamicOpen * 0.08);
+        context.quadraticCurveTo(
+          mouthCenterX,
+          mouthY + dynamicOpen * (1.12 + mouthPreset.smile * 0.2),
+          rightLower,
+          mouthY + dynamicOpen * 0.08
+        );
+        context.quadraticCurveTo(
+          mouthCenterX,
+          mouthY + dynamicOpen * 0.24,
+          leftLower,
+          mouthY + dynamicOpen * 0.08
+        );
+        context.closePath();
+        context.fill();
+
+        context.beginPath();
+        context.fillStyle = mouthPreset.inner;
+        context.ellipse(
+          mouthCenterX,
+          mouthY + dynamicOpen * (0.36 - mouthPreset.smile * 0.16),
+          mouthHalfWidth * 0.82,
+          dynamicOpen * 0.92,
+          0,
+          0,
+          Math.PI * 2
+        );
+        context.fill();
+
+        if (mouthPreset.showTeeth && dynamicOpen > 1.5) {
+          const teethWidth = mouthHalfWidth * 1.02;
+          const teethHeight = Math.max(1.3, dynamicOpen * 0.34);
+          context.fillStyle = mouthPreset.teeth;
+          context.fillRect(
+            mouthCenterX - teethWidth / 2,
+            mouthY - dynamicOpen * 0.02 - smileLift * 0.2,
+            teethWidth,
+            teethHeight
+          );
+        }
+
+        if (mouthPreset.showTongue && dynamicOpen > 2) {
+          context.beginPath();
+          context.fillStyle = mouthPreset.tongue;
+          context.ellipse(
+            mouthCenterX,
+            mouthY + dynamicOpen * 0.85,
+            mouthHalfWidth * 0.38,
+            Math.max(1.2, dynamicOpen * 0.42),
+            0,
+            0,
+            Math.PI * 2
+          );
+          context.fill();
+        }
+
+        context.beginPath();
+        context.strokeStyle = mouthPreset.lipLine;
+        context.lineWidth = Math.max(1.8, bounds.width * 0.012);
+        context.moveTo(leftM, mouthY);
+        context.quadraticCurveTo(
+          mouthCenterX,
+          mouthY - dynamicOpen * (0.58 + mouthPreset.smile * 0.34),
+          rightM,
+          mouthY
+        );
+        context.stroke();
+
+        context.beginPath();
+        context.strokeStyle = mouthPreset.lipShadow;
+        context.lineWidth = Math.max(1.2, bounds.width * 0.008);
+        context.moveTo(mouthCenterX - mouthHalfWidth * 0.9, mouthY + dynamicOpen * 0.5);
+        context.quadraticCurveTo(
+          mouthCenterX,
+          mouthY + dynamicOpen * (1.16 + mouthPreset.smile * 0.2),
+          mouthCenterX + mouthHalfWidth * 0.9,
+          mouthY + dynamicOpen * 0.5
+        );
+        context.stroke();
 
         context.restore();
       };
@@ -2114,15 +2754,20 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         maxWidth: number,
         maxHeight: number
       ) => {
-        const safeScale = Math.min(1.6, Math.max(0.4, scale || 1));
-        const width = bounds.width * safeScale;
-        const height = bounds.height * safeScale;
+        const boundsWidth = Math.max(1, bounds.width);
+        const boundsHeight = Math.max(1, bounds.height);
+        const fitScale = Math.min(maxWidth / boundsWidth, maxHeight / boundsHeight);
+        const safeScale = Math.min(
+          1.6,
+          Math.max(0.4, Number.isFinite(scale) ? scale : 1),
+          Number.isFinite(fitScale) ? fitScale : 1
+        );
+        const width = boundsWidth * safeScale;
+        const height = boundsHeight * safeScale;
         const dx = bounds.x + (bounds.width - width) / 2 + maxWidth * offsetX * 0.45;
         const dy = bounds.y + (bounds.height - height) / 2 + maxHeight * offsetY * 0.45;
-        const marginX = width * 0.35;
-        const marginY = height * 0.35;
-        const x = Math.max(-marginX, Math.min(maxWidth - width + marginX, dx));
-        const y = Math.max(-marginY, Math.min(maxHeight - height + marginY, dy));
+        const x = Math.min(Math.max(dx, 0), Math.max(0, maxWidth - width));
+        const y = Math.min(Math.max(dy, 0), Math.max(0, maxHeight - height));
         return { x, y, width, height };
       };
 
@@ -2268,7 +2913,14 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         );
         const avatarEyeSpacing = Math.min(
           1,
-          Math.max(0.25, Number.isFinite(effects.avatarEyeSpacing) ? effects.avatarEyeSpacing : 1)
+          Math.max(
+            0.25,
+            Number.isFinite(effects.avatarEyeSpacing) ? effects.avatarEyeSpacing : 0.45
+          )
+        );
+        const avatarEyeSize = Math.min(
+          1.8,
+          Math.max(0.5, Number.isFinite(effects.avatarEyeSize) ? effects.avatarEyeSize : 1)
         );
         const avatarMouthOffsetX = Math.min(
           0.35,
@@ -2276,10 +2928,17 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         );
         const avatarMouthOffsetY = Math.min(
           0.3,
-          Math.max(-0.3, Number.isFinite(effects.avatarMouthOffsetY) ? effects.avatarMouthOffsetY : 0)
+          Math.max(
+            -0.3,
+            Number.isFinite(effects.avatarMouthOffsetY) ? effects.avatarMouthOffsetY : -0.08
+          )
         );
-        const avatarEyeStyle = effects.avatarEyeStyle || "classic";
-        const avatarMouthStyle = effects.avatarMouthStyle || "natural";
+        const avatarMouthSize = Math.min(
+          1.8,
+          Math.max(0.5, Number.isFinite(effects.avatarMouthSize) ? effects.avatarMouthSize : 1)
+        );
+        const avatarEyeStyle = normalizeAvatarEyeStyle(effects.avatarEyeStyle || "almond");
+        const avatarMouthStyle = normalizeAvatarMouthStyle(effects.avatarMouthStyle || "natural");
         const needsSegmentation =
           effects.blur || effects.background !== "none" || useAvatar;
         if (needsSegmentation) {
@@ -2385,7 +3044,25 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
               width: width * 0.7,
               height: height * 0.9,
             };
-            const bounds = avatarFrame.valid
+            const presetBounds = {
+              x: width * 0.18,
+              y: height * 0.04,
+              width: width * 0.64,
+              height: height * 0.88,
+            };
+            const trackedAreaRatio = (avatarFrame.width * avatarFrame.height) / (width * height);
+            const trackedAspect = avatarFrame.width / Math.max(1, avatarFrame.height);
+            const isPresetAvatar = isPresetAvatarSource(effects.avatarImageUrl);
+            const canUseTrackedBounds =
+              avatarFrame.valid &&
+              !isPresetAvatar &&
+              trackedAreaRatio >= 0.08 &&
+              trackedAreaRatio <= 0.9 &&
+              trackedAspect >= 0.28 &&
+              trackedAspect <= 1.45;
+            const bounds = isPresetAvatar
+              ? presetBounds
+              : canUseTrackedBounds
               ? {
                   x: avatarFrame.x,
                   y: avatarFrame.y,
@@ -2407,8 +3084,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
               eyeOffsetX: avatarEyeOffsetX,
               eyeOffsetY: avatarEyeOffsetY,
               eyeSpacing: avatarEyeSpacing,
+              eyeSize: avatarEyeSize,
               mouthOffsetX: avatarMouthOffsetX,
               mouthOffsetY: avatarMouthOffsetY,
+              mouthSize: avatarMouthSize,
               eyeStyle: avatarEyeStyle,
               mouthStyle: avatarMouthStyle,
             });
@@ -2553,19 +3232,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     }
 
     const current = videoProcessingRef.current;
+    const effectsKey = buildVideoEffectsKey(effects, hasAvatar);
     if (current.track && current.sourceId === rawTrack.id) {
       current.track.enabled = rawTrack.enabled;
-      current.effectsKey = `${effects.blur ? "1" : "0"}-${effects.background}-${
-        effects.filter
-      }-${effects.mirror ? "1" : "0"}-${hasAvatar ? "1" : "0"}-${
-        effects.backgroundImageUrl
-      }-${effects.avatarImageUrl}-${effects.maskStrength}-${effects.avatarOffsetX}-${
-        effects.avatarOffsetY
-      }-${effects.avatarScale}-${effects.avatarEyeOffsetX}-${effects.avatarEyeOffsetY}-${
-        effects.avatarEyeSpacing
-      }-${effects.avatarMouthOffsetX}-${effects.avatarMouthOffsetY}-${
-        effects.avatarEyeStyle
-      }-${effects.avatarMouthStyle}`;
+      current.effectsKey = effectsKey;
       return current.track;
     }
 
@@ -2579,17 +3249,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         track,
         cleanup,
         sourceId: rawTrack.id,
-        effectsKey: `${effects.blur ? "1" : "0"}-${effects.background}-${
-          effects.filter
-        }-${effects.mirror ? "1" : "0"}-${hasAvatar ? "1" : "0"}-${
-          effects.backgroundImageUrl
-        }-${effects.avatarImageUrl}-${effects.maskStrength}-${effects.avatarOffsetX}-${
-          effects.avatarOffsetY
-        }-${effects.avatarScale}-${effects.avatarEyeOffsetX}-${effects.avatarEyeOffsetY}-${
-          effects.avatarEyeSpacing
-        }-${effects.avatarMouthOffsetX}-${effects.avatarMouthOffsetY}-${
-          effects.avatarEyeStyle
-        }-${effects.avatarMouthStyle}`,
+        effectsKey,
       };
       return track;
     } catch {
@@ -2666,11 +3326,11 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
                 // ignore replace failures
               }
             }
-            setupSenderE2ee(sender);
+            setupSenderE2ee(socketId, sender);
             tuneSenderForLowLatency(sender);
           } else {
             const newSender = pc.addTrack(track, stream);
-            setupSenderE2ee(newSender);
+            setupSenderE2ee(socketId, newSender);
             tuneSenderForLowLatency(newSender);
           }
         });
@@ -2687,12 +3347,12 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
                 // ignore replace failures
               }
             }
-            setupSenderE2ee(videoSender);
+            setupSenderE2ee(socketId, videoSender);
             tuneSenderForLowLatency(videoSender);
             requestVideoKeyFrame(videoSender);
           } else {
             const newSender = pc.addTrack(videoTrack, stream);
-            setupSenderE2ee(newSender);
+            setupSenderE2ee(socketId, newSender);
             tuneSenderForLowLatency(newSender);
             requestVideoKeyFrame(newSender);
           }
@@ -2709,7 +3369,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   );
 
   const attachLocalTracks = useCallback(
-    (pc: RTCPeerConnection) => {
+    (pc: RTCPeerConnection, socketId: string) => {
       const stream = localStreamRef.current;
       if (!stream) return;
       const screenTrackIds = new Set(
@@ -2720,7 +3380,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           .getSenders()
           .find((candidate) => candidate.track?.id === track.id);
         if (senderByTrack) {
-          setupSenderE2ee(senderByTrack);
+          setupSenderE2ee(socketId, senderByTrack);
           if (track.kind === "video") {
             requestVideoKeyFrame(senderByTrack);
           }
@@ -2739,7 +3399,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           } catch {
             // ignore replace failures
           }
-          setupSenderE2ee(senderByKind);
+          setupSenderE2ee(socketId, senderByKind);
           if (track.kind === "video") {
             requestVideoKeyFrame(senderByKind);
           }
@@ -2749,7 +3409,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           return;
         }
         const newSender = pc.addTrack(track, stream);
-        setupSenderE2ee(newSender);
+        setupSenderE2ee(socketId, newSender);
         if (track.kind === "video") {
           requestVideoKeyFrame(newSender);
         }
@@ -2759,6 +3419,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   );
 
   const closePeer = useCallback((socketId: string) => {
+    peerE2eeCapableRef.current.delete(socketId);
+    pendingIceCandidatesRef.current.delete(socketId);
     const disconnectTimer = disconnectTimersRef.current.get(socketId);
     if (disconnectTimer) {
       window.clearTimeout(disconnectTimer);
@@ -3114,10 +3776,15 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   }, [applyLowLatencyToSenders, buildVideoConstraints, requestAllVideoKeyFrames]);
 
   const createPeerConnection = useCallback(
-    (socketId: string) => {
+    (socketId: string, options?: { remoteE2eeCapable?: boolean }) => {
       const existing = peersRef.current.get(socketId);
       if (existing) return existing;
-      const useInsertableStreams = e2eeSupported && callEncryptionEnabledRef.current;
+      if (typeof options?.remoteE2eeCapable === "boolean") {
+        peerE2eeCapableRef.current.set(socketId, options.remoteE2eeCapable);
+      }
+      // Enable insertable streams at the PeerConnection level whenever supported so we can
+      // safely turn per-peer E2EE on/off later without recreating the connection.
+      const useInsertableStreams = e2eeSupported;
       const baseConfig = rtcConfigRef.current || RTC_CONFIG;
       const rtcConfig = useInsertableStreams
         ? ({ ...baseConfig, encodedInsertableStreams: true } as RTCConfiguration)
@@ -3144,7 +3811,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           negotiationState.makingOffer = false;
         }
       };
-      attachLocalTracks(pc);
+      attachLocalTracks(pc, socketId);
       attachScreenShareTrack(pc, socketId);
       pc.onicecandidate = (event) => {
         if (event.candidate && socketRef.current) {
@@ -3155,7 +3822,11 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         }
       };
       pc.ontrack = (event) => {
-        setupReceiverE2ee(event.receiver);
+        try {
+          setupReceiverE2ee(socketId, event.receiver);
+        } catch {
+          // Never break ontrack handling due to E2EE wiring failures.
+        }
         const [stream] = event.streams;
         const existingCamera = remoteStreamsRef.current[socketId];
         const existingScreen = remoteScreenStreamsRef.current[socketId];
@@ -3287,16 +3958,16 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       attachLocalTracks,
       attachScreenShareTrack,
       closePeer,
-      e2eeSupported,
       getPeerNegotiationState,
       requestIceRestart,
       setupReceiverE2ee,
+      shouldUsePeerE2ee,
     ]
   );
 
   useEffect(() => {
     localStreamRef.current = localStream;
-    peersRef.current.forEach((pc) => attachLocalTracks(pc));
+    peersRef.current.forEach((pc, socketId) => attachLocalTracks(pc, socketId));
   }, [attachLocalTracks, localStream]);
 
   useEffect(() => {
@@ -3543,7 +4214,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         activeRoomRef.current &&
         (statusRef.current === "in-call" || statusRef.current === "connecting")
       ) {
-        socket.emit("call:join", { roomId: activeRoomRef.current });
+        socket.emit("call:join", {
+          roomId: activeRoomRef.current,
+          e2eeCapable: e2eeSupported,
+        });
         void refreshIceServers("socket-connect");
       }
     });
@@ -3595,9 +4269,16 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     });
 
     socket.on("call:invite", (invite: IncomingCall) => {
-      if (statusRef.current === "in-call" || statusRef.current === "connecting") return;
+      const callStatus = statusRef.current;
+      const activeRoom = activeRoomRef.current;
+      const isActiveCall = isCallActiveStatus(callStatus);
+      if (isActiveCall && activeRoom && invite.roomId === activeRoom) {
+        return;
+      }
       setIncomingCall(invite);
-      setStatus("incoming");
+      if (!isActiveCall) {
+        setStatus("incoming");
+      }
       setIsOpen(true);
       setError(null);
     });
@@ -3612,21 +4293,26 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         if (!CALL_E2EE_ENABLED) {
           setCallEncryptionMode(false, "disabled in settings", { suppressBanner: true });
         } else if (payload.e2eeEnabled === false) {
-          if (callEncryptionEnabledRef.current) {
-            setCallEncryptionMode(false, "disabled by host");
-          }
-        } else if (!e2eeSupported) {
-          setCallEncryptionMode(false, "unsupported browser", { broadcast: true });
+          setCallEncryptionMode(false, "disabled by host");
         } else if (!callEncryptionEnabledRef.current) {
           setCallEncryptionMode(true);
         }
+        peerE2eeCapableRef.current.clear();
+        payload.participants.forEach((participant) => {
+          peerE2eeCapableRef.current.set(
+            participant.socketId,
+            participant.e2eeCapable === true
+          );
+        });
         setRemoteParticipants(() =>
           Object.fromEntries(payload.participants.map((p) => [p.socketId, p]))
         );
         setStatus("in-call");
         payload.participants.forEach((participant) => {
           if (peersRef.current.has(participant.socketId)) return;
-          createPeerConnection(participant.socketId);
+          createPeerConnection(participant.socketId, {
+            remoteE2eeCapable: participant.e2eeCapable === true,
+          });
         });
         shareCallKeyWithParticipants(payload.roomId, payload.participants);
         requestAllVideoKeyFrames();
@@ -3639,6 +4325,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     socket.on(
       "call:user-joined",
       (payload: { roomId: string; participant: VideoCallParticipant }) => {
+        peerE2eeCapableRef.current.set(
+          payload.participant.socketId,
+          payload.participant.e2eeCapable === true
+        );
         setRemoteParticipants((prev) => ({
           ...prev,
           [payload.participant.socketId]: payload.participant,
@@ -3669,7 +4359,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       }) => {
         if (!payload?.roomId || !payload?.encryptedKey || !payload?.fromUserId) return;
         if (payload.roomId !== activeRoomRef.current) return;
-        if (!e2eeSupported || !callEncryptionEnabledRef.current) return;
+        if (!e2eeCryptoSupported || !callEncryptionEnabledRef.current) return;
         try {
           const { privateKey } = await getOrCreateIdentityKeyPair();
           let senderPublicKey: CryptoKey | null = null;
@@ -3687,16 +4377,19 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           }
           const sharedKey = await deriveSharedKey(privateKey, senderPublicKey);
           const callKey = await decryptWrappedKey(sharedKey, payload.encryptedKey);
-          callKeyRef.current = callKey;
-          callKeyRoomRef.current = payload.roomId;
-          missingCallKeySinceRef.current = null;
-          setError(null);
-          setE2eeDebug(null);
-          requestAllVideoKeyFrames();
-        } catch (err) {
-          const detail = err instanceof Error ? err.message : "Key decrypt failed";
-          setCallEncryptionMode(false, detail, { broadcast: true });
-          setError(null);
+           callKeyRef.current = callKey;
+           callKeyRoomRef.current = payload.roomId;
+           missingCallKeySinceRef.current = null;
+           setError(null);
+           setE2eeDebug(null);
+           requestAllVideoKeyFrames();
+           void flushPendingEncryptedChatInbox(payload.roomId, callKey);
+           void flushPendingEncryptedChatOutbox(payload.roomId, callKey);
+         } catch (err) {
+           const detail = err instanceof Error ? err.message : "Key decrypt failed";
+           setE2eeDebug(`E2EE: ${detail}`);
+           setError(null);
+          void maybeRequestCallKey(payload.roomId);
         }
       }
     );
@@ -3730,15 +4423,12 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
           return;
         }
         if (callEncryptionEnabledRef.current) return;
-        if (!e2eeSupported) {
-          setCallEncryptionMode(false, "unsupported browser", { broadcast: true });
-          return;
-        }
         setCallEncryptionMode(true);
       }
     );
 
     socket.on("call:user-left", (payload: { socketId: string }) => {
+      peerE2eeCapableRef.current.delete(payload.socketId);
       closePeer(payload.socketId);
     });
 
@@ -3751,8 +4441,12 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         displayName?: string;
         handle?: string;
         avatarUrl?: string;
+        e2eeCapable?: boolean;
       }) => {
         try {
+          if (typeof payload.e2eeCapable === "boolean") {
+            peerE2eeCapableRef.current.set(payload.from, payload.e2eeCapable);
+          }
           setRemoteParticipants((prev) => {
             if (prev[payload.from]) return prev;
             return {
@@ -3763,10 +4457,16 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
                 displayName: payload.displayName || payload.handle || "Friend",
                 handle: payload.handle,
                 avatarUrl: payload.avatarUrl,
+                e2eeCapable: payload.e2eeCapable,
               },
             };
           });
-          const pc = createPeerConnection(payload.from);
+          const pc = createPeerConnection(
+            payload.from,
+            typeof payload.e2eeCapable === "boolean"
+              ? { remoteE2eeCapable: payload.e2eeCapable }
+              : undefined
+          );
           const negotiationState = getPeerNegotiationState(payload.from);
           const offerCollision =
             payload.sdp?.type === "offer" &&
@@ -3777,6 +4477,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
             await pc.setLocalDescription({ type: "rollback" });
           }
           await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+          await flushQueuedIceCandidates(payload.from, pc);
           if (payload.sdp?.type === "offer") {
             await pc.setLocalDescription();
             socket.emit("call:answer", { to: payload.from, sdp: pc.localDescription });
@@ -3792,23 +4493,136 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       if (!pc) return;
       try {
         await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+        await flushQueuedIceCandidates(payload.from, pc);
       } catch {
         setError("Failed to finalize call connection.");
       }
     });
 
     socket.on("call:ice", async (payload: { from: string; candidate: RTCIceCandidateInit }) => {
+      if (!payload?.from || !payload?.candidate) return;
       const pc = peersRef.current.get(payload.from);
-      if (!pc) return;
+      if (!pc) {
+        queueIceCandidate(payload.from, payload.candidate);
+        return;
+      }
+      if (!pc.remoteDescription) {
+        queueIceCandidate(payload.from, payload.candidate);
+        return;
+      }
       try {
         await pc.addIceCandidate(new RTCIceCandidate(payload.candidate));
       } catch {
-        // ignore ICE errors
+        // If SDP isn't fully applied yet, keep the candidate around for a later flush.
+        queueIceCandidate(payload.from, payload.candidate);
       }
     });
 
-    socket.on("call:chat", (payload: VideoCallMessage) => {
-      setMessages((prev) => [...prev, { ...payload, id: createMessageId() }]);
+    socket.on("call:chat", (payload: VideoCallChatWirePayload) => {
+      if (payload?.roomId && payload.roomId !== activeRoomRef.current) return;
+      const localUserId = Number(user?.id) || 0;
+      const appendMessage = (
+        next: Omit<VideoCallMessage, "id">,
+        options?: { id?: string }
+      ): string | null => {
+        const now = Date.now();
+        localChatEchoRef.current.forEach((value, key) => {
+          if (now - value > LOCAL_CHAT_DEDUPE_WINDOW_MS) {
+            localChatEchoRef.current.delete(key);
+          }
+        });
+        if (localUserId > 0 && Number(next.from.userId) === localUserId) {
+          const signature = buildChatMessageSignature({
+            userId: localUserId,
+            kind: next.kind,
+            body: String(next.body || ""),
+            gifUrl: String(next.gifUrl || ""),
+          });
+          const echoedAt = localChatEchoRef.current.get(signature);
+          if (echoedAt && now - echoedAt <= LOCAL_CHAT_DEDUPE_WINDOW_MS) {
+            localChatEchoRef.current.delete(signature);
+            return null;
+          }
+        }
+        const resolvedId = options?.id || createMessageId();
+        setMessages((prev) => [...prev, { ...next, id: resolvedId }]);
+        return resolvedId;
+      };
+      const baseFrom = {
+        userId: Number(payload?.from?.userId) || 0,
+        displayName: String(payload?.from?.displayName || payload?.from?.handle || "Friend"),
+        handle: payload?.from?.handle,
+        avatarUrl: payload?.from?.avatarUrl,
+      };
+      const at = payload?.at || new Date().toISOString();
+
+      if (typeof payload?.encryptedMessage === "string" && payload.encryptedMessage.trim()) {
+        const activeKey = callKeyRef.current;
+        const roomId = String(payload?.roomId || activeRoomRef.current || "").trim();
+        if (!activeKey) {
+          if (callEncryptionEnabledRef.current) {
+            // If this is our own message echo (server broadcasts to everyone), rely on local echo.
+            if (localUserId > 0 && Number(baseFrom.userId) === localUserId) return;
+            void maybeRequestCallKey(roomId || undefined);
+            const pendingId = createMessageId();
+            pendingEncryptedChatInboxRef.current.set(pendingId, {
+              roomId,
+              encryptedMessage: payload.encryptedMessage.trim(),
+            });
+            appendMessage(
+              {
+                body: "[Decrypting message...]",
+                kind: "text",
+                gifUrl: "",
+                from: baseFrom,
+                at,
+              },
+              { id: pendingId }
+            );
+            return;
+          }
+          appendMessage({
+            body: "[Encrypted message]",
+            kind: "text",
+            gifUrl: "",
+            from: baseFrom,
+            at,
+          });
+          return;
+        }
+        void decryptJson<VideoCallChatEnvelope>(activeKey, payload.encryptedMessage.trim())
+          .then((decrypted) => {
+            const nextKind =
+              decrypted?.kind === "emoji" || decrypted?.kind === "gif" ? decrypted.kind : "text";
+            appendMessage({
+              body: String(decrypted?.body || ""),
+              kind: nextKind,
+              gifUrl: String(decrypted?.gifUrl || ""),
+              from: baseFrom,
+              at,
+            });
+          })
+          .catch(() => {
+            appendMessage({
+              body: "[Unable to decrypt message]",
+              kind: "text",
+              gifUrl: "",
+              from: baseFrom,
+              at,
+            });
+          });
+        return;
+      }
+
+      const nextKind =
+        payload?.kind === "emoji" || payload?.kind === "gif" ? payload.kind : "text";
+      appendMessage({
+        body: String(payload?.body || ""),
+        kind: nextKind,
+        gifUrl: String(payload?.gifUrl || ""),
+        from: baseFrom,
+        at,
+      });
     });
 
     socket.on(
@@ -4054,6 +4868,24 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       cleanupCallRef.current();
     });
 
+    socket.on(
+      "call:removed",
+      (payload: {
+        roomId?: string;
+        by?: { userId?: number; displayName?: string; handle?: string };
+      }) => {
+        if (payload?.roomId && payload.roomId !== activeRoomRef.current) return;
+        const byName =
+          payload?.by?.displayName ||
+          payload?.by?.handle ||
+          (Number.isFinite(payload?.by?.userId) ? `User ${payload?.by?.userId}` : "the host");
+        cleanupCallRef.current();
+        setStatus("setup");
+        setIsOpen(true);
+        setError(`You were removed from the call by ${byName}.`);
+      }
+    );
+
     return () => {
       stopHeartbeat();
       stopAuthRefresh();
@@ -4097,6 +4929,18 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         setIncomingCall(null);
         setStatus("idle");
         setIsOpen(false);
+      }, CALL_CONNECT_TIMEOUT_MS);
+      return () => clearCallTimeout();
+    }
+
+    if (incomingCall && isCallActiveStatus(status)) {
+      callTimeoutRef.current = window.setTimeout(() => {
+        const invite = incomingCallRef.current;
+        if (!invite || !isCallActiveStatus(statusRef.current)) return;
+        if (socketRef.current) {
+          socketRef.current.emit("call:decline", { roomId: invite.roomId });
+        }
+        setIncomingCall(null);
       }, CALL_CONNECT_TIMEOUT_MS);
       return () => clearCallTimeout();
     }
@@ -4237,6 +5081,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const resetCallState = useCallback(() => {
     setActiveRoomId(null);
     setMessages([]);
+    localChatEchoRef.current.clear();
     setRemoteParticipants({});
     setRemoteStreams({});
     setRemoteScreenStreams({});
@@ -4347,8 +5192,6 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     setIsCallHost(true);
     if (!CALL_E2EE_ENABLED) {
       setCallEncryptionMode(false, "disabled in settings", { suppressBanner: true });
-    } else if (!e2eeSupported) {
-      setCallEncryptionMode(false, "unsupported browser or missing insertable streams");
     } else {
       setCallEncryptionMode(true);
     }
@@ -4373,7 +5216,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     }
     await ensureIceServers({ force: true });
     warnIfNoTurn();
-    socketRef.current.emit("call:join", { roomId });
+    socketRef.current.emit("call:join", { roomId, e2eeCapable: e2eeSupported });
     const hostIdentity = resolveLocalIdentity();
     socketRef.current.emit("call:invite", {
       roomId,
@@ -4414,34 +5257,60 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
 
   const acceptCall = useCallback(async () => {
     if (!socketRef.current || !incomingCall) return;
+    const targetRoomId = incomingCall.roomId;
+    const currentRoomId = activeRoomRef.current;
+    const isActiveCall = isCallActiveStatus(statusRef.current);
+    const switchingRooms =
+      isActiveCall &&
+      Boolean(currentRoomId) &&
+      Boolean(targetRoomId) &&
+      currentRoomId !== targetRoomId;
+
+    if (isActiveCall && currentRoomId && targetRoomId && currentRoomId === targetRoomId) {
+      socketRef.current.emit("call:join", { roomId: targetRoomId, e2eeCapable: e2eeSupported });
+      setIncomingCall(null);
+      return;
+    }
+
+    if (switchingRooms && currentRoomId) {
+      const remoteCount = Object.keys(remoteParticipantsRef.current).length;
+      if (remoteCount <= 1) {
+        socketRef.current.emit("call:end", { roomId: currentRoomId });
+      } else {
+        socketRef.current.emit("call:leave", { roomId: currentRoomId });
+      }
+      cleanupCall();
+    }
+
     resetE2eeState();
     setIsCallHost(false);
     if (!CALL_E2EE_ENABLED) {
       setCallEncryptionMode(false, "disabled in settings", { suppressBanner: true });
     } else if (incomingCall.e2eeEnabled === false) {
       setCallEncryptionMode(false, "disabled by host");
-    } else if (!e2eeSupported) {
-      setCallEncryptionMode(false, "unsupported browser", { broadcast: true });
     } else {
       setCallEncryptionMode(true);
     }
-    callKeyRoomRef.current = callEncryptionEnabledRef.current ? incomingCall.roomId : null;
+    callKeyRoomRef.current = callEncryptionEnabledRef.current ? targetRoomId : null;
     setStatus("connecting");
-    setActiveRoomId(incomingCall.roomId);
+    setActiveRoomId(targetRoomId);
     setError(null);
     try {
       await ensureCallMedia();
     } catch {
       resetE2eeState();
-      setStatus("idle");
-      setIsOpen(false);
+      if (!isCallActiveStatus(statusRef.current)) {
+        setStatus("idle");
+        setIsOpen(false);
+      }
       return;
     }
     await ensureIceServers({ force: true });
     warnIfNoTurn();
-    socketRef.current.emit("call:join", { roomId: incomingCall.roomId });
+    socketRef.current.emit("call:join", { roomId: targetRoomId, e2eeCapable: e2eeSupported });
     setIncomingCall(null);
   }, [
+    cleanupCall,
     e2eeSupported,
     ensureCallMedia,
     ensureIceServers,
@@ -4455,8 +5324,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     if (!socketRef.current || !incomingCall) return;
     socketRef.current.emit("call:decline", { roomId: incomingCall.roomId });
     setIncomingCall(null);
-    setStatus("idle");
-    setIsOpen(false);
+    if (statusRef.current === "incoming") {
+      setStatus("idle");
+      setIsOpen(false);
+    }
   }, [incomingCall]);
 
   const leaveCall = useCallback(() => {
@@ -4538,14 +5409,24 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
 
   const muteAllParticipants = useCallback(() => {
     if (!socketRef.current || !activeRoomRef.current) return;
-    if (!isCallHostRef.current) return;
     socketRef.current.emit("call:mute-all", { roomId: activeRoomRef.current });
   }, []);
 
   const stopAllScreenShares = useCallback(() => {
     if (!socketRef.current || !activeRoomRef.current) return;
-    if (!isCallHostRef.current) return;
     socketRef.current.emit("call:screen:stop-all", { roomId: activeRoomRef.current });
+  }, []);
+
+  const removeParticipantFromCall = useCallback((socketId: string) => {
+    if (!socketRef.current || !activeRoomRef.current) return;
+    const targetSocketId = String(socketId || "").trim();
+    if (!targetSocketId) return;
+    const localSocketId = localSocketIdRef.current;
+    if (localSocketId && targetSocketId === localSocketId) return;
+    socketRef.current.emit("call:remove-participant", {
+      roomId: activeRoomRef.current,
+      socketId: targetSocketId,
+    });
   }, []);
 
   const requestScreenControl = useCallback((targetSocketId: string) => {
@@ -4643,16 +5524,100 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
 
   const sendMessage = useCallback(
     (body: string, kind: VideoCallMessage["kind"] = "text", gifUrl?: string) => {
-      if (!socketRef.current || !activeRoomId) return;
+      const roomId = activeRoomRef.current || activeRoomId;
+      if (!socketRef.current || !roomId) return;
       if (!String(body || "").trim() && kind !== "gif") return;
-      socketRef.current.emit("call:chat", {
-        roomId: activeRoomId,
-        body,
+      const socket = socketRef.current;
+      const payload: VideoCallChatEnvelope = {
+        body: String(body || ""),
         kind,
-        gifUrl,
-      });
+        gifUrl: String(gifUrl || ""),
+      };
+      const appendLocalEcho = () => {
+        const identity = resolveLocalIdentity();
+        const localUserId = Number(user?.id) || 0;
+        const safeKind = payload.kind === "emoji" || payload.kind === "gif" ? payload.kind : "text";
+        const safeBody = String(payload.body || "");
+        const safeGifUrl = String(payload.gifUrl || "");
+        if (localUserId > 0) {
+          const now = Date.now();
+          localChatEchoRef.current.forEach((value, key) => {
+            if (now - value > LOCAL_CHAT_DEDUPE_WINDOW_MS) {
+              localChatEchoRef.current.delete(key);
+            }
+          });
+          const signature = buildChatMessageSignature({
+            userId: localUserId,
+            kind: safeKind,
+            body: safeBody,
+            gifUrl: safeGifUrl,
+          });
+          localChatEchoRef.current.set(signature, now);
+        }
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: createMessageId(),
+            body: safeBody,
+            kind: safeKind,
+            gifUrl: safeGifUrl,
+            from: {
+              userId: localUserId,
+              displayName: identity.displayName || identity.handle || "You",
+              handle: identity.handle || undefined,
+              avatarUrl: identity.avatarUrl || undefined,
+            },
+            at: new Date().toISOString(),
+          },
+        ]);
+      };
+
+      if (!CALL_E2EE_ENABLED || !callEncryptionEnabledRef.current) {
+        appendLocalEcho();
+        socket.emit("call:chat", {
+          roomId,
+          body: payload.body,
+          kind: payload.kind,
+          gifUrl: payload.gifUrl,
+        });
+        return;
+      }
+
+      if (!e2eeCryptoSupported) {
+        setError("Chat encryption is not supported in this runtime.");
+        return;
+      }
+
+      const key = callKeyRef.current;
+      if (!key) {
+        appendLocalEcho();
+        const outbox = pendingEncryptedChatOutboxRef.current;
+        outbox.push({ roomId, payload });
+        // Prevent unbounded growth if the key never arrives.
+        if (outbox.length > 25) {
+          outbox.splice(0, outbox.length - 25);
+        }
+        void maybeRequestCallKey(roomId);
+        showTransientError(
+          "Encryption key is syncing. Your message will send automatically.",
+          6000
+        );
+        return;
+      }
+
+      void encryptJson(key, payload)
+        .then((encryptedMessage) => {
+          appendLocalEcho();
+          socket.emit("call:chat", {
+            roomId,
+            encryptedMessage,
+          });
+        })
+        .catch(() => {
+          setError("Unable to encrypt chat message.");
+        });
     },
-    [activeRoomId]
+    [activeRoomId, e2eeCryptoSupported, maybeRequestCallKey, resolveLocalIdentity, user?.id]
   );
 
   const value = useMemo(
@@ -4721,6 +5686,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       toggleHold,
       muteAllParticipants,
       stopAllScreenShares,
+      removeParticipantFromCall,
     }),
     [
       acceptCall,
@@ -4784,6 +5750,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       toggleVideo,
       muteAllParticipants,
       stopAllScreenShares,
+      removeParticipantFromCall,
     ]
   );
 

@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:video": "vite --mode video",
+    "dev:video": "vite --mode video --open /video.html",
+    "dev:video:desktop": "vite --mode video --host localhost --strictPort",
     "build": "npm run build:client && npm run build:ssr && npm run prerender",
     "build:client": "tsc -b && vite build",
     "build:video": "tsc -b && vite build --mode video",

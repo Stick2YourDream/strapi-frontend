@@ -106,6 +106,8 @@ export default function Login() {
   const navigate = useNavigate();
   const appMode = String(import.meta.env.VITE_APP_MODE || "").toLowerCase();
   const isVideoApp = appMode === "video";
+  const isDesktopShell =
+    typeof window !== "undefined" && Boolean(window.yspDesktop?.isAvailable) && isVideoApp;
   const envDebug =
     String(import.meta.env.VITE_AUTH_DEBUG || "").toLowerCase() === "true";
   const showDebug = import.meta.env.DEV || envDebug;
@@ -495,7 +497,7 @@ export default function Login() {
   };
 
   return (
-    <div className="auth-shell" style={authShellStyle}>
+    <div className={`auth-shell${isDesktopShell ? " is-desktop-shell" : ""}`} style={authShellStyle}>
       <div className="auth-hero">
         <button
           type="button"
