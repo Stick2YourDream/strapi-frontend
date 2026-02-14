@@ -105,6 +105,80 @@ const applyOpacityToColor = (value: string, alpha: number) => {
   return trimmed;
 };
 
+type Rgb = { r: number; g: number; b: number };
+
+const FALLBACK_BG_RGB: Rgb = { r: 11, g: 13, b: 20 }; // #0b0d14
+
+const parseHexToRgb = (value: string): Rgb | null => {
+  const hex = (value || "").trim().replace("#", "");
+  if (!/^[0-9a-f]{3}([0-9a-f]{3})?$/i.test(hex)) return null;
+  const full =
+    hex.length === 3
+      ? `${hex[0]}${hex[0]}${hex[1]}${hex[1]}${hex[2]}${hex[2]}`
+      : hex;
+  const r = parseInt(full.slice(0, 2), 16);
+  const g = parseInt(full.slice(2, 4), 16);
+  const b = parseInt(full.slice(4, 6), 16);
+  if ([r, g, b].some((n) => Number.isNaN(n))) return null;
+  return { r, g, b };
+};
+
+const parseRgbFuncToRgb = (value: string): Rgb | null => {
+  const trimmed = (value || "").trim();
+  // rgb(255, 255, 255) / rgba(255, 255, 255, 0.5)
+  const match = trimmed.match(
+    /^rgba?\(\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})(?:\s*,\s*([0-9.]+)\s*)?\)$/i
+  );
+  if (!match) return null;
+  const r = Number(match[1]);
+  const g = Number(match[2]);
+  const b = Number(match[3]);
+  if (![r, g, b].every((n) => Number.isFinite(n))) return null;
+  return {
+    r: Math.min(255, Math.max(0, Math.round(r))),
+    g: Math.min(255, Math.max(0, Math.round(g))),
+    b: Math.min(255, Math.max(0, Math.round(b))),
+  };
+};
+
+const parseColorToRgb = (value?: string): Rgb | null => {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return null;
+  if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(trimmed)) {
+    return parseHexToRgb(trimmed);
+  }
+  if (trimmed.toLowerCase().startsWith("rgb")) {
+    return parseRgbFuncToRgb(trimmed);
+  }
+  return null;
+};
+
+const blendRgb = (fg: Rgb, bg: Rgb, alpha: number): Rgb => {
+  const a = clamp(alpha, 0, 1);
+  return {
+    r: Math.round(fg.r * a + bg.r * (1 - a)),
+    g: Math.round(fg.g * a + bg.g * (1 - a)),
+    b: Math.round(fg.b * a + bg.b * (1 - a)),
+  };
+};
+
+const averageRgb = (a: Rgb, b: Rgb): Rgb => ({
+  r: Math.round((a.r + b.r) / 2),
+  g: Math.round((a.g + b.g) / 2),
+  b: Math.round((a.b + b.b) / 2),
+});
+
+const relativeLuminance = (rgb: Rgb) => {
+  const toLinear = (c: number) => {
+    const cs = c / 255;
+    return cs <= 0.03928 ? cs / 12.92 : Math.pow((cs + 0.055) / 1.055, 2.4);
+  };
+  const r = toLinear(rgb.r);
+  const g = toLinear(rgb.g);
+  const b = toLinear(rgb.b);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+
 const normalizeImage = (value?: string) => {
   if (value === undefined) return undefined;
   if (value === "") return "";
@@ -409,6 +483,85 @@ export const UserPreferencesProvider = ({ children }: { children: React.ReactNod
         backgroundRepeat: image ? "no-repeat" : undefined,
         backgroundAttachment: image ? "fixed" : undefined,
       };
+
+      // Auto-contrast text + UI tokens based on the user's selected background.
+      // Images without a gradient overlay always use a dark overlay, so keep the dark UI.
+      let isLightTheme = false;
+      if (image && !hasGradient) {
+        isLightTheme = false;
+      } else {
+        const baseRgb = (() => {
+          const parsed = parseColorToRgb(color);
+          if (!parsed) return FALLBACK_BG_RGB;
+          return blendRgb(parsed, FALLBACK_BG_RGB, colorOpacity);
+        })();
+
+        const finalRgb = (() => {
+          if (!hasGradient) return baseRgb;
+          const startRgb =
+            parseColorToRgb(gradientStart) ?? parseHexToRgb("#2563eb") ?? baseRgb;
+          const endRgb =
+            parseColorToRgb(gradientEnd) ?? parseHexToRgb("#22d3ee") ?? baseRgb;
+          const avg = averageRgb(startRgb, endRgb);
+          return blendRgb(avg, baseRgb, gradientOpacity);
+        })();
+
+        isLightTheme = relativeLuminance(finalRgb) >= 0.62;
+      }
+
+      style.colorScheme = isLightTheme ? "light" : "dark";
+
+      const themeVars: Record<string, string> = {
+        "--ysp-fg": isLightTheme ? "#0b0d14" : "#e9ecf5",
+        "--ysp-muted": isLightTheme ? "rgba(15, 23, 42, 0.72)" : "#c7cede",
+        "--ysp-muted-2": isLightTheme ? "rgba(15, 23, 42, 0.55)" : "#9aa5bb",
+        "--ysp-icon": isLightTheme ? "rgba(15, 23, 42, 0.72)" : "rgba(148, 163, 184, 0.95)",
+        "--ysp-border": isLightTheme ? "rgba(2, 6, 23, 0.14)" : "rgba(255, 255, 255, 0.14)",
+        "--ysp-border-strong": isLightTheme
+          ? "rgba(2, 6, 23, 0.24)"
+          : "rgba(255, 255, 255, 0.26)",
+        "--ysp-hover-bg": isLightTheme ? "rgba(2, 6, 23, 0.06)" : "rgba(255, 255, 255, 0.06)",
+        "--ysp-panel-bg": isLightTheme ? "rgba(2, 6, 23, 0.04)" : "rgba(255, 255, 255, 0.05)",
+        "--ysp-panel-border": isLightTheme
+          ? "rgba(2, 6, 23, 0.12)"
+          : "rgba(255, 255, 255, 0.08)",
+        "--ysp-panel-shadow": isLightTheme
+          ? "0 16px 32px rgba(2, 6, 23, 0.12)"
+          : "0 16px 32px rgba(0, 0, 0, 0.35)",
+        "--ysp-input-bg": isLightTheme
+          ? "rgba(255, 255, 255, 0.72)"
+          : "rgba(255, 255, 255, 0.04)",
+        "--ysp-input-border": isLightTheme
+          ? "rgba(2, 6, 23, 0.12)"
+          : "rgba(255, 255, 255, 0.12)",
+        "--ysp-input-fg": isLightTheme ? "#0b0d14" : "#e9ecf5",
+        "--ysp-input-placeholder": isLightTheme ? "rgba(15, 23, 42, 0.45)" : "#9aa5bb",
+        "--ysp-ghost-bg": isLightTheme ? "rgba(2, 6, 23, 0.06)" : "rgba(255, 255, 255, 0.08)",
+        "--ysp-ghost-border": isLightTheme
+          ? "rgba(2, 6, 23, 0.12)"
+          : "rgba(255, 255, 255, 0.12)",
+        "--dashboard-composer-bg": isLightTheme
+          ? "linear-gradient(140deg, rgba(255, 255, 255, 0.78), rgba(241, 245, 249, 0.94))"
+          : "linear-gradient(140deg, rgba(18, 26, 42, 0.8), rgba(8, 12, 22, 0.9))",
+        "--dashboard-composer-border": isLightTheme
+          ? "1px solid rgba(2, 6, 23, 0.12)"
+          : "1px solid rgba(255, 255, 255, 0.1)",
+        "--ysp-surface-1-bg": isLightTheme
+          ? "rgba(255, 255, 255, 0.65)"
+          : "rgba(8, 12, 20, 0.5)",
+        "--ysp-surface-1-border": isLightTheme
+          ? "rgba(2, 6, 23, 0.12)"
+          : "rgba(255, 255, 255, 0.08)",
+        "--ysp-popover-bg": isLightTheme
+          ? "linear-gradient(155deg, rgba(255, 255, 255, 0.9), rgba(241, 245, 249, 0.96))"
+          : "linear-gradient(155deg, rgba(20, 27, 52, 0.98), rgba(8, 10, 20, 0.98))",
+        "--ysp-popover-border": isLightTheme
+          ? "rgba(2, 6, 23, 0.12)"
+          : "rgba(148, 163, 184, 0.22)",
+      };
+
+      Object.assign(style as Record<string, unknown>, themeVars);
+
       return style;
     },
     [preferences.backgrounds]

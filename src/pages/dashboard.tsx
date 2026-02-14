@@ -15,6 +15,7 @@ import { sanitizePostText } from "../utils/emoji";
 import { formatPostUpdateLabel } from "../utils/time";
 import { pickMediaUrl } from "../utils/media";
 import GoalsImpactPanel from "../components/GoalsImpactPanel";
+import { Target } from "lucide-react";
 import { useImpactStats } from "../hooks/useImpactStats";
 import { useNewsPreference } from "../hooks/useNewsPreference";
 // import NewsWidget from "../components/NewsWidget";
@@ -176,21 +177,6 @@ const saveGoalsState = (key: string, state: GoalsState) => {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(key, JSON.stringify(state));
   window.dispatchEvent(new Event("ysp-goals-updated"));
-};
-
-const computeCheckInStreak = (entries: CheckInEntry[]) => {
-  const byDay = new Set(entries.map((entry) => new Date(entry.createdAt).toDateString()));
-  let streak = 0;
-  for (let i = 0; i < 60; i += 1) {
-    const date = new Date();
-    date.setDate(date.getDate() - i);
-    if (byDay.has(date.toDateString())) {
-      streak += 1;
-    } else {
-      break;
-    }
-  }
-  return streak;
 };
 
 const SUPPORT_REQUEST_QUICK_REPLIES = [
@@ -724,6 +710,7 @@ export default function Dashboard() {
   const [formFile, setFormFile] = useState<File | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [composerOpen, setComposerOpen] = useState(false);
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [postVisibility, setPostVisibility] = useState("friends");
   const [postTrustedCircleId, setPostTrustedCircleId] = useState<number | "">("");
@@ -752,6 +739,7 @@ export default function Dashboard() {
   const [copyToast, setCopyToast] = useState<string | null>(null);
   const [impactNotice, setImpactNotice] = useState<string | null>(null);
   const [activePostKey, setActivePostKey] = useState<string | null>(null);
+  const [goalsModalOpen, setGoalsModalOpen] = useState(false);
   const [formFilePreviewUrl, setFormFilePreviewUrl] = useState<string | null>(null);
   const [linkPreview, setLinkPreview] = useState<LinkPreview | null>(null);
   const [linkPreviewLoading, setLinkPreviewLoading] = useState(false);
@@ -785,7 +773,7 @@ export default function Dashboard() {
     loadGoalsState(goalsStorageKey)
   );
   const { override: newsOverride } = useNewsPreference(userId);
-  const { stats: impactStats, bumpStat } = useImpactStats(userId);
+  const { bumpStat } = useImpactStats(userId);
   usePageMeta({
     title: "Dashboard | Your Social Place",
     description:
@@ -813,13 +801,17 @@ export default function Dashboard() {
     if (typeof window === "undefined") return;
     const handleStartCheckIn = (event: Event) => {
       const detail = (event as CustomEvent<{ goal?: string }>).detail;
+      setGoalsModalOpen(false);
+      setComposerOpen(true);
       setComposerExpanded(true);
       setPostSignalTag("check-in");
       if (detail?.goal) {
         setCheckInGoal(detail.goal);
       }
-      const target = document.getElementById("post-composer");
-      target?.scrollIntoView({ behavior: "smooth", block: "start" });
+      window.setTimeout(() => {
+        const target = document.getElementById("post-composer");
+        target?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 50);
     };
     window.addEventListener("ysp-goals-start-checkin", handleStartCheckIn as EventListener);
     return () =>
@@ -866,7 +858,30 @@ export default function Dashboard() {
   const showFeedOptions = !showCheckInOptions || checkInTarget === "feed";
   const dashboardNewsEnabled =
     (newsOverride ?? profile?.notificationSettings?.newsEnabled) !== false;
-  const showComposerAdvanced = composerExpanded;
+  const composerHasDraft = Boolean(formContent.trim()) || Boolean(formFile);
+  const isComposerOpen = composerOpen || composerHasDraft || submitting;
+  const showComposerAdvanced = isComposerOpen && composerExpanded;
+
+  useEffect(() => {
+    if (!composerOpen) return;
+    if (submitting) return;
+    if (composerHasDraft) return;
+    if (showCheckInOptions) return;
+    if (typeof document === "undefined") return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      const composer = document.getElementById("post-composer");
+      if (composer && composer.contains(target)) return;
+      setComposerExpanded(false);
+      setComposerOpen(false);
+      setFormError(null);
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [composerHasDraft, composerOpen, showCheckInOptions, submitting]);
 
   const selectedTemplateLabel = useMemo(() => {
     if (!postTemplateId) return "No template";
@@ -994,6 +1009,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (showCheckInOptions) {
+      setComposerOpen(true);
       setComposerExpanded(true);
     }
   }, [showCheckInOptions]);
@@ -1005,52 +1021,6 @@ export default function Dashboard() {
       setCheckInGroupId("");
     }
   }, [showCheckInOptions]);
-
-  const recap = useMemo(() => {
-    const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    const recent = (goalsState.checkIns || []).filter(
-      (entry) => new Date(entry.createdAt).getTime() >= weekAgo
-    );
-    const checkInCount = recent.filter((entry) => entry.type === "check-in").length;
-    const supportCount = recent.filter((entry) => entry.type === "support-request").length;
-    return {
-      checkInCount,
-      supportCount,
-      streak: computeCheckInStreak(goalsState.checkIns || []),
-      lastEntry: goalsState.checkIns?.[0],
-    };
-  }, [goalsState.checkIns]);
-
-  const heroBadges = useMemo(() => {
-    const badges = [
-      {
-        id: "consistency",
-        label: "Consistency",
-        detail: "5+ check-ins",
-        achieved: impactStats.checkIns >= 5,
-      },
-      {
-        id: "encourager",
-        label: "Encourager",
-        detail: "10+ uplift reactions",
-        achieved: impactStats.encouragements >= 10,
-      },
-      {
-        id: "helper",
-        label: "Support Ally",
-        detail: "5+ support replies",
-        achieved: impactStats.supportReplies >= 5,
-      },
-      {
-        id: "beacon",
-        label: "Beacon",
-        detail: "3+ support requests",
-        achieved: impactStats.supportRequests >= 3,
-      },
-    ];
-    const achieved = badges.filter((badge) => badge.achieved);
-    return (achieved.length ? achieved : badges.slice(0, 1)).slice(0, 2);
-  }, [impactStats]);
 
   useEffect(() => {
     if (!formFile) {
@@ -2331,6 +2301,8 @@ export default function Dashboard() {
       setCheckInTarget("feed");
       setCheckInGroupId("");
       setPostTrustedCircleId("");
+      setComposerExpanded(false);
+      setComposerOpen(false);
       pushImpactNotice("Post created successfully.");
       await reloadPosts({ silent: true });
     } catch (err: unknown) {
@@ -2764,14 +2736,25 @@ export default function Dashboard() {
   }, [activePostKey]);
 
   useEffect(() => {
-    if (!activePostKey) return;
+    if (!goalsModalOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setGoalsModalOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [goalsModalOpen]);
+
+  useEffect(() => {
+    if (!activePostKey && !goalsModalOpen) return;
     if (typeof document === "undefined") return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = previousOverflow;
     };
-  }, [activePostKey]);
+  }, [activePostKey, goalsModalOpen]);
 
   useEffect(() => {
     return () => {
@@ -2814,140 +2797,35 @@ export default function Dashboard() {
           </div>
         )}
         <TopbarSearch />
-        <div className="dash-hero">
-          <div className="dash-hero__text">
-            <p className="eyebrow">Your Social Place</p>
-            <h1>Posts</h1>
-            <p className="subhead">See What Our Community Is Doing!</p>
-            <div className="dash-hero__insights">
-              <div className="hero-insight">
-                <span className="hero-insight__icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="12" cy="12" r="9" />
-                    <path d="M8 12.5l2.5 2.5L16 9.5" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                </span>
-                <div>
-                  <strong>{recap.checkInCount}</strong>
-                  <span>Check-ins (7d)</span>
-                </div>
-              </div>
-              <div className="hero-insight">
-                <span className="hero-insight__icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path
-                      d="M12 21s-7-4.4-9-8.3C1.5 9 3 6 6 6c2 0 3.5 1.2 4 2.6C10.5 7.2 12 6 14 6c3 0 4.5 3 3 6.7C19 16.6 12 21 12 21z"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </span>
-                <div>
-                  <strong>{recap.supportCount}</strong>
-                  <span>Support (7d)</span>
-                </div>
-              </div>
-              <div className="hero-insight">
-                <span className="hero-insight__icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path
-                      d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </span>
-                <div>
-                  <strong>{recap.streak}</strong>
-                  <span>Day streak</span>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div className="dash-hero__aside">
-            <div className="hero-badge" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-              <span className="pill" title="Live">
-                Live
-              </span>
-              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                <div
-                  style={{
-                    width: 36,
-                    height: 36,
-                    borderRadius: "50%",
-                    background: "linear-gradient(135deg, #60a5fa, #7c3aed)",
-                    display: "grid",
-                    placeItems: "center",
-                    overflow: "hidden",
-                    color: "#fff",
-                    fontWeight: 700,
-                  }}
-                >
-                  {profileAvatarUrl ? (
-                    <img
-                      src={profileAvatarUrl}
-                      alt={`${userLabel} avatar`}
-                      style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
-                      onError={() => setProfileAvatarUrl(null)}
-                    />
-                  ) : (
-                    userInitial
-                  )}
-                </div>
-                <div style={{ lineHeight: 1.2 }}>
-                  <div style={{ fontSize: "12px", color: "#9ca3af" }}>Signed in as</div>
-                  <div style={{ fontWeight: 600 }}>{userLabel}</div>
-                </div>
-              </div>
-            </div>
-            <div className="hero-badges">
-              {heroBadges.map((badge) => (
-                <span key={badge.id} className="hero-badge-chip" title={badge.detail}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path
-                      d="M12 17.27 18.18 21 16.54 13.97 22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                  {badge.label}
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
 
       {loading && <p className="status">Loading posts…</p>}
       {error && <p className="status status-error">{error}</p>}
 
       {!loading && !error && (
-        <>
-          <div className="panel-grid">
-            <GoalsImpactPanel
-              userId={userId}
-              groups={trustedCircleOptions}
-              friends={friendOptions}
-              onStateChange={setGoalsState}
-            />
-            <section className="panel post-composer" id="post-composer">
-              <div className="panel-header post-composer__header">
-                <div className="post-composer__header-text">
-                  <p className="eyebrow">Create</p>
-                  <h3>New Post</h3>
-                  <p className="panel-sub">
-                    Let Your Friends Know What You're Up To! 
-                  </p>
-                </div>
-                {visibilityChips.length > 0 && (
-                  <div className="post-composer__header-chips">
-                    {visibilityChips.map((chip) => (
-                      <span key={chip.key} className="post-composer__summary-chip">
-                        {chip.label}
-                      </span>
-                    ))}
+          <>
+            <div className="panel-grid">
+              <section
+                className={`panel post-composer${isComposerOpen ? "" : " is-collapsed"}`}
+                id="post-composer"
+              >
+              {isComposerOpen && (
+                <div className="panel-header post-composer__header">
+                  <div className="post-composer__header-text">
+                    <p className="eyebrow">Create</p>
+                    <h3>New Post</h3>
+                    <p className="panel-sub">Let Your Friends Know What You're Up To!</p>
                   </div>
-                )}
-              </div>
+                  {visibilityChips.length > 0 && (
+                    <div className="post-composer__header-chips">
+                      {visibilityChips.map((chip) => (
+                        <span key={chip.key} className="post-composer__summary-chip">
+                          {chip.label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="post-composer__top">
                 <div className="post-composer__avatar">
                   {profileAvatarUrl ? (
@@ -3018,11 +2896,11 @@ export default function Dashboard() {
                                 </option>
                               ))}
                             </select>
-                            {availableGoals.length === 0 && (
-                              <span className="post-composer__hint">
-                                Add goals in the Goals panel to pick one here.
-                              </span>
-                            )}
+                             {availableGoals.length === 0 && (
+                               <span className="post-composer__hint">
+                                 Add goals in Goals &amp; Trackers to pick one here.
+                               </span>
+                             )}
                           </div>
                           <div className="post-composer__checkin-field">
                             <span className="post-template-label">Share</span>
@@ -3074,83 +2952,109 @@ export default function Dashboard() {
                       )}
                     </div>
                   )}
-                  <textarea
-                    className="auth-input"
-                    value={formContent}
-                    onChange={(e) => {
-                      const nextValue = sanitizePostText(e.target.value);
-                      setFormContent(nextValue);
-                      setFormError(null);
-                    }}
-                    placeholder="What's on your mind?"
-                    rows={showComposerAdvanced ? 4 : 3}
-                  />
-                  <div className="post-composer__summary">
+                  <div className="post-composer__textarea-wrap">
+                    <textarea
+                      className="auth-input"
+                      value={formContent}
+                      onChange={(e) => {
+                        const nextValue = sanitizePostText(e.target.value);
+                        setFormContent(nextValue);
+                        setFormError(null);
+                      }}
+                      onFocus={() => {
+                        if (!isComposerOpen) {
+                          setComposerOpen(true);
+                        }
+                      }}
+                      placeholder="What's on your mind?"
+                      rows={showComposerAdvanced ? 4 : isComposerOpen ? 3 : 1}
+                    />
                     <button
-                      className="post-composer__toggle"
                       type="button"
-                      onClick={() => setComposerExpanded((prev) => !prev)}
-                      aria-controls="post-composer-advanced"
-                      aria-expanded={showComposerAdvanced}
-                      disabled={composerToggleDisabled}
+                      className="post-composer__goals-trigger"
+                      title="Set Goals and Trackers"
+                      aria-label="Set Goals and Trackers"
+                      onClick={() => setGoalsModalOpen(true)}
                     >
-                      <span>{composerToggleLabel}</span>
-                      <span
-                        className={`post-composer__chevron${
-                          showComposerAdvanced ? " is-open" : ""
-                        }`}
-                        aria-hidden="true"
-                      >
-                        <svg viewBox="0 0 20 20">
-                          <path
-                            d="M5 7.5 10 12.5 15 7.5"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.6"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                        </svg>
-                      </span>
+                      <Target size={18} />
                     </button>
-                    {detailChips.length > 0 && (
-                      <div className="post-composer__summary-chips">
-                        {detailChips.map((chip) => (
-                          <span key={chip.key} className="post-composer__summary-chip">
-                            {chip.label}
-                          </span>
-                        ))}
-                      </div>
-                    )}
                   </div>
-                  {linkPreviewLoading && (
-                    <span className="post-composer__hint">Loading preview...</span>
+                  {isComposerOpen && (
+                    <>
+                      <div className="post-composer__summary">
+                        <button
+                          className="post-composer__toggle"
+                          type="button"
+                          onClick={() => setComposerExpanded((prev) => !prev)}
+                          aria-controls="post-composer-advanced"
+                          aria-expanded={showComposerAdvanced}
+                          disabled={composerToggleDisabled}
+                        >
+                          <span>{composerToggleLabel}</span>
+                          <span
+                            className={`post-composer__chevron${
+                              showComposerAdvanced ? " is-open" : ""
+                            }`}
+                            aria-hidden="true"
+                          >
+                            <svg viewBox="0 0 20 20">
+                              <path
+                                d="M5 7.5 10 12.5 15 7.5"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.6"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              />
+                            </svg>
+                          </span>
+                        </button>
+                        {detailChips.length > 0 && (
+                          <div className="post-composer__summary-chips">
+                            {detailChips.map((chip) => (
+                              <span key={chip.key} className="post-composer__summary-chip">
+                                {chip.label}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      {linkPreviewLoading && (
+                        <span className="post-composer__hint">Loading preview...</span>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
 
-              {linkPreview && (
-                <LinkPreviewCard
-                  preview={linkPreview}
-                  url={linkPreview.url || extractFirstUrl(formContent)}
-                />
-              )}
-              {linkPreviewError && <p className="status status-error">{linkPreviewError}</p>}
-              {formFilePreviewUrl && (
-                <div className="post-composer__media-preview">
-                  {formFileIsVideo ? (
-                    <video controls muted playsInline preload="metadata">
-                      <source src={formFilePreviewUrl} />
-                    </video>
-                  ) : (
-                    <img
-                      src={formFilePreviewUrl}
-                      alt="Upload preview"
-                      loading="lazy"
-                      decoding="async"
+              {isComposerOpen && (
+                <>
+                  {linkPreview && (
+                    <LinkPreviewCard
+                      preview={linkPreview}
+                      url={linkPreview.url || extractFirstUrl(formContent)}
                     />
                   )}
-                </div>
+                  {linkPreviewError && (
+                    <p className="status status-error">{linkPreviewError}</p>
+                  )}
+                  {formFilePreviewUrl && (
+                    <div className="post-composer__media-preview">
+                      {formFileIsVideo ? (
+                        <video controls muted playsInline preload="metadata">
+                          <source src={formFilePreviewUrl} />
+                        </video>
+                      ) : (
+                        <img
+                          src={formFilePreviewUrl}
+                          alt="Upload preview"
+                          loading="lazy"
+                          decoding="async"
+                        />
+                      )}
+                    </div>
+                  )}
+                </>
               )}
 
               {showComposerAdvanced && (
@@ -3278,62 +3182,66 @@ export default function Dashboard() {
                       )}
                     </div>
                   )}
-
-                  
+                      
+                
                 </div>
               )}
 
-              <div className="post-composer__actions">
-                <div className="post-composer__tools">
-                  <label className="post-composer__tool">
-                    <input
-                      type="file"
-                      accept="image/*,video/*"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0] || null;
-                        if (!file) {
-                          setFormFile(null);
-                          return;
-                        }
-                        const isVideo = isVideoFile(file);
-                        const maxBytes = isVideo ? MAX_VIDEO_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
-                        const maxLabel = isVideo ? MAX_VIDEO_UPLOAD_LABEL : MAX_UPLOAD_LABEL;
-                        if (file.size > maxBytes) {
-                          setFormError(`Media files must be under ${maxLabel}.`);
-                          e.target.value = "";
-                          setFormFile(null);
-                          return;
-                        }
-                        setFormFile(file);
-                        setFormError(null);
-                      }}
-                    />
-                    <span>{formFile ? "Change media" : "Add photo/video"}</span>
-                  </label>
-                  <span className="post-composer__file">
-                    {formFile ? formFile.name : "No media selected"}
-                  </span>
-                  {formFile && (
+              {isComposerOpen && (
+                <>
+                  <div className="post-composer__actions">
+                    <div className="post-composer__tools">
+                      <label className="post-composer__tool">
+                        <input
+                          type="file"
+                          accept="image/*,video/*"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0] || null;
+                            if (!file) {
+                              setFormFile(null);
+                              return;
+                            }
+                            const isVideo = isVideoFile(file);
+                            const maxBytes = isVideo ? MAX_VIDEO_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
+                            const maxLabel = isVideo ? MAX_VIDEO_UPLOAD_LABEL : MAX_UPLOAD_LABEL;
+                            if (file.size > maxBytes) {
+                              setFormError(`Media files must be under ${maxLabel}.`);
+                              e.target.value = "";
+                              setFormFile(null);
+                              return;
+                            }
+                            setFormFile(file);
+                            setFormError(null);
+                          }}
+                        />
+                        <span>{formFile ? "Change media" : "Add photo/video"}</span>
+                      </label>
+                      <span className="post-composer__file">
+                        {formFile ? formFile.name : "No media selected"}
+                      </span>
+                      {formFile && (
+                        <button
+                          className="btn ghost"
+                          type="button"
+                          onClick={() => setFormFile(null)}
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
                     <button
-                      className="btn ghost"
+                      className="btn primary"
                       type="button"
-                      onClick={() => setFormFile(null)}
+                      disabled={submitting}
+                      onClick={createPost}
                     >
-                      Remove
+                      {submitting ? "Posting..." : "Post"}
                     </button>
-                  )}
-                </div>
-                <button
-                  className="btn primary"
-                  type="button"
-                  disabled={submitting}
-                  onClick={createPost}
-                >
-                  {submitting ? "Posting..." : "Post"}
-                </button>
-              </div>
+                  </div>
 
-              {formError && <p className="auth-message error">{formError}</p>}
+                  {formError && <p className="auth-message error">{formError}</p>}
+                </>
+              )}
             </section>
             {/* <NewsWidget /> */}
           </div>
@@ -3409,11 +3317,15 @@ export default function Dashboard() {
                       </div>
                     )}
                     <span className="featured-wins__badge">Win</span>
-                    <h5>{post.title}</h5>
                     {(() => {
                       const structured = parseStructuredPost(post.content, post.signalTag);
                       if (!structured) {
-                        return <p className="post-body-text">{linkifyText(post.content)}</p>;
+                        return (
+                          <>
+                            <h5>{post.title}</h5>
+                            <p className="post-body-text">{linkifyText(post.content)}</p>
+                          </>
+                        );
                       }
                       return (
                         <div className="post-structured">
@@ -3610,11 +3522,15 @@ export default function Dashboard() {
                         )}
                       </div>
                     </div>
-                    <h3>{post.title}</h3>
                     {(() => {
                       const structured = parseStructuredPost(post.content, post.signalTag);
                       if (!structured) {
-                        return <p className="post-body-text">{linkifyText(post.content)}</p>;
+                        return (
+                          <>
+                            <h3>{post.title}</h3>
+                            <p className="post-body-text">{linkifyText(post.content)}</p>
+                          </>
+                        );
                       }
                       return (
                         <div className="post-structured">
@@ -4202,7 +4118,7 @@ export default function Dashboard() {
               !hasMoreGroupPosts &&
               visiblePosts.length > 0 && <span>You are all caught up.</span>}
           </div>
-          {showGoToTop && !activePostKey && (
+          {showGoToTop && !activePostKey && !goalsModalOpen && (
             <button
               type="button"
               className="go-top-button"
@@ -4214,6 +4130,41 @@ export default function Dashboard() {
       </>
     )}
       </div>
+
+      {goalsModalOpen && (
+        <div
+          className="goals-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="goals-modal-title"
+          onClick={() => setGoalsModalOpen(false)}
+        >
+          <div className="goals-modal__panel" onClick={(event) => event.stopPropagation()}>
+            <div className="goals-modal__handle" aria-hidden="true" />
+            <button
+              className="goals-modal__close"
+              type="button"
+              onClick={() => setGoalsModalOpen(false)}
+              aria-label="Close goals and trackers"
+            >
+              X
+            </button>
+            <div className="goals-modal__scroll">
+              <h2 id="goals-modal-title" className="sr-only">
+                Set Goals and Trackers
+              </h2>
+              <GoalsImpactPanel
+                userId={userId}
+                groups={trustedCircleOptions}
+                friends={friendOptions}
+                onStateChange={setGoalsState}
+                defaultOpen
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       {activePost && (
         <div
           className="post-modal"
@@ -4320,7 +4271,6 @@ export default function Dashboard() {
               ) : null}
 
               <div className="post-modal__body">
-                <h2 id={modalTitleId}>{activePost.title}</h2>
                 {(() => {
                   const structured = parseStructuredPost(
                     activePost.content,
@@ -4328,22 +4278,32 @@ export default function Dashboard() {
                   );
                   if (!structured) {
                     return (
-                      <p className="post-body-text">{linkifyText(activePost.content)}</p>
+                      <>
+                        <h2 id={modalTitleId}>{activePost.title}</h2>
+                        <p className="post-body-text">{linkifyText(activePost.content)}</p>
+                      </>
                     );
                   }
                   return (
-                    <div className="post-structured">
-                      {structured.rows.map((row) => (
-                        <div key={row.label} className="post-structured__row">
-                          <span className="post-structured__label">{row.label}</span>
-                          <span
-                            className={`post-structured__value${row.value ? "" : " is-empty"}`}
-                          >
-                            {row.value || "Not added yet"}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
+                    <>
+                      <h2 id={modalTitleId} className="sr-only">
+                        {activePost.title}
+                      </h2>
+                      <div className="post-structured">
+                        {structured.rows.map((row) => (
+                          <div key={row.label} className="post-structured__row">
+                            <span className="post-structured__label">{row.label}</span>
+                            <span
+                              className={`post-structured__value${
+                                row.value ? "" : " is-empty"
+                              }`}
+                            >
+                              {row.value || "Not added yet"}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
                   );
                 })()}
                 {activePreview && !activePost.imageUrl && (

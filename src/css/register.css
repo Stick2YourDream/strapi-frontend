@@ -247,9 +247,9 @@
   width: 100%;
   padding: 12px 14px;
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.04);
-  color: #e9ecf5;
+  border: 1px solid var(--ysp-input-border, rgba(255, 255, 255, 0.18));
+  background: var(--ysp-input-bg, rgba(255, 255, 255, 0.04));
+  color: var(--ysp-input-fg, #e9ecf5);
   font-size: 15px;
   outline: none;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;

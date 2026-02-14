@@ -37,6 +37,7 @@ type GoalsImpactPanelProps = {
   groups: GroupOption[];
   friends: FriendOption[];
   onStateChange?: (state: GoalsState) => void;
+  defaultOpen?: boolean;
 };
 
 const GOAL_LIBRARY = [
@@ -219,8 +220,10 @@ const formatDate = (value: string) =>
 export default function GoalsImpactPanel({
   userId,
   onStateChange,
+  defaultOpen = false,
 }: GoalsImpactPanelProps) {
   const storageKey = useMemo(() => storageKeyFor(userId), [userId]);
+  const [panelOpen, setPanelOpen] = useState(() => Boolean(defaultOpen));
   const [goalPicker, setGoalPicker] = useState("");
   const [customGoalInput, setCustomGoalInput] = useState("");
   const [lastAddedGoal, setLastAddedGoal] = useState<string | null>(null);
@@ -355,234 +358,260 @@ export default function GoalsImpactPanel({
   };
 
   return (
-    <section className="panel goals-panel">
+    <section className={`panel goals-panel${panelOpen ? "" : " is-collapsed"}`}>
       <div className="panel-header">
-        <div>
-          <p className="eyebrow">Goals & Impact</p>
-          <h3>Set goals, track progress, and stay supported.</h3>
-          <p className="panel-sub">
-            Choose goals and review recent check-ins.
-          </p>
-        </div>
+        <button
+          type="button"
+          className="goals-panel__toggle"
+          onClick={() => setPanelOpen((prev) => !prev)}
+          aria-expanded={panelOpen}
+          aria-controls="goals-panel-content"
+        >
+          <span className="goals-panel__toggle-copy">
+            <h3>{panelOpen ? "Set goals, track progress, and stay supported." : "Set Goals & Trackers"}</h3>
+            {panelOpen && <p className="panel-sub">Choose goals and review recent check-ins.</p>}
+          </span>
+
+          <span className="goals-panel__toggle-right" aria-hidden="true">
+            <span className="goals-panel__toggle-chips">
+              <span className="goals-panel__meta-chip">{activeGoals.length} active</span>
+              <span className="goals-panel__meta-chip">{achievedGoals.length} achieved</span>
+              <span className="goals-panel__meta-chip">{orderedCheckIns.length} check-ins</span>
+            </span>
+            <span className={`goals-panel__chevron${panelOpen ? " is-open" : ""}`}>
+              <svg viewBox="0 0 20 20">
+                <path
+                  d="M5 7.5 10 12.5 15 7.5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </span>
+          </span>
+        </button>
       </div>
 
-      <div className="goals-panel__grid">
-        <div className="goals-panel__column">
-          <div className="goals-panel__section">
-            <div className="goals-panel__header">
-              <h4>Your goals</h4>
-              <span>
-                {activeGoals.length} active · {achievedGoals.length} achieved
-              </span>
-            </div>
-            <div className="goals-panel__selected">
-              {activeGoals.map((goal) => (
-                <div key={goal} className="goals-row">
-                  <span className="goals-row__label">{goal}</span>
-                  <div className="goals-row__actions">
-                    <button
-                      className="goals-row__action"
-                      type="button"
-                      onClick={() => markGoalAchieved(goal)}
-                    >
-                      Achieved
-                    </button>
-                    <button
-                      className="goals-row__action goals-row__action--danger"
-                      type="button"
-                      onClick={() => removeGoal(goal)}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                </div>
-              ))}
-              {activeGoals.length === 0 && (
-                <p className="goals-empty">
-                  Add a goal to get started. Completed goals will appear below.
-                </p>
-              )}
-            </div>
-            <div className="goals-panel__picker">
-              <div className="goals-panel__steps">
-                <span className="goals-step">1. Choose a goal</span>
-                <span className="goals-step">2. Add it to your list</span>
-                <span className="goals-step">3. Start a check-in</span>
+      {panelOpen && (
+        <div className="goals-panel__grid" id="goals-panel-content">
+          <div className="goals-panel__column">
+            <div className="goals-panel__section">
+              <div className="goals-panel__header">
+                <h4>Your goals</h4>
+                <span>
+                  {activeGoals.length} active · {achievedGoals.length} achieved
+                </span>
               </div>
-              <div className="goals-panel__picker-row">
-                <div className="goals-panel__select">
-                  <select
-                    className="auth-input goals-select"
-                    value={goalPicker}
-                    onChange={(event) => setGoalPicker(event.target.value)}
-                  >
-                    <option value="">Select a goal</option>
-                    {filteredGoals.map((goal) => (
-                      <option
-                        key={goal}
-                        value={goal}
-                        disabled={selectedGoals.includes(goal)}
+              <div className="goals-panel__selected">
+                {activeGoals.map((goal) => (
+                  <div key={goal} className="goals-row">
+                    <span className="goals-row__label">{goal}</span>
+                    <div className="goals-row__actions">
+                      <button
+                        className="goals-row__action"
+                        type="button"
+                        onClick={() => markGoalAchieved(goal)}
                       >
-                        {goal}
-                      </option>
-                    ))}
-                  </select>
-                  <span className="goals-select-caret" />
-                </div>
-                <button
-                  className="btn ghost"
-                  type="button"
-                  onClick={() => {
-                    if (!goalPicker) return;
-                    if (!selectedGoals.includes(goalPicker)) {
-                      toggleGoal(goalPicker);
-                    }
-                    setGoalPicker("");
-                  }}
-                  disabled={!goalPicker}
-                >
-                  Add to goals
-                </button>
-              </div>
-              <p className="goals-muted">
-                Pick a goal, tap “Add to goals,” and it will appear above.
-              </p>
-            </div>
-            <div className="goals-panel__custom">
-              <input
-                className="auth-input"
-                placeholder="Add a custom goal"
-                value={customGoalInput}
-                onChange={(event) => setCustomGoalInput(event.target.value)}
-              />
-              <button className="btn primary" type="button" onClick={addCustomGoal}>
-                Add goal
-              </button>
-            </div>
-            {(lastAddedGoal || selectedGoals.length + customGoals.length > 0) && (
-              <div className="goals-panel__next">
-                <div>
-                  <strong>Next step</strong>
-                  <p>
-                    Start a quick check-in{lastAddedGoal ? ` for "${lastAddedGoal}"` : ""}.
-                  </p>
-                </div>
-                <button
-                  className="btn primary"
-                  type="button"
-                  onClick={() => handleStartCheckIn(lastAddedGoal)}
-                >
-                  Start check-in
-                </button>
-              </div>
-            )}
-            {achievedGoals.length > 0 && (
-              <div className="goals-panel__achieved">
-                <div className="goals-panel__header goals-panel__header--tight">
-                  <h5>Achieved goals</h5>
-                  <span>{achievedGoals.length} completed</span>
-                </div>
-                <div className="goals-panel__achieved-list">
-                  {achievedGoals.map((goal) => (
-                    <div key={goal} className="goals-row goals-row--achieved">
-                      <span className="goals-row__label">{goal}</span>
-                      <div className="goals-row__actions">
-                        <button
-                          className="goals-row__action"
-                          type="button"
-                          onClick={() => reactivateGoal(goal)}
-                        >
-                          Reactivate
-                        </button>
-                        <button
-                          className="goals-row__action goals-row__action--danger"
-                          type="button"
-                          onClick={() => removeGoal(goal)}
-                        >
-                          Remove
-                        </button>
-                      </div>
+                        Achieved
+                      </button>
+                      <button
+                        className="goals-row__action goals-row__action--danger"
+                        type="button"
+                        onClick={() => removeGoal(goal)}
+                      >
+                        Remove
+                      </button>
                     </div>
-                  ))}
-                </div>
-                <p className="goals-muted">Nice work. These stay here as your wins.</p>
-              </div>
-            )}
-          </div>
-
-        </div>
-
-        <div className="goals-panel__column">
-          <div className="goals-panel__section">
-            <div className="goals-panel__header">
-              <h4>Recent check-ins</h4>
-              <span>Your private log</span>
-            </div>
-            {orderedCheckIns.length === 0 && (
-              <p className="goals-empty">Your recent check-ins will appear here.</p>
-            )}
-            {orderedCheckIns.length > 0 && (
-              <div className="goals-panel__history">
-                {orderedCheckIns[checkInIndex] && (
-                  <div
-                    key={orderedCheckIns[checkInIndex].id}
-                    className="goals-history-item"
-                  >
-                    <div>
-                      <strong>{orderedCheckIns[checkInIndex].goal}</strong>
-                      <p>{orderedCheckIns[checkInIndex].note}</p>
-                    </div>
-                    <div className="goals-history-meta">
-                      <span>
-                        {orderedCheckIns[checkInIndex].type === "support-request"
-                          ? "Support"
-                          : "Check-in"}
-                      </span>
-                      <span>
-                        {orderedCheckIns[checkInIndex].target === "trusted" &&
-                        orderedCheckIns[checkInIndex].groupName
-                          ? orderedCheckIns[checkInIndex].groupName
-                          : orderedCheckIns[checkInIndex].target === "feed"
-                          ? "My feed"
-                          : "Only me"}
-                      </span>
-                      <span>{formatDate(orderedCheckIns[checkInIndex].createdAt)}</span>
-                    </div>
-                    {orderedCheckIns.length > 1 && (
-                      <div className="goals-history-controls goals-history-controls--overlay">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setCheckInIndex(
-                              (prev) =>
-                                (prev - 1 + orderedCheckIns.length) % orderedCheckIns.length
-                            )
-                          }
-                          aria-label="Previous check-in"
-                        >
-                          Prev
-                        </button>
-                        <span className="goals-history-count">
-                          {checkInIndex + 1} / {orderedCheckIns.length}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setCheckInIndex((prev) => (prev + 1) % orderedCheckIns.length)
-                          }
-                          aria-label="Next check-in"
-                        >
-                          Next
-                        </button>
-                      </div>
-                    )}
                   </div>
+                ))}
+                {activeGoals.length === 0 && (
+                  <p className="goals-empty">
+                    Add a goal to get started. Completed goals will appear below.
+                  </p>
                 )}
               </div>
-            )}
+              <div className="goals-panel__picker">
+                <div className="goals-panel__steps">
+                  <span className="goals-step">1. Choose a goal</span>
+                  <span className="goals-step">2. Add it to your list</span>
+                  <span className="goals-step">3. Start a check-in</span>
+                </div>
+                <div className="goals-panel__picker-row">
+                  <div className="goals-panel__select">
+                    <select
+                      className="auth-input goals-select"
+                      value={goalPicker}
+                      onChange={(event) => setGoalPicker(event.target.value)}
+                    >
+                      <option value="">Select a goal</option>
+                      {filteredGoals.map((goal) => (
+                        <option
+                          key={goal}
+                          value={goal}
+                          disabled={selectedGoals.includes(goal)}
+                        >
+                          {goal}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="goals-select-caret" />
+                  </div>
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={() => {
+                      if (!goalPicker) return;
+                      if (!selectedGoals.includes(goalPicker)) {
+                        toggleGoal(goalPicker);
+                      }
+                      setGoalPicker("");
+                    }}
+                    disabled={!goalPicker}
+                  >
+                    Add to goals
+                  </button>
+                </div>
+                <p className="goals-muted">
+                  Pick a goal, tap “Add to goals,” and it will appear above.
+                </p>
+              </div>
+              <div className="goals-panel__custom">
+                <input
+                  className="auth-input"
+                  placeholder="Add a custom goal"
+                  value={customGoalInput}
+                  onChange={(event) => setCustomGoalInput(event.target.value)}
+                />
+                <button className="btn primary" type="button" onClick={addCustomGoal}>
+                  Add goal
+                </button>
+              </div>
+              {(lastAddedGoal || selectedGoals.length + customGoals.length > 0) && (
+                <div className="goals-panel__next">
+                  <div>
+                    <strong>Next step</strong>
+                    <p>
+                      Start a quick check-in{lastAddedGoal ? ` for "${lastAddedGoal}"` : ""}.
+                    </p>
+                  </div>
+                  <button
+                    className="btn primary"
+                    type="button"
+                    onClick={() => handleStartCheckIn(lastAddedGoal)}
+                  >
+                    Start check-in
+                  </button>
+                </div>
+              )}
+              {achievedGoals.length > 0 && (
+                <div className="goals-panel__achieved">
+                  <div className="goals-panel__header goals-panel__header--tight">
+                    <h5>Achieved goals</h5>
+                    <span>{achievedGoals.length} completed</span>
+                  </div>
+                  <div className="goals-panel__achieved-list">
+                    {achievedGoals.map((goal) => (
+                      <div key={goal} className="goals-row goals-row--achieved">
+                        <span className="goals-row__label">{goal}</span>
+                        <div className="goals-row__actions">
+                          <button
+                            className="goals-row__action"
+                            type="button"
+                            onClick={() => reactivateGoal(goal)}
+                          >
+                            Reactivate
+                          </button>
+                          <button
+                            className="goals-row__action goals-row__action--danger"
+                            type="button"
+                            onClick={() => removeGoal(goal)}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="goals-muted">Nice work. These stay here as your wins.</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="goals-panel__column">
+            <div className="goals-panel__section">
+              <div className="goals-panel__header">
+                <h4>Recent check-ins</h4>
+                <span>Your private log</span>
+              </div>
+              {orderedCheckIns.length === 0 && (
+                <p className="goals-empty">Your recent check-ins will appear here.</p>
+              )}
+              {orderedCheckIns.length > 0 && (
+                <div className="goals-panel__history">
+                  {orderedCheckIns[checkInIndex] && (
+                    <div
+                      key={orderedCheckIns[checkInIndex].id}
+                      className="goals-history-item"
+                    >
+                      <div>
+                        <strong>{orderedCheckIns[checkInIndex].goal}</strong>
+                        <p>{orderedCheckIns[checkInIndex].note}</p>
+                      </div>
+                      <div className="goals-history-meta">
+                        <span>
+                          {orderedCheckIns[checkInIndex].type === "support-request"
+                            ? "Support"
+                            : "Check-in"}
+                        </span>
+                        <span>
+                          {orderedCheckIns[checkInIndex].target === "trusted" &&
+                          orderedCheckIns[checkInIndex].groupName
+                            ? orderedCheckIns[checkInIndex].groupName
+                            : orderedCheckIns[checkInIndex].target === "feed"
+                            ? "My feed"
+                            : "Only me"}
+                        </span>
+                        <span>{formatDate(orderedCheckIns[checkInIndex].createdAt)}</span>
+                      </div>
+                      {orderedCheckIns.length > 1 && (
+                        <div className="goals-history-controls goals-history-controls--overlay">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setCheckInIndex(
+                                (prev) =>
+                                  (prev - 1 + orderedCheckIns.length) % orderedCheckIns.length
+                              )
+                            }
+                            aria-label="Previous check-in"
+                          >
+                            Prev
+                          </button>
+                          <span className="goals-history-count">
+                            {checkInIndex + 1} / {orderedCheckIns.length}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setCheckInIndex((prev) => (prev + 1) % orderedCheckIns.length)
+                            }
+                            aria-label="Next check-in"
+                          >
+                            Next
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </section>
   );
 }

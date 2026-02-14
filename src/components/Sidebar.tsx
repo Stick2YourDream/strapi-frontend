@@ -3,6 +3,26 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import api from "../api/strapi";
 import {
+  Bell,
+  ChevronLeft,
+  Download,
+  EyeOff,
+  Home,
+  LayoutDashboard,
+  Lock,
+  LogOut,
+  MessageSquare,
+  Newspaper,
+  Palette,
+  RefreshCcw,
+  Settings,
+  Shield,
+  Store,
+  User,
+  Users,
+  UsersRound,
+} from "lucide-react";
+import {
   useNotifications,
   type BirthdayPreview,
   type FriendRequestPreview,
@@ -39,6 +59,14 @@ const SETTINGS_SECTIONS: { id: SettingsSection; label: string }[] = [
   { id: "notifications", label: "Sound, Vibration & Quiet Hours" },
   { id: "changes", label: "Changes & Deactivation" },
 ];
+
+const SETTINGS_SECTION_ICONS: Record<SettingsSection, ReactNode> = {
+  appearance: <Palette size={18} />,
+  security: <Lock size={18} />,
+  privacy: <EyeOff size={18} />,
+  notifications: <Bell size={18} />,
+  changes: <RefreshCcw size={18} />,
+};
 
 const BIRTHDAY_MESSAGES = [
   "Happy birthday!",
@@ -680,117 +708,177 @@ export default function Sidebar({
           </button>
           {menuOpen && (
             <div className="mobile-profile-menu">
-              <button
-                className="mobile-profile-item"
-                type="button"
-                onClick={() => handleProfileAction("/dashboard")}
-              >
-                My Dashboard
-              </button>
-              <button
-                className="mobile-profile-item"
-                type="button"
-                onClick={() => handleProfileAction("/me")}
-              >
-                My Profile
-              </button>
-              {canToggleSettings && (
                 <button
                   className="mobile-profile-item"
                   type="button"
-                  onClick={handleSettingsToggle}
+                  data-accent="dashboard"
+                  onClick={() => handleProfileAction("/dashboard")}
                 >
-                  {isSettingsView ? "Back to Profile" : "Settings"}
+                  <span className="sidebar-nav-icon" aria-hidden="true">
+                    <LayoutDashboard size={18} />
+                  </span>
+                <span>My Dashboard</span>
+              </button>
+                <button
+                  className="mobile-profile-item"
+                  type="button"
+                  data-accent="profile"
+                  onClick={() => handleProfileAction("/me")}
+                >
+                  <span className="sidebar-nav-icon" aria-hidden="true">
+                    <User size={18} />
+                  </span>
+                <span>My Profile</span>
+              </button>
+                {canToggleSettings && (
+                  <button
+                    className="mobile-profile-item"
+                    type="button"
+                    data-accent="settings"
+                    onClick={handleSettingsToggle}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      {isSettingsView ? (
+                        <ChevronLeft size={18} />
+                    ) : (
+                      <Settings size={18} />
+                    )}
+                  </span>
+                  <span>{isSettingsView ? "Back to Profile" : "Settings"}</span>
                 </button>
               )}
-              {canSelectSettingsSection && (
-                <div className="mobile-settings-links">
-                  {SETTINGS_SECTIONS.map((section) => (
-                    <button
-                      key={section.id}
-                      className={`mobile-profile-item${
-                        settingsSection === section.id ? " is-active" : ""
-                      }`}
-                      type="button"
-                      onClick={() => handleSettingsSectionChange(section.id)}
-                    >
-                      {section.label}
+                {canSelectSettingsSection && (
+                  <div className="mobile-settings-links">
+                    {SETTINGS_SECTIONS.map((section) => (
+                      <button
+                        key={section.id}
+                        className={`mobile-profile-item${
+                          settingsSection === section.id ? " is-active" : ""
+                        }`}
+                        type="button"
+                        data-accent={section.id}
+                        onClick={() => handleSettingsSectionChange(section.id)}
+                      >
+                        <span className="sidebar-nav-icon" aria-hidden="true">
+                          {SETTINGS_SECTION_ICONS[section.id]}
+                        </span>
+                      <span>{section.label}</span>
                     </button>
                   ))}
                 </div>
               )}
-              <button
-                className="mobile-profile-item"
-                type="button"
-                onClick={() => handleProfileAction("/friends")}
-              >
-                My Friends
-              </button>
-              <button
-                className="mobile-profile-item"
-                type="button"
-                onClick={() => handleProfileAction("/groups")}
-              >
-                My Groups
-              </button>
-              <button
-                className="mobile-profile-item"
-                type="button"
-                onClick={() => handleProfileAction("/forums")}
-              >
-                Forums
-              </button>
-              <button
-                className={`mobile-profile-item${
-                  newsroomEnabled ? "" : " mobile-profile-item--disabled"
-                }`}
-                type="button"
-                disabled={!newsroomEnabled}
-                aria-disabled={!newsroomEnabled}
-                onClick={() => {
-                  if (!newsroomEnabled) return;
-                  handleProfileAction("/news");
-                }}
-              >
-                {newsroomEnabled ? "Newsroom" : "Newsroom (Coming soon)"}
-              </button>
-              {isStaff && (
                 <button
                   className="mobile-profile-item"
                   type="button"
-                  onClick={() => handleProfileAction("/moderation")}
+                  data-accent="friends"
+                  onClick={() => handleProfileAction("/friends")}
                 >
-                  Moderation
-                </button>
-              )}
-              {canToggleGroupSettings && (
+                  <span className="sidebar-nav-icon" aria-hidden="true">
+                    <Users size={18} />
+                  </span>
+                <span>My Friends</span>
+              </button>
                 <button
                   className="mobile-profile-item"
                   type="button"
-                  onClick={handleGroupSettingsToggle}
+                  data-accent="groups"
+                  onClick={() => handleProfileAction("/groups")}
                 >
-                  {isGroupSettingsView
-                    ? "Return to group feed"
-                    : "Group look and feel"}
-                </button>
-              )}
-              <button
-                className="mobile-profile-item"
-                type="button"
-                onClick={() => handleProfileAction("/landing")}
-              >
-                Return Home
+                  <span className="sidebar-nav-icon" aria-hidden="true">
+                    <UsersRound size={18} />
+                  </span>
+                <span>My Groups</span>
               </button>
-              <button
-                className="mobile-profile-item"
-                type="button"
-                onClick={() => {
-                  logout("user-action");
-                  navigate("/login");
-                  setMenuOpen(false);
+                <button
+                  className="mobile-profile-item"
+                  type="button"
+                  data-accent="forums"
+                  onClick={() => handleProfileAction("/forums")}
+                >
+                  <span className="sidebar-nav-icon" aria-hidden="true">
+                    <MessageSquare size={18} />
+                  </span>
+                <span>Forums</span>
+              </button>
+                <button
+                  className={`mobile-profile-item${
+                    newsroomEnabled ? "" : " mobile-profile-item--disabled"
+                  }`}
+                  type="button"
+                  data-accent="news"
+                  disabled={!newsroomEnabled}
+                  aria-disabled={!newsroomEnabled}
+                  onClick={() => {
+                    if (!newsroomEnabled) return;
+                    handleProfileAction("/news");
                 }}
               >
-                Logout
+                <span className="sidebar-nav-icon" aria-hidden="true">
+                  <Newspaper size={18} />
+                </span>
+                <span>
+                  {newsroomEnabled ? "Newsroom" : "Newsroom (Coming soon)"}
+                </span>
+              </button>
+                {isStaff && (
+                  <button
+                    className="mobile-profile-item"
+                    type="button"
+                    data-accent="moderation"
+                    onClick={() => handleProfileAction("/moderation")}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <Shield size={18} />
+                    </span>
+                  <span>Moderation</span>
+                </button>
+              )}
+                {canToggleGroupSettings && (
+                  <button
+                    className="mobile-profile-item"
+                    type="button"
+                    data-accent="group-theme"
+                    onClick={handleGroupSettingsToggle}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      {isGroupSettingsView ? (
+                        <ChevronLeft size={18} />
+                    ) : (
+                      <Palette size={18} />
+                    )}
+                  </span>
+                  <span>
+                    {isGroupSettingsView
+                      ? "Return to group feed"
+                      : "Group look and feel"}
+                  </span>
+                </button>
+              )}
+                <button
+                  className="mobile-profile-item"
+                  type="button"
+                  data-accent="home"
+                  onClick={() => handleProfileAction("/landing")}
+                >
+                  <span className="sidebar-nav-icon" aria-hidden="true">
+                    <Home size={18} />
+                  </span>
+                <span>Return Home</span>
+              </button>
+                <button
+                  className="mobile-profile-item"
+                  type="button"
+                  data-accent="logout"
+                  onClick={() => {
+                    logout("user-action");
+                    navigate("/login");
+                    setMenuOpen(false);
+                  }}
+                >
+                  <span className="sidebar-nav-icon" aria-hidden="true">
+                    <LogOut size={18} />
+                  </span>
+                <span>Logout</span>
               </button>
             </div>
           )}
@@ -869,17 +957,6 @@ export default function Sidebar({
                   }}
                   aria-expanded={showProfileMenu}
                   aria-controls="sidebar-profile-menu"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "10px",
-                    background: "transparent",
-                    border: "1px solid rgba(255,255,255,0.08)",
-                    padding: "10px 12px",
-                    borderRadius: "12px",
-                    color: "#c7cede",
-                    cursor: "pointer",
-                  }}
                 >
                   {profileCard.avatarUrl ? (
                     <AvatarImage
@@ -912,7 +989,7 @@ export default function Sidebar({
                     <span
                       style={{
                         fontSize: "12px",
-                        color: "#9ca3af",
+                        color: "var(--ysp-muted-2, #9ca3af)",
                         display: "block",
                         maxWidth: "100%",
                         overflow: "hidden",
@@ -952,27 +1029,39 @@ export default function Sidebar({
                   <button
                     className="btn ghost nav-btn sidebar-profile-menu-button"
                     type="button"
+                    data-accent="home"
                     onClick={() => handleProfileAction("/landing")}
                   >
-                    Return Home
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <Home size={18} />
+                    </span>
+                    <span>Return Home</span>
                   </button>
                   <button
                     className="btn ghost nav-btn sidebar-profile-menu-button"
                     type="button"
+                    data-accent="downloads"
                     onClick={() => handleProfileAction("/downloads")}
                   >
-                    Downloads
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <Download size={18} />
+                    </span>
+                    <span>Downloads</span>
                   </button>
                   <button
                     className="btn ghost nav-btn sidebar-profile-menu-button"
                     type="button"
+                    data-accent="logout"
                     onClick={() => {
                       logout("user-action");
                       navigate("/login");
                       setShowProfileMenu(false);
                     }}
                   >
-                    Logout
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <LogOut size={18} />
+                    </span>
+                    <span>Logout</span>
                   </button>
                 </div>
               )}
@@ -985,51 +1074,72 @@ export default function Sidebar({
                 className={`btn ghost sidebar-nav-link${
                   active === "dashboard" ? " is-active" : ""
                 }`}
+                data-accent="dashboard"
                 onClick={() => handleProfileAction("/dashboard")}
               >
-                My Dashboard
+                <span className="sidebar-nav-icon" aria-hidden="true">
+                  <LayoutDashboard size={18} />
+                </span>
+                <span>My Dashboard</span>
               </button>
               <button
                 type="button"
                 className={`btn ghost sidebar-nav-link${
                   active === "me" ? " is-active" : ""
                 }`}
+                data-accent="profile"
                 onClick={() => handleProfileAction("/me")}
               >
-                My Profile
+                <span className="sidebar-nav-icon" aria-hidden="true">
+                  <User size={18} />
+                </span>
+                <span>My Profile</span>
               </button>
               <button
                 type="button"
                 className={`btn ghost sidebar-nav-link${
                   active === "friends" ? " is-active" : ""
                 }`}
+                data-accent="friends"
                 onClick={() => handleProfileAction("/friends")}
               >
-                My Friends
+                <span className="sidebar-nav-icon" aria-hidden="true">
+                  <Users size={18} />
+                </span>
+                <span>My Friends</span>
               </button>
               <button
                 type="button"
                 className={`btn ghost sidebar-nav-link${
                   active === "groups" ? " is-active" : ""
                 }`}
+                data-accent="groups"
                 onClick={() => handleProfileAction("/groups")}
               >
-                My Groups
+                <span className="sidebar-nav-icon" aria-hidden="true">
+                  <UsersRound size={18} />
+                </span>
+                <span>My Groups</span>
               </button>
               <button
                 type="button"
                 className={`btn ghost sidebar-nav-link${
                   active === "forums" ? " is-active" : ""
                 }`}
+                data-accent="forums"
                 onClick={() => handleProfileAction("/forums")}
               >
-                Forums
+                <span className="sidebar-nav-icon" aria-hidden="true">
+                  <MessageSquare size={18} />
+                </span>
+                <span>Forums</span>
               </button>
               <button
                 type="button"
                 className={`btn ghost sidebar-nav-link${
                   !storefrontEnabled ? " sidebar-nav-link--disabled" : ""
                 }${active === "storefront" ? " is-active" : ""}`}
+                data-accent="storefront"
                 disabled={!storefrontEnabled}
                 aria-disabled={!storefrontEnabled}
                 onClick={() => {
@@ -1037,13 +1147,17 @@ export default function Sidebar({
                   handleProfileAction("/storefront");
                 }}
               >
-                {storefrontEnabled ? "StoreFront" : "StoreFront (Coming Soon!)"}
+                <span className="sidebar-nav-icon" aria-hidden="true">
+                  <Store size={18} />
+                </span>
+                <span>{storefrontEnabled ? "StoreFront" : "StoreFront (Coming Soon!)"}</span>
               </button>
               <button
                 type="button"
                 className={`btn ghost sidebar-nav-link${
                   !newsroomEnabled ? " sidebar-nav-link--disabled" : ""
                 }${active === "news" ? " is-active" : ""}`}
+                data-accent="news"
                 disabled={!newsroomEnabled}
                 aria-disabled={!newsroomEnabled}
                 onClick={() => {
@@ -1051,7 +1165,10 @@ export default function Sidebar({
                   handleProfileAction("/news");
                 }}
               >
-                {newsroomEnabled ? "Newsroom" : "Newsroom (Coming soon)"}
+                <span className="sidebar-nav-icon" aria-hidden="true">
+                  <Newspaper size={18} />
+                </span>
+                <span>{newsroomEnabled ? "Newsroom" : "Newsroom (Coming soon)"}</span>
               </button>
               {isStaff && (
                 <button
@@ -1059,9 +1176,13 @@ export default function Sidebar({
                   className={`btn ghost sidebar-nav-link${
                     active === "moderation" ? " is-active" : ""
                   }`}
+                  data-accent="moderation"
                   onClick={() => handleProfileAction("/moderation")}
                 >
-                  Moderation
+                  <span className="sidebar-nav-icon" aria-hidden="true">
+                    <Shield size={18} />
+                  </span>
+                  <span>Moderation</span>
                 </button>
               )}
             </div>
@@ -1072,32 +1193,15 @@ export default function Sidebar({
               className={`btn ghost sidebar-settings-button${
                 isSettingsView ? " is-active" : ""
               }`}
+              data-accent="settings"
               onClick={handleSettingsToggle}
               aria-pressed={isSettingsView}
             >
               <span className="sidebar-settings-icon" aria-hidden="true">
                 {isSettingsView ? (
-                  <svg viewBox="0 0 24 24">
-                    <path
-                      d="M15 6l-6 6 6 6"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
+                  <ChevronLeft size={18} />
                 ) : (
-                  <svg viewBox="0 0 24 24">
-                    <path
-                      d="M19.4 13a7.6 7.6 0 0 0 .05-2l2.1-1.64-2-3.46-2.46 1a7.56 7.56 0 0 0-1.72-1l-.38-2.6h-4l-.38 2.6a7.56 7.56 0 0 0-1.72 1l-2.46-1-2 3.46L4.55 11a7.6 7.6 0 0 0 0 2l-2.1 1.64 2 3.46 2.46-1c.54.42 1.12.76 1.72 1l.38 2.6h4l.38-2.6c.6-.24 1.18-.58 1.72-1l2.46 1 2-3.46L19.4 13zM12 15.2a3.2 3.2 0 1 1 0-6.4 3.2 3.2 0 0 1 0 6.4z"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.6"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
+                  <Settings size={18} />
                 )}
               </span>
               <span>{isSettingsView ? "Back to Profile" : "Settings"}</span>
@@ -1109,32 +1213,15 @@ export default function Sidebar({
               className={`btn ghost sidebar-settings-button${
                 isGroupSettingsView ? " is-active" : ""
               }`}
+              data-accent="group-theme"
               onClick={handleGroupSettingsToggle}
               aria-pressed={isGroupSettingsView}
             >
               <span className="sidebar-settings-icon" aria-hidden="true">
                 {isGroupSettingsView ? (
-                  <svg viewBox="0 0 24 24">
-                    <path
-                      d="M15 6l-6 6 6 6"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
+                  <ChevronLeft size={18} />
                 ) : (
-                  <svg viewBox="0 0 24 24">
-                    <path
-                      d="M19.4 13a7.6 7.6 0 0 0 .05-2l2.1-1.64-2-3.46-2.46 1a7.56 7.56 0 0 0-1.72-1l-.38-2.6h-4l-.38 2.6a7.56 7.56 0 0 0-1.72 1l-2.46-1-2 3.46L4.55 11a7.6 7.6 0 0 0 0 2l-2.1 1.64 2 3.46 2.46-1c.54.42 1.12.76 1.72 1l.38 2.6h4l.38-2.6c.6-.24 1.18-.58 1.72-1l2.46 1 2-3.46L19.4 13zM12 15.2a3.2 3.2 0 1 1 0-6.4 3.2 3.2 0 0 1 0 6.4z"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.6"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
+                  <Palette size={18} />
                 )}
               </span>
               <span>
@@ -1153,9 +1240,13 @@ export default function Sidebar({
                   className={`sidebar-settings-link${
                     settingsSection === section.id ? " is-active" : ""
                   }`}
+                  data-accent={section.id}
                   onClick={() => handleSettingsSectionChange(section.id)}
                 >
-                  {section.label}
+                  <span className="sidebar-nav-icon" aria-hidden="true">
+                    {SETTINGS_SECTION_ICONS[section.id]}
+                  </span>
+                  <span>{section.label}</span>
                 </button>
               ))}
             </div>

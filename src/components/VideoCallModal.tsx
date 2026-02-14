@@ -19,6 +19,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import axios from "axios";
+import { useNavigate } from "react-router-dom";
 import {
   useVideoCall,
   type VideoCallInvitee,
@@ -213,6 +214,7 @@ const AVATAR_DEFAULT_EYE_SIZE = 1;
 const AVATAR_DEFAULT_MOUTH_OFFSET_X = 0;
 const AVATAR_DEFAULT_MOUTH_OFFSET_Y = -0.08;
 const AVATAR_DEFAULT_MOUTH_SIZE = 1;
+const AVATAR_PRESET_PROFILE_SETTINGS_VALUE = "__profile_settings__";
 const CHAT_TEXT_SIZE_MIN_REM = 0.6;
 const CHAT_TEXT_SIZE_MAX_REM = 4;
 const CHAT_TEXT_SIZE_STEP_REM = 0.1;
@@ -1209,6 +1211,7 @@ export default function VideoCallModal({
   appSettings,
   onSettingsChange,
 }: VideoCallModalProps) {
+  const navigate = useNavigate();
   const {
     isOpen,
     status,
@@ -2048,6 +2051,12 @@ export default function VideoCallModal({
   const handleAvatarPresetChange = useCallback(
     (event: ChangeEvent<HTMLSelectElement>) => {
       const selectedPresetId = event.target.value;
+      if (selectedPresetId === AVATAR_PRESET_PROFILE_SETTINGS_VALUE) {
+        if (!isStandaloneVideoApp) {
+          navigate("/me?view=settings&section=appearance");
+        }
+        return;
+      }
       const selectedPreset = AVATAR_PRESET_OPTIONS.find((option) => option.id === selectedPresetId);
       if (!selectedPreset) return;
       setVideoEffects({
@@ -2065,7 +2074,7 @@ export default function VideoCallModal({
         avatarMouthSize: AVATAR_DEFAULT_MOUTH_SIZE,
       });
     },
-    [setVideoEffects]
+    [isStandaloneVideoApp, navigate, setVideoEffects]
   );
   const maskStrengthValue = Number.isFinite(videoEffects.maskStrength)
     ? Math.min(1, Math.max(0.2, videoEffects.maskStrength))
@@ -4854,6 +4863,11 @@ export default function VideoCallModal({
                                 {option.label}
                               </option>
                             ))}
+                            {!isStandaloneVideoApp && (
+                              <option value={AVATAR_PRESET_PROFILE_SETTINGS_VALUE}>
+                                Profile settings…
+                              </option>
+                            )}
                           </select>
                         </label>
                         {videoEffects.avatarImageUrl && (
