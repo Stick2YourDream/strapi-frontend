@@ -2,21 +2,17 @@ import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import "../css/release-notes.css";
 
-const RELEASE_NOTES_VERSION = "2026.02.03";
+const RELEASE_NOTES_VERSION = "2026.02.14";
 const STORAGE_KEY = "releaseNotesDismissedVersion";
 const SESSION_PREFIX = "releaseNotesClosed:";
 
 const RELEASE_NOTES = [
   "New Dashboard UI/Tweaks",
-  "Added Goals and Impact Section",
-  "Added Forums",
-  "Added Standalone Downloadable Video Calling Application with new Mobile Only Features and Improved Responsivness",
-  "Added Photo/Video Gallery",
-  "Added Featured Wins to Dashboard",
-  "You can now add friends to a trusted circle a create a trusted circle group to direct message",
+  "Update Video Calling Application for Mobile and UI Improvements",
   "Improved performance of video calls and messaging",
   "Added AI Image Generation to Video Calling",
-  "Storefront COMING SOON!!!"
+  "Storefront COMING SOON!!!",
+  "Added End to End Encryption for Video Calls and Messasging",
 ];
 
 export default function ReleaseNotesModal() {

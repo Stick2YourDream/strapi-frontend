@@ -471,10 +471,58 @@
   color: var(--mist);
   font-weight: 600;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: background 0.2s ease, color 0.2s ease;
 }
 
 .landing-profile-item:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--ysp-hover-bg, rgba(255, 255, 255, 0.06));
+  color: var(--ysp-fg, #f8fafc);
+}
+
+.landing-nav-icon {
+  color: var(--sidebar-icon-color, var(--mist));
+  filter: drop-shadow(0 10px 22px var(--sidebar-icon-glow, rgba(0, 0, 0, 0)));
+  transition: color 0.18s ease, filter 0.18s ease;
+  display: inline-flex;
+  align-items: center;
+}
+
+.landing-profile-item:hover .landing-nav-icon {
+  color: var(--sidebar-icon-color, var(--ysp-fg, rgba(226, 232, 240, 0.98)));
+  filter: drop-shadow(0 14px 26px var(--sidebar-icon-glow, rgba(0, 0, 0, 0.12)));
+}
+
+.landing-profile-menu [data-accent="dashboard"] {
+  --sidebar-icon-color: #38bdf8;
+  --sidebar-icon-glow: rgba(56, 189, 248, 0.38);
+}
+
+.landing-profile-menu [data-accent="profile"] {
+  --sidebar-icon-color: #a855f7;
+  --sidebar-icon-glow: rgba(168, 85, 247, 0.36);
+}
+
+.landing-profile-menu [data-accent="friends"] {
+  --sidebar-icon-color: #22c55e;
+  --sidebar-icon-glow: rgba(34, 197, 94, 0.34);
+}
+
+.landing-profile-menu [data-accent="groups"] {
+  --sidebar-icon-color: #f97316;
+  --sidebar-icon-glow: rgba(249, 115, 22, 0.34);
+}
+
+.landing-profile-menu [data-accent="downloads"] {
+  --sidebar-icon-color: #818cf8;
+  --sidebar-icon-glow: rgba(129, 140, 248, 0.34);
+}
+
+.landing-profile-menu [data-accent="logout"] {
+  --sidebar-icon-color: #fb7185;
+  --sidebar-icon-glow: rgba(251, 113, 133, 0.32);
 }
 
 .btn-ghost,

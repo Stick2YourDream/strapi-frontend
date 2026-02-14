@@ -5,6 +5,7 @@ import api from "../api/strapi";
 import axios from "axios";
 import { getStoredToken } from "../utils/auth-storage";
 import "../css/dashboard.css";
+import FullScreenLoader from "../components/FullScreenLoader";
 import { useAuth } from "../context/AuthContext";
 import Sidebar from "../components/Sidebar";
 import TopbarSearch from "../components/TopbarSearch";
@@ -705,6 +706,7 @@ export default function Dashboard() {
     admin: [],
   });
   const [loading, setLoading] = useState(true);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [formContent, setFormContent] = useState("");
   const [formFile, setFormFile] = useState<File | null>(null);
@@ -2770,6 +2772,12 @@ export default function Dashboard() {
     }
   }, [activePostKey, activePost]);
 
+  useEffect(() => {
+    if (!loading) {
+      setHasLoadedOnce(true);
+    }
+  }, [loading]);
+
   const activePostUrl = activePost ? extractFirstUrl(activePost.content) : "";
   const activePreview = activePostUrl ? previewCache[activePostUrl] : undefined;
   const activePreviewImage = activePreview?.image;
@@ -2784,9 +2792,11 @@ export default function Dashboard() {
     activePost && !activePost.imageUrl && activePreviewImage
   );
   const modalTitleId = activePostKey ? `post-modal-title-${activePostKey}` : undefined;
+  const showInitialLoader = loading && !hasLoadedOnce;
 
   return (
     <div className="dashboard-shell" style={getBackgroundStyle("dashboard")}>
+      {showInitialLoader && <FullScreenLoader label="Loading dashboard" />}
       <Sidebar active="dashboard" />
 
       <div className="main-content">

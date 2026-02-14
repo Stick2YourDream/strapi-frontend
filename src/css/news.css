@@ -43,6 +43,10 @@
   display: none;
 }
 
+.news-filters--sidebar {
+  --ysp-panel-bg: rgba(7, 10, 18, 0.76);
+}
+
 .news-filters-header {
   display: grid;
   gap: 6px;

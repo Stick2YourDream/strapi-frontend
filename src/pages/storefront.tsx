@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { LayoutDashboard } from "lucide-react";
 import "../css/dashboard.css";
 import "../css/storefront.css";
 import "../css/sidebar.css";
+import FullScreenLoader from "../components/FullScreenLoader";
 import TopbarSearch from "../components/TopbarSearch";
 import api from "../api/strapi";
 import AvatarImage from "../components/AvatarImage";
@@ -366,6 +368,7 @@ export default function Storefront() {
   }, [location.search]);
   const [products, setProducts] = useState<StorefrontProduct[]>([]);
   const [loadingListings, setLoadingListings] = useState(false);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [listingError, setListingError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("All");
@@ -379,9 +382,20 @@ export default function Storefront() {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const { user, profile, logout } = useAuth();
+  const loadingStartedRef = useRef(false);
   const listingGridRef = useRef<HTMLDivElement | null>(null);
   const [demoEnabled, setDemoEnabled] = useState(readStorefrontDemoEnabled);
   const [demoCount, setDemoCount] = useState(readStorefrontDemoCount);
+
+  useEffect(() => {
+    if (loadingListings) {
+      loadingStartedRef.current = true;
+      return;
+    }
+    if (loadingStartedRef.current) {
+      setHasLoadedOnce(true);
+    }
+  }, [loadingListings]);
 
   const demoListings = useMemo(() => {
     if (!demoEnabled || previewMine) return [];
@@ -624,6 +638,7 @@ export default function Storefront() {
   }, [loadListings]);
 
   const pageBackground = getBackgroundStyle("storefront") || getBackgroundStyle("dashboard");
+  const showInitialLoader = loadingListings && !hasLoadedOnce;
   const displayName =
     profile?.firstName || profile?.lastName
       ? `${profile?.firstName || ""} ${profile?.lastName || ""}`.trim()
@@ -646,6 +661,7 @@ export default function Storefront() {
 
   return (
     <div className="dashboard-shell storefront-shell" style={pageBackground}>
+      {showInitialLoader && <FullScreenLoader label="Loading storefront" />}
       <div className={`sidebar-shell ${menuOpen ? "open" : ""}`}>
         <div className="sidebar-topbar">
           <button className="brand" type="button" onClick={handleLogoClick} style={{ cursor: "pointer" }}>
@@ -696,9 +712,13 @@ export default function Storefront() {
                 <button
                   className="mobile-profile-item"
                   type="button"
+                  data-accent="dashboard"
                   onClick={() => handleProfileAction("/dashboard")}
                 >
-                  My Dashboard
+                  <span className="sidebar-nav-icon" aria-hidden="true">
+                    <LayoutDashboard size={18} />
+                  </span>
+                  <span>Back to dashboard</span>
                 </button>
                 <button
                   className="mobile-profile-item"
@@ -777,17 +797,21 @@ export default function Storefront() {
                 <button
                   className="btn ghost nav-btn sidebar-profile-menu-button"
                   type="button"
+                  data-accent="dashboard"
                   onClick={() => handleProfileAction("/dashboard")}
                 >
-                  Back to dashboard
+                  <span className="sidebar-nav-icon" aria-hidden="true">
+                    <LayoutDashboard size={18} />
+                  </span>
+                  <span>Back to dashboard</span>
                 </button>
-                <button
-                  className="btn ghost nav-btn sidebar-profile-menu-button"
-                  type="button"
-                  onClick={() => handleProfileAction("/me")}
-                >
-                  My profile
-                </button>
+              <button
+                className="btn ghost nav-btn sidebar-profile-menu-button"
+                type="button"
+                onClick={() => handleProfileAction("/me")}
+              >
+                My profile
+              </button>
                 {user && (
                   <button
                     className="btn ghost nav-btn sidebar-profile-menu-button"
@@ -810,9 +834,13 @@ export default function Storefront() {
             <button
               type="button"
               className="btn ghost sidebar-nav-link"
+              data-accent="dashboard"
               onClick={() => handleProfileAction("/dashboard")}
             >
-              Back to dashboard
+              <span className="sidebar-nav-icon" aria-hidden="true">
+                <LayoutDashboard size={18} />
+              </span>
+              <span>Back to dashboard</span>
             </button>
           </div>
 

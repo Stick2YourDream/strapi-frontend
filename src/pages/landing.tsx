@@ -2,6 +2,14 @@ import "../css/landing.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { gsap } from "gsap";
+import {
+  Download,
+  LayoutDashboard,
+  LogOut,
+  User,
+  Users,
+  UsersRound,
+} from "lucide-react";
 import api from "../api/strapi";
 import SiteFooter from "../components/SiteFooter";
 import { useAuth } from "../context/AuthContext";
@@ -648,48 +656,72 @@ export default function Landing() {
                     <button
                       type="button"
                       className="landing-profile-item"
+                      data-accent="dashboard"
                       onClick={() => handleProfileAction("/dashboard")}
                     >
-                      My Dashboard
+                      <span className="landing-nav-icon" aria-hidden="true">
+                        <LayoutDashboard size={18} />
+                      </span>
+                      <span>My Dashboard</span>
                     </button>
                     <button
                       type="button"
                       className="landing-profile-item"
+                      data-accent="profile"
                       onClick={() => handleProfileAction("/me")}
                     >
-                      My Profile
+                      <span className="landing-nav-icon" aria-hidden="true">
+                        <User size={18} />
+                      </span>
+                      <span>My Profile</span>
                     </button>
                     <button
                       type="button"
                       className="landing-profile-item"
+                      data-accent="friends"
                       onClick={() => handleProfileAction("/friends")}
                     >
-                      My Friends
+                      <span className="landing-nav-icon" aria-hidden="true">
+                        <Users size={18} />
+                      </span>
+                      <span>My Friends</span>
                     </button>
                     <button
                       type="button"
                       className="landing-profile-item"
+                      data-accent="groups"
                       onClick={() => handleProfileAction("/groups")}
                     >
-                      My Groups
+                      <span className="landing-nav-icon" aria-hidden="true">
+                        <UsersRound size={18} />
+                      </span>
+                      <span>My Groups</span>
                     </button>
                     <button
                       type="button"
                       className="landing-profile-item"
+                      data-accent="downloads"
                       onClick={() => handleProfileAction("/downloads")}
                     >
-                      Downloads
+                      <span className="landing-nav-icon" aria-hidden="true">
+                        <Download size={18} />
+                      </span>
+                      <span>Downloads</span>
                     </button>
                     <button
                       type="button"
                       className="landing-profile-item"
+                      data-accent="logout"
                       onClick={() => {
                         logout("user-action");
                         setProfileMenuOpen(false);
                         navigate("/login");
                       }}
                     >
-                      Logout
+                      <span className="landing-nav-icon" aria-hidden="true">
+                        <LogOut size={18} />
+                      </span>
+                      <span>Logout</span>
                     </button>
                   </div>
                 )}

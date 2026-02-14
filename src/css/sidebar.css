@@ -417,7 +417,8 @@
 }
 
 /* Vivid icon accents (scoped to Sidebar via data-accent). */
-.sidebar-shell [data-accent="dashboard"] {
+.sidebar-shell [data-accent="dashboard"],
+.storefront-shell [data-accent="dashboard"] {
   --sidebar-icon-color: #38bdf8;
   --sidebar-icon-glow: rgba(56, 189, 248, 0.38);
   --sidebar-accent-border: rgba(56, 189, 248, 0.5);

@@ -4,6 +4,8 @@ import { useNavigate } from "react-router-dom";
 import "../css/dashboard.css";
 import "../css/news.css";
 import "../css/news-reader-overrides.css";
+import { LayoutDashboard } from "lucide-react";
+import FullScreenLoader from "../components/FullScreenLoader";
 import { useAuth } from "../context/AuthContext";
 import { useNewsPreference } from "../hooks/useNewsPreference";
 import { useUserPreferences } from "../context/UserPreferencesContext";
@@ -251,6 +253,7 @@ export default function News() {
   const [sortOrder, setSortOrder] = useState<"newest" | "oldest">("newest");
   const [articles, setArticles] = useState<NewsArticle[]>([]);
   const [loading, setLoading] = useState(false);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
@@ -277,6 +280,7 @@ export default function News() {
   const [speechRate, setSpeechRate] = useState(1);
   const [isReading, setIsReading] = useState(false);
   const [isSpeechPaused, setIsSpeechPaused] = useState(false);
+  const loadingStartedRef = useRef(false);
   const loadIdRef = useRef(0);
   const readerHtmlRef = useRef<HTMLDivElement | null>(null);
   const imageCacheRef = useRef<Record<string, string>>({});
@@ -733,9 +737,13 @@ export default function News() {
       <button
         className="btn ghost sidebar-nav-link news-sidebar-link"
         type="button"
+        data-accent="dashboard"
         onClick={() => navigate("/dashboard")}
       >
-        My Dashboard
+        <span className="sidebar-nav-icon" aria-hidden="true">
+          <LayoutDashboard size={18} />
+        </span>
+        <span>Back to dashboard</span>
       </button>
       {renderFilters("sidebar")}
     </>
@@ -1237,8 +1245,21 @@ export default function News() {
     return () => window.removeEventListener("keydown", handleKey);
   }, [activeArticle, handleCloseReader]);
 
+  useEffect(() => {
+    if (loading) {
+      loadingStartedRef.current = true;
+      return;
+    }
+    if (loadingStartedRef.current) {
+      setHasLoadedOnce(true);
+    }
+  }, [loading]);
+
+  const showInitialLoader = loading && !hasLoadedOnce;
+
   return (
     <div className="dashboard-shell" style={newsModalBackground}>
+      {showInitialLoader && <FullScreenLoader label="Loading newsroom" />}
       <Sidebar
         active="news"
         hideNavLinks

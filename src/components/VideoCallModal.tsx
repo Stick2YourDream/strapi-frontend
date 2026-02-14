@@ -1055,6 +1055,7 @@ const VideoTile = ({
   onPointerUp,
   onPointerDown,
   onPointerLeave,
+  onPointerCancel,
   onContextMenu,
   onWheel,
   onKeyDown,
@@ -1078,6 +1079,7 @@ const VideoTile = ({
   onPointerUp?: PointerEventHandler<HTMLDivElement>;
   onPointerDown?: PointerEventHandler<HTMLDivElement>;
   onPointerLeave?: PointerEventHandler<HTMLDivElement>;
+  onPointerCancel?: PointerEventHandler<HTMLDivElement>;
   onContextMenu?: MouseEventHandler<HTMLDivElement>;
   onWheel?: WheelEventHandler<HTMLDivElement>;
   onKeyDown?: KeyboardEventHandler<HTMLDivElement>;
@@ -1117,6 +1119,7 @@ const VideoTile = ({
       onPointerUp={onPointerUp}
       onPointerDown={onPointerDown}
       onPointerLeave={onPointerLeave}
+      onPointerCancel={onPointerCancel}
       onContextMenu={onContextMenu}
       onWheel={onWheel}
       onKeyDown={onKeyDown}
@@ -1429,6 +1432,7 @@ export default function VideoCallModal({
     null
   );
   const [isScreenPipDragging, setIsScreenPipDragging] = useState(false);
+  const [mobileScreenShareIndex, setMobileScreenShareIndex] = useState(0);
   const [isMobileLayout, setIsMobileLayout] = useState(false);
   const [aiBackgroundPrompt, setAiBackgroundPrompt] = useState("");
   const [aiBackgroundError, setAiBackgroundError] = useState<string | null>(null);
@@ -1531,7 +1535,43 @@ export default function VideoCallModal({
     maxY: number;
   } | null>(null);
   const pipDragRef = useRef({ active: false, offsetX: 0, offsetY: 0 });
-  const screenPipDragRef = useRef({ active: false, offsetX: 0, offsetY: 0 });
+  const screenPipDragRef = useRef({
+    active: false,
+    pending: false,
+    pointerId: null as number | null,
+    offsetX: 0,
+    offsetY: 0,
+    startX: 0,
+    startY: 0,
+  });
+  const mobileVideoSwipeRef = useRef({
+    active: false,
+    pointerId: null as number | null,
+    startX: 0,
+    startY: 0,
+    lastX: 0,
+    lastY: 0,
+    startTime: 0,
+    hasMoved: false,
+  });
+  const screenPipGestureRef = useRef({
+    pointers: new Map<number, { x: number; y: number }>(),
+    pinchStartDistance: 0,
+    pinchStartZoom: 1,
+    pinchZoomKey: "",
+    isPinching: false,
+    swipePointerId: null as number | null,
+    swipeStartX: 0,
+    swipeStartY: 0,
+    swipeLastX: 0,
+    swipeLastY: 0,
+    swipeStartTime: 0,
+    tapMoved: false,
+    lastTapTime: 0,
+    lastTapX: 0,
+    lastTapY: 0,
+    swipeDetected: false,
+  });
   const demoCleanupRef = useRef<Record<string, () => void>>({});
   const demoCounterRef = useRef(1);
   const avatarAutoAlignedUrlRef = useRef("");
@@ -2654,12 +2694,39 @@ export default function VideoCallModal({
     resolveParticipantLabel,
   ]);
 
+  const mobileScreenShareOrder = useMemo(() => {
+    if (!isMobileLayout) return [];
+    if (screenShareEntries.length === 0) return [];
+    const remoteEntries = screenShareEntries.filter((entry) => !entry.isLocal);
+    const localEntries = screenShareEntries.filter((entry) => entry.isLocal);
+    return [...remoteEntries, ...localEntries];
+  }, [isMobileLayout, screenShareEntries]);
+
+  useEffect(() => {
+    if (!isMobileLayout) {
+      setMobileScreenShareIndex(0);
+      return;
+    }
+    if (mobileScreenShareOrder.length === 0) {
+      setMobileScreenShareIndex(0);
+      return;
+    }
+    setMobileScreenShareIndex((prev) => {
+      if (prev < 0) return 0;
+      if (prev >= mobileScreenShareOrder.length) return 0;
+      return prev;
+    });
+  }, [isMobileLayout, mobileScreenShareOrder]);
+
   const mobileScreenShareEntry = useMemo(() => {
     if (!isMobileLayout) return null;
-    if (screenShareEntries.length === 0) return null;
-    const remoteEntry = screenShareEntries.find((entry) => !entry.isLocal);
-    return remoteEntry || screenShareEntries[0] || null;
-  }, [isMobileLayout, screenShareEntries]);
+    if (mobileScreenShareOrder.length === 0) return null;
+    const index = Math.min(
+      Math.max(0, mobileScreenShareIndex),
+      mobileScreenShareOrder.length - 1
+    );
+    return mobileScreenShareOrder[index] || null;
+  }, [isMobileLayout, mobileScreenShareIndex, mobileScreenShareOrder]);
 
   const getScreenFocusKey = useCallback(
     (entry: { id: string; socketId?: string; isLocal: boolean }) =>
@@ -2670,6 +2737,21 @@ export default function VideoCallModal({
     (entry: { id: string; socketId?: string; isLocal: boolean }) =>
       entry.isLocal ? "screen-local" : `screen-${entry.socketId || entry.id}`,
     []
+  );
+
+  const cycleMobileScreenShare = useCallback(
+    (direction: "next" | "prev") => {
+      if (!isMobileLayout) return;
+      if (mobileScreenShareOrder.length < 2) return;
+      setMobileScreenShareIndex((prev) => {
+        const delta = direction === "next" ? 1 : -1;
+        const next =
+          (prev + delta + mobileScreenShareOrder.length) % mobileScreenShareOrder.length;
+        return next;
+      });
+      setScreenPipPosition(null);
+    },
+    [isMobileLayout, mobileScreenShareOrder.length]
   );
 
   const isMobileCameraOnly = isMobileLayout;
@@ -2807,6 +2889,28 @@ export default function VideoCallModal({
     }
     return top;
   }, [focusedVideoId, isSplitView, showVideoTiles, videoParticipants]);
+
+  const mobileVideoOrder = useMemo(
+    () => (isMobileLayout ? videoParticipants : []),
+    [isMobileLayout, videoParticipants]
+  );
+
+  const cycleMobileVideo = useCallback(
+    (direction: "next" | "prev") => {
+      if (!isMobileLayout) return;
+      if (mobileVideoOrder.length < 2) return;
+      setFocusedVideoId((prev) => {
+        const currentId = prev || primaryVideoSocketId;
+        const currentIndex = mobileVideoOrder.findIndex((entry) => entry.id === currentId);
+        const startIndex = currentIndex >= 0 ? currentIndex : 0;
+        const delta = direction === "next" ? 1 : -1;
+        const nextIndex =
+          (startIndex + delta + mobileVideoOrder.length) % mobileVideoOrder.length;
+        return mobileVideoOrder[nextIndex]?.id || currentId;
+      });
+    },
+    [isMobileLayout, mobileVideoOrder, primaryVideoSocketId]
+  );
 
   useEffect(() => {
     if (isMobileCameraOnly) {
@@ -3020,6 +3124,20 @@ export default function VideoCallModal({
     setScreenPipPosition(null);
     setIsScreenPipDragging(false);
     screenPipDragRef.current.active = false;
+    screenPipDragRef.current.pending = false;
+    screenPipDragRef.current.pointerId = null;
+    screenPipGestureRef.current.pointers.clear();
+    screenPipGestureRef.current.isPinching = false;
+    screenPipGestureRef.current.pinchStartDistance = 0;
+    screenPipGestureRef.current.pinchStartZoom = 1;
+    screenPipGestureRef.current.pinchZoomKey = "";
+    screenPipGestureRef.current.swipePointerId = null;
+    screenPipGestureRef.current.swipeDetected = false;
+    screenPipGestureRef.current.tapMoved = false;
+    screenPipGestureRef.current.lastTapTime = 0;
+    mobileVideoSwipeRef.current.active = false;
+    mobileVideoSwipeRef.current.pointerId = null;
+    mobileVideoSwipeRef.current.hasMoved = false;
   }, [
     focusedScreenId,
     focusedVideoId,
@@ -3081,8 +3199,81 @@ export default function VideoCallModal({
       setScreenPipPosition(null);
       setIsScreenPipDragging(false);
       screenPipDragRef.current.active = false;
+      screenPipDragRef.current.pending = false;
+      screenPipDragRef.current.pointerId = null;
+      screenPipGestureRef.current.pointers.clear();
+      screenPipGestureRef.current.isPinching = false;
+      screenPipGestureRef.current.pinchStartDistance = 0;
+      screenPipGestureRef.current.pinchStartZoom = 1;
+      screenPipGestureRef.current.pinchZoomKey = "";
+      screenPipGestureRef.current.swipePointerId = null;
+      screenPipGestureRef.current.swipeDetected = false;
+      screenPipGestureRef.current.tapMoved = false;
+      screenPipGestureRef.current.lastTapTime = 0;
     }
   }, [isMobileLayout, mobileScreenShareEntry, showCallUi]);
+
+  const updateScreenZoomForPinch = useCallback((targetId: string, nextZoom: number) => {
+    const clamped = Math.min(5, Math.max(1, nextZoom));
+    setScreenZoomLevels((prev) => ({ ...prev, [targetId]: clamped }));
+    if (clamped <= 1) {
+      setScreenPanOffsets((prev) => ({ ...prev, [targetId]: { x: 0, y: 0 } }));
+      setActivePanTarget((prev) => (prev === targetId ? null : prev));
+    }
+  }, []);
+
+  const handleMobileVideoPointerDown = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (!isMobileLayout) return;
+      if (mobileVideoSwipeRef.current.active) return;
+      mobileVideoSwipeRef.current.active = true;
+      mobileVideoSwipeRef.current.pointerId = event.pointerId;
+      mobileVideoSwipeRef.current.startX = event.clientX;
+      mobileVideoSwipeRef.current.startY = event.clientY;
+      mobileVideoSwipeRef.current.lastX = event.clientX;
+      mobileVideoSwipeRef.current.lastY = event.clientY;
+      mobileVideoSwipeRef.current.startTime = performance.now();
+      mobileVideoSwipeRef.current.hasMoved = false;
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    },
+    [isMobileLayout]
+  );
+
+  const handleMobileVideoPointerMove = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (!isMobileLayout) return;
+      const swipe = mobileVideoSwipeRef.current;
+      if (!swipe.active || swipe.pointerId !== event.pointerId) return;
+      swipe.lastX = event.clientX;
+      swipe.lastY = event.clientY;
+      const deltaX = event.clientX - swipe.startX;
+      const deltaY = event.clientY - swipe.startY;
+      if (!swipe.hasMoved && (Math.abs(deltaX) > 6 || Math.abs(deltaY) > 6)) {
+        swipe.hasMoved = true;
+      }
+    },
+    [isMobileLayout]
+  );
+
+  const handleMobileVideoPointerUp = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      const swipe = mobileVideoSwipeRef.current;
+      if (!swipe.active || swipe.pointerId !== event.pointerId) return;
+      swipe.active = false;
+      swipe.pointerId = null;
+      swipe.hasMoved = false;
+      const deltaX = event.clientX - swipe.startX;
+      const deltaY = event.clientY - swipe.startY;
+      const elapsed = performance.now() - swipe.startTime;
+      const absX = Math.abs(deltaX);
+      const absY = Math.abs(deltaY);
+      if (absX > 40 && absX > absY * 1.2 && elapsed < 700) {
+        cycleMobileVideo(deltaX < 0 ? "next" : "prev");
+      }
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+    },
+    [cycleMobileVideo]
+  );
 
   const handlePipPointerDown = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
@@ -3109,23 +3300,36 @@ export default function VideoCallModal({
   const handleScreenPipPointerDown = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
       if (!isMobileLayout || !mobileScreenShareEntry) return;
-      const grid = gridRef.current;
-      if (!grid) return;
-      const tile = event.currentTarget;
-      const gridRect = grid.getBoundingClientRect();
-      const tileRect = tile.getBoundingClientRect();
-      if (!gridRect.width || !gridRect.height) return;
-      screenPipDragRef.current.active = true;
-      screenPipDragRef.current.offsetX = event.clientX - tileRect.left;
-      screenPipDragRef.current.offsetY = event.clientY - tileRect.top;
-      setScreenPipPosition({
-        x: tileRect.left - gridRect.left,
-        y: tileRect.top - gridRect.top,
-      });
-      setIsScreenPipDragging(true);
-      tile.setPointerCapture?.(event.pointerId);
+      const gesture = screenPipGestureRef.current;
+      gesture.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (gesture.pointers.size === 1) {
+        gesture.swipePointerId = event.pointerId;
+        gesture.swipeStartX = event.clientX;
+        gesture.swipeStartY = event.clientY;
+        gesture.swipeLastX = event.clientX;
+        gesture.swipeLastY = event.clientY;
+        gesture.swipeStartTime = performance.now();
+        gesture.tapMoved = false;
+        gesture.swipeDetected = false;
+      } else if (gesture.pointers.size === 2) {
+        const [first, second] = Array.from(gesture.pointers.values());
+        const distance = Math.hypot(first.x - second.x, first.y - second.y);
+        const zoomKey = getScreenFocusKey(mobileScreenShareEntry);
+        gesture.isPinching = true;
+        gesture.pinchStartDistance = distance || 1;
+        gesture.pinchStartZoom = screenZoomLevels[zoomKey] ?? 1;
+        gesture.pinchZoomKey = zoomKey;
+        gesture.swipePointerId = null;
+        gesture.tapMoved = true;
+        gesture.swipeDetected = false;
+      }
+      screenPipDragRef.current.active = false;
+      screenPipDragRef.current.pending = false;
+      screenPipDragRef.current.pointerId = null;
+      setIsScreenPipDragging(false);
+      event.currentTarget.setPointerCapture?.(event.pointerId);
     },
-    [isMobileLayout, mobileScreenShareEntry]
+    [getScreenFocusKey, isMobileLayout, mobileScreenShareEntry, screenZoomLevels]
   );
 
   const handlePipPointerMove = useCallback(
@@ -3155,66 +3359,37 @@ export default function VideoCallModal({
 
   const handleScreenPipPointerMove = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
-      if (!screenPipDragRef.current.active || !isMobileLayout) return;
-      const grid = gridRef.current;
-      if (!grid) return;
-      const gridRect = grid.getBoundingClientRect();
-      const tile = event.currentTarget;
-      const width = tile.offsetWidth;
-      const height = tile.offsetHeight;
-      if (!gridRect.width || !gridRect.height || !width || !height) return;
-      let nextX = event.clientX - gridRect.left - screenPipDragRef.current.offsetX;
-      let nextY = event.clientY - gridRect.top - screenPipDragRef.current.offsetY;
-      nextX = Math.min(Math.max(0, nextX), gridRect.width - width);
-      nextY = Math.min(Math.max(0, nextY), gridRect.height - height);
-      setScreenPipPosition({ x: nextX, y: nextY });
-    },
-    [isMobileLayout]
-  );
-
-  const handlePipPointerUp = useCallback((event: PointerEvent<HTMLDivElement>) => {
-    if (!pipDragRef.current.active || isMobileCameraOnly) return;
-    pipDragRef.current.active = false;
-    setIsPipDragging(false);
-    event.currentTarget.releasePointerCapture?.(event.pointerId);
-  }, [isMobileCameraOnly]);
-
-  const handleScreenPipPointerUp = useCallback((event: PointerEvent<HTMLDivElement>) => {
-    if (!screenPipDragRef.current.active) return;
-    screenPipDragRef.current.active = false;
-    setIsScreenPipDragging(false);
-    event.currentTarget.releasePointerCapture?.(event.pointerId);
-  }, []);
-
-  const pipStyle = useMemo<CSSProperties | undefined>(() => {
-    if (!isMobileLayout || isLocalPrimary || !pipPosition) return undefined;
-    return {
-      left: `${pipPosition.x}px`,
-      top: `${pipPosition.y}px`,
-      right: "auto",
-      bottom: "auto",
-    };
-  }, [isLocalPrimary, isMobileLayout, pipPosition]);
-
-  const screenPipStyle = useMemo<CSSProperties | undefined>(() => {
-    if (!isMobileLayout || !mobileScreenShareEntry || !screenPipPosition) return undefined;
-    return {
-      left: `${screenPipPosition.x}px`,
-      top: `${screenPipPosition.y}px`,
-      right: "auto",
-      bottom: "auto",
-    };
-  }, [isMobileLayout, mobileScreenShareEntry, screenPipPosition]);
-
-  const registerScreenTile = useCallback((id: string) => {
-    return (node: HTMLDivElement | null) => {
-      if (node) {
-        screenTileRefs.current.set(id, node);
-      } else {
-        screenTileRefs.current.delete(id);
+      if (!isMobileLayout || !mobileScreenShareEntry) return;
+      const gesture = screenPipGestureRef.current;
+      if (!gesture.pointers.has(event.pointerId)) return;
+      gesture.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (gesture.isPinching && gesture.pointers.size >= 2) {
+        const [first, second] = Array.from(gesture.pointers.values());
+        const distance = Math.hypot(first.x - second.x, first.y - second.y);
+        if (gesture.pinchStartDistance > 0 && gesture.pinchZoomKey) {
+          const scale = distance / gesture.pinchStartDistance;
+          updateScreenZoomForPinch(gesture.pinchZoomKey, gesture.pinchStartZoom * scale);
+        }
+        return;
       }
-    };
-  }, []);
+      if (gesture.swipePointerId !== event.pointerId) return;
+      const deltaX = event.clientX - gesture.swipeStartX;
+      const deltaY = event.clientY - gesture.swipeStartY;
+      gesture.swipeLastX = event.clientX;
+      gesture.swipeLastY = event.clientY;
+      if (!gesture.tapMoved && (Math.abs(deltaX) > 6 || Math.abs(deltaY) > 6)) {
+        gesture.tapMoved = true;
+      }
+      if (
+        !gesture.swipeDetected &&
+        Math.abs(deltaX) > 24 &&
+        Math.abs(deltaX) > Math.abs(deltaY) * 1.2
+      ) {
+        gesture.swipeDetected = true;
+      }
+    },
+    [isMobileLayout, mobileScreenShareEntry, updateScreenZoomForPinch]
+  );
 
   const toggleFullscreen = useCallback((targetId: string) => {
     const node = screenTileRefs.current.get(targetId);
@@ -3249,6 +3424,104 @@ export default function VideoCallModal({
     document.documentElement.requestFullscreen?.().catch(() => undefined);
     desktopBridge?.toggleFullScreen?.();
   }, [desktopBridge]);
+
+  const handlePipPointerUp = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    if (!pipDragRef.current.active || isMobileCameraOnly) return;
+    pipDragRef.current.active = false;
+    setIsPipDragging(false);
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+  }, [isMobileCameraOnly]);
+
+  const handleScreenPipPointerUp = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (!isMobileLayout) return;
+      const gesture = screenPipGestureRef.current;
+      if (gesture.pointers.has(event.pointerId)) {
+        gesture.pointers.delete(event.pointerId);
+      }
+      if (gesture.isPinching && gesture.pointers.size < 2) {
+        gesture.isPinching = false;
+        gesture.pinchStartDistance = 0;
+        gesture.pinchStartZoom = 1;
+        gesture.pinchZoomKey = "";
+      }
+      if (gesture.swipePointerId === event.pointerId) {
+        const deltaX = event.clientX - gesture.swipeStartX;
+        const deltaY = event.clientY - gesture.swipeStartY;
+        const elapsed = performance.now() - gesture.swipeStartTime;
+        const absX = Math.abs(deltaX);
+        const absY = Math.abs(deltaY);
+        const isSwipe =
+          gesture.swipeDetected || (absX > 40 && absX > absY * 1.2 && elapsed < 700);
+        if (isSwipe) {
+          cycleMobileScreenShare(deltaX < 0 ? "next" : "prev");
+          gesture.lastTapTime = 0;
+        } else if (!gesture.tapMoved && absX < 24 && absY < 24) {
+          const now = performance.now();
+          const tapDistance = Math.hypot(
+            event.clientX - gesture.lastTapX,
+            event.clientY - gesture.lastTapY
+          );
+          if (gesture.lastTapTime && now - gesture.lastTapTime < 280 && tapDistance < 24) {
+            const tileId = mobileScreenShareEntry
+              ? getScreenTileId(mobileScreenShareEntry)
+              : null;
+            if (tileId) {
+              toggleFullscreen(tileId);
+            }
+            gesture.lastTapTime = 0;
+          } else {
+            gesture.lastTapTime = now;
+            gesture.lastTapX = event.clientX;
+            gesture.lastTapY = event.clientY;
+          }
+        }
+        gesture.swipePointerId = null;
+      }
+      screenPipDragRef.current.active = false;
+      screenPipDragRef.current.pending = false;
+      screenPipDragRef.current.pointerId = null;
+      setIsScreenPipDragging(false);
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+    },
+    [
+      cycleMobileScreenShare,
+      getScreenTileId,
+      isMobileLayout,
+      mobileScreenShareEntry,
+      toggleFullscreen,
+    ]
+  );
+
+  const pipStyle = useMemo<CSSProperties | undefined>(() => {
+    if (!isMobileLayout || isLocalPrimary || !pipPosition) return undefined;
+    return {
+      left: `${pipPosition.x}px`,
+      top: `${pipPosition.y}px`,
+      right: "auto",
+      bottom: "auto",
+    };
+  }, [isLocalPrimary, isMobileLayout, pipPosition]);
+
+  const screenPipStyle = useMemo<CSSProperties | undefined>(() => {
+    if (!isMobileLayout || !mobileScreenShareEntry || !screenPipPosition) return undefined;
+    return {
+      left: `${screenPipPosition.x}px`,
+      top: `${screenPipPosition.y}px`,
+      right: "auto",
+      bottom: "auto",
+    };
+  }, [isMobileLayout, mobileScreenShareEntry, screenPipPosition]);
+
+  const registerScreenTile = useCallback((id: string) => {
+    return (node: HTMLDivElement | null) => {
+      if (node) {
+        screenTileRefs.current.set(id, node);
+      } else {
+        screenTileRefs.current.delete(id);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -3945,6 +4218,23 @@ export default function VideoCallModal({
     },
     []
   );
+
+  const mobileScreenShareTileId = useMemo(
+    () => (mobileScreenShareEntry ? getScreenTileId(mobileScreenShareEntry) : null),
+    [getScreenTileId, mobileScreenShareEntry]
+  );
+
+  const mobileScreenShareMediaStyle = useMemo<CSSProperties | undefined>(() => {
+    if (!mobileScreenShareEntry) return undefined;
+    const zoomKey = getScreenFocusKey(mobileScreenShareEntry);
+    const zoom = getScreenZoom(zoomKey);
+    return {
+      objectFit: "contain",
+      transform: `scale(${zoom})`,
+      transformOrigin: "center center",
+      transition: "transform 0.2s ease",
+    };
+  }, [getScreenFocusKey, getScreenZoom, mobileScreenShareEntry]);
 
   const getControlPoint = useCallback(
     (
@@ -6603,11 +6893,18 @@ export default function VideoCallModal({
                       isScreenPipDragging ? " is-dragging" : ""
                     }`}
                     style={screenPipStyle}
-                    mediaStyle={{ objectFit: "contain" }}
+                    mediaStyle={mobileScreenShareMediaStyle}
+                    rootRef={
+                      mobileScreenShareTileId
+                        ? registerScreenTile(mobileScreenShareTileId)
+                        : undefined
+                    }
+                    dataScreenId={mobileScreenShareTileId || undefined}
                     onPointerDown={handleScreenPipPointerDown}
                     onPointerMove={handleScreenPipPointerMove}
                     onPointerUp={handleScreenPipPointerUp}
                     onPointerLeave={handleScreenPipPointerUp}
+                    onPointerCancel={handleScreenPipPointerUp}
                   />
                 )}
                 {presenterMode ? (
@@ -7313,15 +7610,36 @@ export default function VideoCallModal({
                         }${
                           !isLocalPrimary && isMobileLayout && !isMobileCameraOnly
                             ? " is-draggable"
-                            : ""
+                          : ""
                         }${isPipDragging ? " is-dragging" : ""}${
                           localEffectClass ? ` ${localEffectClass}` : ""
                         }`}
                         style={pipStyle}
-                        onPointerDown={handlePipPointerDown}
-                        onPointerMove={handlePipPointerMove}
-                        onPointerUp={handlePipPointerUp}
-                        onPointerLeave={handlePipPointerUp}
+                        onPointerDown={
+                          isMobileLayout && isLocalPrimary
+                            ? handleMobileVideoPointerDown
+                            : handlePipPointerDown
+                        }
+                        onPointerMove={
+                          isMobileLayout && isLocalPrimary
+                            ? handleMobileVideoPointerMove
+                            : handlePipPointerMove
+                        }
+                        onPointerUp={
+                          isMobileLayout && isLocalPrimary
+                            ? handleMobileVideoPointerUp
+                            : handlePipPointerUp
+                        }
+                        onPointerLeave={
+                          isMobileLayout && isLocalPrimary
+                            ? handleMobileVideoPointerUp
+                            : handlePipPointerUp
+                        }
+                        onPointerCancel={
+                          isMobileLayout && isLocalPrimary
+                            ? handleMobileVideoPointerUp
+                            : undefined
+                        }
                       >
                         {showFocusControls && (
                           <div className="video-tile__actions">
@@ -7341,6 +7659,7 @@ export default function VideoCallModal({
                     )}
                     {visibleVideoParticipants.map((participant) => {
                       const isFocused = focusedVideoKey === participant.socketId;
+                      const isPrimary = participant.socketId === primaryVideoSocketId;
                       const participantLabel = resolveParticipantLabel({
                         userId: participant.userId,
                         displayName: participant.displayName,
@@ -7358,8 +7677,31 @@ export default function VideoCallModal({
                               ? ""
                               : "Waiting for video"
                           }
-                          className={
-                            participant.socketId === primaryVideoSocketId ? "is-primary" : undefined
+                          className={isPrimary ? "is-primary" : undefined}
+                          onPointerDown={
+                            isMobileLayout && isPrimary
+                              ? handleMobileVideoPointerDown
+                              : undefined
+                          }
+                          onPointerMove={
+                            isMobileLayout && isPrimary
+                              ? handleMobileVideoPointerMove
+                              : undefined
+                          }
+                          onPointerUp={
+                            isMobileLayout && isPrimary
+                              ? handleMobileVideoPointerUp
+                              : undefined
+                          }
+                          onPointerLeave={
+                            isMobileLayout && isPrimary
+                              ? handleMobileVideoPointerUp
+                              : undefined
+                          }
+                          onPointerCancel={
+                            isMobileLayout && isPrimary
+                              ? handleMobileVideoPointerUp
+                              : undefined
                           }
                         >
                           {showFocusControls && (
