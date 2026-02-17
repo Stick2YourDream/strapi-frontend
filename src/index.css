@@ -3,11 +3,28 @@
   box-sizing: border-box;
 }
 
+:root {
+  --app-font: "Manrope", "Inter", "Segoe UI", "Helvetica Neue", Arial, system-ui,
+    -apple-system, sans-serif;
+}
+
 html, body {
   margin: 0;
   padding: 0;
   overflow-x: hidden;
   background: #05060a;
+  font-family: var(--app-font);
+}
+
+button,
+input,
+textarea,
+select {
+  font-family: var(--app-font);
+}
+
+html[dir="rtl"] body {
+  direction: rtl;
 }
 
 #root {

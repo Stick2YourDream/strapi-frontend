@@ -28,7 +28,7 @@ export default function WhatMakesUsDifferent() {
             aria-label="Go to Your Social Place home"
           >
             <span className="landing-brand-mark" aria-hidden="true">
-              <img src="/logo.png" alt="Your Social Place logo" />
+              <img src="/logo2.png" alt="Your Social Place logo" />
             </span>
             <span className="landing-brand-text">Your Social Place</span>
           </button>

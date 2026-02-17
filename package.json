@@ -12,11 +12,15 @@
     "build:video": "tsc -b && vite build --mode video",
     "build:ssr": "vite build --ssr src/entry-ssg.tsx --outDir dist-ssg",
     "lint": "eslint .",
+    "i18n:extract": "node scripts/i18n-extract.mjs",
+    "i18n:translate": "node scripts/i18n-translate.mjs",
     "prerender": "node scripts/prerender.mjs",
     "preview": "vite preview",
     "start": "npx serve -s dist -l 4173"
   },
   "devDependencies": {
+    "@babel/parser": "^7.27.0",
+    "@babel/traverse": "^7.27.0",
     "@eslint/js": "^9.39.1",
     "@types/node": "^24.10.1",
     "@types/react": "^18.3.27",

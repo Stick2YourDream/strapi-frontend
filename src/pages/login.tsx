@@ -1,5 +1,5 @@
 // src/pages/Login.tsx
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api/strapi";
 import type { AuthResponse, LoginStartResponse } from "../types/auth";
@@ -8,10 +8,14 @@ import axios from "axios";
 import "../css/login.css";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { getOrCreateDeviceId } from "../utils/device-id";
+import { getDefaultDeviceLabel } from "../utils/device-approval";
 import { getStoredExpiresAt, getStoredToken } from "../utils/auth-storage";
+import { pickMediaUrl } from "../utils/media";
 
 const SETTINGS_GLOBAL_KEY = "video-call-settings:global";
 const AUTH_DEBUG_SESSION_KEY = "auth:debug-last-login";
+const RECENT_LOGINS_KEY = "auth:recent-logins";
+const MAX_RECENT_LOGINS = 4;
 
 type AuthDebugSnapshot = {
   at: number;
@@ -42,6 +46,48 @@ const loadBackgroundSettings = (raw: string | null) => {
 };
 
 type VerificationMethod = "sms" | "email" | "totp";
+
+type RecentLoginEntry = {
+  id: number;
+  label: string;
+  identifier: string;
+  avatarUrl?: string | null;
+  lastUsedAt: number;
+};
+
+const loadRecentLogins = () => {
+  if (typeof window === "undefined") return [] as RecentLoginEntry[];
+  const raw = window.localStorage.getItem(RECENT_LOGINS_KEY);
+  if (!raw) return [] as RecentLoginEntry[];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [] as RecentLoginEntry[];
+    return parsed
+      .filter((entry) => entry && typeof entry === "object")
+      .map((entry) => ({
+        id: Number(entry.id),
+        label: String(entry.label || ""),
+        identifier: String(entry.identifier || ""),
+        avatarUrl: entry.avatarUrl ? String(entry.avatarUrl) : null,
+        lastUsedAt: Number(entry.lastUsedAt || 0),
+      }))
+      .filter(
+        (entry) =>
+          Number.isFinite(entry.id) &&
+          entry.id > 0 &&
+          Boolean(entry.identifier.trim())
+      )
+      .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+      .slice(0, MAX_RECENT_LOGINS);
+  } catch {
+    return [] as RecentLoginEntry[];
+  }
+};
+
+const persistRecentLogins = (entries: RecentLoginEntry[]) => {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(RECENT_LOGINS_KEY, JSON.stringify(entries));
+};
 
 const decodeJwtPayload = (token: string) => {
   const parts = token.split(".");
@@ -88,6 +134,12 @@ export default function Login() {
   const [deliveryHint, setDeliveryHint] = useState<string | null>(null);
   const [loginLoading, setLoginLoading] = useState(false);
   const [resending, setResending] = useState(false);
+  const [alternateLoading, setAlternateLoading] = useState(false);
+  const [alternateMethod, setAlternateMethod] = useState<VerificationMethod | null>(null);
+  const [showAlternateOptions, setShowAlternateOptions] = useState(false);
+  const [allowAlternateOnLogin, setAllowAlternateOnLogin] = useState(false);
+  const [showLoginAlternateOptions, setShowLoginAlternateOptions] = useState(false);
+  const [forceSecurityAfterLogin, setForceSecurityAfterLogin] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -102,7 +154,19 @@ export default function Login() {
       return null;
     }
   });
-  const { login } = useAuth();
+  const [trustModalOpen, setTrustModalOpen] = useState(false);
+  const [trustModalLoading, setTrustModalLoading] = useState(false);
+  const [trustModalError, setTrustModalError] = useState<string | null>(null);
+  const [pendingRedirect, setPendingRedirect] = useState<string | null>(null);
+  const [pendingTrustDecision, setPendingTrustDecision] = useState(false);
+  const [recentLogins, setRecentLogins] = useState<RecentLoginEntry[]>(() =>
+    loadRecentLogins()
+  );
+  const [selectedRecentLogin, setSelectedRecentLogin] =
+    useState<RecentLoginEntry | null>(null);
+  const [showAccountSwitch, setShowAccountSwitch] = useState(false);
+  const passwordInputRef = useRef<HTMLInputElement | null>(null);
+  const { login, keyBackupStatus, keyBackupLoading } = useAuth();
   const navigate = useNavigate();
   const appMode = String(import.meta.env.VITE_APP_MODE || "").toLowerCase();
   const isVideoApp = appMode === "video";
@@ -139,12 +203,23 @@ export default function Login() {
     window.addEventListener("storage", handleStorage);
     return () => window.removeEventListener("storage", handleStorage);
   }, []);
-  const postLoginPath = isVideoApp ? "/call" : "/dashboard";
+  const defaultPostLoginPath = isVideoApp ? "/call" : "/dashboard";
+  const securityPostLoginPath = "/me?view=settings&section=security";
+  const postLoginPath = forceSecurityAfterLogin
+    ? securityPostLoginPath
+    : defaultPostLoginPath;
   const isVerificationStep = Boolean(challengeId);
+  const hasRecentLogins = recentLogins.length > 0 && !isVerificationStep;
+  const primaryRecentLogin = hasRecentLogins ? recentLogins[0] : null;
+  const showRecentOnly = Boolean(primaryRecentLogin);
+  const showRecentPassword = Boolean(selectedRecentLogin) && !showAccountSwitch;
+  const showFullLoginForm =
+    !showRecentOnly || isVerificationStep || showAccountSwitch;
   const [backgroundSettings, setBackgroundSettings] = useState(() => {
     if (typeof window === "undefined") return { backgroundImage: "", backgroundColor: "" };
     return loadBackgroundSettings(localStorage.getItem(SETTINGS_GLOBAL_KEY));
   });
+  const trustDeviceLabel = useMemo(() => getDefaultDeviceLabel(), []);
 
   const saveLoginDebug = (jwt: string, remember: boolean) => {
     if (typeof window === "undefined") return;
@@ -234,6 +309,96 @@ export default function Login() {
     return lines.join("\n");
   }, [appMode, lastLoginDebug, rememberDevice]);
 
+  const updateRecentLogins = async (
+    user: AuthResponse["user"],
+    identifierUsed?: string
+  ) => {
+    if (!user?.id) return;
+    const safeIdentifier =
+      identifierUsed?.trim().toLowerCase() || user.email || "";
+    const emailFallback = user.email ? user.email.split("@")[0] : "";
+    let label = safeIdentifier || emailFallback || `User ${user.id}`;
+    let avatarUrl: string | null = null;
+
+    try {
+      const profileRes = await api.get(
+        `/profiles?filters[user][id][$eq]=${user.id}&populate=avatar`
+      );
+      const entry = profileRes.data?.data?.[0];
+      const attrs = entry?.attributes ?? entry ?? {};
+      const firstName = String(attrs.firstName || attrs.firstname || "").trim();
+      const lastName = String(attrs.lastName || attrs.lastname || "").trim();
+      const handle = String(attrs.handle || "").trim();
+      const fullName = `${firstName} ${lastName}`.trim();
+      label = fullName || handle || emailFallback || label;
+      const avatarField = attrs.avatar ?? entry?.avatar;
+      const resolvedAvatar = pickMediaUrl(avatarField, { kind: "avatar" });
+      avatarUrl = resolvedAvatar || null;
+    } catch {
+      // ignore profile lookup failures
+    }
+
+    const nextEntry: RecentLoginEntry = {
+      id: user.id,
+      label,
+      identifier: safeIdentifier || user.email || "",
+      avatarUrl,
+      lastUsedAt: Date.now(),
+    };
+
+    setRecentLogins((prev) => {
+      const merged = [
+        nextEntry,
+        ...prev.filter(
+          (entry) =>
+            entry.id !== nextEntry.id &&
+            entry.identifier.toLowerCase() !== nextEntry.identifier.toLowerCase()
+        ),
+      ];
+      const trimmed = merged
+        .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+        .slice(0, MAX_RECENT_LOGINS);
+      persistRecentLogins(trimmed);
+      return trimmed;
+    });
+  };
+
+  const handleRecentLoginSelect = (entry: RecentLoginEntry) => {
+    if (!entry) return;
+    resetVerificationState();
+    setIdentifier(entry.identifier);
+    setPassword("");
+    setSelectedRecentLogin(entry);
+    setShowAccountSwitch(false);
+    setError(null);
+    setInfo(null);
+    setDebugDetails(null);
+    requestAnimationFrame(() => {
+      passwordInputRef.current?.focus();
+    });
+  };
+
+  const handleSwitchAccount = () => {
+    resetVerificationState();
+    setSelectedRecentLogin(null);
+    setIdentifier("");
+    setPassword("");
+    setShowAccountSwitch(true);
+    setError(null);
+    setInfo(null);
+    setDebugDetails(null);
+  };
+
+  const initialsForLogin = (value: string) => {
+    const cleaned = String(value || "").trim();
+    if (!cleaned) return "U";
+    const parts = cleaned.split(/\s+/).filter(Boolean);
+    if (parts.length === 1) {
+      return parts[0].slice(0, 1).toUpperCase();
+    }
+    return `${parts[0][0] || ""}${parts[1][0] || ""}`.toUpperCase();
+  };
+
   const buildDebugDetails = (err: unknown) => {
     if (!axios.isAxiosError(err)) {
       return String(err || "Unknown error");
@@ -284,6 +449,188 @@ export default function Login() {
     setDeliveryHint(null);
     setResending(false);
     setVerifying(false);
+    setAlternateLoading(false);
+    setAlternateMethod(null);
+    setShowAlternateOptions(false);
+    setAllowAlternateOnLogin(false);
+    setShowLoginAlternateOptions(false);
+  };
+
+  const completeLogin = (
+    data: { jwt: string; user: AuthResponse["user"]; trustedDevice?: boolean },
+    identifierUsed?: string
+  ) => {
+    saveLoginDebug(data.jwt, rememberDevice);
+    login(data.user, data.jwt, { rememberDevice });
+    void updateRecentLogins(data.user, identifierUsed);
+    if (data.trustedDevice) {
+      setPendingTrustDecision(false);
+      navigate(postLoginPath);
+      return;
+    }
+    setPendingRedirect(postLoginPath);
+    setTrustModalError(null);
+    setPendingTrustDecision(true);
+  };
+
+  useEffect(() => {
+    if (!pendingTrustDecision) return;
+    if (keyBackupLoading || keyBackupStatus === "unknown") return;
+    setPendingTrustDecision(false);
+    if (keyBackupStatus === "needs-restore") {
+      setTrustModalOpen(false);
+      setPendingRedirect(null);
+      navigate(pendingRedirect || postLoginPath);
+      return;
+    }
+    setTrustModalOpen(true);
+  }, [
+    keyBackupLoading,
+    keyBackupStatus,
+    navigate,
+    pendingRedirect,
+    pendingTrustDecision,
+    postLoginPath,
+  ]);
+
+  const handleTrustDevice = async () => {
+    if (trustModalLoading) return;
+    setTrustModalLoading(true);
+    setTrustModalError(null);
+    try {
+      const deviceId = getOrCreateDeviceId();
+      await api.post("/auth/trusted-devices/trust", {
+        deviceId,
+        deviceLabel: trustDeviceLabel,
+      });
+      setTrustModalOpen(false);
+      setPendingRedirect(null);
+      navigate(pendingRedirect || postLoginPath);
+    } catch (err: unknown) {
+      const msg = axios.isAxiosError(err)
+        ? err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to trust this device."
+        : "Unable to trust this device.";
+      setTrustModalError(String(msg));
+    } finally {
+      setTrustModalLoading(false);
+    }
+  };
+
+  const handleAlwaysConfirm = () => {
+    setTrustModalOpen(false);
+    setPendingRedirect(null);
+    setTrustModalError(null);
+    navigate(pendingRedirect || postLoginPath);
+  };
+
+  const applyLoginStartResponse = (
+    data: LoginStartResponse,
+    normalizedIdentifier: string
+  ) => {
+    if ("requiresEmailConfirmation" in data && data.requiresEmailConfirmation) {
+      sessionStorage.setItem("emailConfirmationId", data.confirmationId);
+      if (normalizedIdentifier.includes("@")) {
+        sessionStorage.setItem("emailConfirmationEmail", normalizedIdentifier);
+      } else {
+        sessionStorage.removeItem("emailConfirmationEmail");
+      }
+      navigate("/verify-email");
+      return true;
+    }
+
+    if ("requiresVerification" in data && data.requiresVerification) {
+      setChallengeId(data.challengeId);
+      setChallengeMethod(data.method);
+      setDeliveryHint(data.deliveryHint ?? null);
+      setVerificationCode("");
+      setShowAlternateOptions(false);
+      setAllowAlternateOnLogin(false);
+      setShowLoginAlternateOptions(false);
+      if (data.totpInvalid) {
+        setForceSecurityAfterLogin(true);
+      }
+      if (data.method === "totp") {
+        setInfo("Enter the code from your authenticator app.");
+      } else {
+        const baseMessage = data.deliveryHint
+          ? `We sent a code to ${data.deliveryHint}.`
+          : "We sent a verification code.";
+        setInfo(
+          data.totpInvalid
+            ? `${baseMessage} Your authenticator needs to be reset after login.`
+            : baseMessage
+        );
+      }
+      return true;
+    }
+
+    if ("jwt" in data && data.jwt) {
+      completeLogin(data, normalizedIdentifier);
+      return true;
+    }
+
+    return false;
+  };
+
+  const handleLoginError = (err: unknown) => {
+    if (!axios.isAxiosError(err)) {
+      setError("Login failed");
+      setDebugDetails(buildDebugDetails(err));
+      return;
+    }
+
+    const status = err.response?.status;
+    const data: any = err.response?.data;
+    const msg: string = data?.error?.message || data?.message || "Login failed";
+    const msgLower = msg.toLowerCase();
+
+    if (msgLower.includes("not confirmed") || msgLower.includes("confirm your email")) {
+      setError("Please confirm your email before logging in.");
+      setInfo("Check your inbox (and spam), then try again.");
+      setDebugDetails(buildDebugDetails(err));
+      return;
+    }
+
+    if (msgLower.includes("invalid identifier") || msgLower.includes("invalid password")) {
+      setError("Invalid email, phone number, or password.");
+      setDebugDetails(buildDebugDetails(err));
+      return;
+    }
+
+    if (msgLower.includes("phone number required")) {
+      setError(
+        "Phone number required for SMS verification. Update your login phone number in profile settings."
+      );
+      setDebugDetails(buildDebugDetails(err));
+      return;
+    }
+
+    if (msgLower.includes("authenticator app is not configured")) {
+      setError("We couldn’t use your authenticator app. Try another way.");
+      setInfo("Send a one-time code to your email or phone.");
+      setAllowAlternateOnLogin(true);
+      setShowLoginAlternateOptions(true);
+      setForceSecurityAfterLogin(true);
+      setDebugDetails(buildDebugDetails(err));
+      return;
+    }
+
+    if (status === 401) {
+      setError("Unauthorized. Please try again.");
+      setDebugDetails(buildDebugDetails(err));
+      return;
+    }
+
+    if (status === 403) {
+      setError("Access denied. Your account may be blocked.");
+      setDebugDetails(buildDebugDetails(err));
+      return;
+    }
+
+    setError(msg);
+    setDebugDetails(buildDebugDetails(err));
   };
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -292,6 +639,7 @@ export default function Login() {
     setInfo(null);
     setDebugDetails(null);
     resetVerificationState();
+    setForceSecurityAfterLogin(false);
 
     try {
       setLoginLoading(true);
@@ -305,92 +653,47 @@ export default function Login() {
         deviceId,
       });
 
-      if ("requiresEmailConfirmation" in res.data && res.data.requiresEmailConfirmation) {
-        sessionStorage.setItem("emailConfirmationId", res.data.confirmationId);
-        if (normalizedIdentifier.includes("@")) {
-          sessionStorage.setItem("emailConfirmationEmail", normalizedIdentifier);
-        } else {
-          sessionStorage.removeItem("emailConfirmationEmail");
-        }
-        navigate("/verify-email");
-        return;
+      if (!applyLoginStartResponse(res.data, normalizedIdentifier)) {
+        setError("Login failed. Please try again.");
       }
-
-      if ("requiresVerification" in res.data && res.data.requiresVerification) {
-        setChallengeId(res.data.challengeId);
-        setChallengeMethod(res.data.method);
-        setDeliveryHint(res.data.deliveryHint ?? null);
-        if (res.data.method === "totp") {
-          setInfo("Enter the code from your authenticator app.");
-        } else {
-          setInfo(
-            res.data.deliveryHint
-              ? `We sent a code to ${res.data.deliveryHint}.`
-              : "We sent a verification code."
-          );
-        }
-        return;
-      }
-
-      if ("jwt" in res.data && res.data.jwt) {
-        saveLoginDebug(res.data.jwt, rememberDevice);
-        login(res.data.user, res.data.jwt, { rememberDevice });
-        navigate(postLoginPath);
-        return;
-      }
-
-      setError("Login failed. Please try again.");
     } catch (err: unknown) {
-      if (!axios.isAxiosError(err)) {
-        setError("Login failed");
-        setDebugDetails(buildDebugDetails(err));
-        return;
-      }
-
-      const status = err.response?.status;
-      const data: any = err.response?.data;
-      const msg: string =
-        data?.error?.message || data?.message || "Login failed";
-
-      const msgLower = msg.toLowerCase();
-
-      if (msgLower.includes("not confirmed") || msgLower.includes("confirm your email")) {
-        setError("Please confirm your email before logging in.");
-        setInfo("Check your inbox (and spam), then try again.");
-        setDebugDetails(buildDebugDetails(err));
-        return;
-      }
-
-      if (msgLower.includes("invalid identifier") || msgLower.includes("invalid password")) {
-        setError("Invalid email, phone number, or password.");
-        setDebugDetails(buildDebugDetails(err));
-        return;
-      }
-
-      if (msgLower.includes("phone number required")) {
-        setError(
-          "Phone number required for SMS verification. Update your login phone number in profile settings."
-        );
-        setDebugDetails(buildDebugDetails(err));
-        return;
-      }
-
-      if (status === 401) {
-        setError("Unauthorized. Please try again.");
-        setDebugDetails(buildDebugDetails(err));
-        return;
-      }
-
-      if (status === 403) {
-        setError("Access denied. Your account may be blocked.");
-        setDebugDetails(buildDebugDetails(err));
-        return;
-      }
-
-      setError(msg);
-      setDebugDetails(buildDebugDetails(err));
+      handleLoginError(err);
     } finally {
       setLoginLoading(false);
+    }
+  };
+
+  const handleTryAnotherWay = async (method: "email" | "sms") => {
+    if (alternateLoading || loginLoading || verifying) return;
+    setError(null);
+    setInfo(null);
+    setDebugDetails(null);
+
+    if (!identifier.trim() || !password.trim()) {
+      setError("Enter your password to try another method.");
+      return;
+    }
+
+    try {
+      setAlternateLoading(true);
+      setAlternateMethod(method);
+      const deviceId = getOrCreateDeviceId();
+      const normalizedIdentifier = identifier.trim().toLowerCase();
+      const res = await api.post<LoginStartResponse>("/auth/login", {
+        identifier: normalizedIdentifier,
+        password,
+        rememberDevice,
+        deviceId,
+        verificationMethod: method,
+      });
+      if (!applyLoginStartResponse(res.data, normalizedIdentifier)) {
+        setError("Login failed. Please try again.");
+      }
+    } catch (err: unknown) {
+      handleLoginError(err);
+    } finally {
+      setAlternateLoading(false);
+      setAlternateMethod(null);
     }
   };
 
@@ -422,9 +725,8 @@ export default function Login() {
         return;
       }
 
-      saveLoginDebug(res.data.jwt, rememberDevice);
-      login(res.data.user, res.data.jwt, { rememberDevice });
-      navigate(postLoginPath);
+      const normalizedIdentifier = identifier.trim().toLowerCase();
+      completeLogin(res.data, normalizedIdentifier);
     } catch (err: unknown) {
       if (!axios.isAxiosError(err)) {
         setError("Verification failed");
@@ -497,27 +799,119 @@ export default function Login() {
   };
 
   return (
-    <div className={`auth-shell${isDesktopShell ? " is-desktop-shell" : ""}`} style={authShellStyle}>
-      <div className="auth-hero">
-        <button
-          type="button"
-          className="auth-brand"
-          onClick={() => navigate("/")}
-        >
-          <span className="auth-brand-mark" aria-hidden="true">
-            <img src="/logo2.png" alt="" />
-          </span>
-          <span className="auth-brand-text">
-            {isVideoApp ? brandName : "Your Social Place"}
-          </span>
-        </button>
-        <h1 className="subhead-top">Welcome back!</h1>
-        <p className="subhead">
-          Sign in to Your Social Place and start making a difference.
-        </p>
-      </div>
+    <div
+      className={`auth-shell${isDesktopShell ? " is-desktop-shell" : ""}`}
+      style={authShellStyle}
+    >
+      <div
+        className={`auth-layout${hasRecentLogins ? " is-recent-only" : " is-form-only"}`}
+      >
+        <div className={`auth-left${showRecentOnly || showFullLoginForm ? " is-centered" : ""}`}>
+          <div className="auth-hero">
+            <button
+              type="button"
+              className="auth-brand"
+              onClick={() => navigate("/")}
+            >
+              <span className="auth-brand-mark" aria-hidden="true">
+                <img src="/logo2.png" alt="" />
+              </span>
+              <span className="auth-brand-text">
+                {isVideoApp ? brandName : "Your Social Place"}
+              </span>
+            </button>
+            <h1 className="subhead-top">Welcome back!</h1>
+            <p className="subhead">
+              Sign in to Your Social Place and start making a difference.
+            </p>
+          </div>
 
-      <form onSubmit={isVerificationStep ? handleVerify : handleLogin} className="auth-card">
+          {showRecentOnly && primaryRecentLogin && (
+            <section className="auth-recent auth-recent--single" aria-label="Recent logins">
+              <div className="auth-recent-header">
+                <h2>Recent Logins</h2>
+                <p>Click your picture to continue.</p>
+              </div>
+              <button
+                type="button"
+                className="auth-recent-card auth-recent-card--single"
+                onClick={() => handleRecentLoginSelect(primaryRecentLogin)}
+              >
+                <div className="auth-recent-avatar auth-recent-avatar--large">
+                  {primaryRecentLogin.avatarUrl ? (
+                    <img src={primaryRecentLogin.avatarUrl} alt={primaryRecentLogin.label} />
+                  ) : (
+                    <span>{initialsForLogin(primaryRecentLogin.label)}</span>
+                  )}
+                </div>
+                <span className="auth-recent-name">{primaryRecentLogin.label}</span>
+              </button>
+              {showRecentPassword && (
+                <form
+                  onSubmit={handleLogin}
+                  className="auth-card auth-card--recent"
+                >
+                  <div className="field">
+                    <label>Password</label>
+                    <input
+                      className="auth-input"
+                      type="password"
+                      placeholder="Password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required
+                      autoComplete="current-password"
+                      ref={passwordInputRef}
+                    />
+                  </div>
+                  {error && <p className="auth-message error">{error}</p>}
+                  {info && <p className="auth-message info">{info}</p>}
+                  {showDebug && debugDetails && (
+                    <details className="auth-debug">
+                      <summary>Show error details</summary>
+                      <pre>{debugDetails}</pre>
+                    </details>
+                  )}
+                  {showDebug && (
+                    <details className="auth-debug">
+                      <summary>Auth debug</summary>
+                      <pre>{authDebugText}</pre>
+                    </details>
+                  )}
+                  <div className="auth-actions">
+                    <button
+                      type="submit"
+                      className="btn primary"
+                      disabled={loginLoading}
+                    >
+                      {loginLoading ? "Logging in..." : "Login"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn ghost"
+                      onClick={() => navigate("/forgot-password")}
+                    >
+                      Forgot password?
+                    </button>
+                  </div>
+                </form>
+              )}
+              <button
+                type="button"
+                className="auth-recent-switch"
+                onClick={handleSwitchAccount}
+              >
+                Use another account
+              </button>
+            </section>
+          )}
+        </div>
+
+        {showFullLoginForm && (
+          <form
+            onSubmit={isVerificationStep ? handleVerify : handleLogin}
+            className="auth-card"
+          >
         {!isVerificationStep ? (
           <>
             <div className="field">
@@ -543,12 +937,52 @@ export default function Login() {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 autoComplete="current-password"
+                ref={passwordInputRef}
               />
             </div>
 
             <p className="auth-hint">
               If you have 2FA enabled, you will need to enter the code from your authenticator app.
             </p>
+
+            {allowAlternateOnLogin && (
+              <>
+                <div className="sms-actions">
+                  <button
+                    type="button"
+                    className="btn ghost"
+                    onClick={() => setShowLoginAlternateOptions((prev) => !prev)}
+                    disabled={alternateLoading || loginLoading || verifying}
+                  >
+                    Try another way
+                  </button>
+                </div>
+                {showLoginAlternateOptions && (
+                  <div className="sms-actions">
+                    <button
+                      type="button"
+                      className="btn ghost"
+                      onClick={() => void handleTryAnotherWay("email")}
+                      disabled={alternateLoading || loginLoading || verifying}
+                    >
+                      {alternateLoading && alternateMethod === "email"
+                        ? "Sending..."
+                        : "Send code to email"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn ghost"
+                      onClick={() => void handleTryAnotherWay("sms")}
+                      disabled={alternateLoading || loginLoading || verifying}
+                    >
+                      {alternateLoading && alternateMethod === "sms"
+                        ? "Sending..."
+                        : "Send code to phone"}
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
 
           </>
         ) : (
@@ -581,10 +1015,52 @@ export default function Login() {
                   {resending ? "Resending..." : "Resend code"}
                 </button>
               )}
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={() => setShowAlternateOptions((prev) => !prev)}
+                disabled={alternateLoading || loginLoading || verifying}
+              >
+                Try another way
+              </button>
               <button type="button" className="btn ghost" onClick={handleBack}>
                 Back to login
               </button>
             </div>
+            {showAlternateOptions && (
+              <div className="sms-actions">
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={() => void handleTryAnotherWay("email")}
+                  disabled={
+                    alternateLoading ||
+                    loginLoading ||
+                    verifying ||
+                    challengeMethod === "email"
+                  }
+                >
+                  {alternateLoading && alternateMethod === "email"
+                    ? "Sending..."
+                    : "Send code to email"}
+                </button>
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={() => void handleTryAnotherWay("sms")}
+                  disabled={
+                    alternateLoading ||
+                    loginLoading ||
+                    verifying ||
+                    challengeMethod === "sms"
+                  }
+                >
+                  {alternateLoading && alternateMethod === "sms"
+                    ? "Sending..."
+                    : "Send code to phone"}
+                </button>
+              </div>
+            )}
           </>
         )}
 
@@ -647,7 +1123,79 @@ export default function Login() {
             </>
           )}
         </div>
-      </form>
+          </form>
+        )}
+      </div>
+
+      {trustModalOpen && (
+        <div
+          className="auth-trust-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="trust-device-title"
+          aria-describedby="trust-device-desc"
+        >
+          <div className="auth-trust-modal">
+            <div className="auth-trust-hero">
+              <div className="auth-trust-art" aria-hidden="true">
+                <svg viewBox="0 0 140 140" role="img" aria-label="">
+                  <rect x="46" y="16" width="54" height="96" rx="12" fill="#0b0f1c" />
+                  <rect
+                    x="52"
+                    y="24"
+                    width="42"
+                    height="72"
+                    rx="8"
+                    fill="#1d2a4a"
+                  />
+                  <rect x="60" y="102" width="26" height="6" rx="3" fill="#2b3a60" />
+                  <path
+                    d="M24 82c0-10 8-18 18-18h18c8 0 14 6 14 14v30c0 8-6 14-14 14H42c-10 0-18-8-18-18V82Z"
+                    fill="#f2d6c7"
+                  />
+                  <path
+                    d="M56 64c0-6 5-10 10-10h12c6 0 10 4 10 10v20c0 6-4 10-10 10H66c-6 0-10-4-10-10V64Z"
+                    fill="#e9c3b1"
+                  />
+                  <path
+                    d="M36 70c-5 0-9 4-9 9v18c0 5 4 9 9 9h18"
+                    stroke="#d9b09e"
+                    strokeWidth="4"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </div>
+              <div>
+                <h2 id="trust-device-title">You're logged in</h2>
+                <p id="trust-device-desc">Do you want to trust this device?</p>
+              </div>
+            </div>
+            <div className="auth-trust-device">
+              <span className="auth-trust-label">Trusted device name</span>
+              <strong>{trustDeviceLabel}</strong>
+            </div>
+            {trustModalError && <p className="auth-message error">{trustModalError}</p>}
+            <div className="auth-trust-actions">
+              <button
+                type="button"
+                className="btn primary"
+                onClick={handleTrustDevice}
+                disabled={trustModalLoading}
+              >
+                {trustModalLoading ? "Trusting..." : "Trust this device"}
+              </button>
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={handleAlwaysConfirm}
+                disabled={trustModalLoading}
+              >
+                Always confirm it's me
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

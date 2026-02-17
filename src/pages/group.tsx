@@ -9,6 +9,7 @@ import TopbarSearch from "../components/TopbarSearch";
 import { useAuth } from "../context/AuthContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";
 import { usePageMeta } from "../hooks/usePageMeta";
+import LinkPreviewCard from "../components/LinkPreviewCard";
 import { sanitizePostText } from "../utils/emoji";
 import { formatPostUpdateLabel } from "../utils/time";
 import { pickMediaUrl, pickMediaUrls } from "../utils/media";
@@ -163,75 +164,6 @@ const extractFirstUrl = (text: string) => {
   if (url.startsWith("www.")) url = `https://${url}`;
   return url;
 };
-const hostnameFor = (value: string) => {
-  try {
-    return new URL(value).hostname.replace(/^www\./, "");
-  } catch {
-    return value;
-  }
-};
-const faviconFor = (value: string) => {
-  try {
-    const host = new URL(value).hostname.replace(/^www\./, "");
-    return `https://www.google.com/s2/favicons?domain=${host}&sz=128`;
-  } catch {
-    return "";
-  }
-};
-const isYoutubeUrl = (value: string) => {
-  try {
-    const host = new URL(value).hostname.toLowerCase();
-    return host.includes("youtube.com") || host === "youtu.be";
-  } catch {
-    return false;
-  }
-};
-
-const LinkPreviewCard = ({
-  preview,
-  url,
-  compact = false,
-}: {
-  preview: LinkPreview;
-  url: string;
-  compact?: boolean;
-}) => {
-  const title = preview.title || preview.siteName || hostnameFor(url);
-  const meta = preview.siteName || hostnameFor(url);
-  const showBadge = preview.type === "video" || isYoutubeUrl(url);
-  const fallbackImage = preview.image || faviconFor(url);
-  const hasImage = Boolean(fallbackImage);
-  return (
-    <a
-      className={`link-preview-card${compact ? " is-compact" : ""}`}
-      href={url}
-      target="_blank"
-      rel="noreferrer"
-    >
-      <div className="link-preview-media">
-        {hasImage ? (
-          <img
-            src={fallbackImage}
-            alt={title}
-            loading="lazy"
-            decoding="async"
-            className={preview.image ? "" : "is-favicon"}
-          />
-        ) : (
-          <div className="link-preview-placeholder">LINK</div>
-        )}
-        {showBadge && <span className="link-preview-badge">Video</span>}
-      </div>
-      <div className="link-preview-body">
-        <p className="link-preview-title">{title}</p>
-        {preview.description && (
-          <p className="link-preview-desc">{preview.description}</p>
-        )}
-        <span className="link-preview-url">{meta}</span>
-      </div>
-    </a>
-  );
-};
 
 export default function GroupDetail() {
   const { groupId } = useParams();
@@ -254,6 +186,11 @@ export default function GroupDetail() {
   const [editingComments, setEditingComments] = useState<Record<string, boolean>>({});
   const [openCommentsFor, setOpenCommentsFor] = useState<Record<string, boolean>>({});
   const [shareMenuFor, setShareMenuFor] = useState<string | null>(null);
+  const [postMenuFor, setPostMenuFor] = useState<string | null>(null);
+  const [editingPostId, setEditingPostId] = useState<string | null>(null);
+  const [editPostTitle, setEditPostTitle] = useState("");
+  const [editPostBody, setEditPostBody] = useState("");
+  const [postEditing, setPostEditing] = useState<Record<string, boolean>>({});
   const [shareNotice, setShareNotice] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -784,18 +721,33 @@ export default function GroupDetail() {
   const toggleComments = useCallback((postKey: string) => {
     setOpenCommentsFor((prev) => ({ ...prev, [postKey]: !prev[postKey] }));
     setShareMenuFor(null);
+    setPostMenuFor(null);
   }, []);
 
   const toggleShareMenu = useCallback((postKey: string) => {
     setShareMenuFor((prev) => (prev === postKey ? null : postKey));
+    setPostMenuFor(null);
+  }, []);
+
+  const togglePostMenu = useCallback((postKey: string) => {
+    setPostMenuFor((prev) => (prev === postKey ? null : postKey));
+    setShareMenuFor(null);
+  }, []);
+
+  const cancelEditPost = useCallback(() => {
+    setEditingPostId(null);
+    setEditPostTitle("");
+    setEditPostBody("");
   }, []);
 
   useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null;
       if (!target) return;
-      if (target.closest(".post-action-group")) return;
+      if (target.closest(".post-action-group") || target.closest(".post-menu-wrapper"))
+        return;
       setShareMenuFor(null);
+      setPostMenuFor(null);
     };
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
@@ -898,6 +850,83 @@ export default function GroupDetail() {
       setError("Unable to delete post.");
     }
   };
+
+  const saveGroupPost = useCallback(
+    async (post: GroupPost) => {
+      if (!user) {
+        setError("Please log in to edit posts.");
+        return;
+      }
+      if (post.ownerId !== user.id) {
+        setError("You can only edit your own posts.");
+        return;
+      }
+
+      const postKey = String(post.id);
+      const nextTitle = editPostTitle.trim();
+      const nextBody = sanitizePostText(editPostBody).trim();
+      if (!nextTitle && !nextBody) {
+        setError("Add a title or message to update your post.");
+        return;
+      }
+      if ((post.title || "") === nextTitle && (post.body || "") === nextBody) {
+        cancelEditPost();
+        return;
+      }
+
+      setPostEditing((prev) => ({ ...prev, [postKey]: true }));
+      setError(null);
+      try {
+        const attempts: string[] = [];
+        const idNumber = typeof post.id === "number" ? post.id : Number(post.id);
+        if (Number.isFinite(idNumber)) attempts.push(`/group-posts/${idNumber}`);
+        if (post.id) attempts.push(`/group-posts/${post.id}`);
+        const uniqueAttempts = Array.from(new Set(attempts));
+
+        let updated = false;
+        for (const path of uniqueAttempts) {
+          try {
+            await api.put(path, {
+              data: {
+                title: nextTitle || null,
+                body: nextBody || null,
+              },
+            });
+            updated = true;
+            break;
+          } catch (err: unknown) {
+            if (axios.isAxiosError(err) && err.response?.status === 404) {
+              continue;
+            }
+            throw err;
+          }
+        }
+
+        if (!updated) {
+          setError("Unable to update post.");
+          return;
+        }
+
+        setPosts((prev) =>
+          prev.map((entry) =>
+            String(entry.id) === postKey
+              ? {
+                  ...entry,
+                  title: nextTitle || undefined,
+                  body: nextBody || undefined,
+                }
+              : entry
+          )
+        );
+        cancelEditPost();
+      } catch {
+        setError("Unable to update post.");
+      } finally {
+        setPostEditing((prev) => ({ ...prev, [postKey]: false }));
+      }
+    },
+    [cancelEditPost, editPostBody, editPostTitle, user]
+  );
 
   const handleRoleChange = async (
     memberId: number | string,
@@ -1257,6 +1286,7 @@ export default function GroupDetail() {
                     const comments = postComments[commentKey] ?? [];
                     const isCommentsOpen = Boolean(openCommentsFor[commentKey]);
                     const showShareMenu = shareMenuFor === postKey;
+                    const showPostMenu = postMenuFor === postKey;
                     const authorLabel = post.ownerName || "Member";
                     const shareUrl = buildShareUrl(postKey);
                     const shareText = post.title
@@ -1274,6 +1304,10 @@ export default function GroupDetail() {
                     const myReaction = normalizeReactionValue(post.myReaction);
                     const sharesCount = Number(post.shares ?? 0);
                     const commentsCount = comments.length;
+                    const canEditPost = post.ownerId === user?.id;
+                    const canDeletePost = isAdmin || post.ownerId === user?.id;
+                    const isEditingPost = editingPostId === postKey;
+                    const isSavingPost = Boolean(postEditing[postKey]);
                     return (
                       <div key={post.id} id={`post-${postKey}`} className="group-post-card">
                         <div className="group-post-header">
@@ -1283,18 +1317,104 @@ export default function GroupDetail() {
                               {formatPostUpdateLabel(post.createdAt)}
                             </span>
                           </div>
-                          {(isAdmin || post.ownerId === user?.id) && (
-                            <button
-                              className="btn ghost"
-                              type="button"
-                              onClick={() => handleRemovePost(post.id)}
-                            >
-                              Delete
-                            </button>
-                          )}
                         </div>
-                        {post.title && <h4>{post.title}</h4>}
-                        {post.body && <p>{post.body}</p>}
+                        {canDeletePost && !isEditingPost && (
+                          <div className="post-menu-wrapper">
+                            <button
+                              className="post-menu-trigger"
+                              type="button"
+                              aria-haspopup="menu"
+                              aria-expanded={showPostMenu}
+                              aria-label="Open post options"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                togglePostMenu(postKey);
+                              }}
+                            >
+                              <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <circle cx="5" cy="12" r="2" />
+                                <circle cx="12" cy="12" r="2" />
+                                <circle cx="19" cy="12" r="2" />
+                              </svg>
+                            </button>
+                            {showPostMenu && (
+                              <div className="post-menu" role="menu">
+                                {canEditPost && (
+                                  <button
+                                    className="post-menu-item"
+                                    type="button"
+                                    role="menuitem"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setEditingPostId(postKey);
+                                      setEditPostTitle(post.title || "");
+                                      setEditPostBody(post.body || "");
+                                      setPostMenuFor(null);
+                                      setShareMenuFor(null);
+                                      setError(null);
+                                    }}
+                                  >
+                                    Edit
+                                  </button>
+                                )}
+                                <button
+                                  className="post-menu-item is-danger"
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setPostMenuFor(null);
+                                    handleRemovePost(post.id);
+                                  }}
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {isEditingPost ? (
+                          <div className="post-edit">
+                            <input
+                              className="auth-input post-edit-title"
+                              value={editPostTitle}
+                              onChange={(event) => setEditPostTitle(event.target.value)}
+                              placeholder="Post title"
+                            />
+                            <textarea
+                              className="auth-input post-edit-body"
+                              rows={4}
+                              value={editPostBody}
+                              onChange={(event) =>
+                                setEditPostBody(sanitizePostText(event.target.value))
+                              }
+                              placeholder="Update your post"
+                            />
+                            <div className="post-edit-actions">
+                              <button
+                                className="btn ghost"
+                                type="button"
+                                onClick={cancelEditPost}
+                                disabled={isSavingPost}
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                className="btn primary"
+                                type="button"
+                                onClick={() => void saveGroupPost(post)}
+                                disabled={isSavingPost}
+                              >
+                                {isSavingPost ? "Saving..." : "Save changes"}
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            {post.title && <h4>{post.title}</h4>}
+                            {post.body && <p>{post.body}</p>}
+                          </>
+                        )}
                         {previewData && (
                           <LinkPreviewCard
                             preview={previewData}

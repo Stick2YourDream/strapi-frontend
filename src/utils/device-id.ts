@@ -1,4 +1,5 @@
 const DEVICE_ID_KEY = "trustedDeviceId";
+let cachedDeviceId: string | null = null;
 
 const createDeviceId = () => {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -8,8 +9,11 @@ const createDeviceId = () => {
 };
 
 export const getOrCreateDeviceId = () => {
+  if (cachedDeviceId) return cachedDeviceId;
   if (typeof window === "undefined") {
-    return createDeviceId();
+    const created = createDeviceId();
+    cachedDeviceId = created;
+    return created;
   }
   const readFrom = (storage: Storage | null | undefined) => {
     if (!storage) return "";
@@ -34,10 +38,12 @@ export const getOrCreateDeviceId = () => {
     // Keep both storages in sync when possible.
     writeTo(window.localStorage, existing);
     writeTo(window.sessionStorage, existing);
+    cachedDeviceId = existing;
     return existing;
   }
   const created = createDeviceId();
   writeTo(window.localStorage, created);
   writeTo(window.sessionStorage, created);
+  cachedDeviceId = created;
   return created;
 };

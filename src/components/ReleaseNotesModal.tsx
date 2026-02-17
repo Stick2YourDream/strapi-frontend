@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import "../css/release-notes.css";
 
-const RELEASE_NOTES_VERSION = "2026.02.14";
+const RELEASE_NOTES_VERSION = "2026.02.16";
 const STORAGE_KEY = "releaseNotesDismissedVersion";
 const SESSION_PREFIX = "releaseNotesClosed:";
 
@@ -11,8 +11,13 @@ const RELEASE_NOTES = [
   "Update Video Calling Application for Mobile and UI Improvements",
   "Improved performance of video calls and messaging",
   "Added AI Image Generation to Video Calling",
-  "Storefront COMING SOON!!!",
+  "Updated My Friends Page with new designs and features",
   "Added End to End Encryption for Video Calls and Messasging",
+  "Added Ability to Delete and Edit Posts directly from My Dashboard Page",
+  "Added Trust New Device Functionality",
+  "Updated My Profile Look and Feel",
+  "Updated Forums Look and Feel",
+  "Added Translation Support",
 ];
 
 export default function ReleaseNotesModal() {

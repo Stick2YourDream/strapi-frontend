@@ -19,7 +19,7 @@ export default function Guidelines() {
         <header className="terms-header">
           <button className="terms-brand" type="button" onClick={() => navigate("/")}>
             <span className="terms-mark" aria-hidden="true">
-              <img src="/logo.png" alt="" />
+              <img src="/logo2.png" alt="" />
             </span>
             <span className="terms-text">Your Social Place</span>
           </button>

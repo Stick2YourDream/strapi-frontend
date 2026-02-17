@@ -12,6 +12,8 @@ import ProtectedRoute from "../components/ProtectedRoute";
 import Friends from "../pages/friends";
 import FriendProfile from "../pages/friend-profile";
 import Me from "../pages/me";
+import MyPosts from "../pages/my-posts";
+import MyGallery from "../pages/my-gallery";
 import Groups from "../pages/groups";
 import GroupDetail from "../pages/group";
 import Landing from "../pages/landing";
@@ -72,6 +74,7 @@ export default function AppRoutes(): JSX.Element {
       <Route path="/apps" element={<Apps />} />
       <Route path="/downloads" element={<Downloads />} />
       <Route path="/forums" element={<Forums />} />
+      <Route path="/forums/:postId" element={<Forums />} />
       <Route
         path="/storefront"
         element={
@@ -144,6 +147,22 @@ export default function AppRoutes(): JSX.Element {
         element={
           <ProtectedRoute>
             <Me />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/my-posts"
+        element={
+          <ProtectedRoute>
+            <MyPosts />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/my-gallery"
+        element={
+          <ProtectedRoute>
+            <MyGallery />
           </ProtectedRoute>
         }
       />

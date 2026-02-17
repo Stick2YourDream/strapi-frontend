@@ -4,22 +4,26 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { AuthProvider } from "./context/AuthContext";
 import { ChatProvider } from "./context/ChatContext";
+import { TranslationProvider } from "./i18n/TranslationProvider";
 import { UserPreferencesProvider } from "./context/UserPreferencesContext";
 import { VideoCallProvider } from "./context/VideoCallContext";
 import "./index.css";
 import "./css/4k.css";
+import "./css/link-preview.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <AuthProvider>
-      <UserPreferencesProvider>
-        <ChatProvider>
-          <VideoCallProvider>
-            <App />
-          </VideoCallProvider>
-        </ChatProvider>
-      </UserPreferencesProvider>
-    </AuthProvider>
+    <TranslationProvider>
+      <AuthProvider>
+        <UserPreferencesProvider>
+          <ChatProvider>
+            <VideoCallProvider>
+              <App />
+            </VideoCallProvider>
+          </ChatProvider>
+        </UserPreferencesProvider>
+      </AuthProvider>
+    </TranslationProvider>
   </React.StrictMode>
 );
 

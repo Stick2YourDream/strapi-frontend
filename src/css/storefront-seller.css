@@ -2834,7 +2834,7 @@
   --flow-pad: 20px;
   --flow-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
   --seller-card-bg: var(--dashboard-card-bg, var(--flow-surface));
-  font-family: "Space Grotesk", "Outfit", sans-serif;
+  font-family: var(--app-font);
   color: var(--flow-text);
 }
 
@@ -3697,3 +3697,4 @@
     align-items: stretch;
   }
 }
+

@@ -3,7 +3,7 @@
 .storefront-shell {
   --sf-bg: #070b14;
   --sf-text: #eaf1ff;
-  font-family: "Space Grotesk", "Outfit", sans-serif;
+  font-family: var(--app-font);
   color: var(--sf-text);
   position: relative;
   overflow: hidden;
@@ -357,3 +357,4 @@
     align-items: flex-start;
   }
 }
+

@@ -10,6 +10,7 @@ export type AuthUser = {
 export type AuthResponse = {
   jwt: string;
   user: AuthUser;
+  trustedDevice?: boolean;
 };
 
 export type LoginStartResponse =
@@ -28,6 +29,7 @@ export type LoginStartResponse =
       method: "sms" | "email" | "totp";
       challengeId: string;
       deliveryHint?: string;
+      totpInvalid?: boolean;
     };
 
 // ? Your custom register response: /register (no jwt)

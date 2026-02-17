@@ -3,7 +3,7 @@
   padding: 48px clamp(16px, 4vw, 72px);
   background: radial-gradient(120% 140% at 12% 18%, #1f1b2c 0%, #0b0d14 55%, #05060a 100%);
   color: #e9ecf5;
-  font-family: "Inter", "Satoshi", system-ui, -apple-system, sans-serif;
+  font-family: var(--app-font);
   display: grid;
   place-items: center;
   box-sizing: border-box;
@@ -209,3 +209,4 @@
     width: min(1400px, 100%);
   }
 }
+

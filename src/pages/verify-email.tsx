@@ -162,7 +162,7 @@ export default function VerifyEmail(): JSX.Element {
       <div className="auth-hero">
         <button type="button" className="auth-brand" onClick={() => navigate("/")}>
           <span className="auth-brand-mark" aria-hidden="true">
-            <img src="/logo.png" alt="" />
+            <img src="/logo2.png" alt="" />
           </span>
           <span className="auth-brand-text">Your Social Place</span>
         </button>

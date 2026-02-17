@@ -767,7 +767,7 @@ export default function Storefront() {
             <div className="sidebar-profile-row">
               <button
                 type="button"
-                className="sidebar-profile-button storefront-profile-button"
+                className="sidebar-profile-button"
                 onClick={() => setShowProfileMenu((prev) => !prev)}
                 aria-expanded={showProfileMenu}
                 aria-controls="storefront-profile-menu"
@@ -782,13 +782,38 @@ export default function Storefront() {
                     decoding="async"
                   />
                 ) : (
-                  <div className="storefront-avatar-fallback" aria-hidden="true">
+                  <div
+                    aria-hidden="true"
+                    style={{
+                      width: 48,
+                      height: 48,
+                      borderRadius: "50%",
+                      display: "grid",
+                      placeItems: "center",
+                      background: "linear-gradient(135deg, #60a5fa, #7c3aed)",
+                      color: "#0b0d14",
+                      fontWeight: 700,
+                    }}
+                  >
                     {fallbackInitial}
                   </div>
                 )}
-                <div className="storefront-profile-text">
-                  <strong>{displayName}</strong>
-                  <span title={handleLine}>{handleLine}</span>
+                <div style={{ textAlign: "left", minWidth: 0 }}>
+                  <strong style={{ display: "block" }}>{displayName}</strong>
+                  <span
+                    style={{
+                      fontSize: "12px",
+                      color: "var(--ysp-muted-2, #9ca3af)",
+                      display: "block",
+                      maxWidth: "100%",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                    title={handleLine}
+                  >
+                    {handleLine}
+                  </span>
                 </div>
               </button>
             </div>

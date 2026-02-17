@@ -13,6 +13,7 @@ import { useVideoCall, type VideoCallInvitee } from "../context/VideoCallContext
 import api from "../api/strapi";
 import Sidebar from "../components/Sidebar";
 import TopbarSearch from "../components/TopbarSearch";
+import LinkPreviewCard from "../components/LinkPreviewCard";
 import { usePageMeta } from "../hooks/usePageMeta";
 import {
   buildProfilePayloadFromAttrs,
@@ -29,6 +30,8 @@ import {
   formatPhoneDisplay,
   normalizeDialCode,
 } from "../utils/phone";
+
+const MEDIA_PAGE_SIZE = 8;
 
 type FriendProfile = {
   id: number | string;
@@ -84,6 +87,7 @@ type FriendMediaItem = {
   id: number | string;
   title?: string;
   caption?: string;
+  order?: number;
   visibility?: "public" | "friends" | "private" | "trusted";
   kind?: "photo" | "video";
   media?: string;
@@ -133,32 +137,6 @@ const extractFirstUrl = (text: string) => {
   return url;
 };
 
-const hostnameFor = (value: string) => {
-  try {
-    return new URL(value).hostname.replace(/^www\./, "");
-  } catch {
-    return value;
-  }
-};
-
-const faviconFor = (value: string) => {
-  try {
-    const host = new URL(value).hostname.replace(/^www\./, "");
-    return `https://www.google.com/s2/favicons?domain=${host}&sz=128`;
-  } catch {
-    return "";
-  }
-};
-
-const isYoutubeUrl = (value: string) => {
-  try {
-    const host = new URL(value).hostname.toLowerCase();
-    return host.includes("youtube.com") || host === "youtu.be";
-  } catch {
-    return false;
-  }
-};
-
 const isVideoUrl = (value?: string) => !!value && /\.(mp4|webm|mov|m4v|mkv)$/i.test(value);
 
 const normalizeFriendMedia = (entry: any): FriendMediaItem => {
@@ -166,16 +144,26 @@ const normalizeFriendMedia = (entry: any): FriendMediaItem => {
   const attrs = record?.attributes ?? record ?? {};
   const mediaItem = attrs?.media ?? record?.media;
   const mediaUrl = pickMediaUrl(mediaItem, { kind: "post" });
+  const orderValue = Number(attrs?.order);
   return {
     id: record?.id ?? record?.documentId ?? "",
     title: String(attrs?.title || "").trim() || undefined,
     caption: String(attrs?.caption || "").trim() || undefined,
+    order: Number.isFinite(orderValue) ? orderValue : undefined,
     visibility: attrs?.visibility as FriendMediaItem["visibility"],
     kind: attrs?.kind as FriendMediaItem["kind"],
     media: mediaUrl,
     createdAt: String(attrs?.createdAt || ""),
   };
 };
+
+const sortFriendMediaItems = (items: FriendMediaItem[]) =>
+  [...items].sort((a, b) => {
+    const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    if (timeA !== timeB) return timeB - timeA;
+    return String(a.id).localeCompare(String(b.id));
+  });
 
 const parseActionEntry = (
   rows: any[],
@@ -371,54 +359,6 @@ const InfoIcon = ({ name }: { name: string }) => {
   }
 };
 
-const LinkPreviewCard = ({
-  preview,
-  url,
-  compact = false,
-}: {
-  preview?: LinkPreview | null;
-  url: string;
-  compact?: boolean;
-}) => {
-  const safePreview: LinkPreview =
-    preview ?? { url, title: hostnameFor(url), siteName: hostnameFor(url) };
-  const title = safePreview.title || safePreview.siteName || hostnameFor(url);
-  const meta = safePreview.siteName || hostnameFor(url);
-  const showBadge = safePreview.type === "video" || isYoutubeUrl(url);
-  const fallbackImage = safePreview.image || faviconFor(url);
-  const hasImage = Boolean(fallbackImage);
-  return (
-    <a
-      className={`link-preview-card${compact ? " is-compact" : ""}`}
-      href={url}
-      target="_blank"
-      rel="noreferrer"
-    >
-      <div className="link-preview-media">
-        {hasImage ? (
-          <img
-            src={fallbackImage}
-            alt={title}
-            loading="lazy"
-            decoding="async"
-            className={safePreview.image ? "" : "is-favicon"}
-          />
-        ) : (
-          <div className="link-preview-placeholder">LINK</div>
-        )}
-        {showBadge && <span className="link-preview-badge">Video</span>}
-      </div>
-      <div className="link-preview-body">
-        <p className="link-preview-title">{title}</p>
-        {safePreview.description && (
-          <p className="link-preview-desc">{safePreview.description}</p>
-        )}
-        <span className="link-preview-url">{meta}</span>
-      </div>
-    </a>
-  );
-};
-
 export default function FriendProfilePage() {
   const { friendId } = useParams();
   const friendIdNumber = Number(friendId);
@@ -451,6 +391,7 @@ export default function FriendProfilePage() {
   const [mediaLoading, setMediaLoading] = useState(false);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [mediaTab, setMediaTab] = useState<"all" | "photo" | "video">("all");
+  const [mediaPage, setMediaPage] = useState(1);
   const [mediaLightboxOpen, setMediaLightboxOpen] = useState(false);
   const [mediaLightboxItems, setMediaLightboxItems] = useState<FriendMediaItem[]>([]);
   const [mediaLightboxIndex, setMediaLightboxIndex] = useState(0);
@@ -722,7 +663,7 @@ export default function FriendProfilePage() {
         );
         const items = (res.data?.data ?? []).map(normalizeFriendMedia);
         if (active) {
-          setFriendMedia(items);
+          setFriendMedia(sortFriendMediaItems(items));
         }
       } catch {
         if (active) setMediaError("Unable to load gallery for this friend.");
@@ -769,6 +710,28 @@ export default function FriendProfilePage() {
     if (mediaTab === "all") return true;
     return kind === mediaTab;
   });
+
+  useEffect(() => {
+    setMediaPage(1);
+  }, [mediaTab]);
+
+  const mediaPaging = useMemo(() => {
+    const totalPages = Math.max(1, Math.ceil(filteredMedia.length / MEDIA_PAGE_SIZE));
+    const page = Math.min(Math.max(mediaPage, 1), totalPages);
+    const startIndex = (page - 1) * MEDIA_PAGE_SIZE;
+    return {
+      page,
+      totalPages,
+      startIndex,
+      items: filteredMedia.slice(startIndex, startIndex + MEDIA_PAGE_SIZE),
+    };
+  }, [filteredMedia, mediaPage]);
+
+  useEffect(() => {
+    if (mediaPage > mediaPaging.totalPages) {
+      setMediaPage(mediaPaging.totalPages);
+    }
+  }, [mediaPage, mediaPaging.totalPages]);
 
   const activeMediaItem = mediaLightboxOpen
     ? mediaLightboxItems[mediaLightboxIndex]
@@ -1311,14 +1274,15 @@ export default function FriendProfilePage() {
                 )}
                 {!mediaLoading && filteredMedia.length > 0 && (
                   <div className="friend-profile-gallery-grid">
-                    {filteredMedia.map((item, index) => {
+                    {mediaPaging.items.map((item, index) => {
+                      const absoluteIndex = mediaPaging.startIndex + index;
                       const isVideo = item.kind === "video" || isVideoUrl(item.media);
                       return (
                         <button
                           key={String(item.id)}
                           type="button"
                           className="friend-profile-gallery-card"
-                          onClick={() => openMediaLightboxAt(index)}
+                          onClick={() => openMediaLightboxAt(absoluteIndex)}
                           aria-label={item.title || (isVideo ? "Open video" : "Open photo")}
                         >
                           {item.media ? (
@@ -1350,6 +1314,33 @@ export default function FriendProfilePage() {
                         </button>
                       );
                     })}
+                  </div>
+                )}
+                {!mediaLoading && filteredMedia.length > 0 && mediaPaging.totalPages > 1 && (
+                  <div className="profile-media__pagination">
+                    <button
+                      className="btn ghost"
+                      type="button"
+                      onClick={() => setMediaPage((prev) => Math.max(1, prev - 1))}
+                      disabled={mediaPaging.page <= 1}
+                    >
+                      Previous
+                    </button>
+                    <div className="profile-media__page-info">
+                      Page {mediaPaging.page} of {mediaPaging.totalPages}
+                    </div>
+                    <button
+                      className="btn ghost"
+                      type="button"
+                      onClick={() =>
+                        setMediaPage((prev) =>
+                          Math.min(mediaPaging.totalPages, prev + 1)
+                        )
+                      }
+                      disabled={mediaPaging.page >= mediaPaging.totalPages}
+                    >
+                      Next
+                    </button>
                   </div>
                 )}
               </section>

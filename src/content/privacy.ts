@@ -1,7 +1,15 @@
 export const PRIVACY_TITLE = "Your Social Place Privacy Policy";
-export const PRIVACY_UPDATED = "Last updated: Feb 20, 2026";
+import type { PolicyRegionId } from "./policy-regions";
 
-export const PRIVACY_SECTIONS = [
+type PolicySection = {
+  id?: string;
+  title: string;
+  body: string[];
+};
+
+export const PRIVACY_UPDATED = "Feb 20, 2026";
+
+export const PRIVACY_SECTIONS: PolicySection[] = [
   {
     id: "overview",
     title: "1. Overview",
@@ -80,3 +88,82 @@ export const PRIVACY_SECTIONS = [
     body: ["Questions or concerns? Email us at support@yoursocialplace.com."],
   },
 ];
+
+export const PRIVACY_REGIONAL_SECTIONS: Record<PolicyRegionId, PolicySection[]> = {
+  us: [
+    {
+      title: "United States privacy rights",
+      body: [
+        "Depending on your state, you may have rights to access, delete, or correct personal information.",
+        "We do not sell personal information, and we honor lawful opt-out requests where applicable.",
+      ],
+    },
+  ],
+  eea_uk: [
+    {
+      title: "EEA/UK legal bases",
+      body: [
+        "We process personal data based on consent, performance of a contract, legitimate interests, and legal obligations.",
+        "You can withdraw consent at any time without affecting prior processing.",
+      ],
+    },
+    {
+      title: "EEA/UK data subject rights",
+      body: [
+        "You may request access, rectification, erasure, restriction, portability, or object to processing.",
+        "You may lodge a complaint with your local supervisory authority.",
+      ],
+    },
+    {
+      title: "International transfers",
+      body: [
+        "If we transfer personal data outside the EEA/UK, we use approved safeguards such as Standard Contractual Clauses.",
+      ],
+    },
+  ],
+  ca: [
+    {
+      title: "Canada privacy rights",
+      body: [
+        "You may request access to or correction of your personal information under PIPEDA and provincial laws.",
+        "We may transfer data to service providers outside Canada with appropriate safeguards.",
+      ],
+    },
+  ],
+  anz: [
+    {
+      title: "Australia and New Zealand privacy rights",
+      body: [
+        "We comply with the Australian Privacy Principles and New Zealand Privacy Act where applicable.",
+        "You can request access to or correction of your personal information.",
+      ],
+    },
+  ],
+  jp: [
+    {
+      title: "Japan privacy rights",
+      body: [
+        "We comply with the Act on the Protection of Personal Information (APPI).",
+        "You may request disclosure, correction, or deletion of personal information as permitted by law.",
+      ],
+    },
+  ],
+  br: [
+    {
+      title: "Brazil privacy rights",
+      body: [
+        "We comply with the LGPD and process data based on legal bases such as consent, contract, and legitimate interests.",
+        "You may request access, correction, deletion, or portability of your personal data.",
+      ],
+    },
+  ],
+  global: [
+    {
+      title: "International users",
+      body: [
+        "Local privacy laws may apply based on where you live.",
+        "Contact us if you need help exercising your privacy rights.",
+      ],
+    },
+  ],
+};

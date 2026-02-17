@@ -84,9 +84,6 @@ export type NotificationReadState = {
 };
 
 export const PROFILE_PII_CLEAR_FIELDS = {
-  birthday: null,
-  gender: null,
-  phone: null,
   backgrounds: null,
   intent: null,
   onboardingComplete: null,

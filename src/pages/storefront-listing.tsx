@@ -73,15 +73,15 @@ type StorefrontOffer = {
 
 type VerificationItem = {
   label: string;
-  status: "verified" | "pending" | "required";
+  status: "verified" | "pending" | "optional";
   detail: string;
 };
 
 type VerificationStatus = {
-  sellerIdStatus?: "verified" | "pending" | "required";
-  sellerPayoutStatus?: "verified" | "pending" | "required";
-  buyerPaymentStatus?: "verified" | "pending" | "required";
-  buyerAddressStatus?: "verified" | "pending" | "required";
+  sellerIdStatus?: "verified" | "pending" | "required" | "optional";
+  sellerPayoutStatus?: "verified" | "pending" | "required" | "optional";
+  buyerPaymentStatus?: "verified" | "pending" | "required" | "optional";
+  buyerAddressStatus?: "verified" | "pending" | "required" | "optional";
   buyerPaymentProvider?: "stripe" | "paypal" | "cashapp" | "venmo" | "cash" | "other";
   buyerPaymentEmail?: string;
   buyerAddressLine1?: string;
@@ -400,10 +400,10 @@ const getEntityId = (value: any) => {
 };
 
 const normalizeStatus = (value?: string | null): VerificationItem["status"] => {
-  if (value === "verified" || value === "pending" || value === "required") {
+  if (value === "verified" || value === "pending" || value === "optional") {
     return value;
   }
-  return "pending";
+  return "optional";
 };
 
 const buildSellerVerification = (status?: VerificationStatus | null): VerificationItem[] => [

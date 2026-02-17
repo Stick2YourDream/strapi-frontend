@@ -504,6 +504,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                 firstName: payload.firstName || "",
                 lastName: payload.lastName || "",
                 age: payload.age || "",
+                birthday: payload.birthday || "",
+                gender: payload.gender || "",
                 religion: payload.religion || "",
                 hobbies: payload.hobbies || "",
                 occupation: payload.occupation || "",
@@ -513,6 +515,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                 state: payload.state || "",
                 stateCode: payload.stateCode || "",
                 city: payload.city || "",
+                phone: payload.phone || "",
                 ...PROFILE_PII_CLEAR_FIELDS,
               },
             });
@@ -543,6 +546,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
       const publicFields = {
         age: payload?.age || "",
+        birthday: payload?.birthday || "",
+        gender: payload?.gender || "",
         religion: payload?.religion || "",
         hobbies: payload?.hobbies || "",
         occupation: payload?.occupation || "",
@@ -552,6 +557,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         state: payload?.state || "",
         stateCode: payload?.stateCode || "",
         city: payload?.city || "",
+        phone: payload?.phone || "",
       };
       const needsPublicUpdate = Object.entries(publicFields).some(
         ([key, value]) => String(attrs?.[key] || "") !== String(value || "")
@@ -639,25 +645,19 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       const decryptFailed = profileDecryptFailedRef.current === true;
       if (decryptFailed) {
         setKeyBackupStatus("needs-restore");
-        setKeyBackupError(
-          "Unable to decrypt your profile. Restore your key backup or reset encrypted profile."
-        );
+        setKeyBackupError(null);
         return;
       }
       if (hasLocal) {
         await ensureUserKeyOnServer();
-        setKeyBackupStatus(backupExists ? "ready" : "needs-setup");
-      } else if (backupExists) {
+        setKeyBackupStatus("ready");
+      } else if (backupExists || hasEncryptedProfile) {
         setKeyBackupStatus("needs-restore");
-      } else if (hasEncryptedProfile) {
-        setKeyBackupStatus("needs-restore");
-        setKeyBackupError(
-          "Missing local encryption keys. Restore your key backup or reset encrypted profile."
-        );
+        setKeyBackupError(null);
       } else {
         await ensureUserKeyOnServer();
         await getOrCreateProfileKey(user.id);
-        setKeyBackupStatus("needs-setup");
+        setKeyBackupStatus("ready");
       }
     } catch (error) {
       console.warn("Unable to check key backup status:", error);
@@ -891,10 +891,15 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   const updateUser = (userData: User) => {
-    setUser(userData);
+    const merged: User = {
+      ...(user || {}),
+      ...userData,
+      appRole: userData.appRole ?? user?.appRole,
+    };
+    setUser(merged);
     const snapshot: AuthSnapshot = {
-      userRaw: JSON.stringify(userData),
-      userId: String(userData.id),
+      userRaw: JSON.stringify(merged),
+      userId: String(merged.id),
     };
     persistAuthSnapshot(window.localStorage, snapshot);
     persistAuthSnapshot(window.sessionStorage, snapshot);

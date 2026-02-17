@@ -1,14 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../context/AuthContext";
-import {
-  clearPendingDeviceKeyRequestId,
-  consumeDeviceKeyApproval,
-  fetchDeviceKeyRequestStatus,
-  getDefaultDeviceLabel,
-  getPendingDeviceKeyRequestId,
-  requestDeviceKeyApproval,
-} from "../utils/device-approval";
+import api from "../api/strapi";
+import { getDefaultDeviceLabel } from "../utils/device-approval";
+import { getOrCreateDeviceId } from "../utils/device-id";
 import {
   fetchRecoveryCodesStatus,
   regenerateRecoveryCodes,
@@ -17,11 +11,7 @@ import {
 } from "../utils/crypto-recovery";
 import "../css/key-backup.css";
 
-const MIN_PASSPHRASE_LENGTH = 8;
-const MAX_RESTORE_ATTEMPTS = 5;
-
 export default function KeyBackupModal() {
-  const navigate = useNavigate();
   const {
     user,
     keyBackupStatus,
@@ -29,30 +19,15 @@ export default function KeyBackupModal() {
     keyBackupError,
     refreshKeyBackup,
     refreshProfile,
-    createKeyBackup,
-    restoreKeyBackup,
     resetEncryptedProfile,
   } = useAuth();
-  const [passphrase, setPassphrase] = useState("");
-  const [confirm, setConfirm] = useState("");
   const [dismissed, setDismissed] = useState(false);
-  const [localError, setLocalError] = useState<string | null>(null);
-  const [restoreAttempts, setRestoreAttempts] = useState(0);
   const [restoreSuccess, setRestoreSuccess] = useState(false);
-  const [deviceRequestId, setDeviceRequestId] = useState<string | null>(null);
   const [deviceRequestError, setDeviceRequestError] = useState<string | null>(null);
   const [deviceRequestLabel, setDeviceRequestLabel] = useState<string>(() =>
     getDefaultDeviceLabel()
   );
-  const [deviceRequestStatus, setDeviceRequestStatus] = useState<
-    "idle" | "requesting" | "pending" | "approved" | "rejected" | "expired"
-  >("idle");
-  const [deviceRequestExpiresAt, setDeviceRequestExpiresAt] = useState<number | null>(
-    null
-  );
-  const [deviceRequestLoading, setDeviceRequestLoading] = useState(false);
-  const autoRequestRef = useRef(false);
-  const [copyStatus, setCopyStatus] = useState<string | null>(null);
+  const [trustActionLoading, setTrustActionLoading] = useState(false);
   const [resetSuccess, setResetSuccess] = useState(false);
   const [recoveryEmailCode, setRecoveryEmailCode] = useState("");
   const [recoveryEmailHint, setRecoveryEmailHint] = useState<string | null>(null);
@@ -65,25 +40,17 @@ export default function KeyBackupModal() {
   const [recoveryCodesError, setRecoveryCodesError] = useState<string | null>(null);
   const [recoveryCodesCopied, setRecoveryCodesCopied] = useState(false);
   const [showRecoveryCodes, setShowRecoveryCodes] = useState(false);
-  const justCreatedRef = useRef(false);
+  const [showAlternateMethods, setShowAlternateMethods] = useState(false);
+  const [trustedDeviceStatus, setTrustedDeviceStatus] = useState<
+    "unknown" | "trusted" | "untrusted"
+  >("unknown");
+  const [trustedDeviceLoading, setTrustedDeviceLoading] = useState(false);
 
   useEffect(() => {
-    if (justCreatedRef.current && keyBackupStatus === "ready") {
-      justCreatedRef.current = false;
-      setShowRecoveryCodes(true);
-      return;
-    }
-    setPassphrase("");
-    setConfirm("");
-    setLocalError(null);
     setDismissed(false);
-    setRestoreAttempts(0);
     setRestoreSuccess(false);
     setDeviceRequestError(null);
-    setDeviceRequestStatus("idle");
-    setDeviceRequestExpiresAt(null);
-    setDeviceRequestLoading(false);
-    setCopyStatus(null);
+    setTrustActionLoading(false);
     setResetSuccess(false);
     setRecoveryEmailCode("");
     setRecoveryEmailHint(null);
@@ -96,6 +63,9 @@ export default function KeyBackupModal() {
     setRecoveryCodesError(null);
     setRecoveryCodesCopied(false);
     setShowRecoveryCodes(false);
+    setShowAlternateMethods(false);
+    setTrustedDeviceStatus("unknown");
+    setTrustedDeviceLoading(false);
   }, [keyBackupStatus]);
 
   const mode = useMemo(() => {
@@ -106,8 +76,11 @@ export default function KeyBackupModal() {
     return "hidden";
   }, [keyBackupStatus, showRecoveryCodes, user]);
 
-  const isVisible = mode !== "hidden" && !dismissed;
-  const isRecoveryCodesOnly = showRecoveryCodes && keyBackupStatus === "ready";
+  const shouldHideForTrustedDevice = mode === "restore" && trustedDeviceStatus === "trusted";
+  const shouldDeferModal = mode === "restore" && trustedDeviceLoading;
+  const isVisible =
+    mode !== "hidden" && !dismissed && !shouldHideForTrustedDevice && !shouldDeferModal;
+  const shouldShowAlternateMethods = mode !== "restore" || showAlternateMethods;
 
   useEffect(() => {
     if (typeof document === "undefined") return;
@@ -128,106 +101,43 @@ export default function KeyBackupModal() {
   }, [restoreSuccess]);
 
   useEffect(() => {
-    if (mode !== "restore") {
-      setDeviceRequestId(null);
-      return;
-    }
-    const pendingId = getPendingDeviceKeyRequestId();
-    if (pendingId) {
-      setDeviceRequestId(pendingId);
-      setDeviceRequestStatus("pending");
-      setDeviceRequestLabel(getDefaultDeviceLabel());
-    }
+    if (mode !== "restore") return;
+    setDeviceRequestLabel(getDefaultDeviceLabel());
   }, [mode]);
 
-  const startDeviceApprovalRequest = useCallback(
-    async (source: "auto" | "manual") => {
-      if (!user) return;
-      setDeviceRequestError(null);
-      if (source === "manual") {
-        setCopyStatus(null);
-      }
-      setDeviceRequestLoading(true);
-      setDeviceRequestStatus("requesting");
-      try {
-        const label = getDefaultDeviceLabel();
-        setDeviceRequestLabel(label);
-        const response = await requestDeviceKeyApproval(label);
-        setDeviceRequestId(response.requestId);
-        setDeviceRequestStatus("pending");
-        setDeviceRequestExpiresAt(response.expiresAt ? Number(response.expiresAt) : null);
-      } catch {
-        setDeviceRequestError(
-          source === "auto"
-            ? "Unable to auto-request approval. You can try again."
-            : "Unable to request approval. Try again."
-        );
-        setDeviceRequestStatus("idle");
-      } finally {
-        setDeviceRequestLoading(false);
-      }
-    },
-    [user]
-  );
-
   useEffect(() => {
-    if (mode !== "restore") {
-      autoRequestRef.current = false;
+    if (mode !== "restore" || !user) {
+      setTrustedDeviceStatus("unknown");
+      setTrustedDeviceLoading(false);
       return;
     }
-    if (autoRequestRef.current) return;
-    if (getPendingDeviceKeyRequestId()) return;
-    if (deviceRequestId || deviceRequestStatus === "pending" || deviceRequestStatus === "requesting") {
-      return;
-    }
-    autoRequestRef.current = true;
-    void startDeviceApprovalRequest("auto");
-  }, [deviceRequestId, deviceRequestStatus, mode, startDeviceApprovalRequest]);
-
-  useEffect(() => {
-    if (mode !== "restore" || !deviceRequestId || !user) return;
     let active = true;
-    let timer: number | null = null;
-
-    const poll = async () => {
-      if (!active) return;
-      try {
-        const status = await fetchDeviceKeyRequestStatus(deviceRequestId);
+    setTrustedDeviceLoading(true);
+    const deviceId = getOrCreateDeviceId();
+    api
+      .get("/auth/trusted-devices", { params: { deviceId } })
+      .then((res) => {
         if (!active) return;
-        if (status?.expiresAt) {
-          setDeviceRequestExpiresAt(Number(status.expiresAt) || null);
+        const devices = Array.isArray(res.data?.devices) ? res.data.devices : [];
+        const isCurrent = devices.some((entry: any) => entry?.isCurrent === true);
+        setTrustedDeviceStatus(isCurrent ? "trusted" : "untrusted");
+        if (isCurrent) {
+          setDismissed(true);
         }
-        if (status?.status === "approved") {
-          const applied = await consumeDeviceKeyApproval(user.id, status);
-          if (applied) {
-            await refreshKeyBackup();
-            await refreshProfile();
-            setRestoreSuccess(true);
-            setDeviceRequestStatus("approved");
-            setDeviceRequestId(null);
-            clearPendingDeviceKeyRequestId();
-            return;
-          }
+      })
+      .catch(() => {
+        if (!active) return;
+        setTrustedDeviceStatus("unknown");
+      })
+      .finally(() => {
+        if (active) {
+          setTrustedDeviceLoading(false);
         }
-        if (status?.status === "rejected" || status?.status === "expired") {
-          setDeviceRequestStatus(status.status);
-          setDeviceRequestId(null);
-          clearPendingDeviceKeyRequestId();
-          return;
-        }
-        setDeviceRequestStatus("pending");
-      } catch {
-        setDeviceRequestError("Unable to check approval status.");
-      }
-      timer = window.setTimeout(poll, 4000);
-    };
-
-    poll();
+      });
     return () => {
       active = false;
-      if (timer) window.clearTimeout(timer);
     };
-  }, [mode, deviceRequestId, user, refreshKeyBackup, refreshProfile]);
+  }, [mode, user]);
 
   useEffect(() => {
     if (!user) return;
@@ -263,107 +173,32 @@ export default function KeyBackupModal() {
     };
   }, [dismissed, keyBackupStatus, showRecoveryCodes, user]);
 
-  if (mode === "hidden" || dismissed) return null;
+  if (!isVisible) return null;
 
-  const remainingAttempts = MAX_RESTORE_ATTEMPTS - restoreAttempts;
-  const isRestoreLocked = mode === "restore" && remainingAttempts <= 0;
-  const disableRestore = keyBackupLoading || isRestoreLocked || restoreSuccess || resetSuccess;
+  const showTrustPrompt = mode === "restore" && !shouldShowAlternateMethods;
+  const trustActionDisabled = trustActionLoading || restoreSuccess || resetSuccess;
 
-  const handleCreate = async () => {
-    setLocalError(null);
-    if (passphrase.length < MIN_PASSPHRASE_LENGTH) {
-      setLocalError(`Passphrase must be at least ${MIN_PASSPHRASE_LENGTH} characters.`);
-      return;
-    }
-    if (passphrase !== confirm) {
-      setLocalError("Passphrases do not match.");
-      return;
-    }
-    justCreatedRef.current = true;
-    const created = await createKeyBackup(passphrase);
-    if (!created) {
-      justCreatedRef.current = false;
-      return;
-    }
-    setPassphrase("");
-    setConfirm("");
-    setRecoveryCodesError(null);
-    setRecoveryCodesCopied(false);
-    try {
-      setRecoveryCodesLoading(true);
-      const status = await fetchRecoveryCodesStatus();
-      if (!status?.hasCodes) {
-        const codes = await regenerateRecoveryCodes();
-        setRecoveryCodes(codes);
-      }
-      setShowRecoveryCodes(true);
-    } catch {
-      setRecoveryCodesError("Unable to generate recovery codes.");
-    } finally {
-      setRecoveryCodesLoading(false);
-    }
-  };
-
-  const handleRestore = async () => {
-    setLocalError(null);
-    if (isRestoreLocked) {
-      setLocalError("Too many incorrect attempts. Reload to try again.");
-      return;
-    }
-    if (passphrase.length < MIN_PASSPHRASE_LENGTH) {
-      setLocalError(`Passphrase must be at least ${MIN_PASSPHRASE_LENGTH} characters.`);
-      return;
-    }
-    const success = await restoreKeyBackup(passphrase);
-    setPassphrase("");
-    if (success) {
-      setRestoreSuccess(true);
-      return;
-    }
-    setRestoreAttempts((prev) => {
-      const next = prev + 1;
-      const nextRemaining = Math.max(0, MAX_RESTORE_ATTEMPTS - next);
-      setLocalError(
-        nextRemaining > 0
-          ? `Incorrect passphrase. ${nextRemaining} attempt${nextRemaining === 1 ? "" : "s"} remaining.`
-          : "Too many incorrect attempts. Reload to try again."
-      );
-      return next;
-    });
-  };
-
-  const handleRequestApproval = async () => {
-    autoRequestRef.current = true;
-    await startDeviceApprovalRequest("manual");
-  };
-
-  const handleCancelApproval = () => {
-    autoRequestRef.current = true;
-    clearPendingDeviceKeyRequestId();
-    setDeviceRequestId(null);
-    setDeviceRequestStatus("idle");
+  const handleTrustChoice = async () => {
+    if (!user) return;
+    if (trustActionLoading) return;
     setDeviceRequestError(null);
-    setDeviceRequestExpiresAt(null);
-    setCopyStatus(null);
-  };
-
-  const handleOpenSecurity = () => {
-    setDismissed(true);
-    navigate("/me?section=security");
-  };
-
-  const handleCopySecurityLink = async () => {
-    if (typeof window === "undefined") return;
-    const link = `${window.location.origin}/me?section=security`;
+    setTrustActionLoading(true);
     try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(link);
-        setCopyStatus("Security link copied.");
-        return;
-      }
-      setCopyStatus("Copy not supported on this device.");
+      const deviceId = getOrCreateDeviceId();
+      const label = getDefaultDeviceLabel();
+      setDeviceRequestLabel(label);
+      await api.post("/auth/trusted-devices/trust", {
+        deviceId,
+        deviceLabel: label,
+      });
+      setTrustedDeviceStatus("trusted");
+      await refreshKeyBackup();
+      await refreshProfile();
+      setRestoreSuccess(true);
     } catch {
-      setCopyStatus("Unable to copy the link.");
+      setDeviceRequestError("Unable to trust this device.");
+    } finally {
+      setTrustActionLoading(false);
     }
   };
 
@@ -444,11 +279,7 @@ export default function KeyBackupModal() {
       <div className="key-backup-modal">
         <div className="key-backup-header">
           <h3>
-            {mode === "setup"
-              ? isRecoveryCodesOnly
-                ? "Your recovery codes"
-                : "Secure your encrypted profile"
-              : "Restore encrypted profile"}
+            {mode === "setup" ? "Your recovery codes" : "Restore encrypted profile"}
           </h3>
           <button
             type="button"
@@ -465,99 +296,68 @@ export default function KeyBackupModal() {
         <div className="key-backup-body">
           <p>
             {mode === "setup"
-              ? isRecoveryCodesOnly
-                ? "Save these one-time recovery codes somewhere safe. They can reset your encrypted profile if you forget your passphrase."
-                : "Create a passphrase to unlock your encrypted profile on new devices. Your Social Place never stores this passphrase."
-              : "Enter your passphrase to restore your encrypted profile on this device."}
+              ? "Save these one-time recovery codes somewhere safe. They can reset your encrypted profile in an emergency."
+              : shouldShowAlternateMethods
+              ? "Use a recovery option to reset your encrypted profile."
+              : "You're logged in. Trust this device to restore your encrypted profile."}
           </p>
           {mode === "restore" && (
             <p className="key-backup-hint">
               We'll refresh this page after restoring so your encrypted profile loads everywhere.
             </p>
           )}
-          {mode === "restore" && (
-            <p className="key-backup-hint">
-              Quick restore: we can send a request to your trusted devices automatically.
-            </p>
-          )}
-          {mode === "restore" && (
-            <div className="key-backup-device">
-              <h4>Approve from a trusted device</h4>
-              <p className="key-backup-hint">
-                Request approval on a device you already trust. Once approved, we'll
-                restore your encrypted profile and refresh this page.
-              </p>
-              <ol className="key-backup-steps">
-                <li>
-                  Open Your Social Place on a trusted device (one you have already approved).
-                </li>
-                <li>Go to Me → Security → Device approval requests.</li>
-                <li>
-                  Approve the request for{" "}
-                  <strong>{deviceRequestLabel || "this device"}</strong>.
-                </li>
-              </ol>
-              <div className="key-backup-device-actions">
-                <button
-                  type="button"
-                  className="btn ghost"
-                  onClick={() => void handleRequestApproval()}
-                  disabled={deviceRequestLoading || deviceRequestStatus === "pending"}
-                >
-                  {deviceRequestLoading ? "Requesting..." : "Request approval"}
-                </button>
-                <button
-                  type="button"
-                  className="btn ghost"
-                  onClick={handleOpenSecurity}
-                >
-                  Open Security settings
-                </button>
-                <button
-                  type="button"
-                  className="btn ghost"
-                  onClick={handleCopySecurityLink}
-                >
-                  Copy security link
-                </button>
-                {deviceRequestId && (
-                  <button
-                    type="button"
-                    className="btn ghost"
-                    onClick={handleCancelApproval}
-                    disabled={deviceRequestLoading}
-                  >
-                    Cancel request
-                  </button>
-                )}
+          {showTrustPrompt && (
+            <div className="key-backup-trust-card">
+              <div className="key-backup-trust-hero">
+                <div className="key-backup-trust-art" aria-hidden="true">
+                  <svg viewBox="0 0 140 140" role="img" aria-label="">
+                    <rect x="46" y="16" width="54" height="96" rx="12" fill="#0b0f1c" />
+                    <rect x="52" y="24" width="42" height="72" rx="8" fill="#1d2a4a" />
+                    <rect x="60" y="102" width="26" height="6" rx="3" fill="#2b3a60" />
+                    <path
+                      d="M24 82c0-10 8-18 18-18h18c8 0 14 6 14 14v30c0 8-6 14-14 14H42c-10 0-18-8-18-18V82Z"
+                      fill="#f2d6c7"
+                    />
+                    <path
+                      d="M56 64c0-6 5-10 10-10h12c6 0 10 4 10 10v20c0 6-4 10-10 10H66c-6 0-10-4-10-10V64Z"
+                      fill="#e9c3b1"
+                    />
+                    <path
+                      d="M36 70c-5 0-9 4-9 9v18c0 5 4 9 9 9h18"
+                      stroke="#d9b09e"
+                      strokeWidth="4"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </div>
+                <div>
+                  <h4>You're logged in</h4>
+                  <p className="key-backup-hint">Do you want to trust this device?</p>
+                </div>
               </div>
-              {deviceRequestStatus === "pending" && (
-                <p className="key-backup-hint">
-                  Waiting for approval
-                  {deviceRequestExpiresAt
-                    ? ` (expires ${new Date(deviceRequestExpiresAt).toLocaleTimeString()}).`
-                    : "."}
-                </p>
-              )}
-              {deviceRequestStatus === "requesting" && (
-                <p className="key-backup-hint">Requesting approval…</p>
-              )}
-              {copyStatus && <p className="key-backup-hint">{copyStatus}</p>}
-              {deviceRequestStatus === "approved" && (
-                <p className="key-backup-hint">Approved. Restoring now...</p>
-              )}
-              {deviceRequestStatus === "rejected" && (
-                <p className="key-backup-hint">Request rejected. Try again.</p>
-              )}
-              {deviceRequestStatus === "expired" && (
-                <p className="key-backup-hint">Request expired. Please request again.</p>
-              )}
+              <div className="key-backup-trust-device">
+                <span className="key-backup-trust-label">Trusted device name</span>
+                <strong>{deviceRequestLabel || "Current device"}</strong>
+              </div>
+              <p className="key-backup-hint">
+                We'll trust this device and restore your encrypted profile automatically.
+              </p>
               {deviceRequestError && (
                 <p className="key-backup-error">{deviceRequestError}</p>
               )}
+              <div className="key-backup-trust-actions">
+                <button
+                  type="button"
+                  className="btn primary"
+                  onClick={() => void handleTrustChoice()}
+                  disabled={trustActionDisabled}
+                >
+                  {trustActionLoading ? "Restoring..." : "Trust this device"}
+                </button>
+              </div>
             </div>
           )}
-          {mode === "restore" && (
+          {mode === "restore" && shouldShowAlternateMethods && (
             <div className="key-backup-device">
               <h4>Recover with email code</h4>
               <p className="key-backup-hint">
@@ -604,7 +404,7 @@ export default function KeyBackupModal() {
               )}
             </div>
           )}
-          {mode === "restore" && (
+          {mode === "restore" && shouldShowAlternateMethods && (
             <div className="key-backup-device key-backup-danger">
               <h4>Use a recovery code</h4>
               <p className="key-backup-hint">
@@ -639,47 +439,21 @@ export default function KeyBackupModal() {
               </button>
             </div>
           )}
-          {mode === "restore" && (
+          {mode === "restore" && shouldShowAlternateMethods && (
             <p className="key-backup-hint">
-              Attempts remaining: {Math.max(0, remainingAttempts)} of {MAX_RESTORE_ATTEMPTS}
+              Resetting will permanently erase encrypted fields like phone, birthday, and
+              private details.
             </p>
           )}
           {restoreSuccess && (
             <p className="key-backup-hint">Restored. Refreshing now...</p>
           )}
-          {!isRecoveryCodesOnly && (
-            <div className="key-backup-field">
-              <label htmlFor="key-backup-passphrase">Passphrase</label>
-              <input
-                id="key-backup-passphrase"
-                type="password"
-                value={passphrase}
-                onChange={(event) => setPassphrase(event.target.value)}
-                placeholder="Enter passphrase"
-                autoComplete="new-password"
-                disabled={mode === "restore" ? disableRestore : keyBackupLoading}
-              />
-            </div>
-          )}
-          {mode === "setup" && !isRecoveryCodesOnly && (
-            <div className="key-backup-field">
-              <label htmlFor="key-backup-confirm">Confirm passphrase</label>
-              <input
-                id="key-backup-confirm"
-                type="password"
-                value={confirm}
-                onChange={(event) => setConfirm(event.target.value)}
-                placeholder="Re-enter passphrase"
-                autoComplete="new-password"
-              />
-            </div>
-          )}
           {mode === "setup" && (
             <div className="key-backup-device">
               <h4>Recovery codes</h4>
               <p className="key-backup-hint">
-                Save these codes. Each can be used once to recover your encrypted profile if
-                you forget your passphrase.
+                Save these codes. Each can be used once to reset your encrypted profile if
+                you lose access to your device.
               </p>
               {recoveryCodesLoading && <p className="key-backup-hint">Generating codes…</p>}
               {recoveryCodesError && (
@@ -708,14 +482,12 @@ export default function KeyBackupModal() {
                 </>
               ) : (
                 <p className="key-backup-hint">
-                  Recovery codes appear after you save your passphrase.
+                  Recovery codes appear after we generate them.
                 </p>
               )}
             </div>
           )}
-          {(localError || keyBackupError) && (
-            <p className="key-backup-error">{localError || keyBackupError}</p>
-          )}
+          {keyBackupError && <p className="key-backup-error">{keyBackupError}</p>}
         </div>
         <div className="key-backup-actions">
           <button
@@ -729,36 +501,26 @@ export default function KeyBackupModal() {
           >
             Later
           </button>
-          {mode === "setup" ? (
-            isRecoveryCodesOnly ? (
-              <button
-                type="button"
-                className="btn primary"
-                onClick={() => {
-                  setShowRecoveryCodes(false);
-                  setDismissed(true);
-                }}
-              >
-                Done
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="btn primary"
-                onClick={() => void handleCreate()}
-                disabled={keyBackupLoading}
-              >
-                {keyBackupLoading ? "Saving..." : "Save passphrase"}
-              </button>
-            )
-          ) : (
+          {mode === "setup" && (
             <button
               type="button"
               className="btn primary"
-              onClick={() => void handleRestore()}
-              disabled={disableRestore}
+              onClick={() => {
+                setShowRecoveryCodes(false);
+                setDismissed(true);
+              }}
+              disabled={recoveryCodesLoading}
             >
-              {restoreSuccess ? "Refreshing..." : keyBackupLoading ? "Restoring..." : "Restore"}
+              Done
+            </button>
+          )}
+          {mode === "restore" && !shouldShowAlternateMethods && (
+            <button
+              type="button"
+              className="btn primary"
+              onClick={() => setShowAlternateMethods(true)}
+            >
+              Try Another Way
             </button>
           )}
         </div>

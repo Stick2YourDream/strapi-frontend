@@ -825,6 +825,10 @@
   border-color: rgba(255, 94, 128, 0.4);
 }
 
+.storefront-verify.optional {
+  border-color: rgba(148, 163, 184, 0.35);
+}
+
 .storefront-verify-pill {
   padding: 4px 8px;
   border-radius: 999px;
@@ -1050,7 +1054,7 @@
   --sf-radius: 20px;
   --sf-pad: 20px;
   --sf-shadow: 0 18px 40px rgba(5, 10, 20, 0.45);
-  font-family: "Space Grotesk", "Outfit", sans-serif;
+  font-family: var(--app-font);
   color: var(--sf-text);
   position: relative;
   overflow: hidden;
@@ -1237,7 +1241,7 @@
 }
 
 .storefront-hero-copy h1 {
-  font-family: "Space Grotesk", "Outfit", sans-serif;
+  font-family: var(--app-font);
   line-height: 1.1;
   color: var(--sf-text);
 }
@@ -1514,3 +1518,4 @@
     grid-template-columns: 1fr;
   }
 }
+

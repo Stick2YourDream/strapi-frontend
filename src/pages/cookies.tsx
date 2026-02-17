@@ -1,6 +1,7 @@
 import "../css/terms.css";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "../i18n/TranslationProvider";
 import { usePageMeta } from "../hooks/usePageMeta";
 
 type ConsentState = {
@@ -51,10 +52,14 @@ const applyConsent = (status: "granted" | "denied") => {
   });
 };
 
-const formatTimestamp = (value?: number) => {
-  if (!value) return "Not set yet.";
+const formatTimestamp = (
+  value: number | undefined,
+  locale: string,
+  t: (key: string) => string
+) => {
+  if (!value) return t("Not set yet.");
   try {
-    return new Intl.DateTimeFormat("en", {
+    return new Intl.DateTimeFormat(locale || "en", {
       year: "numeric",
       month: "short",
       day: "numeric",
@@ -62,12 +67,13 @@ const formatTimestamp = (value?: number) => {
       minute: "2-digit",
     }).format(new Date(value));
   } catch {
-    return "Recently updated.";
+    return t("Recently updated.");
   }
 };
 
 export default function Cookies() {
   const navigate = useNavigate();
+  const { t, locale } = useTranslation();
   usePageMeta({
     title: "Cookie Policy | Your Social Place",
     description:
@@ -83,11 +89,11 @@ export default function Cookies() {
   }, []);
 
   const statusLabel = useMemo(() => {
-    if (!consent) return "No preference saved yet.";
+    if (!consent) return t("No preference saved yet.");
     return consent.status === "granted"
-      ? "Analytics cookies are enabled."
-      : "Analytics cookies are disabled.";
-  }, [consent]);
+      ? t("Analytics cookies are enabled.")
+      : t("Analytics cookies are disabled.");
+  }, [consent, t]);
 
   const handleChoice = (status: "granted" | "denied") => {
     persistConsent(status);
@@ -101,7 +107,7 @@ export default function Cookies() {
         <header className="terms-header">
           <button className="terms-brand" type="button" onClick={() => navigate("/")}>
             <span className="terms-mark" aria-hidden="true">
-              <img src="/logo.png" alt="" />
+              <img src="/logo2.png" alt="" />
             </span>
             <span className="terms-text">Your Social Place</span>
           </button>
@@ -111,49 +117,56 @@ export default function Cookies() {
         </header>
 
         <main className="terms-card">
-          <h1>Cookie Policy</h1>
-          <p className="terms-updated">Last updated: Jan 4, 2026</p>
+          <h1>{t("Cookie Policy")}</h1>
+          <p className="terms-updated">
+            {t("Last updated: {{date}}", { date: "Jan 4, 2026" })}
+          </p>
 
           <section className="terms-section">
-            <h2>1. Why we use cookies</h2>
+            <h2>{t("1. Why we use cookies")}</h2>
             <p>
-              Cookies help us keep you signed in, remember your preferences, and understand
-              which parts of the site are working well.
+              {t(
+                "Cookies help us keep you signed in, remember your preferences, and understand which parts of the site are working well."
+              )}
             </p>
           </section>
 
           <section className="terms-section">
-            <h2>2. Analytics cookies</h2>
+            <h2>{t("2. Analytics cookies")}</h2>
             <p>
-              We use analytics to understand usage trends and improve the product. You can
-              enable or disable analytics cookies at any time.
+              {t(
+                "We use analytics to understand usage trends and improve the product. You can enable or disable analytics cookies at any time."
+              )}
             </p>
           </section>
 
           <section className="terms-section" id="preferences">
-            <h2>3. Manage cookies</h2>
+            <h2>{t("3. Manage cookies")}</h2>
             <p className="terms-status">{statusLabel}</p>
-            <p className="terms-status">Preference last updated: {formatTimestamp(consent?.ts)}</p>
+            <p className="terms-status">
+              {t("Preference last updated:")}{" "}
+              {formatTimestamp(consent?.ts, locale, t)}
+            </p>
             <div className="terms-actions">
               <button
                 className="terms-button is-primary"
                 type="button"
                 onClick={() => handleChoice("granted")}
               >
-                Allow analytics
+                {t("Allow analytics")}
               </button>
               <button
                 className="terms-button is-ghost"
                 type="button"
                 onClick={() => handleChoice("denied")}
               >
-                Decline analytics
+                {t("Decline analytics")}
               </button>
             </div>
           </section>
 
           <div className="terms-contact">
-            <span>Questions?</span>
+            <span>{t("Questions?")}</span>
             <a href="mailto:support@yoursocialplace.com">support@yoursocialplace.com</a>
           </div>
         </main>

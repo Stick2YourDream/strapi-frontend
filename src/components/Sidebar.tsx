@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   Lock,
   LogOut,
+  Languages,
   MessageSquare,
   Newspaper,
   Palette,
@@ -50,6 +51,7 @@ type SettingsSection =
   | "security"
   | "privacy"
   | "notifications"
+  | "language"
   | "changes";
 
 const SETTINGS_SECTIONS: { id: SettingsSection; label: string }[] = [
@@ -57,6 +59,7 @@ const SETTINGS_SECTIONS: { id: SettingsSection; label: string }[] = [
   { id: "security", label: "Account & Security" },
   { id: "privacy", label: "Visibility & Discoverability" },
   { id: "notifications", label: "Sound, Vibration & Quiet Hours" },
+  { id: "language", label: "Language Options" },
   { id: "changes", label: "Changes & Deactivation" },
 ];
 
@@ -65,6 +68,7 @@ const SETTINGS_SECTION_ICONS: Record<SettingsSection, ReactNode> = {
   security: <Lock size={18} />,
   privacy: <EyeOff size={18} />,
   notifications: <Bell size={18} />,
+  language: <Languages size={18} />,
   changes: <RefreshCcw size={18} />,
 };
 
@@ -148,10 +152,10 @@ export default function Sidebar({
         const displayName =
           profile.firstName || profile.lastName
             ? `${profile.firstName || ""} ${profile.lastName || ""}`.trim()
-            : profile.handle || user.email;
+            : profile.handle || user.username || "Your Profile";
         setProfileSummary({
           displayName,
-          handle: profile.handle || user.email,
+          handle: profile.handle || user.username || "Profile",
           avatarUrl: profile.avatarUrl,
           age: profile.age || "",
           hobbies: profile.hobbies || "",
@@ -179,10 +183,10 @@ export default function Sidebar({
         const displayName =
           payload.firstName || payload.lastName
             ? `${payload.firstName || ""} ${payload.lastName || ""}`.trim()
-            : attrs.handle || user.email;
+            : attrs.handle || user.username || "Your Profile";
         setProfileSummary({
           displayName,
-          handle: attrs.handle || user.email,
+          handle: attrs.handle || user.username || "Profile",
           avatarUrl: pickMediaUrl(attrs.avatar, { kind: "avatar" }),
           age: payload.age || "",
           hobbies: payload.hobbies || "",
@@ -220,9 +224,15 @@ export default function Sidebar({
 
   const profileCard = useMemo(() => {
     if (!user) return null;
+    const displayName =
+      profileSummary?.displayName?.trim() ||
+      profileSummary?.handle?.trim() ||
+      user.username ||
+      "Your Profile";
+    const handle = profileSummary?.handle?.trim() || user.username || "Profile";
     return {
-      displayName: profileSummary?.displayName || user.email || "Me",
-      handle: profileSummary?.handle || user.email || "Profile",
+      displayName,
+      handle,
       avatarUrl: profileSummary?.avatarUrl,
     };
   }, [profileSummary, user]);
@@ -286,6 +296,8 @@ export default function Sidebar({
   const storefrontEnabled = appSettings?.storefrontEnabled !== false;
   const showNavLinks = !hideNavLinks;
   const showBio = !hideBio;
+  const isFriendsMobileMenu = active === "friends";
+  const showMobileCustomContent = isFriendsMobileMenu && Boolean(sidebarContent);
 
   const handleSettingsToggle = () => {
     if (!onSettingsViewChange) return;
@@ -707,179 +719,229 @@ export default function Sidebar({
             )}
           </button>
           {menuOpen && (
-            <div className="mobile-profile-menu">
-                <button
-                  className="mobile-profile-item"
-                  type="button"
-                  data-accent="dashboard"
-                  onClick={() => handleProfileAction("/dashboard")}
-                >
-                  <span className="sidebar-nav-icon" aria-hidden="true">
-                    <LayoutDashboard size={18} />
-                  </span>
-                <span>My Dashboard</span>
-              </button>
-                <button
-                  className="mobile-profile-item"
-                  type="button"
-                  data-accent="profile"
-                  onClick={() => handleProfileAction("/me")}
-                >
-                  <span className="sidebar-nav-icon" aria-hidden="true">
-                    <User size={18} />
-                  </span>
-                <span>My Profile</span>
-              </button>
-                {canToggleSettings && (
+            <div
+              className={`mobile-profile-menu${
+                showMobileCustomContent ? " has-custom-content" : ""
+              }`}
+            >
+              {isFriendsMobileMenu ? (
+                <>
                   <button
                     className="mobile-profile-item"
                     type="button"
-                    data-accent="settings"
-                    onClick={handleSettingsToggle}
+                    data-accent="dashboard"
+                    onClick={() => handleProfileAction("/dashboard")}
                   >
                     <span className="sidebar-nav-icon" aria-hidden="true">
-                      {isSettingsView ? (
-                        <ChevronLeft size={18} />
-                    ) : (
-                      <Settings size={18} />
-                    )}
-                  </span>
-                  <span>{isSettingsView ? "Back to Profile" : "Settings"}</span>
-                </button>
-              )}
-                {canSelectSettingsSection && (
-                  <div className="mobile-settings-links">
-                    {SETTINGS_SECTIONS.map((section) => (
-                      <button
-                        key={section.id}
-                        className={`mobile-profile-item${
-                          settingsSection === section.id ? " is-active" : ""
-                        }`}
-                        type="button"
-                        data-accent={section.id}
-                        onClick={() => handleSettingsSectionChange(section.id)}
-                      >
-                        <span className="sidebar-nav-icon" aria-hidden="true">
-                          {SETTINGS_SECTION_ICONS[section.id]}
-                        </span>
-                      <span>{section.label}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-                <button
-                  className="mobile-profile-item"
-                  type="button"
-                  data-accent="friends"
-                  onClick={() => handleProfileAction("/friends")}
-                >
-                  <span className="sidebar-nav-icon" aria-hidden="true">
-                    <Users size={18} />
-                  </span>
-                <span>My Friends</span>
-              </button>
-                <button
-                  className="mobile-profile-item"
-                  type="button"
-                  data-accent="groups"
-                  onClick={() => handleProfileAction("/groups")}
-                >
-                  <span className="sidebar-nav-icon" aria-hidden="true">
-                    <UsersRound size={18} />
-                  </span>
-                <span>My Groups</span>
-              </button>
-                <button
-                  className="mobile-profile-item"
-                  type="button"
-                  data-accent="forums"
-                  onClick={() => handleProfileAction("/forums")}
-                >
-                  <span className="sidebar-nav-icon" aria-hidden="true">
-                    <MessageSquare size={18} />
-                  </span>
-                <span>Forums</span>
-              </button>
-                <button
-                  className={`mobile-profile-item${
-                    newsroomEnabled ? "" : " mobile-profile-item--disabled"
-                  }`}
-                  type="button"
-                  data-accent="news"
-                  disabled={!newsroomEnabled}
-                  aria-disabled={!newsroomEnabled}
-                  onClick={() => {
-                    if (!newsroomEnabled) return;
-                    handleProfileAction("/news");
-                }}
-              >
-                <span className="sidebar-nav-icon" aria-hidden="true">
-                  <Newspaper size={18} />
-                </span>
-                <span>
-                  {newsroomEnabled ? "Newsroom" : "Newsroom (Coming soon)"}
-                </span>
-              </button>
-                {isStaff && (
-                  <button
-                    className="mobile-profile-item"
-                    type="button"
-                    data-accent="moderation"
-                    onClick={() => handleProfileAction("/moderation")}
-                  >
-                    <span className="sidebar-nav-icon" aria-hidden="true">
-                      <Shield size={18} />
+                      <LayoutDashboard size={18} />
                     </span>
-                  <span>Moderation</span>
-                </button>
-              )}
-                {canToggleGroupSettings && (
+                    <span>My Dashboard</span>
+                  </button>
+                  {sidebarContent && (
+                    <>
+                      <div className="mobile-profile-divider" />
+                      <div className="mobile-custom-content">{sidebarContent}</div>
+                    </>
+                  )}
+                  <div className="mobile-profile-divider" />
                   <button
                     className="mobile-profile-item"
                     type="button"
-                    data-accent="group-theme"
-                    onClick={handleGroupSettingsToggle}
+                    data-accent="logout"
+                    onClick={() => {
+                      logout("user-action");
+                      navigate("/login");
+                      setMenuOpen(false);
+                    }}
                   >
                     <span className="sidebar-nav-icon" aria-hidden="true">
-                      {isGroupSettingsView ? (
-                        <ChevronLeft size={18} />
-                    ) : (
-                      <Palette size={18} />
-                    )}
-                  </span>
-                  <span>
-                    {isGroupSettingsView
-                      ? "Return to group feed"
-                      : "Group look and feel"}
-                  </span>
-                </button>
+                      <LogOut size={18} />
+                    </span>
+                    <span>Logout</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    className="mobile-profile-item"
+                    type="button"
+                    data-accent="dashboard"
+                    onClick={() => handleProfileAction("/dashboard")}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <LayoutDashboard size={18} />
+                    </span>
+                    <span>My Dashboard</span>
+                  </button>
+                  <button
+                    className="mobile-profile-item"
+                    type="button"
+                    data-accent="profile"
+                    onClick={() => handleProfileAction("/me")}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <User size={18} />
+                    </span>
+                    <span>My Profile</span>
+                  </button>
+                  {canToggleSettings && (
+                    <button
+                      className="mobile-profile-item"
+                      type="button"
+                      data-accent="settings"
+                      onClick={handleSettingsToggle}
+                    >
+                      <span className="sidebar-nav-icon" aria-hidden="true">
+                        {isSettingsView ? (
+                          <ChevronLeft size={18} />
+                        ) : (
+                          <Settings size={18} />
+                        )}
+                      </span>
+                      <span>{isSettingsView ? "Back to Profile" : "Settings"}</span>
+                    </button>
+                  )}
+                  {canSelectSettingsSection && (
+                    <div className="mobile-settings-links">
+                      {SETTINGS_SECTIONS.map((section) => (
+                        <button
+                          key={section.id}
+                          className={`mobile-profile-item${
+                            settingsSection === section.id ? " is-active" : ""
+                          }`}
+                          type="button"
+                          data-accent={section.id}
+                          onClick={() => handleSettingsSectionChange(section.id)}
+                        >
+                          <span className="sidebar-nav-icon" aria-hidden="true">
+                            {SETTINGS_SECTION_ICONS[section.id]}
+                          </span>
+                          <span>{section.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <button
+                    className="mobile-profile-item"
+                    type="button"
+                    data-accent="friends"
+                    onClick={() => handleProfileAction("/friends")}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <Users size={18} />
+                    </span>
+                    <span>My Friends</span>
+                  </button>
+                  <button
+                    className="mobile-profile-item"
+                    type="button"
+                    data-accent="groups"
+                    onClick={() => handleProfileAction("/groups")}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <UsersRound size={18} />
+                    </span>
+                    <span>My Groups</span>
+                  </button>
+                  <button
+                    className="mobile-profile-item"
+                    type="button"
+                    data-accent="forums"
+                    onClick={() => handleProfileAction("/forums")}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <MessageSquare size={18} />
+                    </span>
+                    <span>Forums</span>
+                  </button>
+                  <button
+                    className={`mobile-profile-item${
+                      newsroomEnabled ? "" : " mobile-profile-item--disabled"
+                    }`}
+                    type="button"
+                    data-accent="news"
+                    disabled={!newsroomEnabled}
+                    aria-disabled={!newsroomEnabled}
+                    onClick={() => {
+                      if (!newsroomEnabled) return;
+                      handleProfileAction("/news");
+                    }}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <Newspaper size={18} />
+                    </span>
+                    <span>
+                      {newsroomEnabled ? "Newsroom" : "Newsroom (Coming soon)"}
+                    </span>
+                  </button>
+                  {isStaff && (
+                    <button
+                      className="mobile-profile-item"
+                      type="button"
+                      data-accent="moderation"
+                      onClick={() => handleProfileAction("/moderation")}
+                    >
+                      <span className="sidebar-nav-icon" aria-hidden="true">
+                        <Shield size={18} />
+                      </span>
+                      <span>Moderation</span>
+                    </button>
+                  )}
+                  {canToggleGroupSettings && (
+                    <button
+                      className="mobile-profile-item"
+                      type="button"
+                      data-accent="group-theme"
+                      onClick={handleGroupSettingsToggle}
+                    >
+                      <span className="sidebar-nav-icon" aria-hidden="true">
+                        {isGroupSettingsView ? (
+                          <ChevronLeft size={18} />
+                        ) : (
+                          <Palette size={18} />
+                        )}
+                      </span>
+                      <span>
+                        {isGroupSettingsView
+                          ? "Return to group feed"
+                          : "Group look and feel"}
+                      </span>
+                    </button>
+                  )}
+                  {showMobileCustomContent && (
+                    <>
+                      <div className="mobile-profile-divider" />
+                      <div className="mobile-custom-content">{sidebarContent}</div>
+                    </>
+                  )}
+                  <button
+                    className="mobile-profile-item"
+                    type="button"
+                    data-accent="home"
+                    onClick={() => handleProfileAction("/landing")}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <Home size={18} />
+                    </span>
+                    <span>Return Home</span>
+                  </button>
+                  <button
+                    className="mobile-profile-item"
+                    type="button"
+                    data-accent="logout"
+                    onClick={() => {
+                      logout("user-action");
+                      navigate("/login");
+                      setMenuOpen(false);
+                    }}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <LogOut size={18} />
+                    </span>
+                    <span>Logout</span>
+                  </button>
+                </>
               )}
-                <button
-                  className="mobile-profile-item"
-                  type="button"
-                  data-accent="home"
-                  onClick={() => handleProfileAction("/landing")}
-                >
-                  <span className="sidebar-nav-icon" aria-hidden="true">
-                    <Home size={18} />
-                  </span>
-                <span>Return Home</span>
-              </button>
-                <button
-                  className="mobile-profile-item"
-                  type="button"
-                  data-accent="logout"
-                  onClick={() => {
-                    logout("user-action");
-                    navigate("/login");
-                    setMenuOpen(false);
-                  }}
-                >
-                  <span className="sidebar-nav-icon" aria-hidden="true">
-                    <LogOut size={18} />
-                  </span>
-                <span>Logout</span>
-              </button>
             </div>
           )}
         </div>
@@ -984,7 +1046,7 @@ export default function Sidebar({
                       {fallbackInitial}
                     </div>
                   )}
-                  <div style={{ textAlign: "left", minWidth: 0 }}>
+                  <div style={{ textAlign: "left", minWidth: 0 }} data-i18n-skip="true">
                     <strong style={{ display: "block" }}>{nameForDisplay}</strong>
                     <span
                       style={{
@@ -1047,6 +1109,17 @@ export default function Sidebar({
                       <Download size={18} />
                     </span>
                     <span>Downloads</span>
+                  </button>
+                  <button
+                    className="btn ghost nav-btn sidebar-profile-menu-button"
+                    type="button"
+                    data-accent="settings"
+                    onClick={() => handleProfileAction("/me?view=settings")}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <Settings size={18} />
+                    </span>
+                    <span>Account settings</span>
                   </button>
                   <button
                     className="btn ghost nav-btn sidebar-profile-menu-button"

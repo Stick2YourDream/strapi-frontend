@@ -17,7 +17,7 @@
   --reader-highlight-text: #dbeafe;
   --reader-highlight-text-strong: #f0f9ff;
   color: var(--reader-ink);
-  font-family: "Source Serif 4", "Georgia", serif;
+  font-family: var(--app-font);
   background: transparent;
 }
 
@@ -48,12 +48,12 @@
 }
 
 .news-reader-theme .nav-title strong {
-  font-family: "Manrope", "Helvetica Neue", sans-serif;
+  font-family: var(--app-font);
   font-size: 1.5rem;
 }
 
 .news-reader-theme .nav-title span {
-  font-family: "Manrope", "Helvetica Neue", sans-serif;
+  font-family: var(--app-font);
   font-size: 0.9rem;
   display: none;
 }
@@ -66,7 +66,7 @@
 
 .news-reader-theme .nav-actions button,
 .news-reader-theme .nav-actions a {
-  font-family: "Manrope", "Helvetica Neue", sans-serif;
+  font-family: var(--app-font);
   border-radius: 999px;
   padding: clamp(8px, 1.2vw, 12px) clamp(12px, 2vw, 18px);
   border: 1px solid rgba(9, 67, 148, 0.9);
@@ -98,7 +98,7 @@
 
 /* .news-reader-theme .nav-status {
   min-height: 18px;
-  font-family: "Manrope", "Helvetica Neue", sans-serif;
+  font-family: var(--app-font);
   font-size: 0.75rem;
   color: var(--reader-muted);
   margin: 10px 0 16px;
@@ -135,7 +135,7 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  font-family: "Manrope", "Helvetica Neue", sans-serif;
+  font-family: var(--app-font);
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.18em;
@@ -149,11 +149,11 @@
   background: rgba(15, 23, 42, 0.9);
   color: #e2e8f0;
   padding: 6px 10px;
-  font-family: "Manrope", "Helvetica Neue", sans-serif;
+  font-family: var(--app-font);
 }
 
 .news-reader-theme .read-controls button {
-  font-family: "Manrope", "Helvetica Neue", sans-serif;
+  font-family: var(--app-font);
   border-radius: 10px;
   border: 1px solid rgba(148, 163, 184, 0.35);
   background: rgba(5, 36, 109, 0.88);
@@ -172,7 +172,7 @@
 }
 
 .news-reader-theme .read-progress {
-  font-family: "Manrope", "Helvetica Neue", sans-serif;
+  font-family: var(--app-font);
   font-size: 0.75rem;
   color: var(--reader-muted);
 }
@@ -193,7 +193,7 @@
 
 .news-reader-theme .reader-content p:first-of-type::first-letter {
   float: left;
-  font-family: "Fraunces", serif;
+  font-family: var(--app-font);
   font-size: 3.2rem;
   line-height: 0.9;
   padding-right: 8px;
@@ -208,7 +208,7 @@
 }
 
 .news-reader-theme figcaption {
-  font-family: "Manrope", "Helvetica Neue", sans-serif;
+  font-family: var(--app-font);
   font-size: 0.82rem;
   color: var(--reader-muted);
   margin-top: -10px;
@@ -218,3 +218,4 @@
 .news-reader-theme a {
   color: var(--reader-link);
 }
+

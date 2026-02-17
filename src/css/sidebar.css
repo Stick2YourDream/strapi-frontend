@@ -185,6 +185,26 @@
   z-index: 16;
 }
 
+.mobile-profile-menu.has-custom-content {
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+}
+
+.mobile-custom-content {
+  display: grid;
+  gap: 12px;
+}
+
+.mobile-profile-menu .friends-sidebar-dashboard {
+  display: none;
+}
+
+.mobile-profile-divider {
+  height: 1px;
+  background: var(--ysp-panel-border, rgba(148, 163, 184, 0.18));
+  margin: 4px 0;
+}
+
 .mobile-profile-item {
   width: 100%;
   display: flex;

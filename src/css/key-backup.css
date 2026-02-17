@@ -83,6 +83,71 @@
   background: rgba(10, 16, 28, 0.5);
 }
 
+.key-backup-trust-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(10, 16, 28, 0.6);
+}
+
+.key-backup-trust-hero {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.key-backup-trust-hero h4 {
+  margin: 0 0 6px;
+  font-size: 18px;
+  color: #f1f5f9;
+}
+
+.key-backup-trust-art {
+  width: 86px;
+  height: 86px;
+  border-radius: 16px;
+  background: linear-gradient(145deg, rgba(95, 139, 255, 0.28), rgba(12, 18, 32, 0.95));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.key-backup-trust-art svg {
+  width: 64px;
+  height: 64px;
+}
+
+.key-backup-trust-device {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.key-backup-trust-label {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #9fb5ff;
+}
+
+.key-backup-trust-device strong {
+  font-size: 14px;
+  color: #f8fafc;
+}
+
+.key-backup-trust-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
 .key-backup-danger {
   border-color: rgba(255, 115, 115, 0.45);
   background: rgba(40, 12, 18, 0.45);
@@ -214,5 +279,17 @@
   .key-backup-modal {
     height: 96dvh;
     max-height: 96dvh;
+  }
+}
+
+@media (max-width: 600px) {
+  .key-backup-trust-hero {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .key-backup-trust-actions {
+    flex-direction: column;
+    align-items: stretch;
   }
 }

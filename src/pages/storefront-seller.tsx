@@ -172,15 +172,15 @@ type DraftProduct = {
 
 type VerificationItem = {
   label: string;
-  status: "verified" | "pending" | "required";
+  status: "verified" | "pending" | "optional";
   detail: string;
 };
 
 type VerificationStatus = {
-  sellerIdStatus?: "verified" | "pending" | "required";
-  sellerPayoutStatus?: "verified" | "pending" | "required";
-  buyerPaymentStatus?: "verified" | "pending" | "required";
-  buyerAddressStatus?: "verified" | "pending" | "required";
+  sellerIdStatus?: "verified" | "pending" | "required" | "optional";
+  sellerPayoutStatus?: "verified" | "pending" | "required" | "optional";
+  buyerPaymentStatus?: "verified" | "pending" | "required" | "optional";
+  buyerAddressStatus?: "verified" | "pending" | "required" | "optional";
   stripeIdentityStatus?: string;
   stripeIdentitySessionId?: string;
   payoutProvider?: string;
@@ -444,10 +444,10 @@ const parseLocationParts = (location: string) => {
 };
 
 const normalizeStatus = (value?: string | null): VerificationItem["status"] => {
-  if (value === "verified" || value === "pending" || value === "required") {
+  if (value === "verified" || value === "pending" || value === "optional") {
     return value;
   }
-  return "required";
+  return "optional";
 };
 
 const getStatusTone = (value?: string | null) => {
@@ -484,12 +484,12 @@ const buildSellerVerification = (status?: VerificationStatus | null): Verificati
   {
     label: "Government ID",
     status: normalizeStatus(status?.sellerIdStatus),
-    detail: "Identity confirmation",
+    detail: "Optional identity verification",
   },
   {
     label: "Payout method",
     status: normalizeStatus(status?.sellerPayoutStatus),
-    detail: "Bank or PayPal verified",
+    detail: "Optional payout verification",
   },
   {
     label: "Activity history",
@@ -3211,8 +3211,7 @@ export default function StorefrontSeller(): JSX.Element {
               </div>
               <div className="storefront-verification-list">
                   {[payoutItem, activityItem].filter(Boolean).map((item) => {
-                    const statusLabel =
-                      item?.status === "required" ? "optional" : item?.status;
+                    const statusLabel = item?.status || "optional";
                     return (
                       <div key={item?.label} className="storefront-widget-row">
                         <span>{item?.label}</span>

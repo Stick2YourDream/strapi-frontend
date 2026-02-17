@@ -4045,6 +4045,8 @@ export default function VideoCallModal({
       canvas.height = isScreen ? 720 : 360;
       const ctx = canvas.getContext("2d");
       if (!ctx) return null;
+      const fontFamily =
+        getComputedStyle(document.body).fontFamily || "system-ui, sans-serif";
       let rafId = 0;
       const baseHue = Math.floor(Math.random() * 360);
       const draw = () => {
@@ -4054,9 +4056,9 @@ export default function VideoCallModal({
         ctx.fillStyle = `hsla(${baseHue + 40}, 70%, 35%, 0.25)`;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.fillStyle = "#e2e8f0";
-        ctx.font = `${isScreen ? 42 : 28}px "Inter", system-ui, sans-serif`;
+        ctx.font = `${isScreen ? 42 : 28}px ${fontFamily}`;
         ctx.fillText(label, 30, 70);
-        ctx.font = `${isScreen ? 28 : 18}px "Inter", system-ui, sans-serif`;
+        ctx.font = `${isScreen ? 28 : 18}px ${fontFamily}`;
         ctx.fillStyle = "#94a3b8";
         ctx.fillText(now.toLocaleTimeString(), 30, 110);
         ctx.fillStyle = "rgba(255,255,255,0.08)";

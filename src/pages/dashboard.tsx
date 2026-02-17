@@ -19,6 +19,7 @@ import GoalsImpactPanel from "../components/GoalsImpactPanel";
 import { Target } from "lucide-react";
 import { useImpactStats } from "../hooks/useImpactStats";
 import { useNewsPreference } from "../hooks/useNewsPreference";
+import LinkPreviewCard from "../components/LinkPreviewCard";
 // import NewsWidget from "../components/NewsWidget";
 import "../css/news-widget.css";
 
@@ -69,12 +70,22 @@ type ReactionCounts = {
   heart: number;
 };
 
+type PostMediaItem = {
+  id: number;
+  url: string;
+  isVideo: boolean;
+};
+
 type NormalizedPost = {
   id: string | number;
   numericId?: number;
+  documentId?: string;
   title: string;
   content: string;
   imageUrl?: string;
+  mediaUrls?: string[];
+  mediaItems?: PostMediaItem[];
+  mediaIds?: number[];
   createdAt?: string;
   source: "user" | "group" | "admin";
   ownerName?: string;
@@ -295,6 +306,33 @@ const parseStructuredPost = (content: string, tag?: SignalTag) => {
   });
   return { rows };
 };
+const extractCheckInGoal = (content: string, tag?: SignalTag) => {
+  const safeContent = String(content || "");
+  if (tag !== "check-in" && tag !== "support-request") {
+    return { goal: "", content: safeContent };
+  }
+  const lines = safeContent.split(/\r?\n/);
+  let index = 0;
+  while (index < lines.length && lines[index].trim() === "") {
+    index += 1;
+  }
+  if (index >= lines.length) {
+    return { goal: "", content: safeContent };
+  }
+  const match = lines[index].match(/^goal\s*:\s*(.+)$/i);
+  if (!match) {
+    return { goal: "", content: safeContent };
+  }
+  const goal = match[1]?.trim() ?? "";
+  if (!goal) {
+    return { goal: "", content: safeContent };
+  }
+  const remaining = [...lines.slice(0, index), ...lines.slice(index + 1)];
+  while (remaining.length && remaining[0].trim() === "") {
+    remaining.shift();
+  }
+  return { goal, content: remaining.join("\n") };
+};
 const normalize = (entry: unknown): UnknownRecord => {
   if (!isRecord(entry)) return {};
   const attrs = entry.attributes;
@@ -307,6 +345,43 @@ const getEntity = (entry: unknown): unknown => {
   }
   return entry;
 };
+const resolveMediaItems = (field: unknown): unknown[] => {
+  const unwrap = (value: unknown): unknown[] => {
+    if (value === null || value === undefined) return [];
+    if (Array.isArray(value)) {
+      return value.flatMap((item) => unwrap(item));
+    }
+    if (isRecord(value) && "data" in value) {
+      return unwrap((value as UnknownRecord).data);
+    }
+    return [value];
+  };
+
+  return unwrap(field);
+};
+const getMediaIdFromItem = (item: unknown) => {
+  if (typeof item === "number") return Number.isFinite(item) ? item : undefined;
+  if (typeof item === "string") {
+    const num = Number(item);
+    return Number.isFinite(num) ? num : undefined;
+  }
+  if (isRecord(item)) {
+    const rawId =
+      item.id ?? (isRecord(item.attributes) ? item.attributes.id : undefined);
+    const num = Number(rawId);
+    return Number.isFinite(num) ? num : undefined;
+  }
+  return undefined;
+};
+const getMediaItemsFromField = (field: unknown): PostMediaItem[] =>
+  resolveMediaItems(field)
+    .map((item) => {
+      const url = pickMediaUrl(item, { kind: "post" });
+      const id = getMediaIdFromItem(item);
+      if (!url || !id) return null;
+      return { id, url, isVideo: isVideoUrl(url) };
+    })
+    .filter((entry): entry is PostMediaItem => Boolean(entry));
 const getEntityId = (entry: unknown) => {
   const data = getEntity(entry);
   if (typeof data === "number") return Number.isFinite(data) ? data : undefined;
@@ -347,6 +422,11 @@ const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
 const MAX_UPLOAD_LABEL = "1 GB";
 const MAX_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024;
 const MAX_VIDEO_UPLOAD_LABEL = "100 MB";
+const MAX_POST_MEDIA_FILES = 10;
+const USERS_POST_POPULATE =
+  "populate[0]=Users_Pictures&populate[1]=owner&populate[2]=feedbackTarget&populate[3]=trustedCircle";
+const GROUP_POST_POPULATE = "populate[0]=media&populate[1]=owner&populate[2]=group";
+const ADMIN_POST_POPULATE = "populate[0]=Pictures";
 const URL_REGEX =
   /\b((?:https?:\/\/)?(?:www\.)?(?:(?:[a-z0-9-]+\.)+[a-z]{2,}|localhost|\d{1,3}(?:\.\d{1,3}){3})(?::\d{2,5})?)(?:\/[^\s]*)?/gi;
 const TRAILING_PUNCTUATION = /[),.!?]+$/;
@@ -426,14 +506,6 @@ const hostnameFor = (value: string) => {
     return value;
   }
 };
-const faviconFor = (value: string) => {
-  try {
-    const host = new URL(value).hostname.replace(/^www\./, "");
-    return `https://www.google.com/s2/favicons?domain=${host}&sz=128`;
-  } catch {
-    return "";
-  }
-};
 const isYoutubeUrl = (value: string) => {
   try {
     const host = new URL(value).hostname.toLowerCase();
@@ -452,10 +524,32 @@ const isVideoFile = (file: File) => {
   if (file.type && file.type.startsWith("video/")) return true;
   return /\.(mp4|webm|mov|m4v|mkv)$/i.test(file.name);
 };
+const isImageFile = (file: File) => {
+  if (file.type && file.type.startsWith("image/")) return true;
+  return /\.(png|jpe?g|gif|webp|avif|bmp|svg|heic|heif)$/i.test(file.name);
+};
 const mediaDescriptor = (mediaUrl?: string, hasLink?: boolean) => {
   if (mediaUrl) return isVideoUrl(mediaUrl) ? "with a video" : "with a picture";
   if (hasLink) return "with a link";
   return "";
+};
+const getPostMediaUrls = (post: NormalizedPost) => {
+  if (post.mediaItems && post.mediaItems.length) {
+    return post.mediaItems
+      .map((item) => item.url)
+      .filter(Boolean)
+      .slice(0, MAX_POST_MEDIA_FILES);
+  }
+  if (post.mediaUrls && post.mediaUrls.length) {
+    return post.mediaUrls.filter(Boolean).slice(0, MAX_POST_MEDIA_FILES);
+  }
+  return post.imageUrl ? [post.imageUrl] : [];
+};
+const getMediaGridLayout = (count: number) => {
+  const total = Math.min(count, MAX_POST_MEDIA_FILES);
+  if (total <= 1) return { columns: 1, rows: 1 };
+  if (total <= 5) return { columns: total, rows: 1 };
+  return { columns: 5, rows: 2 };
 };
 const buildIdFilter = (field: string, ids: number[]) =>
   ids.map((id, index) => `filters[${field}][id][$in][${index}]=${id}`).join("&");
@@ -477,6 +571,24 @@ const buildUserPostsQuery = (ownerIds: number[]) => {
   groupIndex += 1;
   parts.push(`filters[$or][${groupIndex}][feedbackAudience][$eq]=public`);
   return `${parts.join("&")}&includeDemo=true`;
+};
+const buildUserPostPathCandidates = (post: NormalizedPost) => {
+  const attempts: string[] = [];
+  if (post.documentId) {
+    attempts.push(`/users-posts/${post.documentId}`);
+  }
+  const numericId =
+    post.numericId ?? (typeof post.id === "number" ? post.id : Number(post.id));
+  if (Number.isFinite(numericId)) {
+    attempts.push(`/users-posts/${numericId}`);
+  }
+  if (typeof post.id === "string") {
+    attempts.push(`/users-posts/${post.id}`);
+  }
+  if (typeof post.id === "number") {
+    attempts.push(`/users-posts/${post.id}`);
+  }
+  return Array.from(new Set(attempts));
 };
 const getPostKey = (entry: unknown) => {
   const record = asRecord(entry);
@@ -653,51 +765,6 @@ const POST_TEMPLATES: Array<{
   },
 ];
 
-const LinkPreviewCard = ({
-  preview,
-  url,
-  compact = false,
-}: {
-  preview: LinkPreview;
-  url: string;
-  compact?: boolean;
-}) => {
-  const title = preview.title || preview.siteName || hostnameFor(url);
-  const meta = preview.siteName || hostnameFor(url);
-  const showBadge = preview.type === "video" || isYoutubeUrl(url);
-  const fallbackImage = preview.image || faviconFor(url);
-  const hasImage = Boolean(fallbackImage);
-  return (
-    <a
-      className={`link-preview-card${compact ? " is-compact" : ""}`}
-      href={url}
-      target="_blank"
-      rel="noreferrer"
-    >
-      <div className="link-preview-media">
-        {hasImage ? (
-          <img
-            src={fallbackImage}
-            alt={title}
-            loading="lazy"
-            className={preview.image ? "" : "is-favicon"}
-          />
-        ) : (
-          <div className="link-preview-placeholder">LINK</div>
-        )}
-        {showBadge && <span className="link-preview-badge">Video</span>}
-      </div>
-      <div className="link-preview-body">
-        <p className="link-preview-title">{title}</p>
-        {preview.description && (
-          <p className="link-preview-desc">{preview.description}</p>
-        )}
-        <span className="link-preview-url">{meta}</span>
-      </div>
-    </a>
-  );
-};
-
 export default function Dashboard() {
   const [posts, setPosts] = useState<PostsState>({
     user: [],
@@ -709,7 +776,7 @@ export default function Dashboard() {
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [formContent, setFormContent] = useState("");
-  const [formFile, setFormFile] = useState<File | null>(null);
+  const [formFiles, setFormFiles] = useState<File[]>([]);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [composerOpen, setComposerOpen] = useState(false);
@@ -737,12 +804,27 @@ export default function Dashboard() {
     {}
   );
   const [shareMenuFor, setShareMenuFor] = useState<string | number | null>(null);
+  const [postMenuFor, setPostMenuFor] = useState<string | null>(null);
   const [shareNotice, setShareNotice] = useState<Record<string | number, string>>({});
   const [copyToast, setCopyToast] = useState<string | null>(null);
   const [impactNotice, setImpactNotice] = useState<string | null>(null);
   const [activePostKey, setActivePostKey] = useState<string | null>(null);
+  const [editingPostId, setEditingPostId] = useState<string | null>(null);
+  const [editPostTitle, setEditPostTitle] = useState("");
+  const [editPostContent, setEditPostContent] = useState("");
+  const [editMediaItems, setEditMediaItems] = useState<PostMediaItem[]>([]);
+  const [editMediaPostId, setEditMediaPostId] = useState<string | null>(null);
+  const [editMediaRemovingId, setEditMediaRemovingId] = useState<number | null>(
+    null
+  );
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingDeletePost, setPendingDeletePost] = useState<NormalizedPost | null>(
+    null
+  );
+  const [postEditing, setPostEditing] = useState<Record<string, boolean>>({});
   const [goalsModalOpen, setGoalsModalOpen] = useState(false);
-  const [formFilePreviewUrl, setFormFilePreviewUrl] = useState<string | null>(null);
+  const [formFilePreviewUrls, setFormFilePreviewUrls] = useState<string[]>([]);
+  const [formDragActive, setFormDragActive] = useState(false);
   const [linkPreview, setLinkPreview] = useState<LinkPreview | null>(null);
   const [linkPreviewLoading, setLinkPreviewLoading] = useState(false);
   const [linkPreviewError, setLinkPreviewError] = useState<string | null>(null);
@@ -786,7 +868,6 @@ export default function Dashboard() {
   const nameFromProfile = `${profile?.firstName || ""} ${profile?.lastName || ""}`.trim();
   const userLabel = nameFromProfile || user?.email || "Friend";
   const userInitial = userLabel.charAt(0).toUpperCase();
-  const formFileIsVideo = formFile ? isVideoFile(formFile) : false;
 
   useEffect(() => {
     setGoalsState(loadGoalsState(goalsStorageKey));
@@ -860,7 +941,7 @@ export default function Dashboard() {
   const showFeedOptions = !showCheckInOptions || checkInTarget === "feed";
   const dashboardNewsEnabled =
     (newsOverride ?? profile?.notificationSettings?.newsEnabled) !== false;
-  const composerHasDraft = Boolean(formContent.trim()) || Boolean(formFile);
+  const composerHasDraft = Boolean(formContent.trim()) || formFiles.length > 0;
   const isComposerOpen = composerOpen || composerHasDraft || submitting;
   const showComposerAdvanced = isComposerOpen && composerExpanded;
 
@@ -997,6 +1078,45 @@ export default function Dashboard() {
   const composerToggleLabel = showComposerAdvanced ? "Hide options" : "Customize post";
   const composerToggleDisabled = false;
 
+  const handleComposerFiles = useCallback(
+    (incoming: FileList | File[] | null) => {
+      const files = incoming ? Array.from(incoming) : [];
+      if (!files.length) {
+        setFormFiles([]);
+        return;
+      }
+
+      let valid = files.filter((file) => isVideoFile(file) || isImageFile(file));
+      if (valid.length !== files.length) {
+        setFormError("Only images or videos are allowed.");
+      }
+
+      if (!valid.length) {
+        setFormFiles([]);
+        return;
+      }
+
+      if (valid.length > MAX_POST_MEDIA_FILES) {
+        setFormError(`You can upload up to ${MAX_POST_MEDIA_FILES} files at once.`);
+        valid = valid.slice(0, MAX_POST_MEDIA_FILES);
+      }
+
+      for (const file of valid) {
+        const isVideo = isVideoFile(file);
+        const maxBytes = isVideo ? MAX_VIDEO_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
+        const maxLabel = isVideo ? MAX_VIDEO_UPLOAD_LABEL : MAX_UPLOAD_LABEL;
+        if (file.size > maxBytes) {
+          setFormError(`Media files must be under ${maxLabel}.`);
+          return;
+        }
+      }
+
+      setFormFiles(valid);
+      setFormError(null);
+    },
+    []
+  );
+
   useEffect(() => {
     if (checkInTarget !== "trusted") {
       setCheckInGroupId("");
@@ -1025,14 +1145,16 @@ export default function Dashboard() {
   }, [showCheckInOptions]);
 
   useEffect(() => {
-    if (!formFile) {
-      setFormFilePreviewUrl(null);
+    if (!formFiles.length) {
+      setFormFilePreviewUrls([]);
       return;
     }
-    const objectUrl = URL.createObjectURL(formFile);
-    setFormFilePreviewUrl(objectUrl);
-    return () => URL.revokeObjectURL(objectUrl);
-  }, [formFile]);
+    const urls = formFiles.map((file) => URL.createObjectURL(file));
+    setFormFilePreviewUrls(urls);
+    return () => {
+      urls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [formFiles]);
 
   useEffect(() => {
     if (feedbackAudience !== "specific") {
@@ -1180,14 +1302,14 @@ export default function Dashboard() {
         const groupFilter = memberGroups.length ? buildIdFilter("group", memberGroups) : "";
 
         const [adminRes, userRes, groupRes, commentsRes, circlesRes] = await Promise.all([
-          api.get(`/posts?populate=Pictures&pagination[pageSize]=${POSTS_PAGE_SIZE}`),
+          api.get(`/posts?${ADMIN_POST_POPULATE}&pagination[pageSize]=${POSTS_PAGE_SIZE}`),
           api.get(
-            `/users-posts?${userQuery}&populate=Users_Pictures&populate=owner&populate=feedbackTarget&populate=trustedCircle` +
+            `/users-posts?${userQuery}&${USERS_POST_POPULATE}` +
               `&sort=createdAt:desc&pagination[pageSize]=${POSTS_PAGE_SIZE}&pagination[page]=1`
           ),
           memberGroups.length
             ? api.get(
-                `/group-posts?${groupFilter}&populate=media&populate=owner&populate=group` +
+                `/group-posts?${groupFilter}&${GROUP_POST_POPULATE}` +
                   `&sort=createdAt:desc&pagination[pageSize]=${POSTS_PAGE_SIZE}&pagination[page]=1`
               )
             : Promise.resolve({ data: { data: [], meta: {} } }),
@@ -1376,13 +1498,13 @@ export default function Dashboard() {
       const [userRes, groupRes] = await Promise.all([
         shouldLoadUser
           ? api.get(
-              `/users-posts?${userQuery}&populate=Users_Pictures&populate=owner&populate=feedbackTarget&populate=trustedCircle` +
+              `/users-posts?${userQuery}&${USERS_POST_POPULATE}` +
                 `&sort=createdAt:desc&pagination[pageSize]=${POSTS_PAGE_SIZE}&pagination[page]=${nextUserPage}`
             )
           : Promise.resolve({ data: { data: [], meta: {} } }),
         shouldLoadGroup
           ? api.get(
-              `/group-posts?${groupFilter}&populate=media&populate=owner&populate=group` +
+              `/group-posts?${groupFilter}&${GROUP_POST_POPULATE}` +
                 `&sort=createdAt:desc&pagination[pageSize]=${POSTS_PAGE_SIZE}&pagination[page]=${nextGroupPage}`
             )
           : Promise.resolve({ data: { data: [], meta: {} } }),
@@ -1578,12 +1700,21 @@ export default function Dashboard() {
       const content =
         getString(attributes.Users_Content) ?? getString(attributes.content) ?? "";
 
-      const picturesRaw = getEntity(attributes.Users_Pictures) ?? getEntity(attributes.pictures);
-      const mediaItem = Array.isArray(picturesRaw) ? picturesRaw[0] : picturesRaw;
-      const imageUrl = pickMediaUrl(mediaItem, { kind: "post" });
+      const mediaItems = getMediaItemsFromField(
+        attributes.Users_Pictures ?? attributes.pictures
+      );
+      const mediaUrls = mediaItems.map((item) => item.url);
+      const mediaIds = mediaItems.map((item) => item.id);
+      const imageUrl = mediaUrls[0];
 
       const postRecord = asRecord(post);
       const rawPostId = postRecord.id ?? postRecord.documentId;
+      const documentId =
+        typeof postRecord.documentId === "string"
+          ? postRecord.documentId
+          : typeof attributes.documentId === "string"
+          ? attributes.documentId
+          : undefined;
       const targetIdSet = new Set<string>();
       const addTargetId = (value: unknown) => {
         if (value === undefined || value === null) return;
@@ -1680,9 +1811,13 @@ export default function Dashboard() {
       return {
         id: postId,
         numericId: normalizedNumericId,
+        documentId,
         title,
         content,
         imageUrl,
+        mediaUrls,
+        mediaItems,
+        mediaIds,
         createdAt: getString(attributes.createdAt),
         source: "user",
         ownerName,
@@ -1723,8 +1858,10 @@ export default function Dashboard() {
       const title =
         getString(attributes.title) ?? getString(attributes.Title) ?? "Group update";
       const content = getString(attributes.body) ?? getString(attributes.content) ?? "";
-      const mediaItem = getEntity(attributes.media);
-      const imageUrl = pickMediaUrl(mediaItem, { kind: "post" });
+      const mediaItems = getMediaItemsFromField(attributes.media);
+      const mediaUrls = mediaItems.map((item) => item.url);
+      const mediaIds = mediaItems.map((item) => item.id);
+      const imageUrl = mediaUrls[0];
 
       const ownerData = getEntity(attributes.owner);
       const ownerAttrs = normalize(ownerData) as { email?: string };
@@ -1812,6 +1949,9 @@ export default function Dashboard() {
         title,
         content,
         imageUrl,
+        mediaUrls,
+        mediaItems,
+        mediaIds,
         createdAt: getString(attributes.createdAt),
         source: "group",
         ownerName,
@@ -1844,9 +1984,10 @@ export default function Dashboard() {
       const title = getString(attributes.Title) ?? "Announcement";
       const content = getString(attributes.Posts_Content) ?? "";
 
-      const picturesRaw = getEntity(attributes.Pictures);
-      const mediaItem = Array.isArray(picturesRaw) ? picturesRaw[0] : picturesRaw;
-      const imageUrl = pickMediaUrl(mediaItem, { kind: "post" });
+      const mediaItems = getMediaItemsFromField(attributes.Pictures);
+      const mediaUrls = mediaItems.map((item) => item.url);
+      const mediaIds = mediaItems.map((item) => item.id);
+      const imageUrl = mediaUrls[0];
 
       const postRecord = asRecord(post);
       const rawPostId = postRecord.id ?? postRecord.documentId;
@@ -1923,6 +2064,9 @@ export default function Dashboard() {
         title,
         content,
         imageUrl,
+        mediaUrls,
+        mediaItems,
+        mediaIds,
         createdAt: getString(attributes.createdAt),
         source: "admin",
         ownerName: "Your Social Place",
@@ -2033,9 +2177,7 @@ export default function Dashboard() {
   const fetchUserPostByKey = useCallback(async (postKey: string) => {
     if (!postKey) return false;
     try {
-      const res = await api.get(
-        `/users-posts/${postKey}?populate=Users_Pictures&populate=owner&populate=feedbackTarget&populate=trustedCircle`
-      );
+      const res = await api.get(`/users-posts/${postKey}?${USERS_POST_POPULATE}`);
       const entry = res.data?.data;
       if (!entry) return false;
       setPosts((prev) => ({
@@ -2190,12 +2332,13 @@ export default function Dashboard() {
   const createPost = async () => {
     const sanitized = sanitizePostText(formContent);
     const content = sanitized.trim();
-    if (!content && !formFile) {
+    if (!content && formFiles.length === 0) {
       setFormError("Add a message or a photo/video to post.");
       return;
     }
     const isCheckInPost =
       postSignalTag === "check-in" || postSignalTag === "support-request";
+    const goalSelection = checkInGoal.trim();
     const postToTrustedCircle = isCheckInPost && checkInTarget === "trusted";
     if (postToTrustedCircle && !checkInGroupId) {
       setFormError("Choose a trusted circle for this check-in.");
@@ -2214,12 +2357,27 @@ export default function Dashboard() {
     const previewTitle = linkPreview?.url === url ? linkPreview.title : undefined;
     const derivedTitle =
       previewTitle || (url ? hostnameFor(url) : "") || content || "Post";
+    const contentWithGoal =
+      isCheckInPost && goalSelection && !/^\s*goal\s*:/i.test(content)
+        ? content
+          ? `Goal: ${goalSelection}\n\n${content}`
+          : `Goal: ${goalSelection}`
+        : content;
 
-    if (formFile) {
-      const isVideo = isVideoFile(formFile);
+    if (formFiles.length > MAX_POST_MEDIA_FILES) {
+      setFormError(`You can upload up to ${MAX_POST_MEDIA_FILES} files at once.`);
+      return;
+    }
+
+    for (const file of formFiles) {
+      if (!isVideoFile(file) && !isImageFile(file)) {
+        setFormError("Only images or videos are allowed.");
+        return;
+      }
+      const isVideo = isVideoFile(file);
       const maxBytes = isVideo ? MAX_VIDEO_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
       const maxLabel = isVideo ? MAX_VIDEO_UPLOAD_LABEL : MAX_UPLOAD_LABEL;
-      if (formFile.size > maxBytes) {
+      if (file.size > maxBytes) {
         setFormError(`Media files must be under ${maxLabel}.`);
         return;
       }
@@ -2228,14 +2386,15 @@ export default function Dashboard() {
     setFormError(null);
     setSubmitting(true);
     try {
-      let uploadedId: number | undefined;
+      let uploadedIds: number[] = [];
 
-      if (formFile) {
+      if (formFiles.length) {
         const fd = new FormData();
-        fd.append("files", formFile);
+        formFiles.forEach((file) => fd.append("files", file));
         const uploadRes = await api.post("/upload", fd);
-        const uploaded = uploadRes.data?.[0];
-        uploadedId = uploaded?.id;
+        uploadedIds = (uploadRes.data ?? [])
+          .map((item: { id?: number }) => item?.id)
+          .filter((id: number | undefined): id is number => Number.isFinite(id));
       }
 
       const resolvedSignalTag = postSignalTag === "none" ? undefined : postSignalTag;
@@ -2252,9 +2411,9 @@ export default function Dashboard() {
       await api.post("/users-posts", {
         data: {
           Title: String(derivedTitle).slice(0, 80) || (isCheckInPost ? "Check-in" : "Post"),
-          Users_Content: content,
+          Users_Content: contentWithGoal,
           owner: user?.id,
-          Users_Pictures: uploadedId ? [uploadedId] : undefined,
+          Users_Pictures: uploadedIds.length ? uploadedIds : undefined,
           visibility: effectiveVisibility,
           trustedCircle: trustedCircleId,
           signalTag: resolvedSignalTag,
@@ -2292,7 +2451,7 @@ export default function Dashboard() {
       }
 
       setFormContent("");
-      setFormFile(null);
+      setFormFiles([]);
       setLinkPreview(null);
       setLinkPreviewError(null);
       setFeedbackAudience("none");
@@ -2322,24 +2481,282 @@ export default function Dashboard() {
     }
   };
 
-  const deletePost = async (postId: number) => {
-    if (!window.confirm("Delete this post?")) return;
+  const pushImpactNotice = useCallback(
+    (message: string) => {
+      setImpactNotice(message);
+      if (impactTimeoutRef.current) {
+        window.clearTimeout(impactTimeoutRef.current);
+      }
+      impactTimeoutRef.current = window.setTimeout(() => {
+        setImpactNotice(null);
+      }, 3200);
+    },
+    [setImpactNotice]
+  );
+
+  const deletePost = async (post: NormalizedPost) => {
+    if (post.source !== "user") return;
+    if (!pendingDeletePost || pendingDeletePost.id !== post.id) {
+      setPendingDeletePost(post);
+      return;
+    }
+    setPendingDeletePost(null);
+    const postKey = String(post.id);
     try {
-      await api.delete(`/users-posts/${postId}`);
+      const uniqueAttempts = buildUserPostPathCandidates(post);
+
+      let removed = false;
+      for (const path of uniqueAttempts) {
+        try {
+          await api.delete(path);
+          removed = true;
+          break;
+        } catch (err: unknown) {
+          if (axios.isAxiosError(err) && err.response?.status === 404) {
+            continue;
+          }
+          throw err;
+        }
+      }
+
+      if (!removed) {
+        setError("Failed to delete post");
+        return;
+      }
+
       setPosts((prev) => ({
         ...prev,
-        user: prev.user.filter((post) => {
-          const record = asRecord(post);
-          const rawId = record.id ?? record.documentId;
-          const idValue = Number(rawId);
-          return !Number.isFinite(idValue) || idValue !== postId;
+        user: prev.user.filter((entry) => {
+          const record = asRecord(entry);
+          const attrs = normalize(entry);
+          const rawId =
+            record.id ?? record.documentId ?? attrs.id ?? attrs.documentId ?? undefined;
+          return rawId === undefined || String(rawId) !== postKey;
         }),
       }));
+      if (editingPostId === postKey) {
+        cancelEditPost();
+      }
+      if (shareMenuFor === postKey) {
+        setShareMenuFor(null);
+      }
+      if (activePostKey === postKey) {
+        setActivePostKey(null);
+      }
+      pushImpactNotice("Post deleted.");
     } catch (err) {
       console.error("Delete post failed", err);
-      setError("Failed to delete post");
+      setActionError("Failed to delete post");
     }
   };
+
+  const updateUserPostEntry = useCallback(
+    (postKey: string, nextTitle: string, nextContent: string) => {
+      setPosts((prev) => ({
+        ...prev,
+        user: prev.user.map((entry) => {
+          const record = asRecord(entry);
+          const attrs = normalize(entry);
+          const rawId =
+            record.id ?? record.documentId ?? attrs.id ?? attrs.documentId ?? undefined;
+          if (rawId === undefined || String(rawId) !== postKey) return entry;
+          if (isRecord(record.attributes)) {
+            return {
+              ...record,
+              attributes: {
+                ...record.attributes,
+                Title: nextTitle,
+                Users_Content: nextContent,
+                title: nextTitle,
+                content: nextContent,
+              },
+            };
+          }
+          if (isRecord(record)) {
+            return {
+              ...record,
+              Title: nextTitle,
+              Users_Content: nextContent,
+              title: nextTitle,
+              content: nextContent,
+            };
+          }
+          return entry;
+        }),
+      }));
+    },
+    []
+  );
+
+  const cancelEditPost = useCallback(() => {
+    setEditingPostId(null);
+    setEditPostTitle("");
+    setEditPostContent("");
+    setEditMediaItems([]);
+    setEditMediaPostId(null);
+    setEditMediaRemovingId(null);
+  }, []);
+
+  const updatePostMediaEntry = useCallback(
+    (postKey: string, nextItems: PostMediaItem[]) => {
+      setPosts((prev) => ({
+        ...prev,
+        user: prev.user.map((entry) => {
+          const record = asRecord(entry);
+          const attrs = normalize(entry);
+          const rawId =
+            record.id ?? record.documentId ?? attrs.id ?? attrs.documentId ?? undefined;
+          if (rawId === undefined || String(rawId) !== postKey) return entry;
+          const nextMedia = nextItems.map((item) => ({ id: item.id, url: item.url }));
+          if (isRecord(record.attributes)) {
+            return {
+              ...record,
+              attributes: { ...record.attributes, Users_Pictures: nextMedia },
+            };
+          }
+          return { ...record, Users_Pictures: nextMedia };
+        }),
+      }));
+    },
+    []
+  );
+
+  const removePostMediaItem = useCallback(
+    async (post: NormalizedPost, item: PostMediaItem) => {
+      if (!user) {
+        setActionError("Please log in to edit posts.");
+        return;
+      }
+      if (post.source !== "user" || post.ownerId !== user.id) {
+        setActionError("You can only edit your own posts.");
+        return;
+      }
+      const postKey = String(post.id);
+      if (editMediaRemovingId) return;
+      const currentItems =
+        editMediaPostId === postKey && editMediaItems.length
+          ? editMediaItems
+          : post.mediaItems || [];
+      const remainingItems = currentItems.filter((entry) => entry.id !== item.id);
+
+      setEditMediaRemovingId(item.id);
+      setActionError(null);
+      try {
+        const uniqueAttempts = buildUserPostPathCandidates(post);
+
+        let updated = false;
+        for (const path of uniqueAttempts) {
+          try {
+            await api.put(path, {
+              data: { Users_Pictures: remainingItems.map((entry) => entry.id) },
+            });
+            updated = true;
+            break;
+          } catch (err: unknown) {
+            if (axios.isAxiosError(err) && err.response?.status === 404) {
+              continue;
+            }
+            throw err;
+          }
+        }
+
+        if (!updated) {
+          setActionError("Failed to update post media.");
+          return;
+        }
+
+        updatePostMediaEntry(postKey, remainingItems);
+        setEditMediaItems(remainingItems);
+        pushImpactNotice("Media removed.");
+      } catch (err: unknown) {
+        const msg = axios.isAxiosError(err)
+          ? err.response?.data?.error?.message ||
+            err.response?.data?.message ||
+            "Failed to update post media."
+          : "Failed to update post media.";
+        setActionError(String(msg));
+      } finally {
+        setEditMediaRemovingId(null);
+      }
+    },
+    [
+      editMediaItems,
+      editMediaPostId,
+      editMediaRemovingId,
+      pushImpactNotice,
+      updatePostMediaEntry,
+      user,
+    ]
+  );
+
+  const saveUserPost = useCallback(
+    async (post: NormalizedPost) => {
+      if (!user) {
+        setActionError("Please log in to edit posts.");
+        return;
+      }
+      if (post.source !== "user" || post.ownerId !== user.id) {
+        setActionError("You can only edit your own posts.");
+        return;
+      }
+      const postKey = String(post.id);
+      const nextContent = sanitizePostText(editPostContent).trim();
+      const nextTitleInput = editPostTitle.trim();
+      const finalTitle = (nextTitleInput || post.title || "Post").slice(0, 80);
+      if (post.title === finalTitle && post.content === nextContent) {
+        cancelEditPost();
+        return;
+      }
+
+      setPostEditing((prev) => ({ ...prev, [postKey]: true }));
+      setActionError(null);
+      try {
+        const uniqueAttempts = buildUserPostPathCandidates(post);
+
+        let updated = false;
+        for (const path of uniqueAttempts) {
+          try {
+            await api.put(path, {
+              data: { Title: finalTitle, Users_Content: nextContent },
+            });
+            updated = true;
+            break;
+          } catch (err: unknown) {
+            if (axios.isAxiosError(err) && err.response?.status === 404) {
+              continue;
+            }
+            throw err;
+          }
+        }
+
+        if (!updated) {
+          setActionError("Failed to update post.");
+          return;
+        }
+
+        updateUserPostEntry(postKey, finalTitle, nextContent);
+        cancelEditPost();
+        pushImpactNotice("Post updated.");
+      } catch (err: unknown) {
+        const msg = axios.isAxiosError(err)
+          ? err.response?.data?.error?.message ||
+            err.response?.data?.message ||
+            "Failed to update post."
+          : "Failed to update post.";
+        setActionError(String(msg));
+      } finally {
+        setPostEditing((prev) => ({ ...prev, [postKey]: false }));
+      }
+    },
+    [
+      cancelEditPost,
+      editPostContent,
+      editPostTitle,
+      pushImpactNotice,
+      updateUserPostEntry,
+      user,
+    ]
+  );
 
   const buildShareUrl = useCallback((postKey: string) => {
     if (typeof window === "undefined") return "";
@@ -2420,19 +2837,6 @@ export default function Dashboard() {
       });
     }, 2400);
   }, []);
-
-  const pushImpactNotice = useCallback(
-    (message: string) => {
-      setImpactNotice(message);
-      if (impactTimeoutRef.current) {
-        window.clearTimeout(impactTimeoutRef.current);
-      }
-      impactTimeoutRef.current = window.setTimeout(() => {
-        setImpactNotice(null);
-      }, 3200);
-    },
-    [setImpactNotice]
-  );
 
   const trackShare = useCallback(
     async (post: NormalizedPost, postKey: string) => {
@@ -2622,15 +3026,23 @@ export default function Dashboard() {
   const toggleComments = useCallback((postKey: string) => {
     setOpenCommentsFor((prev) => ({ ...prev, [postKey]: !prev[postKey] }));
     setShareMenuFor(null);
+    setPostMenuFor(null);
   }, []);
 
   const openSupportOptions = useCallback((postKey: string) => {
     setOpenCommentsFor((prev) => ({ ...prev, [postKey]: true }));
     setShareMenuFor(null);
+    setPostMenuFor(null);
   }, []);
 
   const toggleShareMenu = useCallback((postKey: string) => {
     setShareMenuFor((prev) => (prev === postKey ? null : postKey));
+    setPostMenuFor(null);
+  }, []);
+
+  const togglePostMenu = useCallback((postKey: string) => {
+    setPostMenuFor((prev) => (prev === postKey ? null : postKey));
+    setShareMenuFor(null);
   }, []);
 
   const showCopyToast = useCallback((message: string) => {
@@ -2671,13 +3083,18 @@ export default function Dashboard() {
 
   const handleDescriptorAction = useCallback(
     async (post: NormalizedPost, postKey: string, descriptor: string) => {
-      if (descriptor === "with a picture" && post.imageUrl && !isVideoUrl(post.imageUrl)) {
+      const primaryMediaUrl = getPostMediaUrls(post)[0];
+      if (
+        descriptor === "with a picture" &&
+        primaryMediaUrl &&
+        !isVideoUrl(primaryMediaUrl)
+      ) {
         if (typeof window !== "undefined" && !window.confirm("Download this picture?")) {
           return;
         }
         if (typeof document === "undefined") return;
         const link = document.createElement("a");
-        link.href = post.imageUrl;
+        link.href = primaryMediaUrl;
         link.download = `post-${postKey}`;
         link.rel = "noreferrer";
         link.target = "_blank";
@@ -2719,8 +3136,10 @@ export default function Dashboard() {
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null;
       if (!target) return;
-      if (target.closest(".post-action-group")) return;
+      if (target.closest(".post-action-group") || target.closest(".post-menu-wrapper"))
+        return;
       setShareMenuFor(null);
+      setPostMenuFor(null);
     };
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
@@ -2778,18 +3197,29 @@ export default function Dashboard() {
     }
   }, [loading]);
 
-  const activePostUrl = activePost ? extractFirstUrl(activePost.content) : "";
+  const activePostMeta = activePost
+    ? extractCheckInGoal(activePost.content, activePost.signalTag)
+    : { goal: "", content: "" };
+  const activePostContent = activePost ? activePostMeta.content : "";
+  const activePostGoal = activePost ? activePostMeta.goal : "";
+  const activePostUrl = activePost ? extractFirstUrl(activePostContent) : "";
   const activePreview = activePostUrl ? previewCache[activePostUrl] : undefined;
   const activePreviewImage = activePreview?.image;
+  const activeIsYoutube = activePostUrl ? isYoutubeUrl(activePostUrl) : false;
+  const activeMediaUrls = activePost ? getPostMediaUrls(activePost) : [];
+  const activeMediaLayout = getMediaGridLayout(activeMediaUrls.length);
   const activeDescriptor = activePost
-    ? mediaDescriptor(activePost.imageUrl, Boolean(activePostUrl))
+    ? mediaDescriptor(activeMediaUrls[0], Boolean(activePostUrl))
     : "";
   const activeFeedbackLabel = activePost ? feedbackLabelFor(activePost) : "";
   const activeAuthorLabel = activePost?.ownerName || "User";
   const isActiveDescriptorActionable =
     activeDescriptor === "with a picture" || activeDescriptor === "with a link";
   const showActivePreviewMedia = Boolean(
-    activePost && !activePost.imageUrl && activePreviewImage
+    activePost &&
+      activeMediaUrls.length === 0 &&
+      activePreviewImage &&
+      !activeIsYoutube
   );
   const modalTitleId = activePostKey ? `post-modal-title-${activePostKey}` : undefined;
   const showInitialLoader = loading && !hasLoadedOnce;
@@ -2815,8 +3245,43 @@ export default function Dashboard() {
           <>
             <div className="panel-grid">
               <section
-                className={`panel post-composer${isComposerOpen ? "" : " is-collapsed"}`}
+                className={`panel post-composer${isComposerOpen ? "" : " is-collapsed"}${
+                  formDragActive ? " is-dragover" : ""
+                }`}
                 id="post-composer"
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "copy";
+                  if (!isComposerOpen) {
+                    setComposerOpen(true);
+                  }
+                  setFormDragActive(true);
+                }}
+                onDragEnter={(event) => {
+                  event.preventDefault();
+                  setFormDragActive(true);
+                }}
+                onDragLeave={(event) => {
+                  if (
+                    event.currentTarget.contains(event.relatedTarget as Node | null)
+                  ) {
+                    return;
+                  }
+                  setFormDragActive(false);
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  setFormDragActive(false);
+                  const files = event.dataTransfer.files;
+                  if (!files || files.length === 0) {
+                    return;
+                  }
+                  if (!isComposerOpen) {
+                    setComposerOpen(true);
+                  }
+                  setComposerExpanded(true);
+                  handleComposerFiles(files);
+                }}
               >
               {isComposerOpen && (
                 <div className="panel-header post-composer__header">
@@ -2953,7 +3418,7 @@ export default function Dashboard() {
                               </button>
                               {trustedCircleOptions.length === 0 && (
                                 <span className="post-composer__hint">
-                                  Create a trusted circle on the Friends page to use it here.
+                                  Create a trusted circle in My Trusted Circles to use it here.
                                 </span>
                               )}
                             </div>
@@ -3048,20 +3513,37 @@ export default function Dashboard() {
                   {linkPreviewError && (
                     <p className="status status-error">{linkPreviewError}</p>
                   )}
-                  {formFilePreviewUrl && (
+                  {formFilePreviewUrls.length > 0 && (
                     <div className="post-composer__media-preview">
-                      {formFileIsVideo ? (
-                        <video controls muted playsInline preload="metadata">
-                          <source src={formFilePreviewUrl} />
-                        </video>
-                      ) : (
-                        <img
-                          src={formFilePreviewUrl}
-                          alt="Upload preview"
-                          loading="lazy"
-                          decoding="async"
-                        />
-                      )}
+                      <div
+                        className={`post-composer__media-grid${
+                          formFilePreviewUrls.length === 1 ? " is-single" : ""
+                        }`}
+                      >
+                        {formFilePreviewUrls.map((url, index) => {
+                          const file = formFiles[index];
+                          const isVideo = file ? isVideoFile(file) : false;
+                          return (
+                            <div
+                              key={`${file?.name || "media"}-${index}`}
+                              className="post-composer__media-thumb"
+                            >
+                              {isVideo ? (
+                                <video muted playsInline preload="metadata">
+                                  <source src={url} />
+                                </video>
+                              ) : (
+                                <img
+                                  src={url}
+                                  alt="Upload preview"
+                                  loading="lazy"
+                                  decoding="async"
+                                />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                 </>
@@ -3126,7 +3608,7 @@ export default function Dashboard() {
                             </button>
                             {trustedCircleOptions.length === 0 && (
                               <p className="status">
-                                Create a trusted circle on the Friends page to use this.
+                                Create a trusted circle in My Trusted Circles to use this.
                               </p>
                             )}
                           </>
@@ -3205,35 +3687,25 @@ export default function Dashboard() {
                         <input
                           type="file"
                           accept="image/*,video/*"
+                          multiple
                           onChange={(e) => {
-                            const file = e.target.files?.[0] || null;
-                            if (!file) {
-                              setFormFile(null);
-                              return;
-                            }
-                            const isVideo = isVideoFile(file);
-                            const maxBytes = isVideo ? MAX_VIDEO_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
-                            const maxLabel = isVideo ? MAX_VIDEO_UPLOAD_LABEL : MAX_UPLOAD_LABEL;
-                            if (file.size > maxBytes) {
-                              setFormError(`Media files must be under ${maxLabel}.`);
-                              e.target.value = "";
-                              setFormFile(null);
-                              return;
-                            }
-                            setFormFile(file);
-                            setFormError(null);
+                            const files = e.target.files;
+                            handleComposerFiles(files);
+                            e.target.value = "";
                           }}
                         />
-                        <span>{formFile ? "Change media" : "Add photo/video"}</span>
+                        <span>{formFiles.length ? "Change media" : "Add photo/video"}</span>
                       </label>
                       <span className="post-composer__file">
-                        {formFile ? formFile.name : "No media selected"}
+                        {formFiles.length
+                          ? `${formFiles.length} file${formFiles.length === 1 ? "" : "s"} selected`
+                          : "No media selected"}
                       </span>
-                      {formFile && (
+                      {formFiles.length > 0 && (
                         <button
                           className="btn ghost"
                           type="button"
-                          onClick={() => setFormFile(null)}
+                          onClick={() => setFormFiles([])}
                         >
                           Remove
                         </button>
@@ -3298,8 +3770,9 @@ export default function Dashboard() {
                 {featuredWins.map((post) => {
                   const fallbackUrl = extractFirstUrl(post.content);
                   const previewImage = fallbackUrl ? previewCache[fallbackUrl]?.image : "";
+                  const primaryMediaUrl = getPostMediaUrls(post)[0];
                   const mediaUrl =
-                    post.imageUrl ||
+                    primaryMediaUrl ||
                     (isVideoUrl(fallbackUrl) || isImageUrl(fallbackUrl)
                       ? fallbackUrl
                       : previewImage);
@@ -3372,12 +3845,20 @@ export default function Dashboard() {
             )}
 
             {orderedPosts.map((post) => {
-              const postUrl = extractFirstUrl(post.content);
+              const { goal: checkInGoalLabel, content: displayContent } =
+                extractCheckInGoal(post.content, post.signalTag);
+              const postUrl = extractFirstUrl(displayContent);
               const preview = postUrl ? previewCache[postUrl] : undefined;
               const hasLink = Boolean(postUrl);
-              const descriptor = mediaDescriptor(post.imageUrl, hasLink);
+              const isYoutubeLink = postUrl ? isYoutubeUrl(postUrl) : false;
+              const mediaUrls = getPostMediaUrls(post);
+              const mediaCount = mediaUrls.length;
+              const primaryMediaUrl = mediaUrls[0];
+              const mediaLayout = getMediaGridLayout(mediaCount);
+              const descriptor = mediaDescriptor(primaryMediaUrl, hasLink);
               const previewImage = preview?.image;
-              const showPreviewMedia = !post.imageUrl && !!previewImage;
+              const showPreviewMedia =
+                mediaCount === 0 && !!previewImage && !isYoutubeLink;
               const supportReplies = supportRepliesForTag(post.signalTag);
               const supportLabel = formatSignalTag(post.signalTag);
               const supportLabelText =
@@ -3387,16 +3868,19 @@ export default function Dashboard() {
                   ? `${supportLabel} support`
                   : "Support options";
               const authorLabel = post.ownerName || "User";
-              const postId = Number(post.id);
-              const canDelete =
-                post.source === "user" &&
-                Number.isFinite(postId) &&
-                user?.id === post.ownerId;
+              const canEdit = post.source === "user" && user?.id === post.ownerId;
               const feedbackLabel = feedbackLabelFor(post);
               const postKey = String(post.id);
+              const isEditing = editingPostId === postKey;
+              const isSavingPost = Boolean(postEditing[postKey]);
+              const editableMediaItems =
+                isEditing && editMediaPostId === postKey
+                  ? editMediaItems
+                  : post.mediaItems || [];
               const commentKey = String(post.numericId ?? post.id);
               const isCommentsOpen = Boolean(openCommentsFor[commentKey]);
               const showShareMenu = shareMenuFor === postKey;
+              const showPostMenu = postMenuFor === postKey;
               const shareUrl = buildShareUrl(postKey);
               const shareText = post.title
                 ? `${authorLabel}: ${post.title}`
@@ -3449,7 +3933,7 @@ export default function Dashboard() {
                       ) : (
                         <span className="post-meta-tag">{descriptor}</span>
                       ))}
-                    {post.signalTag && post.signalTag !== "none" && (
+                  {post.signalTag && post.signalTag !== "none" && (
                       <>
                         {supportReplies.length > 0 ? (
                           <button
@@ -3481,26 +3965,115 @@ export default function Dashboard() {
                     )}
                   </div>
 
-                  {post.imageUrl ? (
-                    <div className="post-media">
-                      {isVideoUrl(post.imageUrl) ? (
-                        <video
-                          controls
-                          playsInline
-                          preload="metadata"
-                          style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                        >
-                          <source src={post.imageUrl} />
-                        </video>
-                      ) : (
-                        <img
-                          src={post.imageUrl}
-                          alt={post.title}
-                          loading="lazy"
-                          decoding="async"
-                        />
+                  {canEdit && !isEditing && (
+                    <div className="post-menu-wrapper">
+                      <button
+                        className="post-menu-trigger"
+                        type="button"
+                        aria-haspopup="menu"
+                        aria-expanded={showPostMenu}
+                        aria-label="Open post options"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          togglePostMenu(postKey);
+                        }}
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <circle cx="5" cy="12" r="2" />
+                          <circle cx="12" cy="12" r="2" />
+                          <circle cx="19" cy="12" r="2" />
+                        </svg>
+                      </button>
+                      {showPostMenu && (
+                        <div className="post-menu" role="menu">
+                          <button
+                            className="post-menu-item"
+                            type="button"
+                            role="menuitem"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setEditingPostId(postKey);
+                              setEditPostTitle(post.title);
+                              setEditPostContent(post.content);
+                              setEditMediaItems(post.mediaItems || []);
+                              setEditMediaPostId(postKey);
+                              setShareMenuFor(null);
+                              setPostMenuFor(null);
+                              setActionError(null);
+                            }}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            className="post-menu-item is-danger"
+                            type="button"
+                            role="menuitem"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setPostMenuFor(null);
+                              deletePost(post);
+                            }}
+                            disabled={isSavingPost}
+                          >
+                            Delete
+                          </button>
+                        </div>
                       )}
                     </div>
+                  )}
+
+                  {mediaCount > 0 ? (
+                    mediaCount === 1 ? (
+                      <div className="post-media">
+                        {primaryMediaUrl && isVideoUrl(primaryMediaUrl) ? (
+                          <video
+                            controls
+                            playsInline
+                            preload="metadata"
+                            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                          >
+                            <source src={primaryMediaUrl} />
+                          </video>
+                        ) : (
+                          <img
+                            src={primaryMediaUrl}
+                            alt={post.title}
+                            loading="lazy"
+                            decoding="async"
+                          />
+                        )}
+                      </div>
+                    ) : (
+                      <div
+                        className="post-media-grid"
+                        style={{
+                          gridTemplateColumns: `repeat(${mediaLayout.columns}, minmax(0, 1fr))`,
+                          gridTemplateRows: `repeat(${mediaLayout.rows}, minmax(0, 1fr))`,
+                        }}
+                      >
+                        {mediaUrls
+                          .slice(
+                            0,
+                            mediaLayout.columns * mediaLayout.rows
+                          )
+                          .map((url, index) => (
+                            <div key={`${url}-${index}`} className="post-media-grid__item">
+                              {isVideoUrl(url) ? (
+                                <video muted playsInline preload="metadata">
+                                  <source src={url} />
+                                </video>
+                              ) : (
+                                <img
+                                  src={url}
+                                  alt={post.title}
+                                  loading="lazy"
+                                  decoding="async"
+                                />
+                              )}
+                            </div>
+                          ))}
+                      </div>
+                    )
                   ) : showPreviewMedia ? (
                     <div className="post-media link-preview-media">
                       <img
@@ -3521,50 +4094,125 @@ export default function Dashboard() {
                         {post.createdAt && (
                           <span className="date">{formatDate(post.createdAt)}</span>
                         )}
-                        {canDelete && (
-                          <button
-                            className="btn ghost post-delete"
-                            type="button"
-                            onClick={() => deletePost(postId)}
-                          >
-                            Delete
-                          </button>
-                        )}
                       </div>
                     </div>
-                    {(() => {
-                      const structured = parseStructuredPost(post.content, post.signalTag);
-                      if (!structured) {
-                        return (
-                          <>
-                            <h3>{post.title}</h3>
-                            <p className="post-body-text">{linkifyText(post.content)}</p>
-                          </>
-                        );
-                      }
-                      return (
-                        <div className="post-structured">
-                          {structured.rows.map((row) => (
-                            <div key={row.label} className="post-structured__row">
-                              <span className="post-structured__label">{row.label}</span>
-                              <span
-                                className={`post-structured__value${
-                                  row.value ? "" : " is-empty"
-                                }`}
-                              >
-                                {row.value || "Not added yet"}
-                              </span>
-                            </div>
-                          ))}
+                    {isEditing ? (
+                      <div className="post-edit">
+                        <input
+                          className="auth-input post-edit-title"
+                          value={editPostTitle}
+                          onChange={(event) => setEditPostTitle(event.target.value)}
+                          placeholder="Post title"
+                        />
+                        <textarea
+                          className="auth-input post-edit-body"
+                          rows={4}
+                          value={editPostContent}
+                          onChange={(event) =>
+                            setEditPostContent(sanitizePostText(event.target.value))
+                          }
+                          placeholder="Update your post"
+                        />
+                        {editableMediaItems.length > 0 && (
+                          <div className="post-edit-media">
+                            {editableMediaItems.map((item) => (
+                              <div key={item.id} className="post-edit-media__item">
+                                {item.isVideo ? (
+                                  <video muted playsInline preload="metadata">
+                                    <source src={item.url} />
+                                  </video>
+                                ) : (
+                                  <img src={item.url} alt={post.title} loading="lazy" />
+                                )}
+                                <button
+                                  type="button"
+                                  className="post-edit-media__remove"
+                                  onClick={() => void removePostMediaItem(post, item)}
+                                  disabled={editMediaRemovingId === item.id || isSavingPost}
+                                  aria-label="Remove media"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <div className="post-edit-actions">
+                          <button
+                            className="btn ghost"
+                            type="button"
+                            onClick={cancelEditPost}
+                            disabled={isSavingPost}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            className="btn primary"
+                            type="button"
+                            onClick={() => void saveUserPost(post)}
+                            disabled={isSavingPost}
+                          >
+                            {isSavingPost ? "Saving..." : "Save changes"}
+                          </button>
                         </div>
-                      );
-                    })()}
-                    {preview && !post.imageUrl && (
-                      <LinkPreviewCard
-                        preview={preview}
-                        url={preview.url || postUrl}
-                        compact
-                      />
+                      </div>
+                    ) : (
+                      <>
+                        {(() => {
+                          const structured = parseStructuredPost(
+                            displayContent,
+                            post.signalTag
+                          );
+                          if (!structured) {
+                            return (
+                              <>
+                                {checkInGoalLabel ? (
+                                  <span className="post-meta-tag post-meta-tag--goal post-goal-tag">
+                                    Goal: {checkInGoalLabel}
+                                  </span>
+                                ) : (
+                                  <h3>{post.title}</h3>
+                                )}
+                                <p className="post-body-text">
+                                  {linkifyText(displayContent)}
+                                </p>
+                              </>
+                            );
+                          }
+                          return (
+                            <>
+                              {checkInGoalLabel && (
+                                <span className="post-meta-tag post-meta-tag--goal post-goal-tag">
+                                  Goal: {checkInGoalLabel}
+                                </span>
+                              )}
+                              <div className="post-structured">
+                                {structured.rows.map((row) => (
+                                  <div key={row.label} className="post-structured__row">
+                                    <span className="post-structured__label">
+                                      {row.label}
+                                    </span>
+                                    <span
+                                      className={`post-structured__value${
+                                        row.value ? "" : " is-empty"
+                                      }`}
+                                    >
+                                      {row.value || "Not added yet"}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            </>
+                          );
+                        })()}
+                        {preview && mediaCount === 0 && (
+                          <LinkPreviewCard
+                            preview={preview}
+                            url={preview.url || postUrl}
+                            compact
+                          />
+                        )}
+                      </>
                     )}
                     <div className="post-actions">
                       <div className="post-action-counts">
@@ -4249,26 +4897,58 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              {activePost.imageUrl ? (
-                <div className="post-media post-modal__media">
-                  {isVideoUrl(activePost.imageUrl) ? (
-                    <video
-                      controls
-                      playsInline
-                      preload="metadata"
-                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                    >
-                      <source src={activePost.imageUrl} />
-                    </video>
-                  ) : (
-                    <img
-                      src={activePost.imageUrl}
-                      alt={activePost.title}
-                      loading="lazy"
-                      decoding="async"
-                    />
-                  )}
-                </div>
+              {activeMediaUrls.length > 0 ? (
+                activeMediaUrls.length === 1 ? (
+                  <div className="post-media post-modal__media">
+                    {isVideoUrl(activeMediaUrls[0]) ? (
+                      <video
+                        controls
+                        playsInline
+                        preload="metadata"
+                        style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                      >
+                        <source src={activeMediaUrls[0]} />
+                      </video>
+                    ) : (
+                      <img
+                        src={activeMediaUrls[0]}
+                        alt={activePost.title}
+                        loading="lazy"
+                        decoding="async"
+                      />
+                    )}
+                  </div>
+                ) : (
+                  <div
+                    className="post-media-grid post-modal__media-grid"
+                    style={{
+                      gridTemplateColumns: `repeat(${activeMediaLayout.columns}, minmax(0, 1fr))`,
+                      gridTemplateRows: `repeat(${activeMediaLayout.rows}, minmax(0, 1fr))`,
+                    }}
+                  >
+                    {activeMediaUrls
+                      .slice(
+                        0,
+                        activeMediaLayout.columns * activeMediaLayout.rows
+                      )
+                      .map((url, index) => (
+                        <div key={`${url}-${index}`} className="post-media-grid__item">
+                          {isVideoUrl(url) ? (
+                            <video muted playsInline preload="metadata">
+                              <source src={url} />
+                            </video>
+                          ) : (
+                            <img
+                              src={url}
+                              alt={activePost.title}
+                              loading="lazy"
+                              decoding="async"
+                            />
+                          )}
+                        </div>
+                      ))}
+                  </div>
+                )
               ) : showActivePreviewMedia ? (
                 <div className="post-media post-modal__media link-preview-media">
                   <img
@@ -4283,14 +4963,22 @@ export default function Dashboard() {
               <div className="post-modal__body">
                 {(() => {
                   const structured = parseStructuredPost(
-                    activePost.content,
+                    activePostContent,
                     activePost.signalTag
                   );
                   if (!structured) {
                     return (
                       <>
-                        <h2 id={modalTitleId}>{activePost.title}</h2>
-                        <p className="post-body-text">{linkifyText(activePost.content)}</p>
+                        {activePostGoal ? (
+                          <span className="post-meta-tag post-meta-tag--goal post-goal-tag">
+                            Goal: {activePostGoal}
+                          </span>
+                        ) : (
+                          <h2 id={modalTitleId}>{activePost.title}</h2>
+                        )}
+                        <p className="post-body-text">
+                          {linkifyText(activePostContent)}
+                        </p>
                       </>
                     );
                   }
@@ -4299,6 +4987,11 @@ export default function Dashboard() {
                       <h2 id={modalTitleId} className="sr-only">
                         {activePost.title}
                       </h2>
+                      {activePostGoal && (
+                        <span className="post-meta-tag post-meta-tag--goal post-goal-tag">
+                          Goal: {activePostGoal}
+                        </span>
+                      )}
                       <div className="post-structured">
                         {structured.rows.map((row) => (
                           <div key={row.label} className="post-structured__row">
@@ -4316,7 +5009,7 @@ export default function Dashboard() {
                     </>
                   );
                 })()}
-                {activePreview && !activePost.imageUrl && (
+                {activePreview && activeMediaUrls.length === 0 && (
                   <LinkPreviewCard
                     preview={activePreview}
                     url={activePreview.url || activePostUrl}
@@ -4592,6 +5285,65 @@ export default function Dashboard() {
                 Close
               </button>
               <span className="post-modal__hint">Tap outside to close</span>
+            </div>
+          </div>
+        </div>
+      )}
+      {actionError && (
+        <div className="post-error-overlay" role="dialog" aria-modal="true">
+          <div className="post-error-modal">
+            <div className="post-error-header">
+              <h3>Action needed</h3>
+              <button
+                type="button"
+                className="post-error-close"
+                onClick={() => setActionError(null)}
+              >
+                X
+              </button>
+            </div>
+            <p>{actionError}</p>
+            <div className="post-error-actions">
+              <button
+                type="button"
+                className="btn primary"
+                onClick={() => setActionError(null)}
+              >
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {pendingDeletePost && (
+        <div className="post-error-overlay" role="dialog" aria-modal="true">
+          <div className="post-error-modal post-delete-modal">
+            <div className="post-error-header">
+              <h3>Delete post?</h3>
+              <button
+                type="button"
+                className="post-error-close"
+                onClick={() => setPendingDeletePost(null)}
+              >
+                X
+              </button>
+            </div>
+            <p>This will permanently delete the post and its media.</p>
+            <div className="post-error-actions post-delete-actions">
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={() => setPendingDeletePost(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn danger"
+                onClick={() => void deletePost(pendingDeletePost)}
+              >
+                Yes, delete
+              </button>
             </div>
           </div>
         </div>

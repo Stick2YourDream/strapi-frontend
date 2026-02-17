@@ -1,5 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import axios from "axios";
+import { useNavigate, useParams } from "react-router-dom";
 import "../css/forums.css";
 import api from "../api/strapi";
 import Sidebar from "../components/Sidebar";
@@ -7,6 +15,7 @@ import TopbarSearch from "../components/TopbarSearch";
 import { useAuth } from "../context/AuthContext";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { useUserPreferences } from "../context/UserPreferencesContext";
+import LinkPreviewCard from "../components/LinkPreviewCard";
 
 type ForumCategory = {
   id: number | string;
@@ -45,6 +54,8 @@ type ForumPostComment = {
   createdAt: string;
   children?: ForumPostComment[];
 };
+
+type ReportReason = "spam" | "harassment" | "hate" | "impersonation" | "other";
 
 type LinkPreview = {
   url: string;
@@ -105,6 +116,8 @@ const INTENT_LABELS: Record<ForumPost["intent"], string> = {
   tip: "Tip",
   gratitude: "Gratitude",
 };
+
+const FEED_PAGE_SIZE = 5;
 
 const TEMPLATE_PRESETS = [
   {
@@ -245,22 +258,6 @@ const extractFirstUrl = (text: string) => {
   return url;
 };
 
-const hostnameFor = (value: string) => {
-  try {
-    return new URL(value).hostname.replace(/^www\./, "");
-  } catch {
-    return value;
-  }
-};
-const faviconFor = (value: string) => {
-  try {
-    const host = new URL(value).hostname.replace(/^www\./, "");
-    return `https://www.google.com/s2/favicons?domain=${host}&sz=128`;
-  } catch {
-    return "";
-  }
-};
-
 const isYoutubeUrl = (value: string) => {
   try {
     const host = new URL(value).hostname.toLowerCase();
@@ -325,55 +322,6 @@ const normalizePost = (entry: any): ForumPost => {
     thanks: Number(attrs?.thanks ?? 0),
     status: attrs?.status as ForumPost["status"],
   };
-};
-
-const LinkPreviewCard = ({
-  preview,
-  url,
-  compact = true,
-}: {
-  preview: LinkPreview;
-  url: string;
-  compact?: boolean;
-}) => {
-  const safePreview: LinkPreview =
-    preview ?? { url, title: hostnameFor(url), siteName: hostnameFor(url) };
-  const title =
-    safePreview.title || safePreview.siteName || hostnameFor(url);
-  const meta = safePreview.siteName || hostnameFor(url);
-  const showBadge = safePreview.type === "video" || isYoutubeUrl(url);
-  const fallbackImage = safePreview.image || faviconFor(url);
-  const hasImage = Boolean(fallbackImage);
-  return (
-    <a
-      className={`link-preview-card${compact ? " is-compact" : ""}`}
-      href={url}
-      target="_blank"
-      rel="noreferrer"
-    >
-      <div className="link-preview-media">
-        {hasImage ? (
-          <img
-            src={fallbackImage}
-            alt={title}
-            loading="lazy"
-            decoding="async"
-            className={safePreview.image ? "" : "is-favicon"}
-          />
-        ) : (
-          <div className="link-preview-placeholder">LINK</div>
-        )}
-        {showBadge && <span className="link-preview-badge">Video</span>}
-      </div>
-      <div className="link-preview-body">
-        <p className="link-preview-title">{title}</p>
-        {safePreview.description && (
-          <p className="link-preview-desc">{safePreview.description}</p>
-        )}
-        <span className="link-preview-url">{meta}</span>
-      </div>
-    </a>
-  );
 };
 
 const normalizeComment = (entry: any): ForumPostComment => {
@@ -464,6 +412,11 @@ type QuickReplyState = Record<
 const quickReplyStorageKeyFor = (userId?: number | string | null) =>
   userId ? `ysp-forums-quick-replies-${userId}` : "ysp-forums-quick-replies-guest";
 
+const favoriteTopicStorageKeyFor = (userId?: number | string | null) =>
+  userId
+    ? `ysp-forums-favorite-topics-${userId}`
+    : "ysp-forums-favorite-topics-guest";
+
 const loadQuickReplyState = (key: string): QuickReplyState => {
   if (typeof window === "undefined") return {};
   const raw = window.localStorage.getItem(key);
@@ -481,10 +434,32 @@ const saveQuickReplyState = (key: string, state: QuickReplyState) => {
   window.localStorage.setItem(key, JSON.stringify(state));
 };
 
+const loadFavoriteTopics = (key: string): string[] => {
+  if (typeof window === "undefined") return [];
+  const raw = window.localStorage.getItem(key);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as string[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((entry) => String(entry)).filter(Boolean);
+  } catch {
+    return [];
+  }
+};
+
+const saveFavoriteTopics = (key: string, topics: string[]) => {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(key, JSON.stringify(topics));
+};
+
 export default function Forums() {
+  const navigate = useNavigate();
+  const { postId } = useParams();
   const { user } = useAuth();
   const { getBackgroundStyle } = useUserPreferences();
+  const isDetailView = Boolean(postId);
   const quickReplyStorageKey = quickReplyStorageKeyFor(user?.id ?? null);
+  const favoriteTopicStorageKey = favoriteTopicStorageKeyFor(user?.id ?? null);
   const [categories, setCategories] = useState<ForumCategory[]>(DEFAULT_CATEGORIES);
   const [posts, setPosts] = useState<ForumPost[]>([]);
   const [commentsByPost, setCommentsByPost] = useState<
@@ -495,7 +470,6 @@ export default function Forums() {
   );
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
   const [replyInputs, setReplyInputs] = useState<Record<string, string>>({});
-  const [openComments, setOpenComments] = useState<Record<string, boolean>>({});
   const [openReplies, setOpenReplies] = useState<Record<string, boolean>>({});
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editInputs, setEditInputs] = useState<Record<string, string>>({});
@@ -508,17 +482,32 @@ export default function Forums() {
   const [editingPostId, setEditingPostId] = useState<string | null>(null);
   const [editPostTitle, setEditPostTitle] = useState("");
   const [editPostBody, setEditPostBody] = useState("");
+  const [postMenuFor, setPostMenuFor] = useState<string | null>(null);
   const [postEditing, setPostEditing] = useState<Record<string, boolean>>({});
   const [postDeleting, setPostDeleting] = useState<Record<string, boolean>>({});
   const [quickReplies, setQuickReplies] = useState<QuickReplyState>(() =>
     loadQuickReplyState(quickReplyStorageKey)
   );
+  const [favoriteTopicIds, setFavoriteTopicIds] = useState<string[]>(() =>
+    loadFavoriteTopics(favoriteTopicStorageKey)
+  );
+  const [favoriteTopicError, setFavoriteTopicError] = useState<string | null>(null);
+  const [feedPage, setFeedPage] = useState(1);
+  const [postModalOpen, setPostModalOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportingPost, setReportingPost] = useState<ForumPost | null>(null);
+  const [reportReason, setReportReason] = useState<ReportReason>("other");
+  const [reportDetails, setReportDetails] = useState("");
+  const [reportError, setReportError] = useState<string | null>(null);
+  const [reportSubmitting, setReportSubmitting] = useState(false);
   const [quickReplySubmitting, setQuickReplySubmitting] = useState<
     Record<string, boolean>
   >({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [categorySearch, setCategorySearch] = useState("");
+  const [topicsMenuOpen, setTopicsMenuOpen] = useState(false);
+  const [trendingMenuOpen, setTrendingMenuOpen] = useState(false);
   const [activeCategory, setActiveCategory] = useState<string>("all");
   const [intentFilter, setIntentFilter] = useState<ForumPost["intent"] | "all">(
     "all"
@@ -534,7 +523,6 @@ export default function Forums() {
   const [nudge, setNudge] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const topicsRef = useRef<HTMLDivElement | null>(null);
-  const createPostRef = useRef<HTMLDivElement | null>(null);
 
   usePageMeta({
     title: "Forums | Your Social Place",
@@ -650,18 +638,20 @@ export default function Forums() {
     [previewCache]
   );
 
-  const toggleComments = useCallback(
-    (post: ForumPost) => {
-      const key = getPostKey(post);
-      const isOpen = Boolean(openComments[key]);
-      const nextOpen = !isOpen;
-      setOpenComments((prev) => ({ ...prev, [key]: nextOpen }));
-      if (nextOpen && !commentsByPost[key]) {
-        void loadComments([key]);
-      }
-    },
-    [commentsByPost, loadComments, openComments]
-  );
+  const togglePostMenu = useCallback((postKey: string) => {
+    setPostMenuFor((prev) => (prev === postKey ? null : postKey));
+  }, []);
+
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      if (target.closest(".post-menu-wrapper")) return;
+      setPostMenuFor(null);
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, []);
 
   const toggleReply = useCallback((commentId: string | number) => {
     const key = String(commentId);
@@ -825,11 +815,6 @@ export default function Forums() {
           delete next[key];
           return next;
         });
-        setOpenComments((prev) => {
-          const next = { ...prev };
-          delete next[key];
-          return next;
-        });
         setStatus("Post deleted.");
       } catch (error) {
         setStatus(findErrorMessage(error, "Unable to delete post."));
@@ -929,10 +914,35 @@ export default function Forums() {
   }, [quickReplyStorageKey, quickReplies]);
 
   useEffect(() => {
+    setFavoriteTopicIds(loadFavoriteTopics(favoriteTopicStorageKey));
+  }, [favoriteTopicStorageKey]);
+
+  useEffect(() => {
+    saveFavoriteTopics(favoriteTopicStorageKey, favoriteTopicIds);
+  }, [favoriteTopicStorageKey, favoriteTopicIds]);
+
+  useEffect(() => {
     if (!nudge) return;
     const handle = window.setTimeout(() => setNudge(null), 2400);
     return () => window.clearTimeout(handle);
   }, [nudge]);
+
+  useEffect(() => {
+    if (isDetailView) return;
+    setFeedPage(1);
+  }, [activeCategory, intentFilter, search, isDetailView]);
+
+  useEffect(() => {
+    if (!favoriteTopicError) return;
+    const handle = window.setTimeout(() => setFavoriteTopicError(null), 2400);
+    return () => window.clearTimeout(handle);
+  }, [favoriteTopicError]);
+
+  useEffect(() => {
+    if (topicsMenuOpen) return;
+    if (!categorySearch.trim()) return;
+    setCategorySearch("");
+  }, [topicsMenuOpen, categorySearch]);
 
   useEffect(() => {
     if (!categories.length) return;
@@ -942,11 +952,83 @@ export default function Forums() {
     }
   }, [categories, postCategory]);
 
+  const normalizedPostId = useMemo(() => {
+    if (!postId) return "";
+    try {
+      return decodeURIComponent(postId);
+    } catch {
+      return postId;
+    }
+  }, [postId]);
+
+  const selectedPost = useMemo(() => {
+    if (!normalizedPostId) return null;
+    return (
+      posts.find((post) => getPostKey(post) === normalizedPostId) ||
+      posts.find((post) => String(post.id) === String(normalizedPostId)) ||
+      null
+    );
+  }, [normalizedPostId, posts]);
+
+  useEffect(() => {
+    if (!categories.length) return;
+    setFavoriteTopicIds((prev) => {
+      const next = prev.filter((entry) =>
+        categories.some((category) => String(category.id) === String(entry))
+      );
+      return next.length === prev.length ? prev : next;
+    });
+  }, [categories]);
+
   const filteredCategories = useMemo(() => {
     if (!categorySearch.trim()) return categories;
     const needle = categorySearch.toLowerCase();
-    return categories.filter((category) => category.name.toLowerCase().includes(needle));
+    return categories.filter((category) => {
+      const name = category.name.toLowerCase();
+      const description = category.description.toLowerCase();
+      return name.includes(needle) || description.includes(needle);
+    });
   }, [categorySearch, categories]);
+
+  const favoriteTopicSet = useMemo(
+    () => new Set(favoriteTopicIds.map((entry) => String(entry))),
+    [favoriteTopicIds]
+  );
+
+  const activeCategoryMeta = useMemo(() => {
+    if (activeCategory === "all") return null;
+    return categories.find((category) => String(category.id) === activeCategory) ?? null;
+  }, [activeCategory, categories]);
+
+  const favoriteTopics = useMemo(() => {
+    return favoriteTopicIds
+      .map((id) => categories.find((category) => String(category.id) === String(id)))
+      .filter((value): value is ForumCategory => Boolean(value));
+  }, [favoriteTopicIds, categories]);
+
+  const filteredFavoriteTopics = useMemo(() => {
+    if (!categorySearch.trim()) return favoriteTopics;
+    const needle = categorySearch.toLowerCase();
+    return favoriteTopics.filter((category) => {
+      const name = category.name.toLowerCase();
+      const description = category.description.toLowerCase();
+      return name.includes(needle) || description.includes(needle);
+    });
+  }, [categorySearch, favoriteTopics]);
+
+  const filteredOtherTopics = useMemo(() => {
+    return filteredCategories.filter(
+      (category) => !favoriteTopicSet.has(String(category.id))
+    );
+  }, [filteredCategories, favoriteTopicSet]);
+
+  const orderedTopics = useMemo(() => {
+    const favorites = favoriteTopics;
+    const rest = categories.filter(
+      (category) => !favoriteTopicSet.has(String(category.id))
+    );
+    return [...favorites, ...rest];
+  }, [categories, favoriteTopics, favoriteTopicSet]);
 
   const categoryCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -956,6 +1038,11 @@ export default function Forums() {
     });
     return counts;
   }, [posts]);
+
+  const activeCategoryCount =
+    activeCategory === "all"
+      ? posts.length
+      : categoryCounts.get(activeCategory) || 0;
 
   const trendingCategories = useMemo(() => {
     return [...categories]
@@ -967,7 +1054,100 @@ export default function Forums() {
       .slice(0, 4);
   }, [categoryCounts, categories]);
 
-  const visiblePosts = useMemo(() => {
+  const activeTrendingMeta = useMemo(() => {
+    return (
+      trendingCategories.find(
+        (category) => String(category.id) === String(activeCategory)
+      ) ?? null
+    );
+  }, [activeCategory, trendingCategories]);
+
+  const toggleFavoriteTopic = useCallback((topicId: string) => {
+    setFavoriteTopicError(null);
+    setFavoriteTopicIds((prev) => {
+      const exists = prev.includes(topicId);
+      if (exists) {
+        return prev.filter((entry) => entry !== topicId);
+      }
+      if (prev.length >= 3) {
+        setFavoriteTopicError("You can pin up to 3 favorite topics.");
+        return prev;
+      }
+      return [topicId, ...prev].slice(0, 3);
+    });
+  }, []);
+
+  const handleTopicSelect = useCallback((value: string) => {
+    setActiveCategory(value);
+    setTopicsMenuOpen(false);
+  }, []);
+
+  const handleTrendingSelect = useCallback((value: string) => {
+    setActiveCategory(value);
+    setTrendingMenuOpen(false);
+  }, []);
+
+  const handleTopicKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>, value: string) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        handleTopicSelect(value);
+      }
+    },
+    [handleTopicSelect]
+  );
+
+  const handleTrendingKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>, value: string) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        handleTrendingSelect(value);
+      }
+    },
+    [handleTrendingSelect]
+  );
+
+  const renderTopicOption = (category: ForumCategory) => {
+    const id = String(category.id);
+    const isActive = activeCategory === id;
+    const isFavorite = favoriteTopicSet.has(id);
+    const count = categoryCounts.get(id) || 0;
+
+    return (
+      <div
+        key={id}
+        className={`forums-topic-option${isActive ? " is-active" : ""}`}
+        role="option"
+        aria-selected={isActive}
+        tabIndex={0}
+        onClick={() => handleTopicSelect(id)}
+        onKeyDown={(event) => handleTopicKeyDown(event, id)}
+      >
+        <div className="forums-topic-option__text">
+          <span className="forums-topic-option__title">{category.name}</span>
+          <span className="forums-topic-option__desc">{category.description}</span>
+        </div>
+        <div className="forums-topic-option__meta">
+          <span className="forums-topic-option__count">{count} posts</span>
+          <button
+            type="button"
+            className={`forums-topic-option__pin${isFavorite ? " is-active" : ""}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleFavoriteTopic(id);
+            }}
+            aria-pressed={isFavorite}
+            aria-label={isFavorite ? "Unpin topic" : "Pin topic"}
+            title={isFavorite ? "Unpin topic" : "Pin topic"}
+          >
+            <span aria-hidden="true">{isFavorite ? "★" : "☆"}</span>
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const filteredPosts = useMemo(() => {
     return posts.filter((post) => {
       if (activeCategory !== "all" && String(post.categoryId) !== activeCategory) {
         return false;
@@ -985,6 +1165,29 @@ export default function Forums() {
       return true;
     });
   }, [activeCategory, intentFilter, search, posts]);
+
+  const totalFeedPages = useMemo(() => {
+    if (isDetailView) return 1;
+    return Math.max(1, Math.ceil(filteredPosts.length / FEED_PAGE_SIZE));
+  }, [filteredPosts.length, isDetailView]);
+
+  useEffect(() => {
+    if (isDetailView) return;
+    setFeedPage((prev) => Math.min(prev, totalFeedPages));
+  }, [isDetailView, totalFeedPages]);
+
+  const pagedPosts = useMemo(() => {
+    if (isDetailView) return [];
+    const start = (feedPage - 1) * FEED_PAGE_SIZE;
+    return filteredPosts.slice(start, start + FEED_PAGE_SIZE);
+  }, [feedPage, filteredPosts, isDetailView]);
+
+  const visiblePosts = useMemo(() => {
+    if (isDetailView) {
+      return selectedPost ? [selectedPost] : [];
+    }
+    return pagedPosts;
+  }, [isDetailView, pagedPosts, selectedPost]);
 
   useEffect(() => {
     if (!visiblePosts.length) return;
@@ -1028,6 +1231,33 @@ export default function Forums() {
     if (!postTitle.trim()) {
       setPostTitle(template.label);
     }
+  };
+
+  const openPostModal = (intent?: ForumPost["intent"]) => {
+    if (intent) {
+      setPostIntent(intent);
+    }
+    setStatus(null);
+    setPostModalOpen(true);
+  };
+
+  const closePostModal = () => {
+    setPostModalOpen(false);
+  };
+
+  const openReportModal = (post: ForumPost) => {
+    setReportingPost(post);
+    setReportReason("other");
+    setReportDetails("");
+    setReportError(null);
+    setPostMenuFor(null);
+    setReportOpen(true);
+  };
+
+  const closeReportModal = () => {
+    setReportOpen(false);
+    setReportingPost(null);
+    setReportError(null);
   };
 
   const handlePost = async () => {
@@ -1088,8 +1318,11 @@ export default function Forums() {
         createdAt: created.createdAt || new Date().toISOString(),
       };
       setPosts((prev) => [createdPost, ...prev]);
+      setFeedPage(1);
       setPostTitle("");
       setPostBody("");
+      setPostModalOpen(false);
+      setPostIntent("win");
       setStatus(
         created.status === "review"
           ? "Thanks! Your post is queued for review to keep the forums uplifting."
@@ -1102,10 +1335,52 @@ export default function Forums() {
     }
   };
 
-  const scrollToSection = (ref: RefObject<HTMLElement>) => {
-    if (!ref.current) return;
-    ref.current.scrollIntoView({ behavior: "smooth", block: "start" });
+  const submitReport = async () => {
+    if (!user) {
+      setReportError("Please log in to submit a report.");
+      return;
+    }
+    if (!reportingPost) {
+      setReportError("Choose a post to report.");
+      return;
+    }
+    if (reportSubmitting) return;
+    setReportSubmitting(true);
+    try {
+      const targetId =
+        reportingPost.numericId ?? reportingPost.documentId ?? reportingPost.id;
+      await api.post("/reports", {
+        data: {
+          targetType: "forum-post",
+          targetId,
+          targetLabel: reportingPost.title,
+          reason: reportReason,
+          details: reportDetails.trim(),
+        },
+      });
+      setNudge("Thanks for reporting. We'll review this quickly.");
+      closeReportModal();
+    } catch (error) {
+      setReportError(findErrorMessage(error, "Failed to submit report."));
+    } finally {
+      setReportSubmitting(false);
+    }
   };
+
+  const openDiscussion = useCallback(
+    (post: ForumPost) => {
+      setPostMenuFor(null);
+      navigate(`/forums/${encodeURIComponent(getPostKey(post))}`);
+    },
+    [navigate, setPostMenuFor]
+  );
+
+  const scrollToComments = useCallback((commentKey: string) => {
+    const target = document.getElementById(`forum-comments-${commentKey}`);
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, []);
 
   const bumpEncouragement = async (postId: string | number) => {
     if (!user) {
@@ -1215,155 +1490,412 @@ export default function Forums() {
         <TopbarSearch />
         <div className="forums-page">
           <div className="forums-shell">
-        <header className="forums-hero">
-          <div>
-            <span className="forums-eyebrow">Uplifting Forums</span>
-            <h1>Only uplifting conversations. Every topic, zero negativity.</h1>
-            <p>
-              Your Social Place forums are built for support, progress, and encouragement.
-              Share wins, ask for help, and offer tips in a positive, safe space.
-            </p>
-            <div className="forums-hero__actions">
-              <button
-                className="forums-button primary"
-                type="button"
-                onClick={() => {
-                  setActiveCategory("all");
-                  scrollToSection(topicsRef);
-                }}
-              >
-                Explore topics
-              </button>
-              <button
-                className="forums-button ghost"
-                type="button"
-                onClick={() => {
-                  setPostIntent("support");
-                  scrollToSection(createPostRef);
-                }}
-              >
-                Ask for support
-              </button>
-            </div>
-          </div>
-          <div className="forums-hero__card">
-            <h3>Uplifting pledge</h3>
-            <ul>
-              <li>Encourage or offer solutions.</li>
-              <li>Keep language supportive and kind.</li>
-              <li>No attacks, no shaming, no negativity.</li>
-            </ul>
-            <div className="forums-pledge">
-              <label className="forums-pledge-label" htmlFor="pledge-select">
-                Pledge
-              </label>
-              <select
-                id="pledge-select"
-                className="forums-input forums-pledge-select"
-                value={pledgeChoice}
-                onChange={(event) => {
-                  const next = event.target.value;
-                  setPledgeChoice(next);
-                  setPledgeAccepted(Boolean(next));
-                }}
-              >
-                <option value="">Choose your pledge</option>
-                {PLEDGE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              {pledgeAccepted && pledgeMeta && (
-                <span className="forums-pledge-status">
-                  {pledgeMeta.description}
-                </span>
-              )}
-            </div>
-          </div>
-        </header>
+        {!isDetailView && (
+          <>
+            <header className="forums-hero">
+              <div>
+                <span className="forums-eyebrow">Uplifting Forums</span>
+                <h1>Only uplifting conversations. Every topic, zero negativity.</h1>
+                <p>
+                  Your Social Place forums are built for support, progress, and encouragement.
+                  Share wins, ask for help, and offer tips in a positive, safe space.
+                </p>
+                <div className="forums-hero__actions">
+                  <button
+                    className="forums-button primary"
+                    type="button"
+                    onClick={() => {
+                      openPostModal("win");
+                    }}
+                  >
+                    Create a post
+                  </button>
+                  <button
+                    className="forums-button ghost"
+                    type="button"
+                    onClick={() => {
+                      openPostModal("support");
+                    }}
+                  >
+                    Ask for support
+                  </button>
+                </div>
+              </div>
+              <div className="forums-hero__card">
+                <h3>Uplifting pledge</h3>
+                <ul>
+                  <li>Encourage or offer solutions.</li>
+                  <li>Keep language supportive and kind.</li>
+                  <li>No attacks, no shaming, no negativity.</li>
+                </ul>
+                <div className="forums-pledge">
+                  <label className="forums-pledge-label" htmlFor="pledge-select">
+                    Pledge
+                  </label>
+                  <select
+                    id="pledge-select"
+                    className="forums-input forums-pledge-select"
+                    value={pledgeChoice}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      setPledgeChoice(next);
+                      setPledgeAccepted(Boolean(next));
+                    }}
+                  >
+                    <option value="">Choose your pledge</option>
+                    {PLEDGE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  {pledgeAccepted && pledgeMeta && (
+                    <span className="forums-pledge-status">
+                      {pledgeMeta.description}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </header>
 
-        <section className="forums-topics" ref={topicsRef}>
-          <div className="forums-topics__header">
-            <h2>Topics</h2>
-            <div className="forums-topics__controls">
-              <input
-                className="forums-input"
-                placeholder="Search topics"
-                value={categorySearch}
-                onChange={(event) => setCategorySearch(event.target.value)}
-              />
-              {/* Topic creation is admin-only (managed in Strapi). */}
+            <section className="forums-topics" ref={topicsRef}>
+              <div className="forums-topics__header">
+                <div>
+                  <h2>Topics</h2>
+                  <p className="forums-topics__subtitle">
+                    Pin up to three favorites so they always stay at the top.
+                  </p>
+                </div>
+              </div>
+              <div className="forums-topics__controls">
+                <div className="forums-topic-picker">
+                  <button
+                    type="button"
+                    className={`forums-topic-trigger${topicsMenuOpen ? " is-open" : ""}`}
+                    onClick={() => {
+                      setTopicsMenuOpen((prev) => !prev);
+                      setTrendingMenuOpen(false);
+                    }}
+                    aria-expanded={topicsMenuOpen}
+                    aria-haspopup="dialog"
+                  >
+                    <div className="forums-topic-trigger__content">
+                      <span className="forums-topic-trigger__eyebrow">All topics</span>
+                      <span className="forums-topic-trigger__title">
+                        {activeCategoryMeta?.name || "All topics"}
+                      </span>
+                      <span className="forums-topic-trigger__desc">
+                        {activeCategoryMeta?.description ||
+                          "Every topic in the forums feed."}
+                      </span>
+                      <span className="forums-topic-trigger__meta">
+                        {activeCategoryCount} posts · {favoriteTopicIds.length}/3 pinned
+                      </span>
+                    </div>
+                    <span className="forums-topic-trigger__chevron" aria-hidden="true">
+                      ▾
+                    </span>
+                  </button>
+                </div>
+
+                <div className="forums-topic-picker forums-topic-picker--trending">
+                  <button
+                    type="button"
+                    className={`forums-topic-trigger${
+                      trendingMenuOpen ? " is-open" : ""
+                    }`}
+                    onClick={() => {
+                      setTrendingMenuOpen((prev) => !prev);
+                      setTopicsMenuOpen(false);
+                    }}
+                    aria-expanded={trendingMenuOpen}
+                    aria-haspopup="dialog"
+                  >
+                    <div className="forums-topic-trigger__content">
+                      <span className="forums-topic-trigger__eyebrow">
+                        Trending topics
+                      </span>
+                      <span className="forums-topic-trigger__title">
+                        {activeTrendingMeta?.name || "Top trending"}
+                      </span>
+                      <span className="forums-topic-trigger__desc">
+                        {activeTrendingMeta?.description ||
+                          "Most active conversations right now."}
+                      </span>
+                      <span className="forums-topic-trigger__meta">
+                        {trendingCategories.length} trending topics
+                      </span>
+                    </div>
+                    <span className="forums-topic-trigger__chevron" aria-hidden="true">
+                      ▾
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            {topicsMenuOpen && (
+              <div
+                className="forums-modal-overlay forums-topic-modal-overlay"
+                role="dialog"
+                aria-modal="true"
+                aria-label="All topics"
+                onClick={() => setTopicsMenuOpen(false)}
+              >
+                <div
+                  className="forums-modal forums-modal--topics"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <div className="forums-modal__header">
+                    <div>
+                      <span className="forums-modal__eyebrow">Forum topics</span>
+                      <h3>All topics</h3>
+                    </div>
+                    <button
+                      type="button"
+                      className="forums-modal__close"
+                      onClick={() => setTopicsMenuOpen(false)}
+                      aria-label="Close topics"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="forums-modal__body">
+                    <div
+                      className="forums-topic-menu forums-topic-menu--modal"
+                      role="listbox"
+                      aria-label="Forum topics"
+                    >
+                      <div className="forums-topic-menu__search">
+                        <input
+                          className="forums-input"
+                          placeholder="Search topics"
+                          value={categorySearch}
+                          onChange={(event) => setCategorySearch(event.target.value)}
+                          autoFocus
+                        />
+                      </div>
+                      <div className="forums-topic-menu__section">
+                        <div className="forums-topic-menu__label">
+                          <span>Pinned topics</span>
+                          <span>{favoriteTopicIds.length}/3</span>
+                        </div>
+                        {filteredFavoriteTopics.length > 0 ? (
+                          filteredFavoriteTopics.map((category) =>
+                            renderTopicOption(category)
+                          )
+                        ) : (
+                          <div className="forums-topic-menu__empty">
+                            Pin up to three topics so they stay at the top of the list.
+                          </div>
+                        )}
+                      </div>
+                      <div className="forums-topic-menu__section">
+                        <div className="forums-topic-menu__label">
+                          <span>All topics</span>
+                          <span>{filteredOtherTopics.length}</span>
+                        </div>
+                        <div
+                          className={`forums-topic-option is-all${
+                            activeCategory === "all" ? " is-active" : ""
+                          }`}
+                          role="option"
+                          aria-selected={activeCategory === "all"}
+                          tabIndex={0}
+                          onClick={() => handleTopicSelect("all")}
+                          onKeyDown={(event) => handleTopicKeyDown(event, "all")}
+                        >
+                          <div className="forums-topic-option__text">
+                            <span className="forums-topic-option__title">
+                              All topics
+                            </span>
+                            <span className="forums-topic-option__desc">
+                              Browse everything in the forums feed.
+                            </span>
+                          </div>
+                          <div className="forums-topic-option__meta">
+                            <span className="forums-topic-option__count">
+                              {posts.length} posts
+                            </span>
+                          </div>
+                        </div>
+                        {filteredOtherTopics.map((category) =>
+                          renderTopicOption(category)
+                        )}
+                      </div>
+                      {favoriteTopicError && (
+                        <div className="forums-topic-menu__hint is-error">
+                          {favoriteTopicError}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {trendingMenuOpen && (
+              <div
+                className="forums-modal-overlay forums-topic-modal-overlay"
+                role="dialog"
+                aria-modal="true"
+                aria-label="Trending topics"
+                onClick={() => setTrendingMenuOpen(false)}
+              >
+                <div
+                  className="forums-modal forums-modal--topics"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <div className="forums-modal__header">
+                    <div>
+                      <span className="forums-modal__eyebrow">Forum topics</span>
+                      <h3>Top trending</h3>
+                    </div>
+                    <button
+                      type="button"
+                      className="forums-modal__close"
+                      onClick={() => setTrendingMenuOpen(false)}
+                      aria-label="Close trending topics"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="forums-modal__body">
+                    <div
+                      className="forums-topic-menu forums-topic-menu--modal"
+                      role="listbox"
+                      aria-label="Trending topics"
+                    >
+                      <div className="forums-topic-menu__section">
+                        <div className="forums-topic-menu__label">
+                          <span>Trending now</span>
+                          <span>{trendingCategories.length}</span>
+                        </div>
+                        {trendingCategories.length > 0 ? (
+                          trendingCategories.map((category) => {
+                            const id = String(category.id);
+                            const isActive = activeCategory === id;
+                            return (
+                              <div
+                                key={id}
+                                className={`forums-topic-option${
+                                  isActive ? " is-active" : ""
+                                }`}
+                                role="option"
+                                aria-selected={isActive}
+                                tabIndex={0}
+                                onClick={() => handleTrendingSelect(id)}
+                                onKeyDown={(event) =>
+                                  handleTrendingKeyDown(event, id)
+                                }
+                              >
+                                <div className="forums-topic-option__text">
+                                  <span className="forums-topic-option__title">
+                                    {category.name}
+                                  </span>
+                                  <span className="forums-topic-option__desc">
+                                    {category.description}
+                                  </span>
+                                </div>
+                                <div className="forums-topic-option__meta">
+                                  <span className="forums-topic-option__count">
+                                    {category.count} posts
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <div className="forums-topic-menu__empty">
+                            No trending topics yet.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {isDetailView && (
+          <div className="forums-detail-header">
+            <button
+              type="button"
+              className="forums-button ghost"
+              onClick={() => navigate("/forums")}
+            >
+              Back to forum feed
+            </button>
+            <div className="forums-detail-header__meta">
+              <span className="forums-eyebrow">Forum discussion</span>
+              <h2>{selectedPost?.title || "Discussion"}</h2>
             </div>
           </div>
-          <div className="forums-topic-grid">
-            {filteredCategories.map((category) => (
-              <button
-                key={category.id}
-                type="button"
-                className={`forums-topic-card${
-                  activeCategory === String(category.id) ? " is-active" : ""
-                }`}
-                onClick={() => setActiveCategory(String(category.id))}
-              >
-                <h3>{category.name}</h3>
-                <p>{category.description}</p>
-                <span>{categoryCounts.get(String(category.id)) || 0} posts</span>
-              </button>
-            ))}
-          </div>
-        </section>
+        )}
 
         <section className="forums-layout">
           <div className="forums-feed">
             <div className="forums-feed__toolbar">
               <div>
-                <h2>Forum feed</h2>
-                <p>Only uplifting posts, curated by topic.</p>
+                <h2>{isDetailView ? "Discussion" : "Forum feed"}</h2>
+                <p>
+                  {isDetailView
+                    ? "Read, react, and reply to this conversation."
+                    : "Only uplifting posts, curated by topic."}
+                </p>
               </div>
-              <div className="forums-feed__filters">
-                <select
-                  className="forums-input"
-                  value={activeCategory}
-                  onChange={(event) => setActiveCategory(event.target.value)}
-                >
-                  <option value="all">All topics</option>
-                  {categories.map((category) => (
-                    <option key={category.id} value={String(category.id)}>
-                      {category.name}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  className="forums-input"
-                  value={intentFilter}
-                  onChange={(event) =>
-                    setIntentFilter(event.target.value as ForumPost["intent"] | "all")
-                  }
-                >
-                  <option value="all">All intents</option>
-                  <option value="win">Wins</option>
-                  <option value="support">Support requests</option>
-                  <option value="tip">Tips</option>
-                  <option value="idea">Ideas</option>
-                  <option value="gratitude">Gratitude</option>
-                </select>
-                <input
-                  className="forums-input"
-                  placeholder="Search posts"
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                />
-              </div>
+              {!isDetailView && (
+                <div className="forums-feed__filters">
+                  <select
+                    className="forums-input"
+                    value={activeCategory}
+                    onChange={(event) => setActiveCategory(event.target.value)}
+                  >
+                    <option value="all">All topics</option>
+                    {orderedTopics.map((category) => (
+                      <option key={category.id} value={String(category.id)}>
+                        {category.name}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className="forums-input"
+                    value={intentFilter}
+                    onChange={(event) =>
+                      setIntentFilter(event.target.value as ForumPost["intent"] | "all")
+                    }
+                  >
+                    <option value="all">All intents</option>
+                    <option value="win">Wins</option>
+                    <option value="support">Support requests</option>
+                    <option value="tip">Tips</option>
+                    <option value="idea">Ideas</option>
+                    <option value="gratitude">Gratitude</option>
+                  </select>
+                  <input
+                    className="forums-input"
+                    placeholder="Search posts"
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                  />
+                </div>
+              )}
             </div>
 
             {loadError && <div className="forums-status">{loadError}</div>}
             {loading && <div className="forums-status">Loading forums...</div>}
             {nudge && <div className="forums-nudge">{nudge}</div>}
+            {status && <div className="forums-status">{status}</div>}
 
             {!loading && visiblePosts.length === 0 && (
               <div className="forums-empty">
-                <p>No uplifting posts yet. Be the first to start the conversation.</p>
+                <p>
+                  {isDetailView
+                    ? "We couldn't find that discussion."
+                    : "No uplifting posts yet. Be the first to start the conversation."}
+                </p>
               </div>
             )}
 
@@ -1375,20 +1907,77 @@ export default function Forums() {
                 const postKey = getPostKey(post);
                 const commentKey = postKey;
                 const postComments = commentsByPost[commentKey] || [];
-                const commentTree = buildCommentTree(postComments);
-                const isCommentsOpen = Boolean(openComments[commentKey]);
                 const commentCount = postComments.length;
+                const commentTree = isDetailView ? buildCommentTree(postComments) : [];
                 const hasEncouraged = Boolean(quickReplies[postKey]?.encouraged);
                 const hasThanked = Boolean(quickReplies[postKey]?.thanked);
                 const encouragePending = quickReplySubmitting[`encourage-${postKey}`];
                 const thankPending = quickReplySubmitting[`thank-${postKey}`];
                 const postApiId = post.numericId ?? post.id;
                 const isPostOwner = user?.id && post.ownerId === user.id;
+                const showPostMenu = postMenuFor === postKey;
+                const previewBody =
+                  !isDetailView && post.body.length > 180
+                    ? `${post.body.slice(0, 180).trim()}…`
+                    : post.body;
                 return (
                   <article
                     key={post.id}
                     className={`forums-post${post.status === "review" ? " is-review" : ""}`}
                   >
+                    {isPostOwner && editingPostId !== postKey && (
+                      <div className="post-menu-wrapper">
+                        <button
+                          className="post-menu-trigger"
+                          type="button"
+                          aria-haspopup="menu"
+                          aria-expanded={showPostMenu}
+                          aria-label="Open post options"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            togglePostMenu(postKey);
+                          }}
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <circle cx="5" cy="12" r="2" />
+                            <circle cx="12" cy="12" r="2" />
+                            <circle cx="19" cy="12" r="2" />
+                          </svg>
+                        </button>
+                        {showPostMenu && (
+                          <div className="post-menu" role="menu">
+                            <button
+                              type="button"
+                              className="post-menu-item"
+                              role="menuitem"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setEditingPostId(postKey);
+                                setEditPostTitle(post.title);
+                                setEditPostBody(post.body);
+                                setPostMenuFor(null);
+                              }}
+                              disabled={editingPostId === postKey}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              className="post-menu-item is-danger"
+                              role="menuitem"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setPostMenuFor(null);
+                                deleteForumPost(post);
+                              }}
+                              disabled={postDeleting[postKey]}
+                            >
+                              {postDeleting[postKey] ? "Deleting..." : "Delete"}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <div className="forums-post__meta">
                       <span className={`forums-badge is-${post.intent}`}>
                         {INTENT_LABELS[post.intent]}
@@ -1403,7 +1992,9 @@ export default function Forums() {
                       )}
                     </div>
                     <h3>{post.title}</h3>
-                    <p>{post.body}</p>
+                    <p className={isDetailView ? "" : "forums-post__excerpt"}>
+                      {previewBody}
+                    </p>
                     <div className="forums-post__actions">
                       <button
                         type="button"
@@ -1434,34 +2025,25 @@ export default function Forums() {
                       <button
                         type="button"
                         className="forums-button ghost"
-                        onClick={() => toggleComments(post)}
+                        onClick={() => {
+                          if (isDetailView) {
+                            scrollToComments(commentKey);
+                          } else {
+                            openDiscussion(post);
+                          }
+                        }}
                       >
-                        Comment ({commentCount})
+                        {isDetailView
+                          ? `Comment (${commentCount})`
+                          : `View discussion (${commentCount})`}
                       </button>
-                      {isPostOwner && (
-                        <>
-                          <button
-                            type="button"
-                            className="forums-button ghost"
-                            onClick={() => {
-                              setEditingPostId(postKey);
-                              setEditPostTitle(post.title);
-                              setEditPostBody(post.body);
-                            }}
-                            disabled={editingPostId === postKey}
-                          >
-                            Edit post
-                          </button>
-                          <button
-                            type="button"
-                            className="forums-button ghost"
-                            onClick={() => deleteForumPost(post)}
-                            disabled={postDeleting[postKey]}
-                          >
-                            {postDeleting[postKey] ? "Deleting..." : "Delete post"}
-                          </button>
-                        </>
-                      )}
+                      <button
+                        type="button"
+                        className="forums-button ghost"
+                        onClick={() => openReportModal(post)}
+                      >
+                        Report
+                      </button>
                     </div>
                     {editingPostId === postKey ? (
                       <div className="forums-post__edit">
@@ -1501,8 +2083,8 @@ export default function Forums() {
                         </div>
                       </div>
                     ) : null}
-                    {isCommentsOpen && (
-                      <div className="forums-comments">
+                    {isDetailView && (
+                      <div className="forums-comments" id={`forum-comments-${commentKey}`}>
                         <div className="forums-comment-form">
                           <input
                             className="forums-input"
@@ -1815,123 +2397,262 @@ export default function Forums() {
                 );
               })}
             </div>
+            {!isDetailView && totalFeedPages > 1 && (
+              <div className="forums-feed-pagination">
+                <button
+                  type="button"
+                  className="forums-page-btn"
+                  onClick={() => setFeedPage((prev) => Math.max(1, prev - 1))}
+                  disabled={feedPage <= 1}
+                >
+                  Prev
+                </button>
+                {Array.from({ length: totalFeedPages }, (_, index) => index + 1).map(
+                  (page) => (
+                    <button
+                      key={page}
+                      type="button"
+                      className={`forums-page-btn${
+                        page === feedPage ? " is-active" : ""
+                      }`}
+                      onClick={() => setFeedPage(page)}
+                    >
+                      {page}
+                    </button>
+                  )
+                )}
+                <button
+                  type="button"
+                  className="forums-page-btn"
+                  onClick={() =>
+                    setFeedPage((prev) => Math.min(totalFeedPages, prev + 1))
+                  }
+                  disabled={feedPage >= totalFeedPages}
+                >
+                  Next
+                </button>
+              </div>
+            )}
           </div>
 
-          <aside className="forums-side">
-            <div className="forums-panel" ref={createPostRef}>
-              <h3>Create a post</h3>
-              <div className="forums-template-row">
-                {TEMPLATE_PRESETS.map((template) => (
-                  <button
-                    key={template.id}
-                    type="button"
-                    className="forums-chip"
-                    onClick={() => applyTemplate(template)}
-                  >
-                    {template.label}
-                  </button>
-                ))}
-              </div>
-              <div className="forums-field">
-                <label>Intent</label>
-                <select
-                  className="forums-input"
-                  value={postIntent}
-                  onChange={(event) =>
-                    setPostIntent(event.target.value as ForumPost["intent"])
-                  }
-                >
-                  <option value="win">Win</option>
-                  <option value="support">Support request</option>
-                  <option value="tip">Tip</option>
-                  <option value="idea">Idea</option>
-                  <option value="gratitude">Gratitude</option>
-                </select>
-              </div>
-              <div className="forums-field">
-                <label>Topic</label>
-                <select
-                  className="forums-input"
-                  value={postCategory}
-                  onChange={(event) => setPostCategory(event.target.value)}
-                >
-                  {categories.map((category) => (
-                    <option key={category.id} value={String(category.id)}>
-                      {category.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="forums-field">
-                <label>Title</label>
-                <input
-                  className="forums-input"
-                  value={postTitle}
-                  onChange={(event) => setPostTitle(event.target.value)}
-                  placeholder="Give your post a clear title"
-                />
-              </div>
-              <div className="forums-field">
-                <label>Message</label>
-                <textarea
-                  className="forums-input forums-textarea"
-                  value={postBody}
-                  onChange={(event) => setPostBody(event.target.value)}
-                  placeholder="Share your story, question, or encouragement."
-                />
-              </div>
-              {explicitHit && (
-                <div className="forums-tone-warning">
-                  Explicit or sexual content isn't allowed here.
-                </div>
-              )}
-              {negativeHit && (
-                <div className="forums-tone-warning">
-                  We keep this forum uplifting. Please rephrase to remove negative wording.
-                </div>
-              )}
-              {status && <div className="forums-status">{status}</div>}
-              <button
-                className="forums-button primary"
-                type="button"
-                onClick={handlePost}
-                disabled={submitting}
-              >
-                {submitting ? "Posting..." : "Post to forum"}
-              </button>
-            </div>
-
-            <div className="forums-panel">
-              <h3>Trending topics</h3>
-              <div className="forums-trending">
-                {trendingCategories.map((category) => (
-                  <button
-                    key={category.id}
-                    type="button"
-                    className="forums-trending-item"
-                    onClick={() => setActiveCategory(String(category.id))}
-                  >
-                    <div className="forums-trending-text">
-                      <strong className="forums-trending-title">{category.name}</strong>
-                      <span className="forums-trending-desc">{category.description}</span>
-                    </div>
-                    <span className="forums-count">{category.count}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="forums-panel">
-              <h3>Uplift ideas</h3>
-              <ul className="forums-ideas">
-                <li>Share a progress photo or a small win.</li>
-                <li>Offer a tip that helped your routine.</li>
-                <li>Ask for help in a calm, clear way.</li>
-                <li>Celebrate someone else in the comments.</li>
-              </ul>
-            </div>
-          </aside>
         </section>
+        {postModalOpen && (
+          <div
+            className="forums-modal-overlay"
+            role="dialog"
+            aria-modal="true"
+            onClick={closePostModal}
+          >
+            <div className="forums-modal" onClick={(event) => event.stopPropagation()}>
+              <div className="forums-modal__header">
+                <div>
+                  <span className="forums-modal__eyebrow">Create a forum post</span>
+                  <h3>{postIntent === "support" ? "Ask for support" : "Share a post"}</h3>
+                </div>
+                <button
+                  type="button"
+                  className="forums-modal__close"
+                  onClick={closePostModal}
+                  aria-label="Close create post"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="forums-modal__body">
+                <div className="forums-template-row">
+                  {TEMPLATE_PRESETS.map((template) => (
+                    <button
+                      key={template.id}
+                      type="button"
+                      className="forums-chip"
+                      onClick={() => applyTemplate(template)}
+                    >
+                      {template.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="forums-field">
+                  <label>Pledge</label>
+                  <select
+                    className="forums-input"
+                    value={pledgeChoice}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      setPledgeChoice(next);
+                      setPledgeAccepted(Boolean(next));
+                    }}
+                  >
+                    <option value="">Choose your pledge</option>
+                    {PLEDGE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  {pledgeAccepted && pledgeMeta && (
+                    <span className="forums-pledge-status">
+                      {pledgeMeta.description}
+                    </span>
+                  )}
+                </div>
+                <div className="forums-field">
+                  <label>Intent</label>
+                  <select
+                    className="forums-input"
+                    value={postIntent}
+                    onChange={(event) =>
+                      setPostIntent(event.target.value as ForumPost["intent"])
+                    }
+                  >
+                    <option value="win">Win</option>
+                    <option value="support">Support request</option>
+                    <option value="tip">Tip</option>
+                    <option value="idea">Idea</option>
+                    <option value="gratitude">Gratitude</option>
+                  </select>
+                </div>
+                <div className="forums-field">
+                  <label>Topic</label>
+                  <select
+                    className="forums-input"
+                    value={postCategory}
+                    onChange={(event) => setPostCategory(event.target.value)}
+                  >
+                    {categories.map((category) => (
+                      <option key={category.id} value={String(category.id)}>
+                        {category.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="forums-field">
+                  <label>Title</label>
+                  <input
+                    className="forums-input"
+                    value={postTitle}
+                    onChange={(event) => setPostTitle(event.target.value)}
+                    placeholder="Give your post a clear title"
+                  />
+                </div>
+                <div className="forums-field">
+                  <label>Message</label>
+                  <textarea
+                    className="forums-input forums-textarea"
+                    value={postBody}
+                    onChange={(event) => setPostBody(event.target.value)}
+                    placeholder="Share your story, question, or encouragement."
+                  />
+                </div>
+                {explicitHit && (
+                  <div className="forums-tone-warning">
+                    Explicit or sexual content isn't allowed here.
+                  </div>
+                )}
+                {negativeHit && (
+                  <div className="forums-tone-warning">
+                    We keep this forum uplifting. Please rephrase to remove negative wording.
+                  </div>
+                )}
+                {status && <div className="forums-status">{status}</div>}
+              </div>
+              <div className="forums-modal__footer">
+                <button
+                  className="forums-button ghost"
+                  type="button"
+                  onClick={closePostModal}
+                  disabled={submitting}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="forums-button primary"
+                  type="button"
+                  onClick={handlePost}
+                  disabled={submitting}
+                >
+                  {submitting ? "Posting..." : "Post to forum"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {reportOpen && reportingPost && (
+          <div
+            className="forums-modal-overlay"
+            role="dialog"
+            aria-modal="true"
+            onClick={closeReportModal}
+          >
+            <div
+              className="forums-modal forums-modal--report"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="forums-modal__header">
+                <div>
+                  <span className="forums-modal__eyebrow">Report a feed</span>
+                  <h3>Report "{reportingPost.title}"</h3>
+                </div>
+                <button
+                  type="button"
+                  className="forums-modal__close"
+                  onClick={closeReportModal}
+                  aria-label="Close report"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="forums-modal__body">
+                <div className="forums-field">
+                  <label htmlFor="report-reason">Reason</label>
+                  <select
+                    id="report-reason"
+                    className="forums-input"
+                    value={reportReason}
+                    onChange={(event) =>
+                      setReportReason(event.target.value as ReportReason)
+                    }
+                  >
+                    <option value="spam">Spam</option>
+                    <option value="harassment">Harassment</option>
+                    <option value="hate">Hate</option>
+                    <option value="impersonation">Impersonation</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+                <div className="forums-field">
+                  <label htmlFor="report-details">Details</label>
+                  <textarea
+                    id="report-details"
+                    className="forums-input forums-textarea"
+                    rows={4}
+                    value={reportDetails}
+                    onChange={(event) => setReportDetails(event.target.value)}
+                    placeholder="Let us know what's going on."
+                  />
+                </div>
+                {reportError && <div className="forums-status">{reportError}</div>}
+              </div>
+              <div className="forums-modal__footer">
+                <button
+                  className="forums-button ghost"
+                  type="button"
+                  onClick={closeReportModal}
+                  disabled={reportSubmitting}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="forums-button primary"
+                  type="button"
+                  onClick={submitReport}
+                  disabled={reportSubmitting}
+                >
+                  {reportSubmitting ? "Sending..." : "Submit report"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
           </div>
         </div>
       </div>

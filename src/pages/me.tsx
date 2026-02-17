@@ -1,15 +1,27 @@
 // src/pages/Me.tsx
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import {
+  type CSSProperties,
+  type DragEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import "../css/dashboard.css";
 import "../css/profile.css";
+import "../css/friends.css";
 import "../css/media-lightbox.css";
+import "../css/goals-panel.css";
 import { useAuth } from "../context/AuthContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";
 import api from "../api/strapi";
 import axios from "axios";
 import Sidebar from "../components/Sidebar";
 import TopbarSearch from "../components/TopbarSearch";
+import LanguageMenu from "../components/LanguageMenu";
+import LinkPreviewCard from "../components/LinkPreviewCard";
 import { HOBBY_OPTIONS } from "./me_hobbies";
 import { RELIGION_OPTIONS } from "./me_religions";
 import { usePageMeta } from "../hooks/usePageMeta";
@@ -52,6 +64,7 @@ const SETTINGS_SECTION_IDS = [
   "security",
   "privacy",
   "notifications",
+  "language",
   "changes",
 ] as const;
 
@@ -134,11 +147,22 @@ type CommentItem = {
 type FriendOption = {
   id: number;
   label: string;
+  avatarUrl?: string;
 };
 
 type TrustedCircleOption = {
   id: number;
   name: string;
+};
+
+type TrustedCircle = {
+  id: number;
+  name: string;
+};
+
+type TrustedCircleMember = {
+  id: number | string;
+  userId: number;
 };
 
 type GoalsState = {
@@ -160,11 +184,20 @@ type PrivacyEditState = {
   preview: boolean;
 };
 
+type VisibilityOption = {
+  value: "public" | "friends" | "trusted" | "private";
+  label: string;
+  hint: string;
+  disabled?: boolean;
+};
+
 type ProfileMediaItem = {
   id: number | string;
   documentId?: string;
   title?: string;
   caption?: string;
+  folder?: string;
+  order?: number;
   visibility?: "public" | "friends" | "private" | "trusted";
   kind?: "photo" | "video";
   media?: string;
@@ -378,21 +411,6 @@ const extractFirstUrl = (text: string) => {
   if (url.startsWith("www.")) url = `https://${url}`;
   return url;
 };
-const hostnameFor = (value: string) => {
-  try {
-    return new URL(value).hostname.replace(/^www\./, "");
-  } catch {
-    return value;
-  }
-};
-const faviconFor = (value: string) => {
-  try {
-    const host = new URL(value).hostname.replace(/^www\./, "");
-    return `https://www.google.com/s2/favicons?domain=${host}&sz=128`;
-  } catch {
-    return "";
-  }
-};
 const isYoutubeUrl = (value: string) => {
   try {
     const host = new URL(value).hostname.toLowerCase();
@@ -403,6 +421,10 @@ const isYoutubeUrl = (value: string) => {
 };
 const isVideoUrl = (value?: string) =>
   !!value && /\.(mp4|webm|mov|m4v|mkv)$/i.test(value);
+const isImageFile = (file: File) => {
+  if (file.type && file.type.startsWith("image/")) return true;
+  return /\.(png|jpe?g|gif|webp|bmp|tiff?|svg|heic|heif)$/i.test(file.name);
+};
 const isPreviewableUrl = (value?: string) =>
   !!value && (isYoutubeUrl(value) || isVideoUrl(value));
 const isVideoFile = (file: File) => {
@@ -413,6 +435,40 @@ const mediaDescriptor = (mediaUrl?: string, hasLink?: boolean) => {
   if (mediaUrl) return isVideoUrl(mediaUrl) ? "with a video" : "with a picture";
   if (hasLink) return "with a link";
   return "";
+};
+const MEDIA_PAGE_SIZE = 8;
+const MEDIA_FOLDER_ALL = "all";
+const MEDIA_FOLDER_UNSORTED = "__unsorted__";
+const normalizeFolderName = (value?: string | null) => String(value || "").trim();
+const MEDIA_FOLDER_STORAGE_PREFIX = "ysp_media_folders_v1";
+const isReservedMediaFolder = (value: string) => {
+  const normalized = normalizeFolderName(value).toLowerCase();
+  return normalized === MEDIA_FOLDER_ALL || normalized === MEDIA_FOLDER_UNSORTED;
+};
+const sanitizeFolderList = (folders: string[]) => {
+  const seen = new Set<string>();
+  const cleaned: string[] = [];
+  folders.forEach((entry) => {
+    const normalized = normalizeFolderName(entry);
+    if (!normalized || isReservedMediaFolder(normalized)) return;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    cleaned.push(normalized);
+  });
+  return cleaned;
+};
+
+const mergeFolderLists = (current: string[], incoming: string[]) => {
+  const merged = [...current];
+  incoming.forEach((entry) => {
+    const normalized = normalizeFolderName(entry);
+    if (!normalized || isReservedMediaFolder(normalized)) return;
+    if (merged.some((folder) => folder.toLowerCase() === normalized.toLowerCase()))
+      return;
+    merged.push(normalized);
+  });
+  return merged;
 };
 const feedbackLabelFor = (post: MediaPost) => {
   const audience = post.feedbackAudience;
@@ -432,11 +488,14 @@ const normalizeProfileMedia = (entry: any): ProfileMediaItem => {
   const mediaUrl = pickMediaUrl(mediaItem, { kind: "post" });
   const trustedCircle = attrs?.trustedCircle ?? record?.trustedCircle;
   const trustedCircleRecord = trustedCircle?.data ?? trustedCircle ?? null;
+  const orderValue = Number(attrs?.order);
   return {
     id: record?.id ?? record?.documentId ?? "",
     documentId: record?.documentId ?? attrs?.documentId,
     title: String(attrs?.title || "").trim() || undefined,
     caption: String(attrs?.caption || "").trim() || undefined,
+    folder: String(attrs?.folder || "").trim() || undefined,
+    order: Number.isFinite(orderValue) ? orderValue : undefined,
     visibility: attrs?.visibility as ProfileMediaItem["visibility"],
     kind: attrs?.kind as ProfileMediaItem["kind"],
     media: mediaUrl,
@@ -448,50 +507,8 @@ const normalizeProfileMedia = (entry: any): ProfileMediaItem => {
   };
 };
 
-const LinkPreviewCard = ({
-  preview,
-  url,
-  compact = false,
-}: {
-  preview: LinkPreview;
-  url: string;
-  compact?: boolean;
-}) => {
-  const title = preview.title || preview.siteName || hostnameFor(url);
-  const meta = preview.siteName || hostnameFor(url);
-  const showBadge = preview.type === "video" || isYoutubeUrl(url);
-  const fallbackImage = preview.image || faviconFor(url);
-  const hasImage = Boolean(fallbackImage);
-  return (
-    <a
-      className={`link-preview-card${compact ? " is-compact" : ""}`}
-      href={url}
-      target="_blank"
-      rel="noreferrer"
-    >
-      <div className="link-preview-media">
-        {hasImage ? (
-          <img
-            src={fallbackImage}
-            alt={title}
-            loading="lazy"
-            className={preview.image ? "" : "is-favicon"}
-          />
-        ) : (
-          <div className="link-preview-placeholder">LINK</div>
-        )}
-        {showBadge && <span className="link-preview-badge">Video</span>}
-      </div>
-      <div className="link-preview-body">
-        <p className="link-preview-title">{title}</p>
-        {preview.description && (
-          <p className="link-preview-desc">{preview.description}</p>
-        )}
-        <span className="link-preview-url">{meta}</span>
-      </div>
-    </a>
-  );
-};
+const parseMediaOrder = (value?: number | null) =>
+  typeof value === "number" && Number.isFinite(value) ? value : null;
 
 const CHAT_PRESETS = [
   { id: "small", label: "Small", width: 320, height: 440 },
@@ -657,7 +674,16 @@ const formatDateTime = (value?: string | null) => {
 };
 
 export default function Me() {
-  const { user, refreshProfile, logout, updateUser, resetEncryptedProfile } = useAuth();
+  const location = useLocation();
+  const {
+    user,
+    refreshProfile,
+    logout,
+    updateUser,
+  } = useAuth();
+  const mediaFolderStorageKey = user?.id
+    ? `${MEDIA_FOLDER_STORAGE_PREFIX}_${user.id}`
+    : null;
   const { preferences, setBackgroundAll, resetBackgroundAll, setChatPrefs, getBackgroundStyle } =
     useUserPreferences();
   const navigate = useNavigate();
@@ -714,6 +740,7 @@ export default function Me() {
   const profileIdRef = useRef<string | number | null>(null);
   const handleFixAttemptedRef = useRef(false);
   const phoneRepairAttemptedRef = useRef(false);
+  const mediaFoldersLoadedRef = useRef(false);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
   const [avatarRotateBusy, setAvatarRotateBusy] = useState(false);
@@ -723,13 +750,43 @@ export default function Me() {
   const [profileMediaLoading, setProfileMediaLoading] = useState(false);
   const [profileMediaError, setProfileMediaError] = useState<string | null>(null);
   const [mediaTab, setMediaTab] = useState<"all" | "photo" | "video">("all");
+  const [mediaFolderFilter, setMediaFolderFilter] = useState<string>(MEDIA_FOLDER_ALL);
+  const [mediaPage, setMediaPage] = useState(1);
+  const [mediaFolders, setMediaFolders] = useState<string[]>([]);
+  const [mediaNewFolderOpen, setMediaNewFolderOpen] = useState(false);
+  const [mediaNewFolderName, setMediaNewFolderName] = useState("");
+  const [mediaFolderError, setMediaFolderError] = useState<string | null>(null);
+  const [mediaDragOverFolder, setMediaDragOverFolder] = useState<string | null>(null);
+  const [mediaDraggingId, setMediaDraggingId] = useState<string | null>(null);
+  const [mediaDragOverId, setMediaDragOverId] = useState<string | null>(null);
   const [mediaLightboxOpen, setMediaLightboxOpen] = useState(false);
   const [mediaLightboxItems, setMediaLightboxItems] = useState<ProfileMediaItem[]>([]);
   const [mediaLightboxIndex, setMediaLightboxIndex] = useState(0);
+  const [mediaMenuFor, setMediaMenuFor] = useState<string | null>(null);
+  const [mediaVisibilityModalItem, setMediaVisibilityModalItem] =
+    useState<ProfileMediaItem | null>(null);
+  const [mediaEditModalItem, setMediaEditModalItem] =
+    useState<ProfileMediaItem | null>(null);
+  const [mediaMoveModalItem, setMediaMoveModalItem] =
+    useState<ProfileMediaItem | null>(null);
+  const [mediaMoveFolderOpen, setMediaMoveFolderOpen] = useState(false);
+  const [mediaMoveFolderName, setMediaMoveFolderName] = useState("");
+  const [mediaMoveFolderError, setMediaMoveFolderError] = useState<string | null>(
+    null
+  );
+  const [mediaDeleteTarget, setMediaDeleteTarget] =
+    useState<ProfileMediaItem | null>(null);
+  const [editingMediaId, setEditingMediaId] = useState<string | null>(null);
+  const [mediaEditTitle, setMediaEditTitle] = useState("");
+  const [mediaEditCaption, setMediaEditCaption] = useState("");
+  const [mediaEditFolder, setMediaEditFolder] = useState("");
+  const [mediaEditSaving, setMediaEditSaving] = useState(false);
+  const [mediaDragActive, setMediaDragActive] = useState(false);
   const [mediaFile, setMediaFile] = useState<File | null>(null);
   const [mediaFilePreview, setMediaFilePreview] = useState<string | null>(null);
   const [mediaTitle, setMediaTitle] = useState("");
   const [mediaCaption, setMediaCaption] = useState("");
+  const [mediaFolder, setMediaFolder] = useState("");
   const [mediaVisibility, setMediaVisibility] = useState<
     "public" | "friends" | "private" | "trusted"
   >("friends");
@@ -738,12 +795,51 @@ export default function Me() {
   const [trustedCircleOptions, setTrustedCircleOptions] = useState<
     TrustedCircleOption[]
   >([]);
+  const [trustedCircles, setTrustedCircles] = useState<TrustedCircle[]>([]);
+  const [activeTrustedCircleId, setActiveTrustedCircleId] = useState<number | null>(
+    null
+  );
+  const [trustedCircleMembersByGroup, setTrustedCircleMembersByGroup] = useState<
+    Record<number, TrustedCircleMember[]>
+  >({});
+  const [trustedCircleLoading, setTrustedCircleLoading] = useState(false);
+  const [trustedCircleBusy, setTrustedCircleBusy] = useState(false);
+  const [trustedCircleError, setTrustedCircleError] = useState<string | null>(null);
+  const [trustedFriendPicker, setTrustedFriendPicker] = useState("");
+  const [trustedCircleName, setTrustedCircleName] = useState("");
+  const [trustedCircleRename, setTrustedCircleRename] = useState("");
+  const [trustedCircleRenaming, setTrustedCircleRenaming] = useState(false);
+  const [trustedCircleSaving, setTrustedCircleSaving] = useState(false);
+  const [trustedCircleSuccess, setTrustedCircleSuccess] = useState<string | null>(
+    null
+  );
+  const [trustedCircleMenuOpen, setTrustedCircleMenuOpen] = useState(false);
+  const [trustedCircleEditing, setTrustedCircleEditing] = useState(false);
+  const [pendingTrustedAddIds, setPendingTrustedAddIds] = useState<number[]>([]);
+  const [pendingTrustedRemoveIds, setPendingTrustedRemoveIds] = useState<
+    Array<string | number>
+  >([]);
+  const [trustedCircleDeleteOpen, setTrustedCircleDeleteOpen] = useState(false);
+  const [trustedCircleDeleteTarget, setTrustedCircleDeleteTarget] =
+    useState<TrustedCircle | null>(null);
+  const trustedCircleLoadRef = useRef<number | null>(null);
+  const trustedCircleSuccessTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
   const [postComments, setPostComments] = useState<Record<string, CommentItem[]>>({});
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
   const [commentEdits, setCommentEdits] = useState<Record<string, string>>({});
   const [editingComments, setEditingComments] = useState<Record<string, boolean>>({});
   const [openCommentsFor, setOpenCommentsFor] = useState<Record<string, boolean>>({});
   const [shareMenuFor, setShareMenuFor] = useState<string | null>(null);
+  const [postMenuFor, setPostMenuFor] = useState<string | null>(null);
+  const [visibilityModalPost, setVisibilityModalPost] = useState<MediaPost | null>(
+    null
+  );
+  const [editPostModalPost, setEditPostModalPost] = useState<MediaPost | null>(null);
+  const [editingPostId, setEditingPostId] = useState<string | null>(null);
+  const [editPostText, setEditPostText] = useState("");
+  const [postEditing, setPostEditing] = useState<Record<string, boolean>>({});
   const [shareNotice, setShareNotice] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -783,13 +879,28 @@ export default function Me() {
     const viewParam = searchParams.get("view");
     if (viewParam === "settings") {
       setSettingsView("settings");
+      setProfileView("overview");
+    } else if (viewParam === "content") {
+      setSettingsView("profile");
+      setProfileView("content");
+    } else {
+      setSettingsView("profile");
+      setProfileView("overview");
     }
     if (isSettingsSection(sectionParam)) {
       setSettingsSection(sectionParam);
       setSettingsView("settings");
+      setProfileView("overview");
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
   }, [searchParams]);
+  useEffect(() => {
+    return () => {
+      if (trustedCircleSuccessTimeoutRef.current) {
+        window.clearTimeout(trustedCircleSuccessTimeoutRef.current);
+      }
+    };
+  }, []);
   const [hobbyInput, setHobbyInput] = useState("");
   const [hobbyList, setHobbyList] = useState<string[]>([]);
   const [activeHobbyPicker, setActiveHobbyPicker] = useState<
@@ -811,6 +922,11 @@ export default function Me() {
   const [appearanceError, setAppearanceError] = useState<string | null>(null);
   const [appearanceUploading, setAppearanceUploading] = useState(false);
   const [appearanceCollapsed, setAppearanceCollapsed] = useState(true);
+  const [profileInfoOpen, setProfileInfoOpen] = useState(false);
+  const [profileView, setProfileView] = useState<"overview" | "content">("overview");
+  const [contentGalleryOpen, setContentGalleryOpen] = useState(false);
+  const [contentPostsOpen, setContentPostsOpen] = useState(false);
+  const [trustedCirclesOpen, setTrustedCirclesOpen] = useState(false);
   const [trustedDevices, setTrustedDevices] = useState<TrustedDevice[]>([]);
   const [trustedLoading, setTrustedLoading] = useState(false);
   const [trustedError, setTrustedError] = useState<string | null>(null);
@@ -838,13 +954,11 @@ export default function Me() {
   const [passwordResetLoading, setPasswordResetLoading] = useState(false);
   const [passwordResetError, setPasswordResetError] = useState<string | null>(null);
   const [passwordResetSuccess, setPasswordResetSuccess] = useState<string | null>(null);
-  const [profileRecoveryBusy, setProfileRecoveryBusy] = useState(false);
-  const [profileRecoveryError, setProfileRecoveryError] = useState<string | null>(null);
-  const [profileRecoverySuccess, setProfileRecoverySuccess] = useState<string | null>(null);
   const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
   const [twoFactorMethod, setTwoFactorMethod] = useState<TwoFactorMethod>("email");
   const [twoFactorHasAuthenticator, setTwoFactorHasAuthenticator] = useState(false);
   const [twoFactorLoading, setTwoFactorLoading] = useState(false);
+  const [twoFactorResetting, setTwoFactorResetting] = useState(false);
   const [twoFactorError, setTwoFactorError] = useState<string | null>(null);
   const [twoFactorSuccess, setTwoFactorSuccess] = useState<string | null>(null);
   const [phoneVerified, setPhoneVerified] = useState<boolean | null>(null);
@@ -881,15 +995,374 @@ export default function Me() {
     "me" | "public" | "followers"
   >("me");
   const isSettingsView = settingsView === "settings";
+  const isPostsPage = location.pathname === "/my-posts";
+  const isGalleryPage = location.pathname === "/my-gallery";
+
+  useEffect(() => {
+    if (profileView !== "content" || isPostsPage || isGalleryPage) return;
+    setContentGalleryOpen(false);
+    setContentPostsOpen(false);
+  }, [profileView, isPostsPage, isGalleryPage]);
+
+  useEffect(() => {
+    if (!isPostsPage) return;
+    setSettingsView("profile");
+    setProfileView("content");
+    setContentGalleryOpen(false);
+    setContentPostsOpen(true);
+  }, [isPostsPage]);
+  useEffect(() => {
+    if (!isGalleryPage) return;
+    setSettingsView("profile");
+    setProfileView("content");
+    setContentGalleryOpen(true);
+    setContentPostsOpen(false);
+  }, [isGalleryPage]);
+
+  useEffect(() => {
+    if (mediaMoveModalItem) return;
+    setMediaMoveFolderOpen(false);
+    setMediaMoveFolderName("");
+    setMediaMoveFolderError(null);
+  }, [mediaMoveModalItem]);
   const mediaFileIsVideo = mediaFile ? isVideoFile(mediaFile) : false;
 
-  const filteredMedia = useMemo(() => {
-    if (mediaTab === "all") return profileMedia;
-    return profileMedia.filter((item) => {
-      const kind = item.kind || (item.media && isVideoUrl(item.media) ? "video" : "photo");
-      return kind === mediaTab;
+  const handleMediaFileSelection = (file: File | null) => {
+    if (!file) {
+      setMediaFile(null);
+      return;
+    }
+    const isVideo = isVideoFile(file);
+    const isImage = isImageFile(file);
+    if (!isVideo && !isImage) {
+      setProfileMediaError("Upload an image or video file.");
+      setMediaFile(null);
+      return;
+    }
+    const maxBytes = isVideo ? MAX_VIDEO_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
+    const maxLabel = isVideo ? MAX_VIDEO_UPLOAD_LABEL : MAX_UPLOAD_LABEL;
+    if (file.size > maxBytes) {
+      setProfileMediaError(`Media files must be under ${maxLabel}.`);
+      setMediaFile(null);
+      return;
+    }
+    setMediaFile(file);
+    setProfileMediaError(null);
+  };
+
+  useEffect(() => {
+    mediaFoldersLoadedRef.current = false;
+    if (!mediaFolderStorageKey || typeof window === "undefined") {
+      setMediaFolders([]);
+      mediaFoldersLoadedRef.current = true;
+      return;
+    }
+    const raw = window.localStorage.getItem(mediaFolderStorageKey);
+    if (!raw) {
+      setMediaFolders([]);
+      mediaFoldersLoadedRef.current = true;
+      return;
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        setMediaFolders(sanitizeFolderList(parsed.map(String)));
+      } else {
+        setMediaFolders([]);
+      }
+    } catch {
+      setMediaFolders([]);
+    } finally {
+      mediaFoldersLoadedRef.current = true;
+    }
+  }, [mediaFolderStorageKey]);
+
+  useEffect(() => {
+    if (!mediaFolderStorageKey || typeof window === "undefined") return;
+    if (!mediaFoldersLoadedRef.current) return;
+    window.localStorage.setItem(mediaFolderStorageKey, JSON.stringify(mediaFolders));
+  }, [mediaFolderStorageKey, mediaFolders]);
+
+  const mediaFolderOptions = useMemo(() => {
+    const values = new Set<string>();
+    sanitizeFolderList(mediaFolders).forEach((folder) => values.add(folder));
+    profileMedia.forEach((item) => {
+      const folder = normalizeFolderName(item.folder);
+      if (folder && !isReservedMediaFolder(folder)) values.add(folder);
     });
+    const activeFolder = normalizeFolderName(mediaFolderFilter);
+    if (activeFolder && !isReservedMediaFolder(activeFolder)) {
+      values.add(activeFolder);
+    }
+    return Array.from(values).sort((a, b) => a.localeCompare(b));
+  }, [mediaFolderFilter, mediaFolders, profileMedia]);
+
+  const mediaFolderCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    let total = 0;
+    let unsorted = 0;
+    profileMedia.forEach((item) => {
+      if (mediaTab !== "all") {
+        const kind =
+          item.kind || (item.media && isVideoUrl(item.media) ? "video" : "photo");
+        if (kind !== mediaTab) return;
+      }
+      total += 1;
+      const folder = normalizeFolderName(item.folder);
+      if (folder) {
+        counts.set(folder, (counts.get(folder) || 0) + 1);
+      } else {
+        unsorted += 1;
+      }
+    });
+    return { counts, total, unsorted };
   }, [mediaTab, profileMedia]);
+
+  const handleCreateMediaFolder = () => {
+    const nextFolder = normalizeFolderName(mediaNewFolderName);
+    if (!nextFolder) {
+      setMediaFolderError("Enter a folder name.");
+      return;
+    }
+    if (isReservedMediaFolder(nextFolder)) {
+      setMediaFolderError("Choose a different folder name.");
+      return;
+    }
+    const existing = mediaFolderOptions.find(
+      (folder) => folder.toLowerCase() === nextFolder.toLowerCase()
+    );
+    if (!existing) {
+      setMediaFolders((prev) =>
+        prev.some((folder) => folder.toLowerCase() === nextFolder.toLowerCase())
+          ? prev
+          : [...prev, nextFolder]
+      );
+    }
+    setMediaFolderFilter(existing || nextFolder);
+    setMediaNewFolderName("");
+    setMediaNewFolderOpen(false);
+    setMediaFolderError(null);
+  };
+
+  const cancelMediaFolderCreate = () => {
+    setMediaNewFolderName("");
+    setMediaNewFolderOpen(false);
+    setMediaFolderError(null);
+  };
+
+  const closeMediaMoveModal = () => {
+    setMediaMoveModalItem(null);
+    setMediaMoveFolderOpen(false);
+    setMediaMoveFolderName("");
+    setMediaMoveFolderError(null);
+  };
+
+  const cancelMediaMoveFolderCreate = () => {
+    setMediaMoveFolderName("");
+    setMediaMoveFolderOpen(false);
+    setMediaMoveFolderError(null);
+  };
+
+  const handleMoveToNewFolder = () => {
+    if (!mediaMoveModalItem) return;
+    const nextFolder = normalizeFolderName(mediaMoveFolderName);
+    if (!nextFolder) {
+      setMediaMoveFolderError("Enter a folder name.");
+      return;
+    }
+    if (isReservedMediaFolder(nextFolder)) {
+      setMediaMoveFolderError("Choose a different folder name.");
+      return;
+    }
+    const existing = mediaFolderOptions.find(
+      (folder) => folder.toLowerCase() === nextFolder.toLowerCase()
+    );
+    if (!existing) {
+      setMediaFolders((prev) =>
+        prev.some((folder) => folder.toLowerCase() === nextFolder.toLowerCase())
+          ? prev
+          : [...prev, nextFolder]
+      );
+    }
+    const targetFolder = existing || nextFolder;
+    setMediaFolderFilter(targetFolder);
+    const item = mediaMoveModalItem;
+    closeMediaMoveModal();
+    void updateMediaFolder(item, targetFolder);
+  };
+
+  const handleMediaDragStart = (
+    event: DragEvent<HTMLElement>,
+    item: ProfileMediaItem
+  ) => {
+    if (!item.id) return;
+    const key = String(item.id);
+    event.dataTransfer.setData("text/plain", key);
+    event.dataTransfer.setData("application/x-ysp-media-id", key);
+    event.dataTransfer.effectAllowed = "move";
+    setMediaDraggingId(key);
+  };
+
+  const handleMediaDragEnd = () => {
+    setMediaDraggingId(null);
+    setMediaDragOverFolder(null);
+    setMediaDragOverId(null);
+  };
+
+  const handleFolderDragOver = (
+    event: DragEvent<HTMLElement>,
+    folderKey: string
+  ) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setMediaDragOverFolder(folderKey);
+    setMediaDragOverId(null);
+  };
+
+  const handleFolderDragLeave = (folderKey: string) => {
+    setMediaDragOverFolder((prev) => (prev === folderKey ? null : prev));
+  };
+
+  const handleFolderDrop = async (
+    event: DragEvent<HTMLElement>,
+    folderKey: string
+  ) => {
+    event.preventDefault();
+    setMediaDragOverFolder(null);
+    setMediaDragOverId(null);
+    const draggedId =
+      event.dataTransfer.getData("application/x-ysp-media-id") ||
+      event.dataTransfer.getData("text/plain");
+    if (!draggedId) return;
+    const item = profileMedia.find(
+      (entry) =>
+        String(entry.id) === draggedId ||
+        (entry.documentId && String(entry.documentId) === draggedId)
+    );
+    if (!item) return;
+    const nextFolder =
+      folderKey === MEDIA_FOLDER_UNSORTED ? null : normalizeFolderName(folderKey);
+    await updateMediaFolder(item, nextFolder);
+  };
+
+  const handleMediaCardDragOver = (
+    event: DragEvent<HTMLElement>,
+    targetId: string
+  ) => {
+    if (!mediaDraggingId || mediaDraggingId === targetId) return;
+    const sourceItem = profileMedia.find(
+      (item) =>
+        String(item.id) === mediaDraggingId ||
+        (item.documentId && String(item.documentId) === mediaDraggingId)
+    );
+    const targetItem = profileMedia.find(
+      (item) =>
+        String(item.id) === targetId ||
+        (item.documentId && String(item.documentId) === targetId)
+    );
+    if (!sourceItem || !targetItem) return;
+    const sourceFolder = normalizeFolderName(sourceItem.folder);
+    const targetFolder = normalizeFolderName(targetItem.folder);
+    if (sourceFolder !== targetFolder) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setMediaDragOverFolder(null);
+    setMediaDragOverId(targetId);
+  };
+
+  const handleMediaCardDragLeave = (targetId: string) => {
+    setMediaDragOverId((prev) => (prev === targetId ? null : prev));
+  };
+
+  const handleMediaCardDrop = async (
+    event: DragEvent<HTMLElement>,
+    targetId: string
+  ) => {
+    event.preventDefault();
+    const draggedId =
+      event.dataTransfer.getData("application/x-ysp-media-id") ||
+      event.dataTransfer.getData("text/plain");
+    setMediaDragOverId(null);
+    if (!draggedId || draggedId === targetId) return;
+    const sourceItem = profileMedia.find(
+      (item) =>
+        String(item.id) === draggedId ||
+        (item.documentId && String(item.documentId) === draggedId)
+    );
+    const targetItem = profileMedia.find(
+      (item) =>
+        String(item.id) === targetId ||
+        (item.documentId && String(item.documentId) === targetId)
+    );
+    if (!sourceItem || !targetItem) return;
+    const sourceFolder = normalizeFolderName(sourceItem.folder);
+    const targetFolder = normalizeFolderName(targetItem.folder);
+    if (sourceFolder !== targetFolder) return;
+    await reorderMediaItems(draggedId, targetId);
+  };
+
+  const filteredMedia = useMemo(() => {
+    let items = profileMedia;
+    if (mediaTab !== "all") {
+      items = items.filter((item) => {
+        const kind = item.kind || (item.media && isVideoUrl(item.media) ? "video" : "photo");
+        return kind === mediaTab;
+      });
+    }
+    if (
+      mediaFolderFilter !== MEDIA_FOLDER_ALL &&
+      mediaFolderFilter !== MEDIA_FOLDER_UNSORTED
+    ) {
+      items = items.filter((item) => {
+        const folder = normalizeFolderName(item.folder);
+        return folder === mediaFolderFilter;
+      });
+    }
+    const sorted = [...items].sort((a, b) => {
+      if (mediaFolderFilter !== MEDIA_FOLDER_ALL) {
+        const orderA = parseMediaOrder(a.order);
+        const orderB = parseMediaOrder(b.order);
+        if (orderA !== null && orderB !== null && orderA !== orderB) {
+          return orderA - orderB;
+        }
+        if (orderA !== null && orderB === null) return -1;
+        if (orderA === null && orderB !== null) return 1;
+      }
+      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      if (timeA !== timeB) return timeB - timeA;
+      return String(a.id).localeCompare(String(b.id));
+    });
+    return sorted;
+  }, [mediaTab, mediaFolderFilter, profileMedia]);
+
+  useEffect(() => {
+    setMediaPage(1);
+  }, [mediaTab, mediaFolderFilter]);
+
+  useEffect(() => {
+    if (mediaFolderFilter === MEDIA_FOLDER_UNSORTED) {
+      setMediaFolderFilter(MEDIA_FOLDER_ALL);
+    }
+  }, [mediaFolderFilter]);
+
+  const mediaPaging = useMemo(() => {
+    const totalPages = Math.max(1, Math.ceil(filteredMedia.length / MEDIA_PAGE_SIZE));
+    const page = Math.min(Math.max(mediaPage, 1), totalPages);
+    const startIndex = (page - 1) * MEDIA_PAGE_SIZE;
+    return {
+      page,
+      totalPages,
+      startIndex,
+      items: filteredMedia.slice(startIndex, startIndex + MEDIA_PAGE_SIZE),
+    };
+  }, [filteredMedia, mediaPage]);
+
+  useEffect(() => {
+    if (mediaPage > mediaPaging.totalPages) {
+      setMediaPage(mediaPaging.totalPages);
+    }
+  }, [mediaPage, mediaPaging.totalPages]);
   const activeMediaItem = mediaLightboxOpen
     ? mediaLightboxItems[mediaLightboxIndex]
     : null;
@@ -1004,6 +1477,8 @@ export default function Me() {
     const num = Number(rawId);
     return Number.isFinite(num) ? num : undefined;
   };
+  const getEntryId = (entry: any, attrs?: any) =>
+    entry?.id ?? attrs?.documentId ?? entry?.documentId ?? attrs?.id;
   const getEntityLabel = (entry: any, fallback: string) => {
     const attrs = normalize(getEntity(entry));
     const firstName = String(attrs?.firstName || attrs?.firstname || "").trim();
@@ -1011,6 +1486,24 @@ export default function Me() {
     const fullName = `${firstName} ${lastName}`.trim();
     const handle = String(attrs?.handle || attrs?.username || "").trim();
     return fullName || handle || attrs?.email || fallback;
+  };
+  const getErrorMessage = (err: unknown, fallback: string) => {
+    if (axios.isAxiosError(err)) {
+      const data = err.response?.data as
+        | { error?: { message?: string }; message?: string }
+        | undefined;
+      return data?.error?.message || data?.message || fallback;
+    }
+    return fallback;
+  };
+  const pushTrustedCircleSuccess = (message: string) => {
+    setTrustedCircleSuccess(message);
+    if (trustedCircleSuccessTimeoutRef.current) {
+      window.clearTimeout(trustedCircleSuccessTimeoutRef.current);
+    }
+    trustedCircleSuccessTimeoutRef.current = window.setTimeout(() => {
+      setTrustedCircleSuccess(null);
+    }, 3000);
   };
   const mapComments = (rows: any[]): Record<string, CommentItem[]> => {
     const next: Record<string, CommentItem[]> = {};
@@ -1041,6 +1534,83 @@ export default function Me() {
     });
     return next;
   };
+  const activeTrustedCircle = useMemo(() => {
+    if (!trustedCircles.length) return null;
+    if (activeTrustedCircleId) {
+      return trustedCircles.find((circle) => circle.id === activeTrustedCircleId) ?? null;
+    }
+    return trustedCircles[0];
+  }, [activeTrustedCircleId, trustedCircles]);
+
+  useEffect(() => {
+    if (!activeTrustedCircle) {
+      setTrustedCircleRename("");
+      return;
+    }
+    setTrustedCircleRename(activeTrustedCircle.name);
+  }, [activeTrustedCircle]);
+
+  useEffect(() => {
+    setTrustedCircleMenuOpen(false);
+    setTrustedCircleEditing(false);
+    setPendingTrustedAddIds([]);
+    setPendingTrustedRemoveIds([]);
+  }, [activeTrustedCircle?.id]);
+
+  const trustedCircleMembers = useMemo(() => {
+    if (!activeTrustedCircle?.id) return [];
+    return trustedCircleMembersByGroup[activeTrustedCircle.id] ?? [];
+  }, [activeTrustedCircle, trustedCircleMembersByGroup]);
+
+  const trustedMemberIds = useMemo(
+    () => new Set(trustedCircleMembers.map((member) => member.userId)),
+    [trustedCircleMembers]
+  );
+  const pendingTrustedRemoveSet = useMemo(
+    () => new Set(pendingTrustedRemoveIds),
+    [pendingTrustedRemoveIds]
+  );
+  const canEditTrustedCircle =
+    trustedCircleEditing || trustedCircleMembers.length === 0;
+
+  const trustedFriendOptions = useMemo(
+    () =>
+      [...friendOptions].sort((a, b) => a.label.localeCompare(b.label)),
+    [friendOptions]
+  );
+
+  const pendingTrustedAddOptions = useMemo(() => {
+    if (!pendingTrustedAddIds.length) return [];
+    return trustedFriendOptions.filter(
+      (friend) =>
+        pendingTrustedAddIds.includes(friend.id) &&
+        !trustedMemberIds.has(friend.id)
+    );
+  }, [pendingTrustedAddIds, trustedFriendOptions, trustedMemberIds]);
+
+  const hasPendingTrustedChanges = useMemo(
+    () =>
+      pendingTrustedAddIds.some((id) => !trustedMemberIds.has(id)) ||
+      pendingTrustedRemoveIds.length > 0,
+    [pendingTrustedAddIds, pendingTrustedRemoveIds, trustedMemberIds]
+  );
+
+  const trustedCircleFriendRows = useMemo(
+    () =>
+      trustedCircleMembers
+        .filter((member) => member.userId !== user?.id)
+        .map((member) => {
+          const friend = trustedFriendOptions.find(
+            (option) => option.id === member.userId
+          );
+          return {
+            member,
+            label: friend?.label || `User ${member.userId}`,
+            avatarUrl: friend?.avatarUrl,
+          };
+        }),
+    [trustedCircleMembers, trustedFriendOptions, user?.id]
+  );
   const fetchCommentsForPostIds = async (postIds: Array<string | number>) => {
     if (!postIds.length) return {};
     const idFilter = postIds
@@ -1297,17 +1867,361 @@ export default function Me() {
   const toggleComments = (postKey: string) => {
     setOpenCommentsFor((prev) => ({ ...prev, [postKey]: !prev[postKey] }));
     setShareMenuFor(null);
+    setPostMenuFor(null);
+    setVisibilityModalPost(null);
+    setEditPostModalPost(null);
   };
   const toggleShareMenu = (postKey: string) => {
     setShareMenuFor((prev) => (prev === postKey ? null : postKey));
+    setPostMenuFor(null);
+    setVisibilityModalPost(null);
+    setEditPostModalPost(null);
+  };
+  const togglePostMenu = (postKey: string) => {
+    setPostMenuFor((prev) => (prev === postKey ? null : postKey));
+    setShareMenuFor(null);
+    setVisibilityModalPost(null);
+    setEditPostModalPost(null);
+  };
+  const toggleMediaMenu = (mediaKey: string) => {
+    setMediaMenuFor((prev) => (prev === mediaKey ? null : mediaKey));
+    setPostMenuFor(null);
+    setShareMenuFor(null);
+  };
+
+  const cancelPostEdit = () => {
+    setEditingPostId(null);
+    setEditPostText("");
+  };
+
+  const cancelMediaEdit = () => {
+    setEditingMediaId(null);
+    setMediaEditTitle("");
+    setMediaEditCaption("");
+    setMediaEditFolder("");
+  };
+
+  const savePostEdit = async (post: MediaPost) => {
+    if (!user) {
+      setError("Please log in to edit posts.");
+      return;
+    }
+    const postKey = String(post.id);
+    const nextText = sanitizePostText(editPostText).trim();
+    if (!nextText) {
+      setError("Add a message to update your post.");
+      return;
+    }
+    if (nextText === post.text) {
+      cancelPostEdit();
+      return;
+    }
+    setPostEditing((prev) => ({ ...prev, [postKey]: true }));
+    setError(null);
+    try {
+      const attempts: string[] = [];
+      const idNumber = typeof post.id === "number" ? post.id : Number(post.id);
+      const docId = post.documentId ?? (typeof post.id === "string" ? post.id : null);
+      if (docId) attempts.push(`/users-posts/${docId}`);
+      if (Number.isFinite(idNumber)) attempts.push(`/users-posts/${idNumber}`);
+      const uniqueAttempts = Array.from(new Set(attempts));
+
+      let updated = false;
+      for (const path of uniqueAttempts) {
+        try {
+          await api.put(path, { data: { Users_Content: nextText } });
+          updated = true;
+          break;
+        } catch (err: unknown) {
+          if (axios.isAxiosError(err) && err.response?.status === 404) {
+            continue;
+          }
+          throw err;
+        }
+      }
+
+      if (!updated) {
+        setError("Failed to update post.");
+        return;
+      }
+
+      setPosts((prev) =>
+        prev.map((entry) =>
+          String(entry.id) === postKey ? { ...entry, text: nextText } : entry
+        )
+      );
+      cancelPostEdit();
+    } catch (err: unknown) {
+      const msg = axios.isAxiosError(err)
+        ? err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Failed to update post."
+        : "Failed to update post.";
+      setError(String(msg));
+    } finally {
+      setPostEditing((prev) => ({ ...prev, [postKey]: false }));
+    }
+  };
+
+  const saveMediaEdit = async (item: ProfileMediaItem) => {
+    if (!item.id) return;
+    const nextTitle = mediaEditTitle.trim();
+    const nextCaption = mediaEditCaption.trim();
+    const nextFolder = normalizeFolderName(mediaEditFolder);
+    if (nextFolder && isReservedMediaFolder(nextFolder)) {
+      setProfileMediaError("Choose a different folder name.");
+      return;
+    }
+    const currentTitle = String(item.title || "").trim();
+    const currentCaption = String(item.caption || "").trim();
+    const currentFolder = normalizeFolderName(item.folder);
+    if (
+      nextTitle === currentTitle &&
+      nextCaption === currentCaption &&
+      nextFolder === currentFolder
+    ) {
+      cancelMediaEdit();
+      return;
+    }
+    setMediaEditSaving(true);
+    setProfileMediaError(null);
+    const payload = {
+      title: nextTitle || null,
+      caption: nextCaption || null,
+      folder: nextFolder || null,
+    };
+    try {
+      const attempts: string[] = [];
+      if (item.documentId) attempts.push(`/profile-media-items/${item.documentId}`);
+      const numericId = typeof item.id === "number" ? item.id : Number(item.id);
+      if (Number.isFinite(numericId)) attempts.push(`/profile-media-items/${numericId}`);
+      attempts.push(`/profile-media-items/${item.id}`);
+
+      let updated = false;
+      for (const path of attempts) {
+        try {
+          await api.put(path, { data: payload });
+          updated = true;
+          break;
+        } catch (err: any) {
+          if (err?.response?.status === 404) continue;
+          throw err;
+        }
+      }
+
+      if (!updated) {
+        setProfileMediaError("Unable to update media details.");
+        return;
+      }
+
+      setProfileMedia((prev) =>
+        prev.map((entry) =>
+          String(entry.id) === String(item.id) ||
+          (item.documentId && String(entry.documentId) === String(item.documentId))
+            ? {
+                ...entry,
+                title: nextTitle || undefined,
+                caption: nextCaption || undefined,
+                folder: nextFolder || undefined,
+              }
+            : entry
+        )
+      );
+      if (nextFolder) {
+        setMediaFolders((prev) =>
+          prev.some((folder) => folder.toLowerCase() === nextFolder.toLowerCase())
+            ? prev
+            : [...prev, nextFolder]
+        );
+      }
+      cancelMediaEdit();
+    } catch {
+      setProfileMediaError("Unable to update media details.");
+    } finally {
+      setMediaEditSaving(false);
+    }
+  };
+
+  const updateMediaFolder = async (
+    item: ProfileMediaItem,
+    nextFolder: string | null
+  ) => {
+    if (!item.id) return;
+    const normalized = normalizeFolderName(nextFolder);
+    const current = normalizeFolderName(item.folder);
+    if (normalized === current) return;
+    if (normalized && isReservedMediaFolder(normalized)) {
+      setProfileMediaError("Choose a different folder name.");
+      return;
+    }
+    setProfileMediaError(null);
+    const targetFolder = normalized || "";
+    const maxOrder = profileMedia.reduce((acc, entry) => {
+      if (
+        String(entry.id) === String(item.id) ||
+        (item.documentId && String(entry.documentId) === String(item.documentId))
+      ) {
+        return acc;
+      }
+      const entryFolder = normalizeFolderName(entry.folder);
+      if (entryFolder !== targetFolder) return acc;
+      const entryOrder = parseMediaOrder(entry.order);
+      return entryOrder !== null && entryOrder > acc ? entryOrder : acc;
+    }, 0);
+    const nextOrder = maxOrder + 1;
+    const payload = { folder: normalized || null, order: nextOrder };
+    try {
+      const attempts: string[] = [];
+      if (item.documentId) attempts.push(`/profile-media-items/${item.documentId}`);
+      const numericId = typeof item.id === "number" ? item.id : Number(item.id);
+      if (Number.isFinite(numericId)) attempts.push(`/profile-media-items/${numericId}`);
+      attempts.push(`/profile-media-items/${item.id}`);
+
+      let updated = false;
+      for (const path of attempts) {
+        try {
+          await api.put(path, { data: payload });
+          updated = true;
+          break;
+        } catch (err: any) {
+          if (err?.response?.status === 404) continue;
+          throw err;
+        }
+      }
+
+      if (!updated) {
+        setProfileMediaError("Unable to move media item.");
+        return;
+      }
+
+      setProfileMedia((prev) => {
+        const targetFolder = normalized || "";
+        const maxOrder = prev.reduce((acc, entry) => {
+          if (
+            String(entry.id) === String(item.id) ||
+            (item.documentId && String(entry.documentId) === String(item.documentId))
+          ) {
+            return acc;
+          }
+          const entryFolder = normalizeFolderName(entry.folder);
+          if (entryFolder !== targetFolder) return acc;
+          const entryOrder = parseMediaOrder(entry.order);
+          return entryOrder !== null && entryOrder > acc ? entryOrder : acc;
+        }, 0);
+        const nextOrder = maxOrder + 1;
+        return prev.map((entry) =>
+          String(entry.id) === String(item.id) ||
+          (item.documentId && String(entry.documentId) === String(item.documentId))
+            ? { ...entry, folder: normalized || undefined, order: nextOrder }
+            : entry
+        );
+      });
+      if (normalized) {
+        setMediaFolders((prev) =>
+          prev.some((folder) => folder.toLowerCase() === normalized.toLowerCase())
+            ? prev
+            : [...prev, normalized]
+        );
+      }
+    } catch {
+      setProfileMediaError("Unable to move media item.");
+    }
+  };
+
+  const updateMediaOrder = async (item: ProfileMediaItem, order: number) => {
+    if (!item.id) return;
+    const nextOrder = Number.isFinite(order) ? Math.max(0, Math.floor(order)) : null;
+    if (nextOrder === null) return;
+    const payload = { order: nextOrder };
+    try {
+      const attempts: string[] = [];
+      if (item.documentId) attempts.push(`/profile-media-items/${item.documentId}`);
+      const numericId = typeof item.id === "number" ? item.id : Number(item.id);
+      if (Number.isFinite(numericId)) attempts.push(`/profile-media-items/${numericId}`);
+      attempts.push(`/profile-media-items/${item.id}`);
+
+      for (const path of attempts) {
+        try {
+          await api.put(path, { data: payload });
+          return;
+        } catch (err: any) {
+          if (err?.response?.status === 404) continue;
+          throw err;
+        }
+      }
+    } catch {
+      throw new Error("Unable to reorder media.");
+    }
+  };
+
+  const reorderMediaItems = async (sourceId: string, targetId: string) => {
+    const sourceItem = profileMedia.find(
+      (item) =>
+        String(item.id) === sourceId ||
+        (item.documentId && String(item.documentId) === sourceId)
+    );
+    const targetItem = profileMedia.find(
+      (item) =>
+        String(item.id) === targetId ||
+        (item.documentId && String(item.documentId) === targetId)
+    );
+    if (!sourceItem || !targetItem) return;
+    const sourceFolder = normalizeFolderName(sourceItem.folder);
+    const targetFolder = normalizeFolderName(targetItem.folder);
+    if (sourceFolder !== targetFolder) return;
+
+    const scopedItems = filteredMedia.filter(
+      (item) => normalizeFolderName(item.folder) === sourceFolder
+    );
+    const sourceIndex = scopedItems.findIndex((item) => String(item.id) === sourceId);
+    const targetIndex = scopedItems.findIndex((item) => String(item.id) === targetId);
+    if (sourceIndex < 0 || targetIndex < 0) return;
+
+    const nextFiltered = [...scopedItems];
+    const [moved] = nextFiltered.splice(sourceIndex, 1);
+    nextFiltered.splice(targetIndex, 0, moved);
+
+    const orderMap = new Map<string, number>();
+    nextFiltered.forEach((item, index) => {
+      orderMap.set(String(item.id), index + 1);
+    });
+
+    const changed: ProfileMediaItem[] = [];
+    const nextProfileMedia = profileMedia.map((item) => {
+      const key = String(item.id);
+      if (!orderMap.has(key)) return item;
+      const nextOrder = orderMap.get(key) ?? item.order;
+      if (item.order === nextOrder) return item;
+      const updated = { ...item, order: nextOrder };
+      changed.push(updated);
+      return updated;
+    });
+
+    if (!changed.length) return;
+    setProfileMedia(nextProfileMedia);
+
+    try {
+      for (const item of changed) {
+        await updateMediaOrder(item, item.order || 0);
+      }
+    } catch {
+      setProfileMedia(profileMedia);
+      setProfileMediaError("Unable to reorder media.");
+    }
   };
 
   useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null;
       if (!target) return;
-      if (target.closest(".post-action-group")) return;
+      if (
+        target.closest(".post-action-group") ||
+        target.closest(".post-menu-wrapper")
+      )
+        return;
       setShareMenuFor(null);
+      setPostMenuFor(null);
+      setMediaMenuFor(null);
     };
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
@@ -2057,28 +2971,6 @@ export default function Me() {
     }
   };
 
-  const handleProfileRecoveryReset = async () => {
-    setProfileRecoveryError(null);
-    setProfileRecoverySuccess(null);
-    if (typeof window !== "undefined") {
-      const confirmed = window.confirm(
-        "Reset your encrypted profile? This will permanently erase encrypted fields like phone, birthday, and private details. You cannot undo this."
-      );
-      if (!confirmed) return;
-    }
-    setProfileRecoveryBusy(true);
-    const success = await resetEncryptedProfile();
-    if (success) {
-      setProfileRecoverySuccess("Encrypted profile reset. Refreshing...");
-      if (typeof window !== "undefined") {
-        window.setTimeout(() => window.location.reload(), 1200);
-      }
-    } else {
-      setProfileRecoveryError("Unable to reset encrypted profile. Please try again.");
-    }
-    setProfileRecoveryBusy(false);
-  };
-
   const loadTwoFactorStatus = async () => {
     if (!user?.id) return;
     setTwoFactorLoading(true);
@@ -2094,6 +2986,11 @@ export default function Me() {
       setTwoFactorMethod(method);
       setTwoFactorHasAuthenticator(Boolean(data.hasAuthenticator));
       setPhoneVerified(Boolean(data.phoneVerified));
+      if (data.totpSecretInvalid) {
+        setTwoFactorError(
+          "Your authenticator setup needs to be reset. Click Reset 2FA to re-enroll."
+        );
+      }
     } catch (err) {
       if (axios.isAxiosError(err)) {
         const msg =
@@ -2159,6 +3056,43 @@ export default function Me() {
     }
   };
 
+  const handleTwoFactorReset = async () => {
+    if (!user?.id) return;
+    if (typeof window !== "undefined") {
+      const confirmed = window.confirm(
+        "Reset two-factor authentication? This clears your current 2FA setup so you can re-enroll."
+      );
+      if (!confirmed) return;
+    }
+    setTwoFactorError(null);
+    setTwoFactorSuccess(null);
+    setTwoFactorResetting(true);
+    try {
+      await api.post("/auth/2fa/reset");
+      setTwoFactorEnabled(false);
+      setTwoFactorMethod("totp");
+      setTwoFactorHasAuthenticator(false);
+      setTotpSetup(null);
+      setTotpCode("");
+      const started = await handleTotpSetup();
+      if (started) {
+        setTwoFactorSuccess("Two-factor reset. Scan the QR code to re-enroll.");
+      }
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to reset two-factor.";
+        setTwoFactorError(String(msg));
+      } else {
+        setTwoFactorError("Unable to reset two-factor.");
+      }
+    } finally {
+      setTwoFactorResetting(false);
+    }
+  };
+
   const handleTotpSetup = async () => {
     setTwoFactorError(null);
     setTwoFactorSuccess(null);
@@ -2168,12 +3102,13 @@ export default function Me() {
       const data = res.data ?? {};
       if (!data.qrCodeDataUrl || !data.otpauthUrl) {
         setTwoFactorError("Unable to start authenticator setup.");
-        return;
+        return false;
       }
       setTotpSetup({
         qrCodeDataUrl: data.qrCodeDataUrl,
         otpauthUrl: data.otpauthUrl,
       });
+      return true;
     } catch (err) {
       if (axios.isAxiosError(err)) {
         const msg =
@@ -2184,6 +3119,7 @@ export default function Me() {
       } else {
         setTwoFactorError("Unable to start authenticator setup.");
       }
+      return false;
     } finally {
       setTotpSetupLoading(false);
     }
@@ -2211,6 +3147,18 @@ export default function Me() {
           err.response?.data?.error?.message ||
           err.response?.data?.message ||
           "Unable to verify authenticator code.";
+        const msgLower = String(msg).toLowerCase();
+        if (msgLower.includes("no pending authenticator setup")) {
+          setTwoFactorError("Setup expired. Starting a new authenticator setup.");
+          setTotpSetup(null);
+          setTotpCode("");
+          setTwoFactorHasAuthenticator(false);
+          const started = await handleTotpSetup();
+          if (started) {
+            setTwoFactorSuccess("New setup started. Scan the QR and enter the code.");
+          }
+          return;
+        }
         setTwoFactorError(String(msg));
       } else {
         setTwoFactorError("Unable to verify authenticator code.");
@@ -2833,8 +3781,18 @@ const setProfileFromEntry = async (entry: any) => {
       const res = await api.get(
         `/profile-media-items?filters[owner][id][$eq]=${user.id}&populate=media&populate=trustedCircle&sort=createdAt:desc&pagination[pageSize]=200`
       );
-      const items = (res.data?.data ?? []).map(normalizeProfileMedia);
+      const items: ProfileMediaItem[] = (res.data?.data ?? []).map(
+        normalizeProfileMedia
+      );
       setProfileMedia(items);
+      const foldersFromItems = sanitizeFolderList(
+        items
+          .map((item) => normalizeFolderName(item.folder))
+          .filter((folder) => folder && !isReservedMediaFolder(folder)) as string[]
+      );
+      if (foldersFromItems.length) {
+        setMediaFolders((prev) => mergeFolderLists(prev, foldersFromItems));
+      }
       return items;
     } catch (err) {
       setProfileMediaError("Unable to load your media gallery.");
@@ -2844,31 +3802,312 @@ const setProfileFromEntry = async (entry: any) => {
     }
   };
 
-  const fetchTrustedCircleOptions = async (): Promise<TrustedCircleOption[]> => {
-    if (!user) return [];
-    try {
-      const res = await api.get(
-        `/trusted-circles?sort=name:asc&pagination[pageSize]=${MAX_TRUSTED_CIRCLES}`
+  const refreshTrustedCircleMembers = useCallback(
+    async (circleId: number) => {
+      const membersRes = await api.get(
+        `/trusted-circle-members?filters[circle][id][$eq]=${circleId}&populate=user&pagination[pageSize]=200`
       );
-      const entries = res.data?.data ?? [];
-      const mapped = entries
+      const members: TrustedCircleMember[] = (membersRes.data?.data ?? [])
         .map((entry: any) => {
           const attrs = normalize(entry);
-          const circleId = Number(entry?.id ?? attrs?.documentId ?? attrs?.id);
-          if (!Number.isFinite(circleId)) return null;
-          return {
-            id: circleId,
-            name: String(attrs?.name || `Circle ${circleId}`),
-          } as TrustedCircleOption;
+          const userId = getEntityId(attrs.user);
+          const recordId = getEntryId(entry, attrs);
+          if (!userId || !recordId) return null;
+          return { id: recordId, userId };
         })
-        .filter(Boolean) as TrustedCircleOption[];
-      setTrustedCircleOptions(mapped);
-      return mapped;
-    } catch {
-      setTrustedCircleOptions([]);
-      return [];
+        .filter(Boolean) as TrustedCircleMember[];
+      setTrustedCircleMembersByGroup((prev) => ({ ...prev, [circleId]: members }));
+    },
+    [getEntryId, getEntityId]
+  );
+
+  const loadTrustedCircles = useCallback(
+    async (force = false) => {
+      if (!user) {
+        setTrustedCircles([]);
+        setActiveTrustedCircleId(null);
+        setTrustedCircleMembersByGroup({});
+        trustedCircleLoadRef.current = null;
+        return;
+      }
+      if (!force && trustedCircleLoadRef.current === user.id) return;
+      trustedCircleLoadRef.current = user.id;
+      setTrustedCircleLoading(true);
+      setTrustedCircleError(null);
+      try {
+        const circlesRes = await api.get(
+          `/trusted-circles?sort=name:asc&pagination[pageSize]=${MAX_TRUSTED_CIRCLES}`
+        );
+        const entries = circlesRes.data?.data ?? [];
+        const circles = entries
+          .map((entry: any) => {
+            const attrs = normalize(entry);
+            const circleId = Number(entry?.id ?? attrs?.documentId ?? attrs?.id);
+            if (!Number.isFinite(circleId)) return null;
+            return {
+              id: circleId,
+              name: String(attrs?.name || "Trusted circle"),
+            } as TrustedCircle;
+          })
+          .filter(Boolean) as TrustedCircle[];
+        setTrustedCircles(circles);
+        setTrustedCircleMembersByGroup((prev) => {
+          const next: Record<number, TrustedCircleMember[]> = {};
+          circles.forEach((circle) => {
+            if (prev[circle.id]) {
+              next[circle.id] = prev[circle.id];
+            }
+          });
+          return next;
+        });
+        setActiveTrustedCircleId((current) => {
+          if (current && circles.some((circle) => circle.id === current)) {
+            return current;
+          }
+          return circles[0]?.id ?? null;
+        });
+      } catch (err) {
+        setTrustedCircleError(getErrorMessage(err, "Unable to load trusted circles."));
+      } finally {
+        setTrustedCircleLoading(false);
+      }
+    },
+    [getErrorMessage, user]
+  );
+
+  useEffect(() => {
+    setTrustedCircleOptions(
+      trustedCircles.map((circle) => ({ id: circle.id, name: circle.name }))
+    );
+  }, [trustedCircles]);
+
+  useEffect(() => {
+    if (!activeTrustedCircle?.id) return;
+    if (trustedCircleMembersByGroup[activeTrustedCircle.id]) return;
+    void refreshTrustedCircleMembers(activeTrustedCircle.id);
+  }, [activeTrustedCircle?.id, refreshTrustedCircleMembers, trustedCircleMembersByGroup]);
+
+  const createTrustedCircle = useCallback(async () => {
+    if (!user) return null;
+    const name = trustedCircleName.trim();
+    if (!name) {
+      setTrustedCircleError("Enter a name for your trusted circle.");
+      return null;
     }
-  };
+    if (trustedCircles.length >= MAX_TRUSTED_CIRCLES) {
+      setTrustedCircleError(`You can create up to ${MAX_TRUSTED_CIRCLES} circles.`);
+      return null;
+    }
+    setTrustedCircleBusy(true);
+    setTrustedCircleError(null);
+    try {
+      const res = await api.post("/trusted-circles", {
+        data: {
+          name,
+        },
+      });
+      const entry = res.data?.data ?? res.data;
+      const attrs = normalize(entry);
+      const circleId = Number(entry?.id ?? attrs?.documentId ?? attrs?.id);
+      if (!Number.isFinite(circleId)) {
+        setTrustedCircleError("Unable to create trusted circle.");
+        return null;
+      }
+      const nextCircle = { id: circleId, name: String(attrs?.name || name) };
+      setTrustedCircles((prev) => [...prev, nextCircle]);
+      setTrustedCircleName("");
+      setActiveTrustedCircleId(circleId);
+      await refreshTrustedCircleMembers(circleId);
+      pushTrustedCircleSuccess(`"${nextCircle.name}" created.`);
+      return circleId;
+    } catch (err) {
+      setTrustedCircleError(getErrorMessage(err, "Unable to create trusted circle."));
+      return null;
+    } finally {
+      setTrustedCircleBusy(false);
+    }
+  }, [
+    getErrorMessage,
+    pushTrustedCircleSuccess,
+    refreshTrustedCircleMembers,
+    trustedCircleName,
+    trustedCircles.length,
+    user,
+  ]);
+
+  const queueTrustedFriend = useCallback(
+    (friendId: number) => {
+      if (!Number.isFinite(friendId)) return;
+      if (trustedMemberIds.has(friendId)) return;
+      setTrustedCircleEditing(true);
+      setPendingTrustedAddIds((prev) =>
+        prev.includes(friendId) ? prev : [...prev, friendId]
+      );
+    },
+    [trustedMemberIds]
+  );
+
+  const togglePendingRemoval = useCallback((member: TrustedCircleMember) => {
+    setPendingTrustedRemoveIds((prev) =>
+      prev.includes(member.id)
+        ? prev.filter((id) => id !== member.id)
+        : [...prev, member.id]
+    );
+  }, []);
+
+  const cancelTrustedCircleEdits = useCallback(() => {
+    setTrustedCircleEditing(false);
+    setPendingTrustedAddIds([]);
+    setPendingTrustedRemoveIds([]);
+  }, []);
+
+  const applyTrustedCircleChanges = useCallback(async () => {
+    if (!activeTrustedCircle?.id) return;
+    const circleId = activeTrustedCircle.id;
+    const additions = pendingTrustedAddIds.filter((id) => !trustedMemberIds.has(id));
+    const removals = trustedCircleMembers.filter((member) =>
+      pendingTrustedRemoveSet.has(member.id)
+    );
+    if (!additions.length && !removals.length) {
+      cancelTrustedCircleEdits();
+      pushTrustedCircleSuccess("No changes to apply.");
+      return;
+    }
+    setTrustedCircleBusy(true);
+    setTrustedCircleError(null);
+    try {
+      await Promise.all([
+        ...additions.map((friendId) =>
+          api.post("/trusted-circle-members", {
+            data: { circle: circleId, user: friendId },
+          })
+        ),
+        ...removals.map((member) =>
+          api.delete(`/trusted-circle-members/${member.id}`)
+        ),
+      ]);
+      await refreshTrustedCircleMembers(circleId);
+      setPendingTrustedAddIds([]);
+      setPendingTrustedRemoveIds([]);
+      setTrustedCircleEditing(false);
+      pushTrustedCircleSuccess("Trusted circle updated.");
+    } catch (err) {
+      const message = getErrorMessage(err, "Unable to update trusted circle.");
+      if (message.toLowerCase().includes("already in this circle")) {
+        await refreshTrustedCircleMembers(circleId);
+        setPendingTrustedAddIds([]);
+        setPendingTrustedRemoveIds([]);
+        setTrustedCircleEditing(false);
+        pushTrustedCircleSuccess("Trusted circle updated.");
+      } else {
+        setTrustedCircleError(message);
+      }
+    } finally {
+      setTrustedCircleBusy(false);
+    }
+  }, [
+    activeTrustedCircle,
+    cancelTrustedCircleEdits,
+    getErrorMessage,
+    pendingTrustedAddIds,
+    pendingTrustedRemoveSet,
+    pushTrustedCircleSuccess,
+    refreshTrustedCircleMembers,
+    trustedCircleMembers,
+    trustedMemberIds,
+  ]);
+
+  const clearTrustedFriends = useCallback(async () => {
+    if (!activeTrustedCircle?.id) return;
+    const membersToRemove = trustedCircleMembers.filter(
+      (member) => member.userId !== user?.id
+    );
+    if (!membersToRemove.length) return;
+    setTrustedCircleBusy(true);
+    setTrustedCircleError(null);
+    try {
+      await Promise.all(
+        membersToRemove.map((member) =>
+          api.delete(`/trusted-circle-members/${member.id}`)
+        )
+      );
+      await refreshTrustedCircleMembers(activeTrustedCircle.id);
+      pushTrustedCircleSuccess("Trusted circle cleared.");
+    } catch (err) {
+      setTrustedCircleError(getErrorMessage(err, "Unable to clear trusted circle."));
+    } finally {
+      setTrustedCircleBusy(false);
+    }
+  }, [
+    getErrorMessage,
+    refreshTrustedCircleMembers,
+    activeTrustedCircle,
+    trustedCircleMembers,
+    user,
+    pushTrustedCircleSuccess,
+  ]);
+
+  const handleRenameTrustedCircle = useCallback(async () => {
+    if (!activeTrustedCircle?.id) return;
+    const name = trustedCircleRename.trim();
+    if (!name) {
+      setTrustedCircleError("Enter a name for this circle.");
+      return;
+    }
+    setTrustedCircleSaving(true);
+    setTrustedCircleError(null);
+    try {
+      await api.put(`/trusted-circles/${activeTrustedCircle.id}`, {
+        data: { name },
+      });
+      setTrustedCircles((prev) =>
+        prev.map((circle) =>
+          circle.id === activeTrustedCircle.id ? { ...circle, name } : circle
+        )
+      );
+      setTrustedCircleRenaming(false);
+      setTrustedCircleEditing(false);
+      pushTrustedCircleSuccess("Trusted circle renamed.");
+    } catch (err) {
+      setTrustedCircleError(getErrorMessage(err, "Unable to rename circle."));
+    } finally {
+      setTrustedCircleSaving(false);
+    }
+  }, [activeTrustedCircle, getErrorMessage, pushTrustedCircleSuccess, trustedCircleRename]);
+
+  const handleDeleteTrustedCircle = useCallback(async () => {
+    if (!activeTrustedCircle?.id) return;
+    setTrustedCircleSaving(true);
+    setTrustedCircleError(null);
+    try {
+      await api.delete(`/trusted-circles/${activeTrustedCircle.id}`);
+      setTrustedCircles((prev) =>
+        prev.filter((circle) => circle.id !== activeTrustedCircle.id)
+      );
+      setTrustedCircleMembersByGroup((prev) => {
+        const next = { ...prev };
+        delete next[activeTrustedCircle.id];
+        return next;
+      });
+      setActiveTrustedCircleId((current) => {
+        if (current !== activeTrustedCircle.id) return current;
+        const remaining = trustedCircles.filter(
+          (circle) => circle.id !== activeTrustedCircle.id
+        );
+        return remaining[0]?.id ?? null;
+      });
+      setPendingTrustedAddIds([]);
+      setPendingTrustedRemoveIds([]);
+      setTrustedCircleEditing(false);
+      setTrustedCircleDeleteOpen(false);
+      setTrustedCircleDeleteTarget(null);
+      pushTrustedCircleSuccess("Trusted circle deleted.");
+    } catch (err) {
+      setTrustedCircleError(getErrorMessage(err, "Unable to delete circle."));
+    } finally {
+      setTrustedCircleSaving(false);
+    }
+  }, [activeTrustedCircle, getErrorMessage, pushTrustedCircleSuccess, trustedCircles]);
 
   const fetchLinkPreview = async (url: string): Promise<LinkPreview | null> => {
     if (!url) return null;
@@ -2912,6 +4151,11 @@ const setProfileFromEntry = async (entry: any) => {
       setProfileMediaError("Choose a trusted circle for this media.");
       return;
     }
+    const normalizedFolder = normalizeFolderName(mediaFolder);
+    if (normalizedFolder && isReservedMediaFolder(normalizedFolder)) {
+      setProfileMediaError("Choose a different folder name.");
+      return;
+    }
 
     setProfileMediaError(null);
     setMediaSubmitting(true);
@@ -2924,12 +4168,21 @@ const setProfileFromEntry = async (entry: any) => {
         setProfileMediaError("Media upload failed.");
         return;
       }
+      const nextOrder =
+        profileMedia.reduce((acc, entry) => {
+          const entryFolder = normalizeFolderName(entry.folder);
+          if (entryFolder !== (normalizedFolder || "")) return acc;
+          const entryOrder = parseMediaOrder(entry.order);
+          return entryOrder !== null && entryOrder > acc ? entryOrder : acc;
+        }, 0) + 1;
       await api.post("/profile-media-items", {
         data: {
           title: mediaTitle.trim() || null,
           caption: mediaCaption.trim() || null,
+          folder: normalizedFolder || null,
           visibility: mediaVisibility,
           kind: isVideo ? "video" : "photo",
+          order: nextOrder,
           media: uploadedId,
           trustedCircle:
             mediaVisibility === "trusted" && mediaTrustedCircleId
@@ -2937,8 +4190,16 @@ const setProfileFromEntry = async (entry: any) => {
               : null,
         },
       });
+      if (normalizedFolder && !isReservedMediaFolder(normalizedFolder)) {
+        setMediaFolders((prev) =>
+          prev.some((folder) => folder.toLowerCase() === normalizedFolder.toLowerCase())
+            ? prev
+            : [...prev, normalizedFolder]
+        );
+      }
       setMediaTitle("");
       setMediaCaption("");
+      setMediaFolder("");
       setMediaFile(null);
       setMediaVisibility("friends");
       setMediaTrustedCircleId("");
@@ -3024,61 +4285,6 @@ const setProfileFromEntry = async (entry: any) => {
       );
     } catch {
       setProfileMediaError("Unable to update media visibility.");
-    }
-  };
-
-  const updateMediaTrustedCircle = async (
-    item: ProfileMediaItem,
-    groupId: number | ""
-  ) => {
-    if (!item.id) return;
-    if (!groupId) {
-      setProfileMediaError("Select a trusted circle.");
-      return;
-    }
-    setProfileMediaError(null);
-    try {
-      const attempts: string[] = [];
-      if (item.documentId) attempts.push(`/profile-media-items/${item.documentId}`);
-      const numericId = typeof item.id === "number" ? item.id : Number(item.id);
-      if (Number.isFinite(numericId)) attempts.push(`/profile-media-items/${numericId}`);
-      attempts.push(`/profile-media-items/${item.id}`);
-
-      let updated = false;
-      for (const path of attempts) {
-        try {
-          await api.put(path, {
-            data: { visibility: "trusted", trustedCircle: groupId },
-          });
-          updated = true;
-          break;
-        } catch (err: any) {
-          if (err?.response?.status === 404) continue;
-          throw err;
-        }
-      }
-
-      if (!updated) {
-        setProfileMediaError("Unable to update trusted circle.");
-        return;
-      }
-
-      setProfileMedia((prev) =>
-        prev.map((entry) =>
-          String(entry.id) === String(item.id) ||
-          (item.documentId && String(entry.documentId) === String(item.documentId))
-            ? {
-                ...entry,
-                visibility: "trusted",
-                trustedCircleId: Number(groupId),
-                trustedCircleName: trustedCircleOptions.find((group) => group.id === groupId)
-                  ?.name,
-              }
-            : entry
-        )
-      );
-    } catch {
-      setProfileMediaError("Unable to update trusted circle.");
     }
   };
 
@@ -3386,9 +4592,12 @@ const setProfileFromEntry = async (entry: any) => {
           const otherId = requesterId === user.id ? targetId : requesterId;
           const otherUser = requesterId === user.id ? attrs.target : attrs.requester;
           if (!otherId) return;
+          const otherAttrs = normalize(getEntity(otherUser));
+          const avatarUrl = pickMediaUrl(otherAttrs?.avatar, { kind: "avatar" });
           optionMap.set(otherId, {
             id: otherId,
             label: getEntityLabel(otherUser, `User ${otherId}`),
+            avatarUrl,
           });
         });
         const options = Array.from(optionMap.values()).sort((a, b) =>
@@ -3450,7 +4659,7 @@ const setProfileFromEntry = async (entry: any) => {
           setEditing(true);
           await fetchMyPosts();
           await fetchProfileMedia();
-          await fetchTrustedCircleOptions();
+          await loadTrustedCircles(true);
           return;
         }
 
@@ -3458,7 +4667,7 @@ const setProfileFromEntry = async (entry: any) => {
         setEditing(false);
         await fetchMyPosts();
         await fetchProfileMedia();
-        await fetchTrustedCircleOptions();
+        await loadTrustedCircles(true);
       } catch {
         setError("Failed to load profile");
       } finally {
@@ -3735,24 +4944,27 @@ const setProfileFromEntry = async (entry: any) => {
       const encryptedProfile = await encryptProfilePayload(user.id, nextPayload);
 
       const buildPayload = (handleValue: string) => {
-        const data: any = {
-          encryptedProfile,
-          profileKeyVersion: 1,
-          firstName: publicFirstName,
-          lastName: publicLastName,
-          age: nextPayload.age,
-          religion: nextPayload.religion,
-          hobbies: nextPayload.hobbies,
-          occupation: nextPayload.occupation,
-          bio: nextPayload.bio,
-          country: nextPayload.country,
-          countryCode: nextPayload.countryCode,
-          state: nextPayload.state,
-          stateCode: nextPayload.stateCode,
-          city: nextPayload.city,
-          handle: handleValue,
-          locale: "en",
-          user: user.id,
+          const data: any = {
+            encryptedProfile,
+            profileKeyVersion: 1,
+            firstName: publicFirstName,
+            lastName: publicLastName,
+            age: nextPayload.age,
+            birthday: normalizedBirthday,
+            gender: nextPayload.gender,
+            religion: nextPayload.religion,
+            hobbies: nextPayload.hobbies,
+            occupation: nextPayload.occupation,
+            bio: nextPayload.bio,
+            country: nextPayload.country,
+            countryCode: nextPayload.countryCode,
+            state: nextPayload.state,
+            stateCode: nextPayload.stateCode,
+            city: nextPayload.city,
+            phone: effectivePhone,
+            handle: handleValue,
+            locale: "en",
+            user: user.id,
           registrationLocked: nextLocks,
           preferredVerificationMethod: mergedProfile.preferredVerificationMethod,
           showPhoneOnProfile: mergedProfile.showPhoneOnProfile,
@@ -4057,6 +5269,7 @@ const setProfileFromEntry = async (entry: any) => {
     { id: "security", label: "Account & Security" },
     { id: "privacy", label: "Visibility & Discoverability" },
     { id: "notifications", label: "Sound, Vibration & Quiet Hours" },
+    { id: "language", label: "Language Options" },
     { id: "changes", label: "Changes & Deactivation" },
   ];
   const settingsSelectValue: SettingsSection | "profile" = isSettingsView
@@ -4073,14 +5286,18 @@ const setProfileFromEntry = async (entry: any) => {
   const handleSettingsSelectChange = (value: SettingsSection | "profile") => {
     if (value === "profile") {
       setSettingsView("profile");
+      setProfileView("overview");
       setSettingsMenuOpen(false);
       setEditing(false);
+      navigate("/me");
       return;
     }
     setSettingsSection(value);
     setSettingsView("settings");
+    setProfileView("overview");
     setSettingsMenuOpen(false);
     setEditing(false);
+    navigate(`/me?view=settings&section=${value}`);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
   const toggleSettingsMenu = () => {
@@ -4150,6 +5367,9 @@ const setProfileFromEntry = async (entry: any) => {
                 setSettingsMenuOpen(false);
                 setSettingsView("profile");
                 setEditing(true);
+                setProfileInfoOpen(true);
+                setProfileView("overview");
+                navigate("/me");
                 window.scrollTo({ top: 0, behavior: "smooth" });
               }}
             >
@@ -4223,6 +5443,30 @@ const setProfileFromEntry = async (entry: any) => {
                 </div>
               )}
             </div>
+            <button
+              className="btn ghost profile-header-action-button"
+              type="button"
+              onClick={() => {
+                setSettingsMenuOpen(false);
+                setProfileView("overview");
+                navigate(isGalleryPage ? "/me" : "/my-gallery");
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }}
+            >
+              {isGalleryPage ? "Back to Profile" : "My Gallery"}
+            </button>
+            <button
+              className="btn ghost profile-header-action-button"
+              type="button"
+              onClick={() => {
+                setSettingsMenuOpen(false);
+                setProfileView("overview");
+                navigate(isPostsPage ? "/me" : "/my-posts");
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }}
+            >
+              {isPostsPage ? "Back to Profile" : "My Posts"}
+            </button>
           </div>
         </div>
       </section>
@@ -4767,36 +6011,588 @@ const setProfileFromEntry = async (entry: any) => {
         </div>
       )}
 
-      {deletePostTarget && (
+      {visibilityModalPost &&
+        (() => {
+          const activePost = visibilityModalPost;
+          if (!activePost) return null;
+          const currentVisibility = activePost.visibility || "friends";
+          const trustedCircleName =
+            activePost.trustedCircleName ||
+            trustedCircleOptions.find(
+              (group) => group.id === activePost.trustedCircleId
+            )?.name ||
+            trustedCircleOptions[0]?.name ||
+            "Trusted Circle";
+          const hasTrustedCircle = Boolean(
+            activePost.trustedCircleId || trustedCircleOptions.length
+          );
+          const visibilityOptions: VisibilityOption[] = [
+            {
+              value: "public",
+              label: "Public",
+              hint: "Anyone can see this post.",
+            },
+            {
+              value: "friends",
+              label: "Friends",
+              hint: "Only friends can see this post.",
+            },
+            {
+              value: "trusted",
+              label: "Trusted Circle",
+              hint: hasTrustedCircle
+                ? `Only ${trustedCircleName} can see this post.`
+                : "Create a trusted circle to use this.",
+              disabled: !hasTrustedCircle,
+            },
+            {
+              value: "private",
+              label: "Private",
+              hint: "Only you can see this post.",
+            },
+          ];
+
+          return (
+            <div
+              className="post-action-overlay"
+              role="dialog"
+              aria-modal="true"
+              onClick={(event) => {
+                if (event.target === event.currentTarget) {
+                  setVisibilityModalPost(null);
+                }
+              }}
+            >
+              <div className="post-action-modal">
+                <div className="post-action-modal__header">
+                  <div>
+                    <p className="post-action-modal__eyebrow">Visibility</p>
+                    <h3 className="post-action-modal__title">Set visibility</h3>
+                  </div>
+                  <button
+                    className="post-action-modal__close"
+                    type="button"
+                    onClick={() => setVisibilityModalPost(null)}
+                    aria-label="Close visibility modal"
+                  >
+                    X
+                  </button>
+                </div>
+                <div className="post-action-options">
+                  {visibilityOptions.map((option) => {
+                    const isActive = currentVisibility === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        className={`post-action-option${
+                          isActive ? " is-active" : ""
+                        }`}
+                        type="button"
+                        aria-pressed={isActive}
+                        disabled={option.disabled}
+                        onClick={() => {
+                          if (!activePost) return;
+                          setVisibilityModalPost(null);
+                          void updatePostVisibility(activePost, option.value);
+                        }}
+                      >
+                        <span className="post-action-option__title">{option.label}</span>
+                        <span className="post-action-option__hint">{option.hint}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {currentVisibility === "trusted" && trustedCircleOptions.length > 0 && (
+                  <label className="profile-media__modal-select">
+                    <span>Trusted circle</span>
+                    <select
+                      className="auth-input profile-media__select"
+                      value={
+                        activePost.trustedCircleId ?? trustedCircleOptions[0]?.id ?? ""
+                      }
+                      onChange={(event) => {
+                        const nextId = event.target.value ? Number(event.target.value) : "";
+                        if (!nextId) return;
+                        const nextName = trustedCircleOptions.find(
+                          (group) => group.id === Number(nextId)
+                        )?.name;
+                        setVisibilityModalPost((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                trustedCircleId: Number(nextId),
+                                trustedCircleName: nextName,
+                              }
+                            : prev
+                        );
+                        void updatePostVisibility(
+                          {
+                            ...activePost,
+                            trustedCircleId: Number(nextId),
+                            trustedCircleName: nextName,
+                          },
+                          "trusted"
+                        );
+                      }}
+                    >
+                      {trustedCircleOptions.map((group) => (
+                        <option key={group.id} value={group.id}>
+                          {group.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
+      {editPostModalPost && (
         <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.55)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1000,
+          className="post-action-overlay"
+          role="dialog"
+          aria-modal="true"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setEditPostModalPost(null);
+            }
           }}
         >
-          <div
-            style={{
-              background: "#0f172a",
-              padding: "24px",
-              borderRadius: "12px",
-              boxShadow: "0 12px 40px rgba(0,0,0,0.35)",
-              maxWidth: "420px",
-              width: "90%",
-              border: "1px solid rgba(248, 113, 113, 0.35)",
-            }}
-          >
-            <h3 style={{ margin: "0 0 12px", color: "#f87171" }}>
-              Are You Sure You Want To Delete This Post
-            </h3>
-            <p style={{ margin: "0 0 16px", color: "#e5e7eb" }}>
+          <div className="post-action-modal">
+            <div className="post-action-modal__header">
+              <div>
+                <p className="post-action-modal__eyebrow">Post options</p>
+                <h3 className="post-action-modal__title">Edit post</h3>
+              </div>
+              <button
+                className="post-action-modal__close"
+                type="button"
+                onClick={() => setEditPostModalPost(null)}
+                aria-label="Close edit post modal"
+              >
+                X
+              </button>
+            </div>
+            <div className="post-action-options">
+              <button
+                className="post-action-option"
+                type="button"
+                onClick={() => {
+                  const postKey = String(editPostModalPost.id);
+                  setEditingPostId(postKey);
+                  setEditPostText(sanitizePostText(editPostModalPost.text));
+                  setEditPostModalPost(null);
+                }}
+              >
+                <span className="post-action-option__title">Edit post</span>
+                <span className="post-action-option__hint">
+                  Update the text for this post.
+                </span>
+              </button>
+              <button
+                className="post-action-option is-danger"
+                type="button"
+                onClick={() => {
+                  setEditPostModalPost(null);
+                  setDeletePostTarget(editPostModalPost);
+                }}
+              >
+                <span className="post-action-option__title">Delete post</span>
+                <span className="post-action-option__hint">
+                  Remove this post permanently.
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {mediaVisibilityModalItem &&
+        (() => {
+          const activeItem = mediaVisibilityModalItem;
+          if (!activeItem) return null;
+          const currentVisibility = activeItem.visibility || "friends";
+          const trustedCircleName =
+            activeItem.trustedCircleName ||
+            trustedCircleOptions.find(
+              (group) => group.id === activeItem.trustedCircleId
+            )?.name ||
+            trustedCircleOptions[0]?.name ||
+            "Trusted Circle";
+          const hasTrustedCircle = Boolean(
+            activeItem.trustedCircleId || trustedCircleOptions.length
+          );
+          const visibilityOptions: VisibilityOption[] = [
+            {
+              value: "public",
+              label: "Public",
+              hint: "Anyone can see this media.",
+            },
+            {
+              value: "friends",
+              label: "Friends",
+              hint: "Only friends can see this media.",
+            },
+            {
+              value: "trusted",
+              label: "Trusted Circle",
+              hint: hasTrustedCircle
+                ? `Only ${trustedCircleName} can see this media.`
+                : "Create a trusted circle to use this.",
+              disabled: !hasTrustedCircle,
+            },
+            {
+              value: "private",
+              label: "Private",
+              hint: "Only you can see this media.",
+            },
+          ];
+
+          return (
+            <div
+              className="post-action-overlay"
+              role="dialog"
+              aria-modal="true"
+              onClick={(event) => {
+                if (event.target === event.currentTarget) {
+                  setMediaVisibilityModalItem(null);
+                }
+              }}
+            >
+              <div className="post-action-modal">
+                <div className="post-action-modal__header">
+                  <div>
+                    <p className="post-action-modal__eyebrow">Visibility</p>
+                    <h3 className="post-action-modal__title">Set visibility</h3>
+                  </div>
+                  <button
+                    className="post-action-modal__close"
+                    type="button"
+                    onClick={() => setMediaVisibilityModalItem(null)}
+                    aria-label="Close visibility modal"
+                  >
+                    X
+                  </button>
+                </div>
+                <div className="post-action-options">
+                  {visibilityOptions.map((option) => {
+                    const isActive = currentVisibility === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        className={`post-action-option${
+                          isActive ? " is-active" : ""
+                        }`}
+                        type="button"
+                        aria-pressed={isActive}
+                        disabled={option.disabled}
+                        onClick={() => {
+                          if (!activeItem) return;
+                          setMediaVisibilityModalItem(null);
+                          void updateMediaVisibility(
+                            activeItem,
+                            option.value
+                          );
+                        }}
+                      >
+                        <span className="post-action-option__title">{option.label}</span>
+                        <span className="post-action-option__hint">{option.hint}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+      {mediaEditModalItem && (
+        <div
+          className="post-action-overlay"
+          role="dialog"
+          aria-modal="true"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setMediaEditModalItem(null);
+            }
+          }}
+        >
+          <div className="post-action-modal">
+            <div className="post-action-modal__header">
+              <div>
+                <p className="post-action-modal__eyebrow">Media options</p>
+                <h3 className="post-action-modal__title">Edit media</h3>
+              </div>
+              <button
+                className="post-action-modal__close"
+                type="button"
+                onClick={() => setMediaEditModalItem(null)}
+                aria-label="Close edit media modal"
+              >
+                X
+              </button>
+            </div>
+            <div className="post-action-options">
+              <button
+                className="post-action-option"
+                type="button"
+                onClick={() => {
+                  const mediaKey = String(mediaEditModalItem.id);
+                  setEditingMediaId(mediaKey);
+                  setMediaEditTitle(mediaEditModalItem.title || "");
+                  setMediaEditCaption(mediaEditModalItem.caption || "");
+                  setMediaEditFolder(mediaEditModalItem.folder || "");
+                  setMediaEditModalItem(null);
+                }}
+              >
+                <span className="post-action-option__title">Edit details</span>
+                <span className="post-action-option__hint">
+                  Update the title or caption.
+                </span>
+              </button>
+              <button
+                className="post-action-option"
+                type="button"
+                onClick={() => {
+                  setMediaMoveModalItem(mediaEditModalItem);
+                  setMediaEditModalItem(null);
+                }}
+              >
+                <span className="post-action-option__title">Move to folder</span>
+                <span className="post-action-option__hint">
+                  Choose or create a folder for this media.
+                </span>
+              </button>
+              <button
+                className="post-action-option is-danger"
+                type="button"
+                onClick={() => {
+                  setMediaEditModalItem(null);
+                  setMediaDeleteTarget(mediaEditModalItem);
+                }}
+              >
+                <span className="post-action-option__title">Delete media</span>
+                <span className="post-action-option__hint">
+                  Remove this media permanently.
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {mediaMoveModalItem && (
+        <div
+          className="post-action-overlay"
+          role="dialog"
+          aria-modal="true"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              closeMediaMoveModal();
+            }
+          }}
+        >
+          <div className="post-action-modal">
+            <div className="post-action-modal__header">
+              <div>
+                <p className="post-action-modal__eyebrow">Folders</p>
+                <h3 className="post-action-modal__title">Move to folder</h3>
+              </div>
+              <button
+                className="post-action-modal__close"
+                type="button"
+                onClick={closeMediaMoveModal}
+                aria-label="Close move to folder modal"
+              >
+                X
+              </button>
+            </div>
+            <div className="post-action-options">
+              <button
+                className="post-action-option"
+                type="button"
+                disabled={mediaMoveFolderOpen}
+                onClick={() => {
+                  setMediaMoveFolderOpen(true);
+                  setMediaMoveFolderError(null);
+                }}
+              >
+                <span className="post-action-option__title">New folder</span>
+                <span className="post-action-option__hint">
+                  Create a folder and move this media.
+                </span>
+              </button>
+              {mediaMoveFolderOpen && (
+                <div className="profile-media__folder-create">
+                  <input
+                    className="auth-input"
+                    placeholder="Folder name"
+                    autoFocus
+                    value={mediaMoveFolderName}
+                    onChange={(event) => {
+                      setMediaMoveFolderName(event.target.value);
+                      if (mediaMoveFolderError) setMediaMoveFolderError(null);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        handleMoveToNewFolder();
+                      }
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        cancelMediaMoveFolderCreate();
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="btn primary"
+                    onClick={handleMoveToNewFolder}
+                  >
+                    Create & move
+                  </button>
+                  <button
+                    type="button"
+                    className="btn ghost"
+                    onClick={cancelMediaMoveFolderCreate}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+              {mediaMoveFolderError && (
+                <p className="status status-error">{mediaMoveFolderError}</p>
+              )}
+              <button
+                className="post-action-option"
+                type="button"
+                onClick={() => {
+                  if (!mediaMoveModalItem) return;
+                  const item = mediaMoveModalItem;
+                  closeMediaMoveModal();
+                  void updateMediaFolder(item, null);
+                }}
+              >
+                <span className="post-action-option__title">Remove from folder</span>
+                <span className="post-action-option__hint">Keep it in all media.</span>
+              </button>
+              {mediaFolderOptions.map((folder) => (
+                <button
+                  key={folder}
+                  className="post-action-option"
+                  type="button"
+                  onClick={() => {
+                    if (!mediaMoveModalItem) return;
+                    const item = mediaMoveModalItem;
+                    closeMediaMoveModal();
+                    void updateMediaFolder(item, folder);
+                  }}
+                >
+                  <span className="post-action-option__title">{folder}</span>
+                  <span className="post-action-option__hint">
+                    Move into this folder.
+                  </span>
+                </button>
+              ))}
+              {mediaFolderOptions.length === 0 && !mediaMoveFolderOpen && (
+                <p className="status">
+                  No folders yet. Create one here to get started.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {mediaDeleteTarget && (
+        <div
+          className="post-action-overlay"
+          role="dialog"
+          aria-modal="true"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setMediaDeleteTarget(null);
+            }
+          }}
+        >
+          <div className="post-action-modal is-danger">
+            <div className="post-action-modal__header">
+              <div>
+                <p className="post-action-modal__eyebrow">Confirm</p>
+                <h3 className="post-action-modal__title">
+                  Are you sure you want to delete this
+                </h3>
+              </div>
+              <button
+                className="post-action-modal__close"
+                type="button"
+                onClick={() => setMediaDeleteTarget(null)}
+                aria-label="Close delete confirmation"
+              >
+                X
+              </button>
+            </div>
+            <p className="post-action-confirm">
               This action cannot be undone.
             </p>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px" }}>
+            <div className="post-action-footer">
+              <button
+                className="btn ghost"
+                type="button"
+                onClick={() => setMediaDeleteTarget(null)}
+              >
+                No, Do Not Delete
+              </button>
+              <button
+                className="btn primary"
+                type="button"
+                onClick={() => {
+                  if (mediaDeleteTarget) {
+                    void deleteMediaItem(mediaDeleteTarget);
+                    setMediaDeleteTarget(null);
+                  }
+                }}
+              >
+                Yes, I'm Sure
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deletePostTarget && (
+        <div
+          className="post-action-overlay"
+          role="dialog"
+          aria-modal="true"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setDeletePostTarget(null);
+            }
+          }}
+        >
+          <div className="post-action-modal is-danger">
+            <div className="post-action-modal__header">
+              <div>
+                <p className="post-action-modal__eyebrow">Confirm</p>
+                <h3 className="post-action-modal__title">
+                  Are you sure you want to delete this
+                </h3>
+              </div>
+              <button
+                className="post-action-modal__close"
+                type="button"
+                onClick={() => setDeletePostTarget(null)}
+                aria-label="Close delete confirmation"
+              >
+                X
+              </button>
+            </div>
+            <p className="post-action-confirm">
+              This action cannot be undone.
+            </p>
+            <div className="post-action-footer">
               <button
                 className="btn ghost"
                 type="button"
@@ -4873,9 +6669,18 @@ const setProfileFromEntry = async (entry: any) => {
       <Sidebar
         active="me"
         settingsView={settingsView}
-        onSettingsViewChange={setSettingsView}
+        onSettingsViewChange={(nextView) => {
+          setSettingsView(nextView);
+          if (nextView === "settings") {
+            setProfileView("overview");
+          }
+        }}
         settingsSection={settingsSection}
-        onSettingsSectionChange={setSettingsSection}
+        onSettingsSectionChange={(section) => {
+          setSettingsSection(section);
+          setSettingsView("settings");
+          setProfileView("overview");
+        }}
       />
 
         <div className="main-content profile-content">
@@ -5143,16 +6948,42 @@ const setProfileFromEntry = async (entry: any) => {
         {error && <p className="status status-error">{error}</p>}
         {success && <p className="status status-success">{success}</p>}
 
-        {!isSettingsView && (
+        {!isSettingsView && !isPostsPage && !isGalleryPage && (
         <div className="panel-grid">
           <section className="panel">
-            <div className="panel-header">
-              <div>
-                <p className="eyebrow">About</p>
-                <h3>Your Info</h3>
-              </div>
+            <div
+              className={`panel-header profile-info-header${
+                profileInfoOpen ? "" : " is-collapsed"
+              }`}
+            >
+              <button
+                className="profile-info-toggle"
+                type="button"
+                onClick={() => setProfileInfoOpen((prev) => !prev)}
+                aria-expanded={profileInfoOpen}
+                aria-controls="profile-info-content"
+              >
+                <h3>Your Profile</h3>
+                <span
+                  className={`profile-info-chevron${profileInfoOpen ? " is-open" : ""}`}
+                  aria-hidden="true"
+                >
+                  <svg viewBox="0 0 20 20">
+                    <path
+                      d="M5 7.5 10 12.5 15 7.5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </span>
+              </button>
             </div>
 
+            {profileInfoOpen && (
+            <div id="profile-info-content">
             {editing ? (
               <>
                 <div className="profile-columns">
@@ -5488,6 +7319,361 @@ const setProfileFromEntry = async (entry: any) => {
                 </div>
               </div>
             )}
+            </div>
+            )}
+          </section>
+          <section className="panel trusted-circle-panel">
+            <div
+              className={`panel-header profile-info-header${
+                trustedCirclesOpen ? "" : " is-collapsed"
+              }`}
+            >
+              <button
+                type="button"
+                className="profile-info-toggle"
+                onClick={() => setTrustedCirclesOpen((prev) => !prev)}
+                aria-expanded={trustedCirclesOpen}
+              >
+                <h3>My Trusted Circles</h3>
+                <span className="trusted-circle__meta">
+                  <span className="trusted-circle__count">
+                    {trustedCircles.length}/{MAX_TRUSTED_CIRCLES}
+                  </span>
+                  <span
+                    className={`profile-info-chevron${
+                      trustedCirclesOpen ? " is-open" : ""
+                    }`}
+                    aria-hidden="true"
+                  >
+                    <svg viewBox="0 0 16 16" focusable="false" aria-hidden="true">
+                      <path
+                        d="M4 6.5 8 10l4-3.5"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.9"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </span>
+                </span>
+              </button>
+            </div>
+            {trustedCirclesOpen && (
+              <>
+                {trustedCircleError && (
+                  <p className="status status-error">{trustedCircleError}</p>
+                )}
+                {trustedCircleSuccess && (
+                  <p className="status status-success">{trustedCircleSuccess}</p>
+                )}
+                {trustedCircleLoading ? (
+                  <p className="status">Loading trusted circles...</p>
+                ) : (
+                  <>
+                    <div className="trusted-circle__create">
+                      <input
+                        className="auth-input"
+                        placeholder="Name your trusted circle"
+                        value={trustedCircleName}
+                        onChange={(event) => setTrustedCircleName(event.target.value)}
+                        maxLength={40}
+                        disabled={
+                          trustedCircleBusy ||
+                          trustedCircles.length >= MAX_TRUSTED_CIRCLES
+                        }
+                      />
+                      <button
+                        className="btn primary"
+                        type="button"
+                        disabled={
+                          trustedCircleBusy ||
+                          trustedCircles.length >= MAX_TRUSTED_CIRCLES ||
+                          !trustedCircleName.trim()
+                        }
+                        onClick={() => void createTrustedCircle()}
+                      >
+                        {trustedCircleBusy ? "Creating..." : "Create circle"}
+                      </button>
+                    </div>
+                    {trustedCircles.length === 0 ? (
+                      <p className="status">
+                        Create your first trusted circle to add friends.
+                      </p>
+                    ) : (
+                      <>
+                        <div className="trusted-circle__tabs">
+                          {trustedCircles.map((circle) => (
+                            <button
+                              key={circle.id}
+                              type="button"
+                              className={`trusted-circle__tab${
+                                circle.id === activeTrustedCircle?.id ? " is-active" : ""
+                              }`}
+                              onClick={() => setActiveTrustedCircleId(circle.id)}
+                            >
+                              {circle.name}
+                            </button>
+                          ))}
+                        </div>
+                        {activeTrustedCircle && (
+                          <div className="trusted-circle__editor">
+                            {trustedCircleRenaming ? (
+                              <>
+                                <input
+                                  className="auth-input"
+                                  value={trustedCircleRename}
+                                  onChange={(event) =>
+                                    setTrustedCircleRename(event.target.value)
+                                  }
+                                  maxLength={40}
+                                />
+                                <div className="trusted-circle__editor-actions">
+                                  <button
+                                    className="btn ghost"
+                                    type="button"
+                                    onClick={() => {
+                                      setTrustedCircleRenaming(false);
+                                      setTrustedCircleRename(activeTrustedCircle.name);
+                                    }}
+                                    disabled={trustedCircleSaving}
+                                  >
+                                    Cancel
+                                  </button>
+                                  <button
+                                    className="btn primary"
+                                    type="button"
+                                    onClick={handleRenameTrustedCircle}
+                                    disabled={
+                                      trustedCircleSaving || !trustedCircleRename.trim()
+                                    }
+                                  >
+                                    {trustedCircleSaving ? "Saving..." : "Save name"}
+                                  </button>
+                                </div>
+                              </>
+                            ) : (
+                              <div className="trusted-circle__editor-row">
+                                <div>
+                                  <p className="trusted-circle__label">Active circle</p>
+                                  <div className="trusted-circle__menu">
+                                    <button
+                                      className="btn ghost trusted-circle__menu-button"
+                                      type="button"
+                                      onClick={() =>
+                                        setTrustedCircleMenuOpen((prev) => !prev)
+                                      }
+                                      disabled={trustedCircleSaving}
+                                    >
+                                      {activeTrustedCircle.name}
+                                      <span className="trusted-circle__menu-caret">▾</span>
+                                    </button>
+                                    {trustedCircleMenuOpen && (
+                                      <div className="trusted-circle__menu-list">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            cancelTrustedCircleEdits();
+                                            setTrustedCircleRenaming(true);
+                                            setTrustedCircleMenuOpen(false);
+                                          }}
+                                        >
+                                          Rename
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setTrustedCircleEditing(true);
+                                            setTrustedCircleMenuOpen(false);
+                                          }}
+                                        >
+                                          Edit friends
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="danger"
+                                          onClick={() => {
+                                            setTrustedCircleMenuOpen(false);
+                                            setTrustedCircleDeleteTarget(activeTrustedCircle);
+                                            setTrustedCircleDeleteOpen(true);
+                                          }}
+                                        >
+                                          Delete
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        <div className="goals-panel__trusted">
+                          <div className="goals-panel__trusted-group">
+                            <div className="goals-panel__trusted-header">
+                              <h5>{activeTrustedCircle?.name || "Trusted friends"}</h5>
+                              <div className="goals-panel__trusted-actions">
+                                <button
+                                  className="btn ghost"
+                                  type="button"
+                                  disabled={
+                                    trustedCircleBusy || !activeTrustedCircle?.id
+                                  }
+                                  onClick={clearTrustedFriends}
+                                >
+                                  Clear
+                                </button>
+                              </div>
+                            </div>
+                            {trustedFriendOptions.length === 0 ? (
+                              <p className="goals-empty">
+                                Add friends to build a trusted circle.
+                              </p>
+                            ) : (
+                              <>
+                                <div className="goals-panel__trusted-picker">
+                                  <div className="goals-panel__select">
+                                    <select
+                                      className="auth-input goals-select"
+                                      value={trustedFriendPicker}
+                                      onChange={(event) => {
+                                        const value = event.target.value;
+                                        setTrustedFriendPicker(value);
+                                        const nextId = Number(value);
+                                        if (Number.isFinite(nextId)) {
+                                          queueTrustedFriend(nextId);
+                                        }
+                                        setTrustedFriendPicker("");
+                                      }}
+                                      disabled={
+                                        !canEditTrustedCircle ||
+                                        trustedCircleBusy ||
+                                        !activeTrustedCircle?.id
+                                      }
+                                    >
+                                      <option value="">Select a friend to trust</option>
+                                      {trustedFriendOptions.map((friend) => (
+                                        <option
+                                          key={friend.id}
+                                          value={friend.id}
+                                          disabled={
+                                            trustedMemberIds.has(friend.id) ||
+                                            friend.id === user?.id
+                                          }
+                                        >
+                                          {friend.label}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <span className="goals-select-caret" />
+                                  </div>
+                                </div>
+                                {canEditTrustedCircle && pendingTrustedAddOptions.length > 0 && (
+                                  <div className="trusted-circle__pending">
+                                    <p className="trusted-circle__pending-label">Pending</p>
+                                    <div className="trusted-circle__pending-list">
+                                      {pendingTrustedAddOptions.map((friend) => (
+                                        <span
+                                          key={friend.id}
+                                          className="trusted-circle__pending-chip"
+                                        >
+                                          {friend.label}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {canEditTrustedCircle && (
+                                  <div className="trusted-circle__apply">
+                                    <button
+                                      className="btn ghost"
+                                      type="button"
+                                      onClick={cancelTrustedCircleEdits}
+                                      disabled={
+                                        trustedCircleBusy || !trustedCircleEditing
+                                      }
+                                    >
+                                      Cancel
+                                    </button>
+                                    <button
+                                      className="btn primary"
+                                      type="button"
+                                      onClick={() => void applyTrustedCircleChanges()}
+                                      disabled={!hasPendingTrustedChanges || trustedCircleBusy}
+                                    >
+                                      {trustedCircleBusy ? "Saving..." : "Apply changes"}
+                                    </button>
+                                  </div>
+                                )}
+                                <div className="goals-panel__trusted-list">
+                                  {trustedCircleFriendRows.map((row) => {
+                                    const avatarUrl = row.avatarUrl;
+                                    return (
+                                      <div key={row.member.id} className="trusted-friend-row">
+                                        <button
+                                          type="button"
+                                          className={`trusted-friend-toggle${
+                                            pendingTrustedRemoveSet.has(row.member.id)
+                                              ? " is-remove"
+                                              : " is-active"
+                                          }${avatarUrl ? " has-avatar" : ""}${
+                                            canEditTrustedCircle ? "" : " is-locked"
+                                          }`}
+                                          onClick={() => togglePendingRemoval(row.member)}
+                                          disabled={!canEditTrustedCircle}
+                                          aria-pressed={
+                                            !pendingTrustedRemoveSet.has(row.member.id)
+                                          }
+                                          aria-label={
+                                            pendingTrustedRemoveSet.has(row.member.id)
+                                              ? "Marked for removal"
+                                              : "Trusted friend"
+                                          }
+                                        >
+                                          {avatarUrl ? (
+                                            <img
+                                              className="trusted-friend-toggle__avatar"
+                                              src={avatarUrl}
+                                              alt={row.label}
+                                              loading="lazy"
+                                              decoding="async"
+                                            />
+                                          ) : (
+                                            <>
+                                              <span className="trusted-friend-toggle__ring" />
+                                              <span className="trusted-friend-toggle__dot" />
+                                            </>
+                                          )}
+                                        </button>
+                                        <span
+                                          className={`trusted-friend-name${
+                                            pendingTrustedRemoveSet.has(row.member.id)
+                                              ? " is-muted"
+                                              : ""
+                                          }`}
+                                        >
+                                          {row.label}
+                                        </span>
+                                        {pendingTrustedRemoveSet.has(row.member.id) && (
+                                          <span className="trusted-friend-tag">Remove</span>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                  {trustedCircleFriendRows.length === 0 && (
+                                    <p className="goals-empty">No trusted friends yet.</p>
+                                  )}
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </>
+                )}
+              </>
+            )}
           </section>
         </div>
         )}
@@ -5505,12 +7691,12 @@ const setProfileFromEntry = async (entry: any) => {
               </div>
             </div>
 
-            <div className="security-grid">
-                <div className="security-card">
-                  <h4>Password reset</h4>
-                  <p className="security-muted">
-                    We will email a reset link to {user.email}.
-                  </p>
+            <div className="security-grid security-grid--quad">
+              <div className="security-card">
+                <h4>Password reset</h4>
+                <p className="security-muted">
+                  We will email a reset link to {user.email}.
+                </p>
                 <button
                   className="btn ghost"
                   type="button"
@@ -5522,36 +7708,13 @@ const setProfileFromEntry = async (entry: any) => {
                 {passwordResetError && (
                   <p className="status status-error">{passwordResetError}</p>
                 )}
-                  {passwordResetSuccess && (
-                    <p className="status status-success">{passwordResetSuccess}</p>
-                  )}
-                </div>
+                {passwordResetSuccess && (
+                  <p className="status status-success">{passwordResetSuccess}</p>
+                )}
+              </div>
 
-                <div className="security-card security-card-danger">
-                  <h4>Encrypted profile recovery</h4>
-                  <p className="security-muted">
-                    Forgot your passphrase and do not have trusted devices? You can reset your
-                    encrypted profile to continue. This permanently erases encrypted fields like
-                    phone, birthday, and private details.
-                  </p>
-                  <button
-                    className="btn ghost"
-                    type="button"
-                    onClick={handleProfileRecoveryReset}
-                    disabled={profileRecoveryBusy}
-                  >
-                    {profileRecoveryBusy ? "Resetting..." : "Reset encrypted profile"}
-                  </button>
-                  {profileRecoveryError && (
-                    <p className="status status-error">{profileRecoveryError}</p>
-                  )}
-                  {profileRecoverySuccess && (
-                    <p className="status status-success">{profileRecoverySuccess}</p>
-                  )}
-                </div>
-
-                <div className="security-card">
-                  <h4>Two-factor authentication</h4>
+              <div className="security-card">
+                <h4>Two-factor authentication</h4>
                 <p className="security-muted">
                   Add a second step at login. Trusted devices can skip verification.
                 </p>
@@ -5588,6 +7751,19 @@ const setProfileFromEntry = async (entry: any) => {
                   >
                     {twoFactorLoading ? "Saving..." : "Save"}
                   </button>
+                </div>
+                <div className="security-row">
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={handleTwoFactorReset}
+                    disabled={twoFactorResetting || twoFactorLoading}
+                  >
+                    {twoFactorResetting ? "Resetting..." : "Reset 2FA"}
+                  </button>
+                  <p className="security-muted">
+                    Use this if your authenticator is out of sync. We will re-enroll you.
+                  </p>
                 </div>
                 {twoFactorMethod === "totp" && (
                   <div className="totp-setup">
@@ -5722,7 +7898,9 @@ const setProfileFromEntry = async (entry: any) => {
                   <p className="status status-success">{phoneChangeSuccess}</p>
                 )}
               </div>
+            </div>
 
+            <div className="security-grid security-grid--stack">
               <div className="security-card security-card-wide">
                 <h4>Trusted devices</h4>
                 <p className="security-muted">
@@ -5863,7 +8041,7 @@ const setProfileFromEntry = async (entry: any) => {
               </div>
             </div>
 
-            <div className="security-grid">
+            <div className="security-grid security-grid--notifications">
               <div className="security-card">
                 <div className="security-card__header">
                   <span className="security-card__icon" aria-hidden="true">
@@ -6683,6 +8861,25 @@ const setProfileFromEntry = async (entry: any) => {
         </div>
         )}
 
+        {isSettingsView && settingsSection === "language" && (
+        <div className="panel-grid">
+          <section className="panel profile-settings-panel profile-settings-panel--language">
+            <div className="panel-header profile-language-header">
+              <div className="profile-language-copy">
+                <p className="eyebrow">Language</p>
+                <h3>Language Options</h3>
+                <p className="panel-sub">
+                  Choose the language you want to use across the app.
+                </p>
+              </div>
+              <div className="profile-language-control">
+                <LanguageMenu inline />
+              </div>
+            </div>
+          </section>
+        </div>
+        )}
+
         {isSettingsView && settingsSection === "changes" && (
         <div className="panel-grid">
           <section className="panel profile-settings-panel">
@@ -6804,293 +9001,663 @@ const setProfileFromEntry = async (entry: any) => {
         </div>
         )}
 
-        {!isSettingsView && (
+        {!isSettingsView && isGalleryPage && (
+        <div className="profile-content-grid">
         <section className="panel profile-media">
-          <div className="panel-header profile-media__header">
-            <div>
-              <p className="eyebrow">Gallery</p>
-              <h3>Photo + Video Gallery</h3>
-              <p className="panel-sub">
-                Curate your moments and choose who can see them.
-              </p>
-            </div>
-            <div className="profile-media__tabs">
-              <button
-                type="button"
-                className={`profile-media__tab${mediaTab === "all" ? " is-active" : ""}`}
-                onClick={() => setMediaTab("all")}
-              >
-                All
-              </button>
-              <button
-                type="button"
-                className={`profile-media__tab${mediaTab === "photo" ? " is-active" : ""}`}
-                onClick={() => setMediaTab("photo")}
-              >
-                Photos
-              </button>
-              <button
-                type="button"
-                className={`profile-media__tab${mediaTab === "video" ? " is-active" : ""}`}
-                onClick={() => setMediaTab("video")}
-              >
-                Videos
-              </button>
-            </div>
-          </div>
-
-          <div className="profile-media__composer">
-            <div className="profile-media__preview">
-              {mediaFilePreview ? (
-                mediaFileIsVideo ? (
-                  <video controls muted playsInline preload="metadata">
-                    <source src={mediaFilePreview} />
-                  </video>
-                ) : (
-                  <img src={mediaFilePreview} alt="Media preview" />
-                )
-              ) : (
-                <div className="profile-media__placeholder">
-                  Select a photo or video to preview.
-                </div>
-              )}
-            </div>
-            <div className="profile-media__fields">
-              <div className="profile-media__row">
-                <input
-                  className="auth-input"
-                  placeholder="Title (optional)"
-                  value={mediaTitle}
-                  onChange={(e) => setMediaTitle(e.target.value)}
-                />
-                <select
-                  className="auth-input profile-media__select"
-                  value={mediaVisibility}
-                  onChange={(e) =>
-                    setMediaVisibility(
-                      e.target.value as "public" | "friends" | "private" | "trusted"
-                    )
-                  }
-                >
-                  <option value="public">Public</option>
-                  <option value="friends">Friends</option>
-                  <option value="private">Private</option>
-                  <option value="trusted">Trusted Circle</option>
-                </select>
+          <div
+            className={`panel-header profile-media__header profile-section-header${
+              contentGalleryOpen ? "" : " is-collapsed"
+            }`}
+          >
+            <button
+              type="button"
+              className="profile-section-toggle"
+              onClick={() => setContentGalleryOpen((prev) => !prev)}
+              aria-expanded={contentGalleryOpen}
+            >
+              <div>
+                <p className="eyebrow">Gallery</p>
+                <h3>My Photos and Videos</h3>
+                <p className="panel-sub">
+                  Curate your moments and choose who can see them.
+                </p>
               </div>
-              {mediaVisibility === "trusted" && (
-                <div className="profile-media__row">
+              <span
+                className={`profile-section-chevron${
+                  contentGalleryOpen ? " is-open" : ""
+                }`}
+                aria-hidden="true"
+              >
+                <svg viewBox="0 0 16 16" focusable="false" aria-hidden="true">
+                  <path
+                    d="M4 6.5 8 10l4-3.5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.9"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </span>
+            </button>
+            {contentGalleryOpen && (
+              <div className="profile-media__tabs">
+                <button
+                  type="button"
+                  className={`profile-media__tab${mediaTab === "all" ? " is-active" : ""}`}
+                  onClick={() => setMediaTab("all")}
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  className={`profile-media__tab${mediaTab === "photo" ? " is-active" : ""}`}
+                  onClick={() => setMediaTab("photo")}
+                >
+                  Photos
+                </button>
+                <button
+                  type="button"
+                  className={`profile-media__tab${mediaTab === "video" ? " is-active" : ""}`}
+                  onClick={() => setMediaTab("video")}
+                >
+                  Videos
+                </button>
+              </div>
+            )}
+            {contentGalleryOpen && (
+              <div className="profile-media__filters">
+                <label className="profile-media__filter">
+                  <span>Folder</span>
                   <select
                     className="auth-input profile-media__select"
-                    value={mediaTrustedCircleId}
-                    onChange={(e) =>
-                      setMediaTrustedCircleId(e.target.value ? Number(e.target.value) : "")
-                    }
+                    value={mediaFolderFilter}
+                    onChange={(event) => setMediaFolderFilter(event.target.value)}
                   >
-                    <option value="">Select a trusted circle</option>
-                    {trustedCircleOptions.map((group) => (
-                      <option key={group.id} value={group.id}>
-                        {group.name}
+                    <option value={MEDIA_FOLDER_ALL}>All folders</option>
+                    {mediaFolderOptions.map((folder) => (
+                      <option key={folder} value={folder}>
+                        {folder}
                       </option>
                     ))}
                   </select>
-                  {trustedCircleOptions.length === 0 && (
-                    <span className="post-composer__hint">
-                      Create a trusted circle on the Friends page to use this.
-                    </span>
+                </label>
+                <div className="profile-media__filter-meta">
+                  {filteredMedia.length} item{filteredMedia.length === 1 ? "" : "s"}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {contentGalleryOpen && (
+            <>
+              <datalist id="media-folder-options">
+                {mediaFolderOptions.map((folder) => (
+                  <option key={folder} value={folder} />
+                ))}
+              </datalist>
+              <div className="profile-media__composer">
+                <div
+                  className={`profile-media__preview${
+                    mediaDragActive ? " is-dragover" : ""
+                  }`}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "copy";
+                    setMediaDragActive(true);
+                  }}
+                  onDragEnter={(event) => {
+                    event.preventDefault();
+                    setMediaDragActive(true);
+                  }}
+                  onDragLeave={() => setMediaDragActive(false)}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setMediaDragActive(false);
+                    const file = event.dataTransfer.files?.[0] || null;
+                    handleMediaFileSelection(file);
+                  }}
+                >
+                  {mediaFilePreview ? (
+                    mediaFileIsVideo ? (
+                      <video controls muted playsInline preload="metadata">
+                        <source src={mediaFilePreview} />
+                      </video>
+                    ) : (
+                      <img src={mediaFilePreview} alt="Media preview" />
+                    )
+                  ) : (
+                    <div className="profile-media__placeholder">
+                      {mediaDragActive
+                        ? "Drop your photo or video to preview."
+                        : "Drag and drop a photo or video, or select one to preview."}
+                    </div>
                   )}
                 </div>
-              )}
-              <textarea
-                className="auth-input profile-media__caption"
-                placeholder="Caption (optional)"
-                value={mediaCaption}
-                onChange={(e) => setMediaCaption(e.target.value)}
-                rows={3}
-              />
-              <div className="profile-media__actions">
-                <label className="post-composer__tool">
-                  <input
-                    type="file"
-                    accept="image/*,video/*"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0] || null;
-                      if (!file) {
-                        setMediaFile(null);
-                        return;
+                <div className="profile-media__fields">
+                  <div className="profile-media__row">
+                    <input
+                      className="auth-input"
+                      placeholder="Title (optional)"
+                      value={mediaTitle}
+                      onChange={(e) => setMediaTitle(e.target.value)}
+                    />
+                    <input
+                      className="auth-input"
+                      placeholder="Folder (optional)"
+                      value={mediaFolder}
+                      onChange={(e) => setMediaFolder(e.target.value)}
+                      list="media-folder-options"
+                    />
+                    <select
+                      className="auth-input profile-media__select"
+                      value={mediaVisibility}
+                      onChange={(e) =>
+                        setMediaVisibility(
+                          e.target.value as "public" | "friends" | "private" | "trusted"
+                        )
                       }
-                      const isVideo = isVideoFile(file);
-                      const maxBytes = isVideo ? MAX_VIDEO_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
-                      const maxLabel = isVideo ? MAX_VIDEO_UPLOAD_LABEL : MAX_UPLOAD_LABEL;
-                      if (file.size > maxBytes) {
-                        setProfileMediaError(`Media files must be under ${maxLabel}.`);
-                        e.target.value = "";
-                        setMediaFile(null);
-                        return;
-                      }
-                      setMediaFile(file);
-                      setProfileMediaError(null);
-                    }}
+                    >
+                      <option value="public">Public</option>
+                      <option value="friends">Friends</option>
+                      <option value="private">Private</option>
+                      <option value="trusted">Trusted Circle</option>
+                    </select>
+                  </div>
+                  {mediaVisibility === "trusted" && (
+                    <div className="profile-media__row">
+                      <select
+                        className="auth-input profile-media__select"
+                        value={mediaTrustedCircleId}
+                        onChange={(e) =>
+                          setMediaTrustedCircleId(e.target.value ? Number(e.target.value) : "")
+                        }
+                      >
+                        <option value="">Select a trusted circle</option>
+                        {trustedCircleOptions.map((group) => (
+                          <option key={group.id} value={group.id}>
+                            {group.name}
+                          </option>
+                        ))}
+                      </select>
+                      {trustedCircleOptions.length === 0 && (
+                        <span className="post-composer__hint">
+                          Create a trusted circle in My Trusted Circles to use this.
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  <textarea
+                    className="auth-input profile-media__caption"
+                    placeholder="Caption (optional)"
+                    value={mediaCaption}
+                    onChange={(e) => setMediaCaption(e.target.value)}
+                    rows={3}
                   />
-                  <span>{mediaFile ? "Change media" : "Choose media"}</span>
-                </label>
-                <span className="profile-media__file">
-                  {mediaFile ? mediaFile.name : "No media selected"}
-                </span>
-                {mediaFile && (
+                  <div className="profile-media__actions">
+                    <label className="post-composer__tool">
+                      <input
+                        type="file"
+                        accept="image/*,video/*"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0] || null;
+                          handleMediaFileSelection(file);
+                        }}
+                      />
+                      <span>{mediaFile ? "Change media" : "Choose media"}</span>
+                    </label>
+                    <span className="profile-media__file">
+                      {mediaFile ? mediaFile.name : "No media selected"}
+                    </span>
+                    {mediaFile && (
+                      <button
+                        className="btn ghost"
+                        type="button"
+                        onClick={() => setMediaFile(null)}
+                      >
+                        Remove
+                      </button>
+                    )}
+                    {mediaFile && (
+                      <button
+                        className="btn primary"
+                        type="button"
+                        onClick={createMediaItem}
+                        disabled={mediaSubmitting}
+                      >
+                        {mediaSubmitting ? "Uploading..." : "Add to gallery"}
+                      </button>
+                    )}
+                  </div>
+                  {profileMediaError && (
+                    <p className="status status-error">{profileMediaError}</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="profile-media__folders">
+                <div className="profile-media__folder-toolbar">
+                  <p className="profile-media__folder-hint">
+                    Double-click a folder to open it. Drag media onto a folder to move it.
+                  </p>
+                  <button
+                    type="button"
+                    className="btn ghost profile-media__folder-btn"
+                    onClick={() => {
+                      setMediaNewFolderOpen(true);
+                      setMediaFolderError(null);
+                    }}
+                    disabled={mediaNewFolderOpen}
+                  >
+                    New folder
+                  </button>
+                </div>
+                {mediaNewFolderOpen && (
+                  <div className="profile-media__folder-create">
+                    <input
+                      className="auth-input"
+                      placeholder="Folder name"
+                      autoFocus
+                      value={mediaNewFolderName}
+                      onChange={(event) => {
+                        setMediaNewFolderName(event.target.value);
+                        if (mediaFolderError) setMediaFolderError(null);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          handleCreateMediaFolder();
+                        }
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          cancelMediaFolderCreate();
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="btn primary"
+                      onClick={handleCreateMediaFolder}
+                    >
+                      Create
+                    </button>
+                    <button
+                      type="button"
+                      className="btn ghost"
+                      onClick={cancelMediaFolderCreate}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
+                <div className="profile-media__folder-grid">
+                  <button
+                    type="button"
+                    className={`profile-media__folder-card${
+                      mediaFolderFilter === MEDIA_FOLDER_ALL ? " is-active" : ""
+                    }`}
+                    onClick={() => setMediaFolderFilter(MEDIA_FOLDER_ALL)}
+                    onDoubleClick={() => setMediaFolderFilter(MEDIA_FOLDER_ALL)}
+                  >
+                    <span className="profile-media__folder-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24">
+                        <path
+                          d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.6"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </span>
+                    <span className="profile-media__folder-name">All media</span>
+                    <span className="profile-media__folder-count">
+                      {mediaFolderCounts.total} item
+                      {mediaFolderCounts.total === 1 ? "" : "s"}
+                    </span>
+                  </button>
+                  {mediaFolderOptions.map((folder) => {
+                    const count = mediaFolderCounts.counts.get(folder) ?? 0;
+                    const isActive = mediaFolderFilter === folder;
+                    const isDrop = mediaDragOverFolder === folder;
+                    return (
+                      <button
+                        key={folder}
+                        type="button"
+                        title={folder}
+                        className={`profile-media__folder-card${
+                          isActive ? " is-active" : ""
+                        }${isDrop ? " is-drop" : ""}`}
+                        onClick={() => setMediaFolderFilter(folder)}
+                        onDoubleClick={() => setMediaFolderFilter(folder)}
+                        onDragOver={(event) => handleFolderDragOver(event, folder)}
+                        onDragLeave={() => handleFolderDragLeave(folder)}
+                        onDrop={(event) => void handleFolderDrop(event, folder)}
+                      >
+                        <span className="profile-media__folder-icon" aria-hidden="true">
+                          <svg viewBox="0 0 24 24">
+                            <path
+                              d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.6"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </svg>
+                        </span>
+                        <span className="profile-media__folder-name">{folder}</span>
+                        <span className="profile-media__folder-count">
+                          {count} item{count === 1 ? "" : "s"}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {mediaFolderError && (
+                  <p className="status status-error">{mediaFolderError}</p>
+                )}
+              </div>
+
+              {profileMediaLoading && <p className="status">Loading gallery...</p>}
+              {!profileMediaLoading && filteredMedia.length === 0 && (
+                <p className="status">No gallery items yet.</p>
+              )}
+              {!profileMediaLoading && filteredMedia.length > 0 && (
+                <div className="profile-media__grid">
+                  {mediaPaging.items.map((item, index) => {
+                    const absoluteIndex = mediaPaging.startIndex + index;
+                    const isVideo = item.kind === "video" || isVideoUrl(item.media);
+                    const mediaKey = String(item.id);
+                    const showMediaMenu = mediaMenuFor === mediaKey;
+                    const isEditingMedia = editingMediaId === mediaKey;
+                    return (
+                      <article
+                        key={String(item.id)}
+                        className={`profile-media__card${
+                          showMediaMenu ? " is-popover-open" : ""
+                        }${mediaDraggingId === mediaKey ? " is-dragging" : ""}${
+                          mediaDragOverId === mediaKey ? " is-drop-target" : ""
+                        }`}
+                        draggable={!isEditingMedia}
+                        onDragStart={(event) => handleMediaDragStart(event, item)}
+                        onDragEnd={handleMediaDragEnd}
+                        onDragOver={(event) => handleMediaCardDragOver(event, mediaKey)}
+                        onDragLeave={() => handleMediaCardDragLeave(mediaKey)}
+                        onDrop={(event) => void handleMediaCardDrop(event, mediaKey)}
+                      >
+                        <div
+                          className={`profile-media__asset${
+                            item.media ? " is-interactive" : ""
+                          }`}
+                          role={item.media ? "button" : undefined}
+                          tabIndex={item.media ? 0 : undefined}
+                          onClick={(event) => {
+                            if (!item.media) return;
+                            const target = event.target as HTMLElement;
+                            if (target.closest("button, a, input, select, textarea")) {
+                              return;
+                            }
+                            if (
+                              isVideo &&
+                              target.tagName &&
+                              target.tagName.toLowerCase() === "video"
+                            ) {
+                              return;
+                            }
+                            openMediaLightboxAt(absoluteIndex);
+                          }}
+                          onKeyDown={(event) => {
+                            if (!item.media) return;
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              openMediaLightboxAt(absoluteIndex);
+                            }
+                          }}
+                          aria-label="Open media preview"
+                        >
+                          <div className="profile-media__overlay">
+                            {item.media && (
+                              <div className="post-menu-wrapper post-menu-wrapper--media">
+                                <button
+                                  className="post-menu-trigger"
+                                  type="button"
+                                  aria-haspopup="menu"
+                                  aria-expanded={showMediaMenu}
+                                  aria-label="Open media options"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    toggleMediaMenu(mediaKey);
+                                  }}
+                                >
+                                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                                    <circle cx="5" cy="12" r="2" />
+                                    <circle cx="12" cy="12" r="2" />
+                                    <circle cx="19" cy="12" r="2" />
+                                  </svg>
+                                </button>
+                                {showMediaMenu && (
+                                  <div className="post-menu" role="menu">
+                                    <button
+                                      className="post-menu-item"
+                                      type="button"
+                                      role="menuitem"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        setMediaMenuFor(null);
+                                        openMediaLightboxAt(absoluteIndex);
+                                      }}
+                                    >
+                                      View Fullscreen
+                                    </button>
+                                    {item.folder && (
+                                      <button
+                                        className="post-menu-item"
+                                        type="button"
+                                        role="menuitem"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          setMediaMenuFor(null);
+                                          void updateMediaFolder(item, null);
+                                        }}
+                                      >
+                                        Remove from folder
+                                      </button>
+                                    )}
+                                    <button
+                                      className="post-menu-item"
+                                      type="button"
+                                      role="menuitem"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        setMediaMenuFor(null);
+                                        setMediaVisibilityModalItem(item);
+                                      }}
+                                    >
+                                      Set Visibility
+                                    </button>
+                                    <button
+                                      className="post-menu-item"
+                                      type="button"
+                                      role="menuitem"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        setMediaMenuFor(null);
+                                        setMediaEditModalItem(item);
+                                      }}
+                                    >
+                                      Edit
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            <span className="profile-media__badge">
+                              {item.visibility || "friends"}
+                            </span>
+                          </div>
+                          {item.media ? (
+                            isVideo ? (
+                              <video controls preload="metadata" draggable={false}>
+                                <source src={item.media} />
+                              </video>
+                            ) : (
+                              <img
+                                src={item.media}
+                                alt={item.title || "Photo"}
+                                draggable={false}
+                              />
+                            )
+                          ) : (
+                            <div className="profile-media__placeholder">No media</div>
+                          )}
+                        </div>
+                        <div className="profile-media__meta">
+                          {isEditingMedia ? (
+                            <div className="profile-media__edit">
+                              <input
+                                className="auth-input"
+                                placeholder="Title (optional)"
+                                value={mediaEditTitle}
+                                onChange={(event) => setMediaEditTitle(event.target.value)}
+                              />
+                              <input
+                                className="auth-input"
+                                placeholder="Folder (optional)"
+                                value={mediaEditFolder}
+                                onChange={(event) => setMediaEditFolder(event.target.value)}
+                                list="media-folder-options"
+                              />
+                              <textarea
+                                className="auth-input"
+                                rows={3}
+                                placeholder="Caption (optional)"
+                                value={mediaEditCaption}
+                                onChange={(event) => setMediaEditCaption(event.target.value)}
+                              />
+                              <div className="profile-media__edit-actions">
+                                <button
+                                  className="btn ghost"
+                                  type="button"
+                                  onClick={cancelMediaEdit}
+                                  disabled={mediaEditSaving}
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  className="btn primary"
+                                  type="button"
+                                  onClick={() => void saveMediaEdit(item)}
+                                  disabled={mediaEditSaving}
+                                >
+                                  {mediaEditSaving ? "Saving..." : "Save changes"}
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="profile-media__title-row">
+                                <strong>
+                                  {item.title || (isVideo ? "Video" : "Photo")}
+                                </strong>
+                                {item.createdAt && (
+                                  <span>{formatPostUpdateLabel(item.createdAt)}</span>
+                                )}
+                              </div>
+                              {item.folder && (
+                                <span className="profile-media__folder-tag">
+                                  {item.folder}
+                                </span>
+                              )}
+                              {item.caption && (
+                                <p className="profile-media__caption-text">
+                                  {item.caption}
+                                </p>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+              {!profileMediaLoading && filteredMedia.length > 0 && mediaPaging.totalPages > 1 && (
+                <div className="profile-media__pagination">
                   <button
                     className="btn ghost"
                     type="button"
-                    onClick={() => setMediaFile(null)}
+                    onClick={() => setMediaPage((prev) => Math.max(1, prev - 1))}
+                    disabled={mediaPaging.page <= 1}
                   >
-                    Remove
+                    Previous
                   </button>
-                )}
-                <button
-                  className="btn primary"
-                  type="button"
-                  onClick={createMediaItem}
-                  disabled={mediaSubmitting || !mediaFile}
-                >
-                  {mediaSubmitting ? "Uploading..." : "Add to gallery"}
-                </button>
-              </div>
-              {profileMediaError && (
-                <p className="status status-error">{profileMediaError}</p>
+                  <div className="profile-media__page-info">
+                    Page {mediaPaging.page} of {mediaPaging.totalPages}
+                  </div>
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={() =>
+                      setMediaPage((prev) =>
+                        Math.min(mediaPaging.totalPages, prev + 1)
+                      )
+                    }
+                    disabled={mediaPaging.page >= mediaPaging.totalPages}
+                  >
+                    Next
+                  </button>
+                </div>
               )}
-            </div>
-          </div>
-
-          {profileMediaLoading && <p className="status">Loading gallery...</p>}
-          {!profileMediaLoading && filteredMedia.length === 0 && (
-            <p className="status">No gallery items yet.</p>
-          )}
-          {!profileMediaLoading && filteredMedia.length > 0 && (
-            <div className="profile-media__grid">
-              {filteredMedia.map((item, index) => {
-                const isVideo = item.kind === "video" || isVideoUrl(item.media);
-                return (
-                  <article key={String(item.id)} className="profile-media__card">
-                    <div
-                      className={`profile-media__asset${
-                        item.media ? " is-interactive" : ""
-                      }`}
-                      role={item.media ? "button" : undefined}
-                      tabIndex={item.media ? 0 : undefined}
-                      onClick={(event) => {
-                        if (!item.media) return;
-                        const target = event.target as HTMLElement;
-                        if (target.closest("button, a, input, select, textarea")) {
-                          return;
-                        }
-                        if (
-                          isVideo &&
-                          target.tagName &&
-                          target.tagName.toLowerCase() === "video"
-                        ) {
-                          return;
-                        }
-                        openMediaLightboxAt(index);
-                      }}
-                      onKeyDown={(event) => {
-                        if (!item.media) return;
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          openMediaLightboxAt(index);
-                        }
-                      }}
-                      aria-label="Open media preview"
-                    >
-                      {item.media ? (
-                        isVideo ? (
-                          <video controls preload="metadata">
-                            <source src={item.media} />
-                          </video>
-                        ) : (
-                          <img src={item.media} alt={item.title || "Photo"} />
-                        )
-                      ) : (
-                        <div className="profile-media__placeholder">No media</div>
-                      )}
-                      {item.media && (
-                        <button
-                          className="media-lightbox__open"
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            openMediaLightboxAt(index);
-                          }}
-                        >
-                          View
-                        </button>
-                      )}
-                      <span className="profile-media__badge">
-                        {item.visibility || "friends"}
-                      </span>
-                    </div>
-                    <div className="profile-media__meta">
-                      <div className="profile-media__title-row">
-                        <strong>{item.title || (isVideo ? "Video" : "Photo")}</strong>
-                        {item.createdAt && (
-                          <span>{formatPostUpdateLabel(item.createdAt)}</span>
-                        )}
-                      </div>
-                      {item.caption && (
-                        <p className="profile-media__caption-text">{item.caption}</p>
-                      )}
-                      <div className="profile-media__controls">
-                        <select
-                          className="auth-input profile-media__select"
-                          value={item.visibility || "friends"}
-                          onChange={(e) =>
-                            updateMediaVisibility(
-                              item,
-                              e.target.value as ProfileMediaItem["visibility"]
-                            )
-                          }
-                        >
-                          <option value="public">Public</option>
-                          <option value="friends">Friends</option>
-                          <option value="private">Private</option>
-                          <option value="trusted">Trusted Circle</option>
-                        </select>
-                        <select
-                          className="auth-input profile-media__select"
-                          value={item.trustedCircleId ?? ""}
-                          disabled={(item.visibility || "friends") !== "trusted"}
-                          onChange={(e) =>
-                            updateMediaTrustedCircle(
-                              item,
-                              e.target.value ? Number(e.target.value) : ""
-                            )
-                          }
-                        >
-                          <option value="">Select circle</option>
-                          {trustedCircleOptions.map((group) => (
-                            <option key={group.id} value={group.id}>
-                              {group.name}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          className="btn ghost"
-                          type="button"
-                          onClick={() => deleteMediaItem(item)}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
+            </>
           )}
         </section>
+        </div>
         )}
 
-        {!isSettingsView && (
-        <div className="posts-grid">
+        {!isSettingsView && isPostsPage && (
+        <div className="profile-content-grid">
+        <section className="panel profile-posts-panel">
+          <div
+            className={`panel-header profile-posts__header profile-section-header${
+              contentPostsOpen ? "" : " is-collapsed"
+            }`}
+          >
+            <button
+              type="button"
+              className="profile-section-toggle"
+              onClick={() => setContentPostsOpen((prev) => !prev)}
+              aria-expanded={contentPostsOpen}
+            >
+              <div>
+                <p className="eyebrow">Posts</p>
+                <h3>My Posts</h3>
+                <p className="panel-sub">Review, edit, and manage your updates.</p>
+              </div>
+              <span
+                className={`profile-section-chevron${
+                  contentPostsOpen ? " is-open" : ""
+                }`}
+                aria-hidden="true"
+              >
+                <svg viewBox="0 0 16 16" focusable="false" aria-hidden="true">
+                  <path
+                    d="M4 6.5 8 10l4-3.5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.9"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </span>
+            </button>
+          </div>
+          {contentPostsOpen && (posts.length === 0 ? (
+            <p className="status">No posts yet.</p>
+          ) : (
+          <div className="posts-grid">
           {posts.map((p) => {
             const postUrl = extractFirstUrl(p.text);
             const preview = postUrl ? previewCache[postUrl] : undefined;
@@ -7103,6 +9670,7 @@ const setProfileFromEntry = async (entry: any) => {
             const comments = postComments[commentKey] ?? [];
             const isCommentsOpen = Boolean(openCommentsFor[commentKey]);
             const showShareMenu = shareMenuFor === postKey;
+            const showPostMenu = postMenuFor === postKey;
             const shareUrl = buildShareUrl(postKey);
             const shareText = p.text
               ? `${displayName}: ${p.text.slice(0, 80)}`
@@ -7116,13 +9684,16 @@ const setProfileFromEntry = async (entry: any) => {
             const myReaction = normalizeReactionValue(p.myReaction);
             const sharesCount = Number(p.shares ?? 0);
             const commentsCount = comments.length;
-            const currentVisibility = p.visibility || "friends";
+            const isEditingPost = editingPostId === postKey;
+            const isSavingPost = Boolean(postEditing[postKey]);
 
             return (
               <article
                 key={String(p.id)}
                 id={`post-${postKey}`}
-                className={`post-card${showShareMenu ? " is-popover-open" : ""}`}
+                className={`post-card${
+                  showShareMenu || showPostMenu ? " is-popover-open" : ""
+                }`}
               >
                 <div className="post-meta-bar">
                   <span className="post-meta-name">{displayName}</span>
@@ -7130,53 +9701,226 @@ const setProfileFromEntry = async (entry: any) => {
                     {formatPostUpdateLabel(p.createdAt)}
                   </span>
                   {descriptor && <span className="post-meta-tag">{descriptor}</span>}
-                  {feedbackLabel && <span className="post-feedback-tag">{feedbackLabel}</span>}
-                  <select
-                    className="auth-input post-feedback-select post-visibility-select"
-                    value={currentVisibility}
-                    onChange={(e) => void updatePostVisibility(p, e.target.value)}
-                  >
-                    <option value="public">Public</option>
-                    <option value="friends">Friends</option>
-                    <option value="trusted">Trusted Circle</option>
-                    <option value="private">Private</option>
-                  </select>
-                  {canDelete && (
-                    <button
-                      className="btn ghost post-delete"
-                      type="button"
-                      onClick={() => setDeletePostTarget(p)}
-                    >
-                      Delete
-                    </button>
+                  {feedbackLabel && (
+                    <span className="post-feedback-tag">{feedbackLabel}</span>
                   )}
                 </div>
 
-                {p.media ? (
-                  <div className="post-media">
-                    {isVideoUrl(p.media) ? (
-                      <video controls style={{ width: "100%", height: "100%", objectFit: "cover" }}>
-                        <source src={p.media} />
-                      </video>
-                    ) : (
-                      <img src={p.media} alt={p.text} loading="lazy" />
+                {canDelete && !isEditingPost && !p.media && !preview?.image && (
+                  <div className="post-menu-wrapper">
+                    <button
+                      className="post-menu-trigger"
+                      type="button"
+                      aria-haspopup="menu"
+                      aria-expanded={showPostMenu}
+                      aria-label="Open post options"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        togglePostMenu(postKey);
+                      }}
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <circle cx="5" cy="12" r="2" />
+                        <circle cx="12" cy="12" r="2" />
+                        <circle cx="19" cy="12" r="2" />
+                      </svg>
+                    </button>
+                    {showPostMenu && (
+                      <div className="post-menu" role="menu">
+                        <button
+                          className="post-menu-item"
+                          type="button"
+                          role="menuitem"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setPostMenuFor(null);
+                            setVisibilityModalPost(p);
+                          }}
+                        >
+                          Set visibility
+                        </button>
+                        <button
+                          className="post-menu-item"
+                          type="button"
+                          role="menuitem"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setPostMenuFor(null);
+                            setEditPostModalPost(p);
+                          }}
+                        >
+                          Edit
+                        </button>
+                      </div>
                     )}
                   </div>
-                ) : preview?.image ? (
+                )}
+
+                {p.media ? (
+                  <div className="post-media">
+                    {canDelete && !isEditingPost && (
+                      <div className="post-menu-wrapper post-menu-wrapper--media">
+                        <button
+                          className="post-menu-trigger"
+                          type="button"
+                          aria-haspopup="menu"
+                          aria-expanded={showPostMenu}
+                          aria-label="Open post options"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            togglePostMenu(postKey);
+                          }}
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <circle cx="5" cy="12" r="2" />
+                            <circle cx="12" cy="12" r="2" />
+                            <circle cx="19" cy="12" r="2" />
+                          </svg>
+                        </button>
+                        {showPostMenu && (
+                          <div className="post-menu" role="menu">
+                            <button
+                              className="post-menu-item"
+                              type="button"
+                              role="menuitem"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setPostMenuFor(null);
+                                setVisibilityModalPost(p);
+                              }}
+                            >
+                              Set visibility
+                            </button>
+                            <button
+                              className="post-menu-item"
+                              type="button"
+                              role="menuitem"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setPostMenuFor(null);
+                                setEditPostModalPost(p);
+                              }}
+                            >
+                              Edit
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <div className="post-media__asset">
+                      {isVideoUrl(p.media) ? (
+                        <video controls style={{ width: "100%", height: "100%", objectFit: "cover" }}>
+                          <source src={p.media} />
+                        </video>
+                      ) : (
+                        <img src={p.media} alt={p.text} loading="lazy" />
+                      )}
+                    </div>
+                  </div>
+                ) : preview?.image && !isYoutubeUrl(postUrl) ? (
                   <div className="post-media link-preview-media">
-                    <img
-                      src={preview.image}
-                      alt={preview.title || displayName}
-                      loading="lazy"
-                    />
+                    {canDelete && !isEditingPost && (
+                      <div className="post-menu-wrapper post-menu-wrapper--media">
+                        <button
+                          className="post-menu-trigger"
+                          type="button"
+                          aria-haspopup="menu"
+                          aria-expanded={showPostMenu}
+                          aria-label="Open post options"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            togglePostMenu(postKey);
+                          }}
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <circle cx="5" cy="12" r="2" />
+                            <circle cx="12" cy="12" r="2" />
+                            <circle cx="19" cy="12" r="2" />
+                          </svg>
+                        </button>
+                        {showPostMenu && (
+                          <div className="post-menu" role="menu">
+                            <button
+                              className="post-menu-item"
+                              type="button"
+                              role="menuitem"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setPostMenuFor(null);
+                                setVisibilityModalPost(p);
+                              }}
+                            >
+                              Set visibility
+                            </button>
+                            <button
+                              className="post-menu-item"
+                              type="button"
+                              role="menuitem"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setPostMenuFor(null);
+                                setEditPostModalPost(p);
+                              }}
+                            >
+                              Edit
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <div className="post-media__asset">
+                      <img
+                        src={preview.image}
+                        alt={preview.title || displayName}
+                        loading="lazy"
+                      />
+                    </div>
                   </div>
                 ) : null}
 
                 <div className="post-body">
-                  <h3>{displayName}</h3>
-                  <p>{p.text}</p>
-                  {preview && !p.media && (
-                    <LinkPreviewCard preview={preview} url={preview.url || postUrl} compact />
+                  {isEditingPost ? (
+                    <div className="post-edit">
+                      <textarea
+                        className="auth-input post-edit-body"
+                        rows={4}
+                        value={editPostText}
+                        onChange={(event) =>
+                          setEditPostText(sanitizePostText(event.target.value))
+                        }
+                        placeholder="Update your post"
+                      />
+                      <div className="post-edit-actions">
+                        <button
+                          className="btn ghost"
+                          type="button"
+                          onClick={cancelPostEdit}
+                          disabled={isSavingPost}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          className="btn primary"
+                          type="button"
+                          onClick={() => void savePostEdit(p)}
+                          disabled={isSavingPost}
+                        >
+                          {isSavingPost ? "Saving..." : "Save changes"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <h3>{displayName}</h3>
+                      <p>{p.text}</p>
+                      {preview && !p.media && (
+                        <LinkPreviewCard
+                          preview={preview}
+                          url={preview.url || postUrl}
+                          compact
+                        />
+                      )}
+                    </>
                   )}
                   <div className="post-actions">
                     <div className="post-action-counts">
@@ -7706,9 +10450,46 @@ const setProfileFromEntry = async (entry: any) => {
               </article>
             );
           })}
+          </div>
+          ))}
+        </section>
         </div>
         )}
       </div>
+
+      {trustedCircleDeleteOpen && trustedCircleDeleteTarget && (
+        <div className="trusted-circle-modal__backdrop">
+          <div className="trusted-circle-modal">
+            <h4>Delete trusted circle?</h4>
+            <p>
+              This will remove <strong>{trustedCircleDeleteTarget.name}</strong> and
+              all members in the circle. Posts or media shared to this circle will
+              become private.
+            </p>
+            <div className="trusted-circle-modal__actions">
+              <button
+                className="btn ghost"
+                type="button"
+                onClick={() => {
+                  setTrustedCircleDeleteOpen(false);
+                  setTrustedCircleDeleteTarget(null);
+                }}
+                disabled={trustedCircleSaving}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn ghost danger"
+                type="button"
+                onClick={handleDeleteTrustedCircle}
+                disabled={trustedCircleSaving}
+              >
+                {trustedCircleSaving ? "Deleting..." : "Delete circle"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {mediaLightboxOpen && activeMediaItem && (
         <div
@@ -7804,6 +10585,11 @@ const setProfileFromEntry = async (entry: any) => {
                 <span className="media-lightbox__tag">
                   {activeMediaItem.visibility || "friends"}
                 </span>
+                {normalizeFolderName(activeMediaItem.folder) && (
+                  <span className="media-lightbox__tag">
+                    {normalizeFolderName(activeMediaItem.folder)}
+                  </span>
+                )}
                 {activeMediaItem.createdAt && (
                   <span className="media-lightbox__tag">
                     {formatPostUpdateLabel(activeMediaItem.createdAt)}

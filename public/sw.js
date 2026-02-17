@@ -5,7 +5,7 @@ const PRECACHE_URLS = [
   "/",
   "/index.html",
   "/manifest.webmanifest",
-  "/logo.png",
+  "/logo2.png",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
   "/screenshots/screenshot-wide.png",

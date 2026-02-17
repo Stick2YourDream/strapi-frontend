@@ -66,7 +66,7 @@ export default function Landing() {
     canonical: "https://yoursocialplace.com/",
     keywords:
       "Your Social Place, motivational social network, accountability, goals, progress, friends, groups, live video calls, screen sharing, real-time chat, Newsroom, moderation, privacy controls, PWA",
-    image: "https://yoursocialplace.com/logo.png",
+    image: "https://yoursocialplace.com/logo2.png",
     imageAlt: "Your Social Place logo",
   });
   const [profileSummary, setProfileSummary] = useState<ProfileSummary | null>(null);
@@ -576,7 +576,7 @@ export default function Landing() {
             aria-label="Go to Your Social Place home"
           >
             <span className="landing-brand-mark" aria-hidden="true">
-              <img src="/logo.png" alt="Your Social Place logo" />
+              <img src="/logo2.png" alt="Your Social Place logo" />
             </span>
             <span className="landing-brand-text">Your Social Place</span>
           </button>

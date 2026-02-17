@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import "../css/downloads-page.css";
 import { usePageMeta } from "../hooks/usePageMeta";
 
@@ -31,6 +32,7 @@ const detectPlatform = () => {
 };
 
 export default function Apps() {
+  const navigate = useNavigate();
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(
     null
   );
@@ -113,6 +115,17 @@ export default function Apps() {
   return (
     <div className="downloads-page">
       <div className="downloads-shell">
+        <header className="downloads-header">
+          <button className="downloads-brand" type="button" onClick={() => navigate("/")}>
+            <span className="downloads-brand-mark" aria-hidden="true">
+              <img src="/logo2.png" alt="Your Social Place logo" />
+            </span>
+            <span className="downloads-brand-text">Your Social Place</span>
+          </button>
+          <button className="downloads-back" type="button" onClick={() => navigate(-1)}>
+            Go back
+          </button>
+        </header>
         <section className="downloads-hero">
           <div className="downloads-hero__content">
             <span className="downloads-eyebrow">Apps & Downloads</span>

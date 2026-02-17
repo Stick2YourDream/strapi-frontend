@@ -7,6 +7,7 @@ import type { RegisterResponse } from "../types/auth";
 import { TERMS_SECTIONS, TERMS_TITLE, TERMS_UPDATED } from "../content/terms";
 import axios from "axios";
 import "../css/register.css";
+import { useTranslation } from "../i18n/TranslationProvider";
 import { usePageMeta } from "../hooks/usePageMeta";
 import {
   extractNationalDigits,
@@ -181,6 +182,7 @@ const parseContact = (value: string, dialCode: string): ParsedContact | null => 
 };
 
 export default function Register() {
+  const { t } = useTranslation();
   const [form, setForm] = useState({
     firstName: "",
     lastName: "",
@@ -207,9 +209,11 @@ export default function Register() {
   const [smsSent, setSmsSent] = useState(false);
   const [smsError, setSmsError] = useState<string | null>(null);
   const [registeredMethod, setRegisteredMethod] = useState<ContactType | null>(null);
+  const [accessNotice, setAccessNotice] = useState<string | null>(null);
   const formStartRef = useRef(Date.now());
   const [searchParams] = useSearchParams();
   const intentParam = searchParams.get("intent");
+  const accessParam = searchParams.get("access");
   const intentKey = useMemo(() => normalizeIntent(intentParam), [intentParam]);
   const intentConfig = intentKey ? INTENT_CONFIG[intentKey] : null;
   usePageMeta({
@@ -233,6 +237,18 @@ export default function Register() {
     }
     return "Thank you for registering with Your Social Place. Enter the 6-digit code sent to your email to finish setup.";
   }, [registeredMethod, contactDetails?.type]);
+
+  useEffect(() => {
+    if (accessParam) {
+      const messageMap: Record<string, string> = {
+        forums: "You must register and login to access forums.",
+      };
+      const notice = messageMap[accessParam] || "You must register and login.";
+      setAccessNotice(notice);
+    } else {
+      setAccessNotice(null);
+    }
+  }, [accessParam]);
 
   useEffect(() => {
     let active = true;
@@ -530,7 +546,7 @@ export default function Register() {
           onClick={() => navigate("/")}
         >
           <span className="auth-brand-mark" aria-hidden="true">
-            <img src="/logo.png" alt="" />
+            <img src="/logo2.png" alt="" />
           </span>
           <span className="auth-brand-text">Your Social Place</span>
         </button>
@@ -825,6 +841,35 @@ export default function Register() {
         </div>
       </form>
 
+      {accessNotice && (
+        <div className="register-access-overlay" role="dialog" aria-modal="true">
+          <div className="register-access-modal">
+            <div className="register-access-header">
+              <h3>Heads up</h3>
+              <button
+                type="button"
+                className="register-access-close"
+                onClick={() => setAccessNotice(null)}
+              >
+                X
+              </button>
+            </div>
+            <div className="register-access-body">
+              <p>{accessNotice}</p>
+            </div>
+            <div className="register-access-actions">
+              <button
+                type="button"
+                className="btn primary"
+                onClick={() => setAccessNotice(null)}
+              >
+                Got it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showSuccessModal && (
         <div className="register-success-overlay" role="dialog" aria-modal="true">
           <div className="register-success-modal">
@@ -873,8 +918,10 @@ export default function Register() {
           <div className="terms-modal">
             <div className="terms-modal-header">
               <div>
-                <h3>{TERMS_TITLE}</h3>
-                <p className="terms-updated">{TERMS_UPDATED}</p>
+                <h3>{t(TERMS_TITLE)}</h3>
+                <p className="terms-updated">
+                  {t("Last updated: {{date}}", { date: TERMS_UPDATED })}
+                </p>
               </div>
               <button
                 className="terms-close"
@@ -895,9 +942,9 @@ export default function Register() {
             >
               {TERMS_SECTIONS.map((section) => (
                 <section key={section.title} className="terms-section">
-                  <h4>{section.title}</h4>
+                  <h4>{t(section.title)}</h4>
                   {section.body.map((paragraph, index) => (
-                    <p key={`${section.title}-${index}`}>{paragraph}</p>
+                    <p key={`${section.title}-${index}`}>{t(paragraph)}</p>
                   ))}
                 </section>
               ))}

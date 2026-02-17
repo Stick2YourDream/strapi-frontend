@@ -1,11 +1,10 @@
 // src/pages/Friends.tsx
 import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import axios from "axios";
 import "../css/dashboard.css";
 import "../css/friends.css";
 import "../css/media-lightbox.css";
-import "../css/goals-panel.css";
+import { LayoutDashboard } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useChat } from "../context/ChatContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";
@@ -14,6 +13,7 @@ import api from "../api/strapi";
 import Sidebar from "../components/Sidebar";
 import TopbarSearch from "../components/TopbarSearch";
 import { usePageMeta } from "../hooks/usePageMeta";
+import LinkPreviewCard from "../components/LinkPreviewCard";
 import {
   buildProfilePayloadFromAttrs,
   decryptFriendProfilePayload,
@@ -45,16 +45,6 @@ type FriendMediaItem = {
   kind?: "photo" | "video";
   media?: string;
   createdAt?: string;
-};
-
-type TrustedCircle = {
-  id: number;
-  name: string;
-};
-
-type TrustedCircleMember = {
-  id: number | string;
-  userId: number;
 };
 
 type FriendProfile = {
@@ -119,22 +109,6 @@ const extractFirstUrl = (text: string) => {
   let url = match[0].replace(/[),.!?]+$/, "");
   if (url.startsWith("www.")) url = `https://${url}`;
   return url;
-};
-
-const hostnameFor = (value: string) => {
-  try {
-    return new URL(value).hostname.replace(/^www\./, "");
-  } catch {
-    return value;
-  }
-};
-const faviconFor = (value: string) => {
-  try {
-    const host = new URL(value).hostname.replace(/^www\./, "");
-    return `https://www.google.com/s2/favicons?domain=${host}&sz=128`;
-  } catch {
-    return "";
-  }
 };
 
 const isYoutubeUrl = (value: string) => {
@@ -210,7 +184,6 @@ const canView = (audience: "public" | "followers", visibility: VisibilityLevel) 
 };
 
 const FRIENDS_PAGE_SIZE = 10;
-const MAX_TRUSTED_CIRCLES = 5;
 
 const formatLastSeen = (value?: string) => {
   if (!value) return "Last seen recently";
@@ -238,55 +211,6 @@ const formatPostDate = (value?: string) => {
   } catch {
     return value;
   }
-};
-
-const LinkPreviewCard = ({
-  preview,
-  url,
-  compact = false,
-}: {
-  preview?: LinkPreview | null;
-  url: string;
-  compact?: boolean;
-}) => {
-  const safePreview: LinkPreview =
-    preview ?? { url, title: hostnameFor(url), siteName: hostnameFor(url) };
-  const title =
-    safePreview.title || safePreview.siteName || hostnameFor(url);
-  const meta = safePreview.siteName || hostnameFor(url);
-  const showBadge = safePreview.type === "video" || isYoutubeUrl(url);
-  const fallbackImage = safePreview.image || faviconFor(url);
-  const hasImage = Boolean(fallbackImage);
-  return (
-    <a
-      className={`link-preview-card${compact ? " is-compact" : ""}`}
-      href={url}
-      target="_blank"
-      rel="noreferrer"
-    >
-      <div className="link-preview-media">
-        {hasImage ? (
-          <img
-            src={fallbackImage}
-            alt={title}
-            loading="lazy"
-            decoding="async"
-            className={safePreview.image ? "" : "is-favicon"}
-          />
-        ) : (
-          <div className="link-preview-placeholder">LINK</div>
-        )}
-        {showBadge && <span className="link-preview-badge">Video</span>}
-      </div>
-      <div className="link-preview-body">
-        <p className="link-preview-title">{title}</p>
-        {safePreview.description && (
-          <p className="link-preview-desc">{safePreview.description}</p>
-        )}
-        <span className="link-preview-url">{meta}</span>
-      </div>
-    </a>
-  );
 };
 
 const feedbackLabelFor = (post: FriendPost) => {
@@ -337,15 +261,6 @@ export default function Friends() {
   useEffect(() => {
     linkPreviewsRef.current = linkPreviews;
   }, [linkPreviews]);
-  const pushTrustedCircleSuccess = useCallback((message: string) => {
-    setTrustedCircleSuccess(message);
-    if (trustedCircleSuccessTimeoutRef.current) {
-      window.clearTimeout(trustedCircleSuccessTimeoutRef.current);
-    }
-    trustedCircleSuccessTimeoutRef.current = window.setTimeout(() => {
-      setTrustedCircleSuccess(null);
-    }, 3000);
-  }, []);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [blockEntries, setBlockEntries] = useState<UserActionEntry[]>([]);
@@ -354,36 +269,7 @@ export default function Friends() {
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [activePost, setActivePost] = useState<FriendPost | null>(null);
   const [copyToast, setCopyToast] = useState<string | null>(null);
-  const [trustedCircles, setTrustedCircles] = useState<TrustedCircle[]>([]);
-  const [activeTrustedCircleId, setActiveTrustedCircleId] = useState<number | null>(
-    null
-  );
-  const [trustedCircleMembersByGroup, setTrustedCircleMembersByGroup] = useState<
-    Record<number, TrustedCircleMember[]>
-  >({});
-  const [trustedCircleLoading, setTrustedCircleLoading] = useState(false);
-  const [trustedCircleBusy, setTrustedCircleBusy] = useState(false);
-  const [trustedCircleError, setTrustedCircleError] = useState<string | null>(null);
-  const [trustedFriendPicker, setTrustedFriendPicker] = useState("");
-  const [trustedCircleName, setTrustedCircleName] = useState("");
-  const [trustedCircleRename, setTrustedCircleRename] = useState("");
-  const [trustedCircleRenaming, setTrustedCircleRenaming] = useState(false);
-  const [trustedCircleSaving, setTrustedCircleSaving] = useState(false);
-  const [trustedCircleSuccess, setTrustedCircleSuccess] = useState<string | null>(null);
-  const [trustedCircleMenuOpen, setTrustedCircleMenuOpen] = useState(false);
-  const [trustedCircleEditing, setTrustedCircleEditing] = useState(false);
-  const [pendingTrustedAddIds, setPendingTrustedAddIds] = useState<number[]>([]);
-  const [pendingTrustedRemoveIds, setPendingTrustedRemoveIds] = useState<
-    Array<string | number>
-  >([]);
-  const [trustedCircleDeleteOpen, setTrustedCircleDeleteOpen] = useState(false);
-  const [trustedCircleDeleteTarget, setTrustedCircleDeleteTarget] =
-    useState<TrustedCircle | null>(null);
   const [friendPage, setFriendPage] = useState(1);
-  const trustedCircleLoadRef = useRef<number | null>(null);
-  const trustedCircleSuccessTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null
-  );
 
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
   const getEntity = (entry: any) => entry?.data ?? entry ?? null;
@@ -427,23 +313,6 @@ export default function Friends() {
         return { userId, recordId };
       })
       .filter(Boolean) as UserActionEntry[];
-  const getErrorMessage = (err: unknown, fallback: string) => {
-    if (axios.isAxiosError(err)) {
-      const data = err.response?.data as
-        | { error?: { message?: string }; message?: string }
-        | undefined;
-      return data?.error?.message || data?.message || fallback;
-    }
-    return fallback;
-  };
-
-  const formatFriendLabel = (friend: FriendProfile) => {
-    const name = `${friend.firstName || ""} ${friend.lastName || ""}`.trim();
-    if (name) return name;
-    if (friend.handle) return `@${friend.handle}`;
-    return `Friend ${friend.userId || friend.id}`;
-  };
-
   const showCopyToast = useCallback((message: string) => {
     setCopyToast(message);
     if (toastTimeoutRef.current) {
@@ -479,364 +348,6 @@ export default function Friends() {
     textarea.remove();
     return copied;
   }, []);
-
-  const activeTrustedCircle = useMemo(() => {
-    if (!trustedCircles.length) return null;
-    if (activeTrustedCircleId) {
-      return trustedCircles.find((circle) => circle.id === activeTrustedCircleId) ?? null;
-    }
-    return trustedCircles[0];
-  }, [activeTrustedCircleId, trustedCircles]);
-
-  useEffect(() => {
-    if (!activeTrustedCircle) {
-      setTrustedCircleRename("");
-      return;
-    }
-    setTrustedCircleRename(activeTrustedCircle.name);
-  }, [activeTrustedCircle]);
-
-  useEffect(() => {
-    setTrustedCircleMenuOpen(false);
-    setTrustedCircleEditing(false);
-    setPendingTrustedAddIds([]);
-    setPendingTrustedRemoveIds([]);
-  }, [activeTrustedCircle?.id]);
-
-  const trustedCircleMembers = useMemo(() => {
-    if (!activeTrustedCircle?.id) return [];
-    return trustedCircleMembersByGroup[activeTrustedCircle.id] ?? [];
-  }, [activeTrustedCircle, trustedCircleMembersByGroup]);
-
-  const trustedMemberIds = useMemo(
-    () => new Set(trustedCircleMembers.map((member) => member.userId)),
-    [trustedCircleMembers]
-  );
-  const pendingTrustedRemoveSet = useMemo(
-    () => new Set(pendingTrustedRemoveIds),
-    [pendingTrustedRemoveIds]
-  );
-  const canEditTrustedCircle =
-    trustedCircleEditing || trustedCircleMembers.length === 0;
-
-  const trustedFriendOptions = useMemo(() => {
-    return profiles
-      .filter((profile) => Number.isFinite(profile.userId ?? NaN))
-      .map((profile) => ({
-        id: profile.userId as number,
-        label: formatFriendLabel(profile),
-      }))
-      .sort((a, b) => a.label.localeCompare(b.label));
-  }, [profiles]);
-
-  const pendingTrustedAddOptions = useMemo(() => {
-    if (!pendingTrustedAddIds.length) return [];
-    return trustedFriendOptions.filter(
-      (friend) => pendingTrustedAddIds.includes(friend.id) && !trustedMemberIds.has(friend.id)
-    );
-  }, [pendingTrustedAddIds, trustedFriendOptions, trustedMemberIds]);
-
-  const hasPendingTrustedChanges = useMemo(
-    () =>
-      pendingTrustedAddIds.some((id) => !trustedMemberIds.has(id)) ||
-      pendingTrustedRemoveIds.length > 0,
-    [pendingTrustedAddIds, pendingTrustedRemoveIds, trustedMemberIds]
-  );
-
-  const refreshTrustedCircleMembers = useCallback(
-    async (circleId: number) => {
-      const membersRes = await api.get(
-        `/trusted-circle-members?filters[circle][id][$eq]=${circleId}&populate=user&pagination[pageSize]=200`
-      );
-      const members: TrustedCircleMember[] = (membersRes.data?.data ?? [])
-        .map((entry: any) => {
-          const attrs = normalize(entry);
-          const userId = getEntityId(attrs.user);
-          const recordId = getEntryId(entry, attrs);
-          if (!userId || !recordId) return null;
-          return { id: recordId, userId };
-        })
-        .filter(Boolean) as TrustedCircleMember[];
-      setTrustedCircleMembersByGroup((prev) => ({ ...prev, [circleId]: members }));
-    },
-    [getEntryId, getEntityId]
-  );
-
-  const loadTrustedCircles = useCallback(
-    async (force = false) => {
-      if (!user) {
-        setTrustedCircles([]);
-        setActiveTrustedCircleId(null);
-        setTrustedCircleMembersByGroup({});
-        trustedCircleLoadRef.current = null;
-        return;
-      }
-      if (!force && trustedCircleLoadRef.current === user.id) return;
-      trustedCircleLoadRef.current = user.id;
-      setTrustedCircleLoading(true);
-      setTrustedCircleError(null);
-      try {
-        const circlesRes = await api.get(
-          `/trusted-circles?sort=name:asc&pagination[pageSize]=${MAX_TRUSTED_CIRCLES}`
-        );
-        const entries = circlesRes.data?.data ?? [];
-        const circles = entries
-          .map((entry: any) => {
-            const attrs = normalize(entry);
-            const circleId = Number(entry?.id ?? attrs?.documentId ?? attrs?.id);
-            if (!Number.isFinite(circleId)) return null;
-            return {
-              id: circleId,
-              name: String(attrs?.name || "Trusted circle"),
-            } as TrustedCircle;
-          })
-          .filter(Boolean) as TrustedCircle[];
-        setTrustedCircles(circles);
-        setTrustedCircleMembersByGroup((prev) => {
-          const next: Record<number, TrustedCircleMember[]> = {};
-          circles.forEach((circle) => {
-            if (prev[circle.id]) {
-              next[circle.id] = prev[circle.id];
-            }
-          });
-          return next;
-        });
-        setActiveTrustedCircleId((current) => {
-          if (current && circles.some((circle) => circle.id === current)) {
-            return current;
-          }
-          return circles[0]?.id ?? null;
-        });
-      } catch (err) {
-        setTrustedCircleError(getErrorMessage(err, "Unable to load trusted circles."));
-      } finally {
-        setTrustedCircleLoading(false);
-      }
-    },
-    [getErrorMessage, user]
-  );
-
-  const createTrustedCircle = useCallback(async () => {
-    if (!user) return null;
-    const name = trustedCircleName.trim();
-    if (!name) {
-      setTrustedCircleError("Enter a name for your trusted circle.");
-      return null;
-    }
-    if (trustedCircles.length >= MAX_TRUSTED_CIRCLES) {
-      setTrustedCircleError(`You can create up to ${MAX_TRUSTED_CIRCLES} circles.`);
-      return null;
-    }
-    setTrustedCircleBusy(true);
-    setTrustedCircleError(null);
-    try {
-      const res = await api.post("/trusted-circles", {
-        data: {
-          name,
-        },
-      });
-      const entry = res.data?.data ?? res.data;
-      const attrs = normalize(entry);
-      const circleId = Number(entry?.id ?? attrs?.documentId ?? attrs?.id);
-      if (!Number.isFinite(circleId)) {
-        setTrustedCircleError("Unable to create trusted circle.");
-        return null;
-      }
-      const nextCircle = { id: circleId, name: String(attrs?.name || name) };
-      setTrustedCircles((prev) => [...prev, nextCircle]);
-      setTrustedCircleName("");
-      setActiveTrustedCircleId(circleId);
-      await refreshTrustedCircleMembers(circleId);
-      pushTrustedCircleSuccess(`"${nextCircle.name}" created.`);
-      return circleId;
-    } catch (err) {
-      setTrustedCircleError(getErrorMessage(err, "Unable to create trusted circle."));
-      return null;
-    } finally {
-      setTrustedCircleBusy(false);
-    }
-  }, [
-    getErrorMessage,
-    pushTrustedCircleSuccess,
-    refreshTrustedCircleMembers,
-    trustedCircleName,
-    trustedCircles.length,
-    user,
-  ]);
-
-  const queueTrustedFriend = useCallback(
-    (friendId: number) => {
-      if (!Number.isFinite(friendId)) return;
-      if (trustedMemberIds.has(friendId)) return;
-      setTrustedCircleEditing(true);
-      setPendingTrustedAddIds((prev) =>
-        prev.includes(friendId) ? prev : [...prev, friendId]
-      );
-    },
-    [trustedMemberIds]
-  );
-
-  const togglePendingRemoval = useCallback((member: TrustedCircleMember) => {
-    setPendingTrustedRemoveIds((prev) =>
-      prev.includes(member.id)
-        ? prev.filter((id) => id !== member.id)
-        : [...prev, member.id]
-    );
-  }, []);
-
-  const cancelTrustedCircleEdits = useCallback(() => {
-    setTrustedCircleEditing(false);
-    setPendingTrustedAddIds([]);
-    setPendingTrustedRemoveIds([]);
-  }, []);
-
-  const applyTrustedCircleChanges = useCallback(async () => {
-    if (!activeTrustedCircle?.id) return;
-    const circleId = activeTrustedCircle.id;
-    const additions = pendingTrustedAddIds.filter((id) => !trustedMemberIds.has(id));
-    const removals = trustedCircleMembers.filter((member) =>
-      pendingTrustedRemoveSet.has(member.id)
-    );
-    if (!additions.length && !removals.length) {
-      cancelTrustedCircleEdits();
-      pushTrustedCircleSuccess("No changes to apply.");
-      return;
-    }
-    setTrustedCircleBusy(true);
-    setTrustedCircleError(null);
-    try {
-      await Promise.all([
-        ...additions.map((friendId) =>
-          api.post("/trusted-circle-members", {
-            data: { circle: circleId, user: friendId },
-          })
-        ),
-        ...removals.map((member) =>
-          api.delete(`/trusted-circle-members/${member.id}`)
-        ),
-      ]);
-      await refreshTrustedCircleMembers(circleId);
-      setPendingTrustedAddIds([]);
-      setPendingTrustedRemoveIds([]);
-      setTrustedCircleEditing(false);
-      pushTrustedCircleSuccess("Trusted circle updated.");
-    } catch (err) {
-      const message = getErrorMessage(err, "Unable to update trusted circle.");
-      if (message.toLowerCase().includes("already in this circle")) {
-        await refreshTrustedCircleMembers(circleId);
-        setPendingTrustedAddIds([]);
-        setPendingTrustedRemoveIds([]);
-        setTrustedCircleEditing(false);
-        pushTrustedCircleSuccess("Trusted circle updated.");
-      } else {
-        setTrustedCircleError(message);
-      }
-    } finally {
-      setTrustedCircleBusy(false);
-    }
-  }, [
-    activeTrustedCircle,
-    cancelTrustedCircleEdits,
-    getErrorMessage,
-    pendingTrustedAddIds,
-    pendingTrustedRemoveSet,
-    pushTrustedCircleSuccess,
-    refreshTrustedCircleMembers,
-    trustedCircleMembers,
-    trustedMemberIds,
-  ]);
-
-  const clearTrustedFriends = useCallback(async () => {
-    if (!activeTrustedCircle?.id) return;
-    const membersToRemove = trustedCircleMembers.filter(
-      (member) => member.userId !== user?.id
-    );
-    if (!membersToRemove.length) return;
-    setTrustedCircleBusy(true);
-    setTrustedCircleError(null);
-    try {
-      await Promise.all(
-        membersToRemove.map((member) =>
-          api.delete(`/trusted-circle-members/${member.id}`)
-        )
-      );
-      await refreshTrustedCircleMembers(activeTrustedCircle.id);
-      pushTrustedCircleSuccess("Trusted circle cleared.");
-    } catch (err) {
-      setTrustedCircleError(getErrorMessage(err, "Unable to clear trusted circle."));
-    } finally {
-      setTrustedCircleBusy(false);
-    }
-  }, [
-    getErrorMessage,
-    refreshTrustedCircleMembers,
-    activeTrustedCircle,
-    trustedCircleMembers,
-    user,
-    pushTrustedCircleSuccess,
-  ]);
-
-  const handleRenameTrustedCircle = useCallback(async () => {
-    if (!activeTrustedCircle?.id) return;
-    const name = trustedCircleRename.trim();
-    if (!name) {
-      setTrustedCircleError("Enter a name for this circle.");
-      return;
-    }
-    setTrustedCircleSaving(true);
-    setTrustedCircleError(null);
-    try {
-      await api.put(`/trusted-circles/${activeTrustedCircle.id}`, {
-        data: { name },
-      });
-      setTrustedCircles((prev) =>
-        prev.map((circle) =>
-          circle.id === activeTrustedCircle.id ? { ...circle, name } : circle
-        )
-      );
-      setTrustedCircleRenaming(false);
-      setTrustedCircleEditing(false);
-      pushTrustedCircleSuccess("Trusted circle renamed.");
-    } catch (err) {
-      setTrustedCircleError(getErrorMessage(err, "Unable to rename circle."));
-    } finally {
-      setTrustedCircleSaving(false);
-    }
-  }, [activeTrustedCircle, getErrorMessage, pushTrustedCircleSuccess, trustedCircleRename]);
-
-  const handleDeleteTrustedCircle = useCallback(async () => {
-    if (!activeTrustedCircle?.id) return;
-    setTrustedCircleSaving(true);
-    setTrustedCircleError(null);
-    try {
-      await api.delete(`/trusted-circles/${activeTrustedCircle.id}`);
-      setTrustedCircles((prev) =>
-        prev.filter((circle) => circle.id !== activeTrustedCircle.id)
-      );
-      setTrustedCircleMembersByGroup((prev) => {
-        const next = { ...prev };
-        delete next[activeTrustedCircle.id];
-        return next;
-      });
-      setActiveTrustedCircleId((current) => {
-        if (current !== activeTrustedCircle.id) return current;
-        const remaining = trustedCircles.filter(
-          (circle) => circle.id !== activeTrustedCircle.id
-        );
-        return remaining[0]?.id ?? null;
-      });
-      setPendingTrustedAddIds([]);
-      setPendingTrustedRemoveIds([]);
-      setTrustedCircleEditing(false);
-      setTrustedCircleDeleteOpen(false);
-      setTrustedCircleDeleteTarget(null);
-      pushTrustedCircleSuccess("Trusted circle deleted.");
-    } catch (err) {
-      setTrustedCircleError(getErrorMessage(err, "Unable to delete circle."));
-    } finally {
-      setTrustedCircleSaving(false);
-    }
-  }, [activeTrustedCircle, getErrorMessage, pushTrustedCircleSuccess, trustedCircles]);
 
   const getPostDescriptor = useCallback((post: FriendPost) => {
     if (post.imageUrl) return isVideoUrl(post.imageUrl) ? "with a video" : "with a picture";
@@ -1099,20 +610,6 @@ export default function Friends() {
     load();
   }, [fetchLinkPreview, user]);
 
-  useEffect(() => {
-    void loadTrustedCircles();
-  }, [loadTrustedCircles]);
-
-  useEffect(() => {
-    if (!activeTrustedCircle?.id) return;
-    if (trustedCircleMembersByGroup[activeTrustedCircle.id]) return;
-    void refreshTrustedCircleMembers(activeTrustedCircle.id);
-  }, [
-    activeTrustedCircle,
-    refreshTrustedCircleMembers,
-    trustedCircleMembersByGroup,
-  ]);
-
   const presenceIds = useMemo(
     () =>
       Array.from(
@@ -1181,21 +678,6 @@ export default function Friends() {
       setFriendPage(totalFriendPages);
     }
   }, [friendPage, totalFriendPages]);
-
-  const trustedCircleFriendRows = useMemo(() => {
-    const profileMap = new Map<number, FriendProfile>();
-    profiles.forEach((profile) => {
-      if (profile.userId) {
-        profileMap.set(profile.userId, profile);
-      }
-    });
-    return trustedCircleMembers
-      .filter((member) => member.userId !== user?.id)
-      .map((member) => ({
-        member,
-        profile: profileMap.get(member.userId),
-      }));
-  }, [profiles, trustedCircleMembers, user?.id]);
 
   useEffect(() => {
     if (!filteredFriends.length) {
@@ -1328,8 +810,11 @@ export default function Friends() {
     activeDescriptor === "with a picture" || activeDescriptor === "with a link";
   const activePreview = activePost?.linkUrl ? linkPreviews[activePost.linkUrl] : null;
   const activePreviewImage = activePreview?.image;
+  const activeIsYoutube = activePost?.linkUrl
+    ? isYoutubeUrl(activePost.linkUrl)
+    : false;
   const showActivePreviewMedia = Boolean(
-    activePost && !activePost.imageUrl && activePreviewImage
+    activePost && !activePost.imageUrl && activePreviewImage && !activeIsYoutube
   );
   const showActivePlaceholder = Boolean(
     activePost && !activePost.imageUrl && !activePreviewImage
@@ -1596,160 +1081,130 @@ export default function Friends() {
     </ul>
   );
 
+  const renderSidebarContent = () => (
+    <div className="friends-sidebar">
+      <button
+        className="btn ghost sidebar-nav-link friends-sidebar-dashboard"
+        type="button"
+        data-accent="dashboard"
+        onClick={() => navigate("/dashboard")}
+      >
+        <span className="sidebar-nav-icon" aria-hidden="true">
+          <LayoutDashboard size={18} />
+        </span>
+        <span>My Dashboard</span>
+      </button>
+      <section className="panel friends-sidebar-panel">
+        <div className="panel-header friend-panel-header">
+          <div>
+            <p className="eyebrow">Friends</p>
+          </div>
+        </div>
+        {!loading && profiles.length > 0 && (
+          <div className="friend-search">
+            <label className="friend-search-label" htmlFor="friend-search-input">
+              Search Friends
+            </label>
+            <input
+              id="friend-search-input"
+              className="friend-search-input"
+              type="search"
+              value={friendQuery}
+              onChange={(e) => setFriendQuery(e.target.value)}
+              placeholder="Find Your Friends"
+            />
+          </div>
+        )}
+        {loading ? (
+          <p className="status">Loading friends...</p>
+        ) : profiles.length === 0 ? (
+          <p className="status">No friends yet.</p>
+        ) : filteredFriends.length === 0 ? (
+          <p className="status">No friends match your search.</p>
+        ) : (
+          <>
+            <ul className="friend-mini-list">
+              {pagedFriends.map((friend) => {
+                const name = `${friend.firstName || ""} ${friend.lastName || ""}`.trim();
+                const handle = friend.handle || "friend";
+                const displayName = name || handle;
+                const isActive = friend.userId === selectedFriendId;
+                return (
+                  <li key={friend.id} className="friend-mini-item">
+                    <button
+                      className={`friend-mini-button${isActive ? " is-active" : ""}`}
+                      type="button"
+                      onClick={() => handleSelectFriend(friend)}
+                    >
+                      {renderAvatar(friend, 32)}
+                      <span className="friend-mini-meta">
+                        <span className="friend-mini-name">{displayName}</span>
+                        {name && handle ? (
+                          <span className="friend-mini-tag">@{handle}</span>
+                        ) : null}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            {totalFriendPages > 1 && (
+              <div className="friend-pagination">
+                <button
+                  className="friend-page-btn"
+                  type="button"
+                  onClick={() => setFriendPage((prev) => Math.max(1, prev - 1))}
+                  disabled={friendPage <= 1}
+                >
+                  Prev
+                </button>
+                {Array.from({ length: totalFriendPages }, (_, index) => index + 1).map(
+                  (page) => (
+                    <button
+                      key={page}
+                      className={`friend-page-btn${
+                        page === friendPage ? " is-active" : ""
+                      }`}
+                      type="button"
+                      onClick={() => setFriendPage(page)}
+                    >
+                      {page}
+                    </button>
+                  )
+                )}
+                <button
+                  className="friend-page-btn"
+                  type="button"
+                  onClick={() =>
+                    setFriendPage((prev) => Math.min(totalFriendPages, prev + 1))
+                  }
+                  disabled={friendPage >= totalFriendPages}
+                >
+                  Next
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </section>
+    </div>
+  );
+
   return (
     <div className="dashboard-shell friends-page" style={getBackgroundStyle("friends")}>
-      <Sidebar active="friends" />
+      <Sidebar
+        active="friends"
+        hideNavLinks
+        hideBio
+        sidebarContent={renderSidebarContent()}
+      />
 
       <div className="main-content">
         <TopbarSearch value={query} onChange={setQuery} />
-        <div className="dash-hero">
-          <div className="dash-hero__text">
-            <p className="eyebrow">Friends</p>
-            <h1>Your Friends</h1>
-          </div>
-        </div>
 
         {error && <p className="status status-error">{error}</p>}
 
-        <div className="panel-grid">
-          <section className="panel">
-            <div className="panel-header friend-panel-header">
-              <div>
-                <p className="eyebrow">Friends</p>
-                <h3>Current Friends</h3>
-              </div>
-              {!loading && profiles.length > 0 && (
-                <button
-                  className="btn ghost friend-video-call"
-                  type="button"
-                  onClick={() => openCallComposer()}
-                >
-                  Start video call
-                </button>
-              )}
-            </div>
-            {!loading && profiles.length > 0 && (
-              <div className="friend-search">
-                <label className="friend-search-label" htmlFor="friend-search-input">
-                  Search Friends
-                </label>
-                <input
-                  id="friend-search-input"
-                  className="friend-search-input"
-                  type="search"
-                  value={friendQuery}
-                  onChange={(e) => setFriendQuery(e.target.value)}
-                  placeholder="Find Your Friends"
-                />
-              </div>
-            )}
-            {loading ? (
-              <p className="status">Loading friends...</p>
-            ) : profiles.length === 0 ? (
-              <p className="status">No friends yet.</p>
-            ) : filteredFriends.length === 0 ? (
-              <p className="status">No friends match your search.</p>
-            ) : (
-              <>
-                <ul className="friend-mini-list">
-                  {pagedFriends.map((friend) => {
-                  const name = `${friend.firstName || ""} ${friend.lastName || ""}`.trim();
-                  const handle = friend.handle || "friend";
-                  const displayName = name || handle;
-                  const isActive = friend.userId === selectedFriendId;
-                  return (
-                    <li key={friend.id} className="friend-mini-item">
-                      <div className="friend-mini-row">
-                        <button
-                          className={`friend-mini-button${isActive ? " is-active" : ""}`}
-                          type="button"
-                          onClick={() => handleSelectFriend(friend)}
-                        >
-                          {renderAvatar(friend, 32)}
-                          <span className="friend-mini-meta">
-                            <span className="friend-mini-name">
-                              {displayName}
-                              {name && handle ? (
-                                <span className="friend-mini-tag">@{handle}</span>
-                              ) : null}
-                            </span>
-                          </span>
-                        </button>
-                        <div className="friend-mini-actions">
-                          <button
-                            className="friend-profile-btn"
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              if (friend.userId) {
-                                navigate(`/friends/${friend.userId}`);
-                              }
-                            }}
-                          >
-                            Profile
-                          </button>
-                          <button
-                            className={`friend-favorite-toggle${
-                              friend.favorite ? " is-active" : ""
-                            }`}
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              handleToggleFavorite(friend);
-                            }}
-                            aria-label={
-                              friend.favorite ? "Remove favorite" : "Mark as favorite"
-                            }
-                          >
-                            <span aria-hidden="true">
-                              {friend.favorite ? "★" : "☆"}
-                            </span>
-                          </button>
-                        </div>
-                      </div>
-                    </li>
-                  );
-                  })}
-                </ul>
-                {totalFriendPages > 1 && (
-                  <div className="friend-pagination">
-                    <button
-                      className="friend-page-btn"
-                      type="button"
-                      onClick={() => setFriendPage((prev) => Math.max(1, prev - 1))}
-                      disabled={friendPage <= 1}
-                    >
-                      Prev
-                    </button>
-                    {Array.from({ length: totalFriendPages }, (_, index) => index + 1).map(
-                      (page) => (
-                        <button
-                          key={page}
-                          className={`friend-page-btn${
-                            page === friendPage ? " is-active" : ""
-                          }`}
-                          type="button"
-                          onClick={() => setFriendPage(page)}
-                        >
-                          {page}
-                        </button>
-                      )
-                    )}
-                    <button
-                      className="friend-page-btn"
-                      type="button"
-                      onClick={() =>
-                        setFriendPage((prev) => Math.min(totalFriendPages, prev + 1))
-                      }
-                      disabled={friendPage >= totalFriendPages}
-                    >
-                      Next
-                    </button>
-                  </div>
-                )}
-              </>
-            )}
-          </section>
+        <div className="friends-spotlight-grid">
           <section className="panel">
             <div className="panel-header">
               <div>
@@ -1764,10 +1219,34 @@ export default function Friends() {
                 <div className="friend-header">
                   {renderAvatar(selectedFriend, 48)}
                   <div className="friend-header-meta">
-                    <strong>
-                      {`${selectedFriend.firstName || ""} ${selectedFriend.lastName || ""}`.trim() ||
-                        `@${selectedFriend.handle || "friend"}`}
-                    </strong>
+                    <div className="friend-header-title">
+                      <strong>
+                        {`${selectedFriend.firstName || ""} ${selectedFriend.lastName || ""}`.trim() ||
+                          `@${selectedFriend.handle || "friend"}`}
+                      </strong>
+                      <button
+                        className={`friend-favorite-star${
+                          selectedFriend.favorite ? " is-active" : ""
+                        }`}
+                        type="button"
+                        onClick={() => handleToggleFavorite(selectedFriend)}
+                        aria-label={
+                          selectedFriend.favorite
+                            ? "Remove favorite"
+                            : "Mark as favorite"
+                        }
+                        title={
+                          selectedFriend.favorite
+                            ? "Remove favorite"
+                            : "Mark as favorite"
+                        }
+                        disabled={isBlocked}
+                      >
+                        <span aria-hidden="true">
+                          {selectedFriend.favorite ? "★" : "☆"}
+                        </span>
+                      </button>
+                    </div>
                     <span className="friend-name">
                       @{selectedFriend.handle || "friend"}
                     </span>
@@ -1803,16 +1282,6 @@ export default function Friends() {
                     disabled={isBlocked}
                   >
                     Video call
-                  </button>
-                  <button
-                    className={`btn ghost friend-favorite-action${
-                      selectedFriend.favorite ? " is-active" : ""
-                    }`}
-                    type="button"
-                    onClick={() => handleToggleFavorite(selectedFriend)}
-                    disabled={isBlocked}
-                  >
-                    {selectedFriend.favorite ? "Favorite" : "Add favorite"}
                   </button>
                   <button
                     className="btn ghost"
@@ -1982,323 +1451,6 @@ export default function Friends() {
           </section>
         </div>
 
-        <section className="panel trusted-circle-panel">
-          <div className="panel-header">
-            <div>
-              <p className="eyebrow">Trusted circles</p>
-              <h3>My Trusted Groups</h3>
-              <p className="panel-sub">
-                Create up to {MAX_TRUSTED_CIRCLES} private circles and choose who can see
-                sensitive updates.
-              </p>
-            </div>
-            <span className="trusted-circle__count">
-              {trustedCircles.length}/{MAX_TRUSTED_CIRCLES}
-            </span>
-          </div>
-          {trustedCircleError && (
-            <p className="status status-error">{trustedCircleError}</p>
-          )}
-          {trustedCircleSuccess && (
-            <p className="status status-success">{trustedCircleSuccess}</p>
-          )}
-          {trustedCircleLoading ? (
-            <p className="status">Loading trusted circles...</p>
-          ) : (
-            <>
-              <div className="trusted-circle__create">
-                <input
-                  className="auth-input"
-                  placeholder="Name your trusted circle"
-                  value={trustedCircleName}
-                  onChange={(event) => setTrustedCircleName(event.target.value)}
-                  maxLength={40}
-                  disabled={trustedCircleBusy || trustedCircles.length >= MAX_TRUSTED_CIRCLES}
-                />
-                <button
-                  className="btn primary"
-                  type="button"
-                  disabled={
-                    trustedCircleBusy ||
-                    trustedCircles.length >= MAX_TRUSTED_CIRCLES ||
-                    !trustedCircleName.trim()
-                  }
-                  onClick={() => void createTrustedCircle()}
-                >
-                  {trustedCircleBusy ? "Creating..." : "Create circle"}
-                </button>
-              </div>
-              {trustedCircles.length === 0 ? (
-                <p className="status">Create your first trusted circle to add friends.</p>
-              ) : (
-                <>
-                  <div className="trusted-circle__tabs">
-                    {trustedCircles.map((circle) => (
-                      <button
-                        key={circle.id}
-                        type="button"
-                        className={`trusted-circle__tab${
-                          circle.id === activeTrustedCircle?.id ? " is-active" : ""
-                        }`}
-                        onClick={() => setActiveTrustedCircleId(circle.id)}
-                      >
-                        {circle.name}
-                      </button>
-                    ))}
-                  </div>
-                  {activeTrustedCircle && (
-                    <div className="trusted-circle__editor">
-                      {trustedCircleRenaming ? (
-                        <>
-                          <input
-                            className="auth-input"
-                            value={trustedCircleRename}
-                            onChange={(event) =>
-                              setTrustedCircleRename(event.target.value)
-                            }
-                            maxLength={40}
-                          />
-                          <div className="trusted-circle__editor-actions">
-                            <button
-                              className="btn ghost"
-                              type="button"
-                              onClick={() => {
-                                setTrustedCircleRenaming(false);
-                                setTrustedCircleRename(activeTrustedCircle.name);
-                              }}
-                              disabled={trustedCircleSaving}
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              className="btn primary"
-                              type="button"
-                              onClick={handleRenameTrustedCircle}
-                              disabled={
-                                trustedCircleSaving || !trustedCircleRename.trim()
-                              }
-                            >
-                              {trustedCircleSaving ? "Saving..." : "Save name"}
-                            </button>
-                          </div>
-                        </>
-                      ) : (
-                        <div className="trusted-circle__editor-row">
-                          <div>
-                            <p className="trusted-circle__label">Active circle</p>
-                            <div className="trusted-circle__menu">
-                              <button
-                                className="btn ghost trusted-circle__menu-button"
-                                type="button"
-                                onClick={() =>
-                                  setTrustedCircleMenuOpen((prev) => !prev)
-                                }
-                                disabled={trustedCircleSaving}
-                              >
-                                {activeTrustedCircle.name}
-                                <span className="trusted-circle__menu-caret">▾</span>
-                              </button>
-                              {trustedCircleMenuOpen && (
-                                <div className="trusted-circle__menu-list">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      cancelTrustedCircleEdits();
-                                      setTrustedCircleRenaming(true);
-                                      setTrustedCircleMenuOpen(false);
-                                    }}
-                                  >
-                                    Rename
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setTrustedCircleEditing(true);
-                                      setTrustedCircleMenuOpen(false);
-                                    }}
-                                  >
-                                    Edit friends
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="danger"
-                                    onClick={() => {
-                                      setTrustedCircleMenuOpen(false);
-                                      setTrustedCircleDeleteTarget(activeTrustedCircle);
-                                      setTrustedCircleDeleteOpen(true);
-                                    }}
-                                  >
-                                    Delete
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                          
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  <div className="goals-panel__trusted">
-                    <div className="goals-panel__trusted-group">
-                      <div className="goals-panel__trusted-header">
-                        <h5>{activeTrustedCircle?.name || "Trusted friends"}</h5>
-                        <div className="goals-panel__trusted-actions">
-                          <button
-                            className="btn ghost"
-                            type="button"
-                            disabled={trustedCircleBusy || !activeTrustedCircle?.id}
-                            onClick={clearTrustedFriends}
-                          >
-                            Clear
-                          </button>
-                        </div>
-                      </div>
-                      {trustedFriendOptions.length === 0 ? (
-                        <p className="goals-empty">Add friends to build a trusted circle.</p>
-                      ) : (
-                        <>
-                          <div className="goals-panel__trusted-picker">
-                            <div className="goals-panel__select">
-                              <select
-                                className="auth-input goals-select"
-                                value={trustedFriendPicker}
-                                onChange={(event) => {
-                                  const value = event.target.value;
-                                  setTrustedFriendPicker(value);
-                                  const nextId = Number(value);
-                                  if (Number.isFinite(nextId)) {
-                                    queueTrustedFriend(nextId);
-                                  }
-                                  setTrustedFriendPicker("");
-                                }}
-                                disabled={
-                                  !canEditTrustedCircle ||
-                                  trustedCircleBusy ||
-                                  !activeTrustedCircle?.id
-                                }
-                              >
-                                <option value="">Select a friend to trust</option>
-                                {trustedFriendOptions.map((friend) => (
-                                  <option
-                                    key={friend.id}
-                                    value={friend.id}
-                                    disabled={
-                                      trustedMemberIds.has(friend.id) ||
-                                      friend.id === user?.id
-                                    }
-                                  >
-                                    {friend.label}
-                                  </option>
-                                ))}
-                              </select>
-                              <span className="goals-select-caret" />
-                            </div>
-                          </div>
-                          {canEditTrustedCircle && pendingTrustedAddOptions.length > 0 && (
-                            <div className="trusted-circle__pending">
-                              <p className="trusted-circle__pending-label">Pending</p>
-                              <div className="trusted-circle__pending-list">
-                                {pendingTrustedAddOptions.map((friend) => (
-                                  <span
-                                    key={friend.id}
-                                    className="trusted-circle__pending-chip"
-                                  >
-                                    {friend.label}
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                          {canEditTrustedCircle && (
-                            <div className="trusted-circle__apply">
-                              <button
-                                className="btn ghost"
-                                type="button"
-                                onClick={cancelTrustedCircleEdits}
-                                disabled={trustedCircleBusy || !trustedCircleEditing}
-                              >
-                                Cancel
-                              </button>
-                              <button
-                                className="btn primary"
-                                type="button"
-                                onClick={() => void applyTrustedCircleChanges()}
-                                disabled={!hasPendingTrustedChanges || trustedCircleBusy}
-                              >
-                                {trustedCircleBusy ? "Saving..." : "Apply changes"}
-                              </button>
-                            </div>
-                          )}
-                          <div className="goals-panel__trusted-list">
-                            {trustedCircleFriendRows.map(({ member, profile }) => {
-                              const avatarUrl = profile?.avatarUrl;
-                              const label = profile
-                                ? formatFriendLabel(profile)
-                                : `User ${member.userId}`;
-                              return (
-                                <div key={member.id} className="trusted-friend-row">
-                                  <button
-                                    type="button"
-                                    className={`trusted-friend-toggle${
-                                      pendingTrustedRemoveSet.has(member.id)
-                                        ? " is-remove"
-                                        : " is-active"
-                                    }${avatarUrl ? " has-avatar" : ""}${
-                                      canEditTrustedCircle ? "" : " is-locked"
-                                    }`}
-                                    onClick={() => togglePendingRemoval(member)}
-                                    disabled={!canEditTrustedCircle}
-                                    aria-pressed={!pendingTrustedRemoveSet.has(member.id)}
-                                    aria-label={
-                                      pendingTrustedRemoveSet.has(member.id)
-                                        ? "Marked for removal"
-                                        : "Trusted friend"
-                                    }
-                                  >
-                                    {avatarUrl ? (
-                                      <img
-                                        className="trusted-friend-toggle__avatar"
-                                        src={avatarUrl}
-                                        alt={label}
-                                        loading="lazy"
-                                        decoding="async"
-                                      />
-                                    ) : (
-                                      <>
-                                        <span className="trusted-friend-toggle__ring" />
-                                        <span className="trusted-friend-toggle__dot" />
-                                      </>
-                                    )}
-                                  </button>
-                                  <span
-                                    className={`trusted-friend-name${
-                                      pendingTrustedRemoveSet.has(member.id)
-                                        ? " is-muted"
-                                        : ""
-                                    }`}
-                                  >
-                                    {label}
-                                  </span>
-                                  {pendingTrustedRemoveSet.has(member.id) && (
-                                    <span className="trusted-friend-tag">Remove</span>
-                                  )}
-                                </div>
-                              );
-                            })}
-                            {trustedCircleFriendRows.length === 0 && (
-                              <p className="goals-empty">No trusted friends yet.</p>
-                            )}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </>
-              )}
-            </>
-          )}
-        </section>
       </div>
 
       {activePost && (
@@ -2419,49 +1571,6 @@ export default function Friends() {
         </div>
       )}
       {copyToast && <div className="toast success-toast">{copyToast}</div>}
-
-      {trustedCircleDeleteOpen && trustedCircleDeleteTarget && (
-        <div
-          className="trusted-circle-modal__backdrop"
-          role="dialog"
-          aria-modal="true"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) {
-              setTrustedCircleDeleteOpen(false);
-              setTrustedCircleDeleteTarget(null);
-            }
-          }}
-        >
-          <div className="trusted-circle-modal">
-            <h4>Delete trusted circle?</h4>
-            <p>
-              This will remove <strong>{trustedCircleDeleteTarget.name}</strong> and
-              its member list.
-            </p>
-            <div className="trusted-circle-modal__actions">
-              <button
-                className="btn ghost"
-                type="button"
-                onClick={() => {
-                  setTrustedCircleDeleteOpen(false);
-                  setTrustedCircleDeleteTarget(null);
-                }}
-                disabled={trustedCircleSaving}
-              >
-                Cancel
-              </button>
-              <button
-                className="btn ghost danger"
-                type="button"
-                onClick={() => void handleDeleteTrustedCircle()}
-                disabled={trustedCircleSaving}
-              >
-                {trustedCircleSaving ? "Deleting..." : "Delete circle"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {mediaLightboxOpen && activeMediaItem && (
         <div

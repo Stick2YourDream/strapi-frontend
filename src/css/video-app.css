@@ -34,7 +34,7 @@
   background-position: center;
   background-repeat: no-repeat;
   color: var(--video-text);
-  font-family: "Inter", "Satoshi", system-ui, -apple-system, sans-serif;
+  font-family: var(--app-font);
 }
 
 .video-theme[data-theme="light"],
@@ -967,3 +967,4 @@
     font-size: 11px;
   }
 }
+

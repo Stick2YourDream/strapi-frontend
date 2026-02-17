@@ -1,7 +1,14 @@
 export const TERMS_TITLE = "Your Social Place Terms and Conditions";
-export const TERMS_UPDATED = "Last updated: Feb 20, 2026";
+import type { PolicyRegionId } from "./policy-regions";
 
-export const TERMS_SECTIONS = [
+type PolicySection = {
+  title: string;
+  body: string[];
+};
+
+export const TERMS_UPDATED = "Feb 20, 2026";
+
+export const TERMS_SECTIONS: PolicySection[] = [
   {
     title: "1. Acceptance of these Terms",
     body: [
@@ -87,3 +94,83 @@ export const TERMS_SECTIONS = [
     ],
   },
 ];
+
+export const TERMS_REGIONAL_SECTIONS: Record<PolicyRegionId, PolicySection[]> = {
+  us: [
+    {
+      title: "United States governing law",
+      body: [
+        "If you live in the United States, these Terms are governed by U.S. law and the laws of the state where Stick2YourDreams is headquartered, without regard to conflict-of-law rules.",
+        "You agree to bring disputes in the state or federal courts located in that state, unless mandatory law provides another venue.",
+      ],
+    },
+    {
+      title: "U.S. communications and notices",
+      body: [
+        "You consent to receive electronic communications and notices from us.",
+        "If you provide a phone number, standard SMS and carrier rates may apply.",
+      ],
+    },
+  ],
+  eea_uk: [
+    {
+      title: "EEA/UK consumer protections",
+      body: [
+        "Nothing in these Terms limits any consumer rights that cannot be waived under the laws of your country.",
+        "If there is a conflict between these Terms and mandatory local law, the local law prevails.",
+      ],
+    },
+    {
+      title: "Local courts and dispute resolution",
+      body: [
+        "You may bring claims in the courts of your habitual residence within the EEA/UK.",
+        "We will not prevent you from using alternative dispute resolution where required by law.",
+      ],
+    },
+  ],
+  ca: [
+    {
+      title: "Canada consumer protections",
+      body: [
+        "Provincial consumer protection laws apply and may provide additional rights.",
+        "If a provision is unenforceable in your province, it will be limited to the minimum extent necessary.",
+      ],
+    },
+  ],
+  anz: [
+    {
+      title: "Australia and New Zealand consumer guarantees",
+      body: [
+        "Our services come with guarantees that cannot be excluded under the Australian Consumer Law and New Zealand Consumer Guarantees Act.",
+        "You may be entitled to a refund, replacement, or compensation for reasonably foreseeable loss.",
+      ],
+    },
+  ],
+  jp: [
+    {
+      title: "Japan consumer protections",
+      body: [
+        "Mandatory protections under Japanese consumer law apply.",
+        "We do not exclude liability where prohibited by law.",
+      ],
+    },
+  ],
+  br: [
+    {
+      title: "Brazil consumer protections",
+      body: [
+        "Mandatory protections under the Brazilian Consumer Defense Code apply.",
+        "We do not exclude liability where prohibited by law.",
+      ],
+    },
+  ],
+  global: [
+    {
+      title: "International use",
+      body: [
+        "If you access the Service outside the United States, you are responsible for complying with local laws.",
+        "Nothing in these Terms limits rights that cannot be waived under your local law.",
+      ],
+    },
+  ],
+};
