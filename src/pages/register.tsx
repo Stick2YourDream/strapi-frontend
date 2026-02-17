@@ -181,6 +181,22 @@ const parseContact = (value: string, dialCode: string): ParsedContact | null => 
   return null;
 };
 
+const SECURITY_QUESTION_OPTIONS = [
+  "What was the name of your first pet?",
+  "What city were you born in?",
+  "What is the last name of a favorite teacher?",
+  "What was your first car?",
+  "What is your mother's maiden name?",
+  "What street did you grow up on?",
+  "What was the name of your elementary school?",
+] as const;
+
+const isDuplicateContactError = (message: string) => {
+  const lower = String(message || "").toLowerCase();
+  if (!lower) return false;
+  return lower.includes("already in use") && (lower.includes("email") || lower.includes("phone"));
+};
+
 export default function Register() {
   const { t } = useTranslation();
   const [form, setForm] = useState({
@@ -204,6 +220,12 @@ export default function Register() {
   const [termsRead, setTermsRead] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [duplicateModalOpen, setDuplicateModalOpen] = useState(false);
+  const [securityQuestions, setSecurityQuestions] = useState([
+    { question: "", answer: "" },
+    { question: "", answer: "" },
+    { question: "", answer: "" },
+  ]);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [smsSending, setSmsSending] = useState(false);
   const [smsSent, setSmsSent] = useState(false);
@@ -393,10 +415,23 @@ export default function Register() {
     setDialCodeEditing(false);
   };
 
+  const updateSecurityQuestion = (
+    index: number,
+    field: "question" | "answer",
+    value: string
+  ) => {
+    setSecurityQuestions((prev) =>
+      prev.map((entry, idx) =>
+        idx === index ? { ...entry, [field]: value } : entry
+      )
+    );
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setInfo(null);
+    setDuplicateModalOpen(false);
 
     if (form.botField) {
       setError("Unable to register at this time.");
@@ -444,6 +479,22 @@ export default function Register() {
       return;
     }
 
+    const trimmedSecurity = securityQuestions.map((entry) => ({
+      question: entry.question.trim(),
+      answer: entry.answer.trim(),
+    }));
+    if (trimmedSecurity.some((entry) => !entry.question || !entry.answer)) {
+      setError("Please answer all three security questions.");
+      return;
+    }
+    const uniqueQuestions = new Set(
+      trimmedSecurity.map((entry) => entry.question.toLowerCase())
+    );
+    if (uniqueQuestions.size !== trimmedSecurity.length) {
+      setError("Please choose three different security questions.");
+      return;
+    }
+
     const elapsedMs = Date.now() - formStartRef.current;
     if (elapsedMs < 3000) {
       setError("Please take a moment to review your info before signing up.");
@@ -467,6 +518,7 @@ export default function Register() {
         botField: form.botField,
         termsAccepted,
         intent: intentKey || undefined,
+        securityQuestions: trimmedSecurity,
       });
 
       // Best-effort: create a minimal profile shell; encrypted profile fields are set after login.
@@ -526,11 +578,16 @@ export default function Register() {
       setShowSuccessModal(true);
     } catch (err) {
       if (axios.isAxiosError(err)) {
-        setError(
+        const message =
           (err.response?.data as any)?.error?.message ||
-            (err.response?.data as any)?.message ||
-            "Error registering user"
-        );
+          (err.response?.data as any)?.message ||
+          "Error registering user";
+        if (isDuplicateContactError(message)) {
+          setDuplicateModalOpen(true);
+          setError(null);
+          return;
+        }
+        setError(message);
       } else {
         setError("Error registering user");
       }
@@ -791,6 +848,44 @@ export default function Register() {
           />
         </div>
 
+        <div className="field">
+          <label>Security questions (required)</label>
+          <div className="security-questions">
+            {securityQuestions.map((entry, index) => (
+              <div className="security-question-row" key={`security-${index}`}>
+                <select
+                  className="auth-input"
+                  value={entry.question}
+                  onChange={(event) =>
+                    updateSecurityQuestion(index, "question", event.target.value)
+                  }
+                  required
+                >
+                  <option value="">Select a question</option>
+                  {SECURITY_QUESTION_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  className="auth-input"
+                  type="text"
+                  placeholder="Answer"
+                  value={entry.answer}
+                  onChange={(event) =>
+                    updateSecurityQuestion(index, "answer", event.target.value)
+                  }
+                  required
+                />
+              </div>
+            ))}
+          </div>
+          <small className="auth-hint">
+            Used by support to verify your identity if your account is locked.
+          </small>
+        </div>
+
         <div className="terms-consent">
           <label className={`terms-checkbox ${termsAccepted ? "checked" : ""}`}>
             <input
@@ -907,6 +1002,35 @@ export default function Register() {
                 onClick={() => navigate("/login")}
               >
                 Go to login
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {duplicateModalOpen && (
+        <div className="register-duplicate-overlay" role="dialog" aria-modal="true">
+          <div className="register-duplicate-modal">
+            <div className="register-duplicate-header">
+              <h3>Email/Phone Number Already Exists</h3>
+              <button
+                type="button"
+                className="register-duplicate-close"
+                onClick={() => setDuplicateModalOpen(false)}
+              >
+                Close
+              </button>
+            </div>
+            <div className="register-duplicate-body">
+              <p>Try Another Email/Phone Number</p>
+            </div>
+            <div className="register-duplicate-actions">
+              <button
+                type="button"
+                className="btn primary"
+                onClick={() => setDuplicateModalOpen(false)}
+              >
+                Got it
               </button>
             </div>
           </div>

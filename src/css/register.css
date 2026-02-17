@@ -269,6 +269,17 @@
   flex: 1;
 }
 
+.security-questions {
+  display: grid;
+  gap: 10px;
+}
+
+.security-question-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
 .register-contact-row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -466,6 +477,16 @@ select.auth-input option {
   z-index: 54;
 }
 
+.register-duplicate-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 6, 12, 0.7);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  z-index: 56;
+}
+
 .terms-modal {
   width: min(720px, 100%);
   max-height: 80vh;
@@ -500,6 +521,17 @@ select.auth-input option {
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
 }
 
+.register-duplicate-modal {
+  width: min(520px, 100%);
+  background: rgba(18, 10, 16, 0.98);
+  border: 1px solid rgba(255, 119, 119, 0.35);
+  border-radius: 18px;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  overflow: hidden;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+}
+
 .terms-modal-header {
   display: flex;
   align-items: center;
@@ -527,12 +559,26 @@ select.auth-input option {
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.register-duplicate-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
 .register-success-header h3 {
   margin: 0;
   font-size: 18px;
 }
 
 .register-access-header h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.register-duplicate-header h3 {
   margin: 0;
   font-size: 18px;
 }
@@ -555,6 +601,16 @@ select.auth-input option {
   font-size: 18px;
   line-height: 1;
   cursor: pointer;
+}
+
+.register-duplicate-close {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  color: #f8b4b4;
+  cursor: pointer;
+  font-weight: 600;
 }
 
 .terms-modal-header h3 {
@@ -598,7 +654,17 @@ select.auth-input option {
   line-height: 1.6;
 }
 
+.register-duplicate-body {
+  padding: 18px;
+  color: #f8b4b4;
+  line-height: 1.6;
+}
+
 .register-access-body p {
+  margin: 0;
+}
+
+.register-duplicate-body p {
   margin: 0;
 }
 
@@ -631,6 +697,14 @@ select.auth-input option {
 }
 
 .register-access-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.register-duplicate-actions {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
@@ -750,6 +824,10 @@ select.auth-input option {
   }
 
   .register-intent-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .security-question-row {
     grid-template-columns: 1fr;
   }
 

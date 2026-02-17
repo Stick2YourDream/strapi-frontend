@@ -32,7 +32,7 @@ export default function Privacy() {
     description:
       "Learn how Your Social Place collects, uses, and protects your information.",
     type: "website",
-    canonical: "https://yoursocialplace.com/privacy",
+    canonical: "https://s2ydconnection.com/privacy",
   });
 
   return (

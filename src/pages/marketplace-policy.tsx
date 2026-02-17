@@ -21,7 +21,7 @@ export default function MarketplacePolicy() {
     description:
       "Review StoreFront shipping, local pickup, platform fee, and payment policies.",
     type: "website",
-    canonical: "https://yoursocialplace.com/marketplace-policy",
+    canonical: "https://s2ydconnection.com/marketplace-policy",
   });
 
   return (

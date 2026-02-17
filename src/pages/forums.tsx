@@ -529,7 +529,7 @@ export default function Forums() {
     description:
       "Uplifting forums built for encouragement, progress, and positive support.",
     type: "website",
-    canonical: "https://yoursocialplace.com/forums",
+    canonical: "https://s2ydconnection.com/forums",
     keywords:
       "uplifting forums, supportive community, positive social network, goals, accountability",
   });

@@ -586,6 +586,14 @@ export default function Login() {
     const msg: string = data?.error?.message || data?.message || "Login failed";
     const msgLower = msg.toLowerCase();
 
+    if (msgLower.includes("account locked") || msgLower.includes("too many failed")) {
+      setError(
+        "Account locked for 24 hours due to too many failed login attempts. Contact support@yoursocialplace.com to unlock."
+      );
+      setDebugDetails(buildDebugDetails(err));
+      return;
+    }
+
     if (msgLower.includes("not confirmed") || msgLower.includes("confirm your email")) {
       setError("Please confirm your email before logging in.");
       setInfo("Check your inbox (and spam), then try again.");
@@ -1106,7 +1114,7 @@ export default function Login() {
               ) : (
                 <a
                   className="btn ghost"
-                  href="https://yoursocialplace.com/register"
+                  href="https://s2ydconnection.com/register"
                   target="_blank"
                   rel="noreferrer"
                 >

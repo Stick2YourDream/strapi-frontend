@@ -10,7 +10,7 @@ export default function Guidelines() {
     description:
       "Read the Your Social Place community guidelines for constructive feedback, safety, and reporting.",
     type: "website",
-    canonical: "https://yoursocialplace.com/guidelines",
+    canonical: "https://s2ydconnection.com/guidelines",
   });
 
   return (

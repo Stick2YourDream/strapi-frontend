@@ -1,9 +1,23 @@
 User-agent: *
 Allow: /
-Allow: /login
-Allow: /register
 Disallow: /dashboard
 Disallow: /friends
 Disallow: /me
+Disallow: /my-posts
+Disallow: /my-gallery
+Disallow: /groups
+Disallow: /storefront
+Disallow: /moderation
+Disallow: /news
+Disallow: /login
+Disallow: /register
+Disallow: /forgot-password
+Disallow: /reset-password
+Disallow: /verify-email
+Disallow: /delete-account
+Disallow: /delete-data
+Disallow: /share
+Disallow: /protocol
+Disallow: /notes/
 
-Sitemap: https://yoursocialplace.com/sitemap.xml
+Sitemap: https://s2ydconnection.com/sitemap.xml

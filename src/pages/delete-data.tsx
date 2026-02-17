@@ -37,7 +37,7 @@ export default function DeleteData() {
     description:
       "Request deletion of your personal data from Your Social Place.",
     type: "website",
-    canonical: "https://yoursocialplace.com/delete-data",
+    canonical: "https://s2ydconnection.com/delete-data",
   });
 
   useEffect(() => {

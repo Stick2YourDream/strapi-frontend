@@ -14,7 +14,7 @@ const normalizeProtocolUrl = (rawUrl: string) => {
     return path.startsWith("/") ? path : `/${path}`;
   }
 
-  if (trimmed.startsWith("https://yoursocialplace.com")) {
+  if (trimmed.startsWith("https://s2ydconnection.com")) {
     try {
       const url = new URL(trimmed);
       return `${url.pathname}${url.search}${url.hash}`;

@@ -9,7 +9,7 @@ export default function Report() {
     description:
       "Report a user or post and learn what happens next at Your Social Place.",
     type: "website",
-    canonical: "https://yoursocialplace.com/report",
+    canonical: "https://s2ydconnection.com/report",
   });
 
   return (

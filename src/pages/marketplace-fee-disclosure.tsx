@@ -13,7 +13,7 @@ export default function MarketplaceFeeDisclosure() {
     title: "StoreFront Platform Fee Disclosure | Your Social Place",
     description: "Review StoreFront platform fee rules for online and cash payments.",
     type: "website",
-    canonical: "https://yoursocialplace.com/marketplace-fee-disclosure",
+    canonical: "https://s2ydconnection.com/marketplace-fee-disclosure",
   });
 
   return (

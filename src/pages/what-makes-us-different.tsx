@@ -14,7 +14,7 @@ export default function WhatMakesUsDifferent() {
     description:
       "See what makes Your Social Place different: accountability-first design, safer defaults, and real momentum.",
     type: "website",
-    canonical: "https://yoursocialplace.com/what-makes-us-different",
+    canonical: "https://s2ydconnection.com/what-makes-us-different",
   });
 
   return (
