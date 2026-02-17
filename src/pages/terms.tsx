@@ -32,7 +32,7 @@ export default function Terms() {
     description:
       "Review the Your Social Place terms and conditions for community guidelines, safety, and platform usage.",
     type: "website",
-    canonical: "https://s2ydconnection.com/terms",
+    canonical: "https://yoursocialplace.com/terms",
   });
 
   return (

@@ -1114,7 +1114,7 @@ export default function Login() {
               ) : (
                 <a
                   className="btn ghost"
-                  href="https://s2ydconnection.com/register"
+                  href="https://yoursocialplace.com/register"
                   target="_blank"
                   rel="noreferrer"
                 >

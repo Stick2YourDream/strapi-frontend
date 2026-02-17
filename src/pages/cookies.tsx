@@ -79,7 +79,7 @@ export default function Cookies() {
     description:
       "Read the Your Social Place Cookie Policy and manage your analytics preferences.",
     type: "website",
-    canonical: "https://s2ydconnection.com/cookies",
+    canonical: "https://yoursocialplace.com/cookies",
   });
 
   const [consent, setConsent] = useState<ConsentState | null>(null);

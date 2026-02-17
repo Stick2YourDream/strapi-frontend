@@ -53,7 +53,7 @@ export default function Apps() {
     description:
       "Download YSP Live, the Windows control helper, or install the Your Social Place PWA on any device.",
     type: "website",
-    canonical: "https://s2ydconnection.com/apps",
+    canonical: "https://yoursocialplace.com/apps",
     keywords:
       "Your Social Place downloads, YSP Live, Windows helper, Android APK, PWA install, iOS install, macOS install",
   });

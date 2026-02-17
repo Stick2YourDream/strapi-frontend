@@ -9,7 +9,7 @@ export default function Safety() {
     description:
       "Learn how Your Social Place keeps the community safe with clear rules, fast reporting, and thoughtful moderation.",
     type: "website",
-    canonical: "https://s2ydconnection.com/safety",
+    canonical: "https://yoursocialplace.com/safety",
   });
 
   return (

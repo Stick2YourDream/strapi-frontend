@@ -63,10 +63,10 @@ export default function Landing() {
     description:
       "Your Social Place is a motivational social network for accountability with live video calls, screen sharing, real-time chat, groups, and Newsroom updates.",
     type: "website",
-    canonical: "https://s2ydconnection.com/",
+    canonical: "https://yoursocialplace.com/",
     keywords:
       "Your Social Place, motivational social network, accountability, goals, progress, friends, groups, live video calls, screen sharing, real-time chat, Newsroom, moderation, privacy controls, PWA",
-    image: "https://s2ydconnection.com/logo2.png",
+    image: "https://yoursocialplace.com/logo2.png",
     imageAlt: "Your Social Place logo",
   });
   const [profileSummary, setProfileSummary] = useState<ProfileSummary | null>(null);

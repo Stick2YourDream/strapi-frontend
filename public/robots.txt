@@ -20,4 +20,4 @@ Disallow: /share
 Disallow: /protocol
 Disallow: /notes/
 
-Sitemap: https://s2ydconnection.com/sitemap.xml
+Sitemap: https://yoursocialplace.com/sitemap.xml

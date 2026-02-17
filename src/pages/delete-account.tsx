@@ -32,7 +32,7 @@ export default function DeleteAccount() {
     description:
       "Request permanent deletion of your Your Social Place account and associated data.",
     type: "website",
-    canonical: "https://s2ydconnection.com/delete-account",
+    canonical: "https://yoursocialplace.com/delete-account",
   });
 
   const canSubmit =

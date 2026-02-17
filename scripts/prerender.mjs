@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const distDir = path.join(rootDir, "dist");
 const ssgDir = path.join(rootDir, "dist-ssg");
-const BASE_URL = "https://s2ydconnection.com";
+const BASE_URL = "https://yoursocialplace.com";
 
 const templatePath = path.join(distDir, "index.html");
 const template = fs.readFileSync(templatePath, "utf-8");
