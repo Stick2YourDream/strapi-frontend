@@ -59,12 +59,29 @@ const resolveEmbedOrigin = () => {
   return fallback.replace(/\/$/, "");
 };
 
+const resolveEmbedHost = (origin?: string) => {
+  const envHost = String(import.meta.env.VITE_YOUTUBE_EMBED_HOST || "").trim();
+  if (envHost) return envHost.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  if (origin) {
+    try {
+      const host = new URL(origin).hostname.toLowerCase();
+      if (host.endsWith("azurewebsites.net")) {
+        return "www.youtube.com";
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return "www.youtube-nocookie.com";
+};
+
 const buildEmbedUrl = (videoId: string, origin?: string) => {
   const params = new URLSearchParams({ autoplay: "1", rel: "0" });
   if (origin) {
     params.set("origin", origin);
   }
-  return `https://www.youtube-nocookie.com/embed/${videoId}?${params.toString()}`;
+  const host = resolveEmbedHost(origin);
+  return `https://${host}/embed/${videoId}?${params.toString()}`;
 };
 
 export default function LinkPreviewCard({
@@ -135,6 +152,7 @@ export default function LinkPreviewCard({
             src={buildEmbedUrl(videoId, embedOrigin)}
             title={title}
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            referrerPolicy="origin"
             allowFullScreen
           />
         ) : (
