@@ -51,8 +51,21 @@ const parseYouTubeId = (url: string) => {
   return null;
 };
 
-const buildEmbedUrl = (videoId: string) =>
-  `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0`;
+const resolveEmbedOrigin = () => {
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return window.location.origin;
+  }
+  const fallback = String(import.meta.env.VITE_PUBLIC_SITE_URL || "").trim();
+  return fallback.replace(/\/$/, "");
+};
+
+const buildEmbedUrl = (videoId: string, origin?: string) => {
+  const params = new URLSearchParams({ autoplay: "1", rel: "0" });
+  if (origin) {
+    params.set("origin", origin);
+  }
+  return `https://www.youtube-nocookie.com/embed/${videoId}?${params.toString()}`;
+};
 
 export default function LinkPreviewCard({
   preview,
@@ -74,6 +87,7 @@ export default function LinkPreviewCard({
     safePreview.image || (videoId ? `https://img.youtube.com/vi/${videoId}/hqdefault.jpg` : "");
   const hasImage = Boolean(fallbackImage);
   const [showEmbed, setShowEmbed] = useState(false);
+  const embedOrigin = resolveEmbedOrigin();
 
   if (!isYouTube) {
     return (
@@ -118,7 +132,7 @@ export default function LinkPreviewCard({
         {showEmbed && videoId ? (
           <iframe
             className="link-preview-embed"
-            src={buildEmbedUrl(videoId)}
+            src={buildEmbedUrl(videoId, embedOrigin)}
             title={title}
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
             allowFullScreen
