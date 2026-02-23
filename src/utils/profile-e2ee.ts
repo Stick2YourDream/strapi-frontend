@@ -50,6 +50,8 @@ export type ProfilePayload = {
   externalIndexingEnabled?: boolean;
   activityVisibility?: VisibilityLevel;
   notificationSettings?: NotificationSettings;
+  storefrontDefaultLocation?: string;
+  storefrontDefaultRadiusMiles?: number;
   lastSeenAt?: string;
 };
 
@@ -140,6 +142,13 @@ export const buildProfilePayloadFromAttrs = (attrs: any): ProfilePayload => ({
       : undefined,
   activityVisibility: attrs?.activityVisibility || undefined,
   notificationSettings: attrs?.notificationSettings || undefined,
+  storefrontDefaultLocation: attrs?.storefrontDefaultLocation || undefined,
+  storefrontDefaultRadiusMiles:
+    typeof attrs?.storefrontDefaultRadiusMiles === "number"
+      ? attrs.storefrontDefaultRadiusMiles
+      : attrs?.storefrontDefaultRadiusMiles
+      ? Number(attrs.storefrontDefaultRadiusMiles)
+      : undefined,
   lastSeenAt: attrs?.lastSeenAt || undefined,
 });
 

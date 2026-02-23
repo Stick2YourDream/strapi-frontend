@@ -4,6 +4,16 @@ export type AuthUser = {
   email: string;
   confirmed: boolean;
   appRole?: "user" | "moderator" | "admin";
+  ageVerified?: boolean;
+  ageVerifiedAt?: string | null;
+  ageVerificationRequired?: boolean;
+  ageVerificationDueAt?: string | null;
+  ageVerificationOverdue?: boolean;
+  ageVerificationDaysRemaining?: number | null;
+  ageVerificationDobMismatchAt?: string | null;
+  ageVerificationDobMismatchDueAt?: string | null;
+  ageVerificationDobMismatchOverdue?: boolean;
+  ageVerificationDobMismatchDaysRemaining?: number | null;
 };
 
 // ? Login response from Strapi: /auth/local or /auth/login/verify

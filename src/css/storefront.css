@@ -68,6 +68,14 @@
   font-size: 20px;
 }
 
+.storefront-stat-note {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: #9fb0d3;
+}
+
 .storefront-layout {
   display: grid;
   grid-template-columns: minmax(240px, 0.34fr) minmax(0, 1fr);
@@ -307,6 +315,56 @@
   background: linear-gradient(135deg, rgba(80, 186, 255, 0.25), rgba(24, 32, 58, 0.9));
 }
 
+.storefront-card.is-sold {
+  opacity: 0.92;
+  border-color: rgba(255, 116, 116, 0.35);
+}
+
+.storefront-card.is-pending {
+  opacity: 0.88;
+  border-color: rgba(255, 199, 102, 0.35);
+}
+
+.storefront-card-ribbon {
+  position: absolute;
+  top: 14px;
+  left: -44px;
+  transform: rotate(-35deg);
+  background: linear-gradient(120deg, rgba(239, 68, 68, 0.95), rgba(248, 113, 113, 0.95));
+  color: #0b0f1c;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-size: 11px;
+  padding: 6px 48px;
+  box-shadow: 0 8px 18px rgba(12, 14, 24, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  z-index: 4;
+}
+
+.storefront-card-ribbon.is-sold {
+  left: -44px;
+  right: auto;
+  transform: rotate(-35deg);
+  background: linear-gradient(120deg, rgba(239, 68, 68, 0.95), rgba(248, 113, 113, 0.95));
+  color: #2b0606;
+}
+
+.storefront-card-ribbon.is-pending {
+  left: -44px;
+  right: auto;
+  transform: rotate(-35deg);
+  background: linear-gradient(120deg, rgba(245, 158, 11, 0.95), rgba(251, 191, 36, 0.95));
+  color: #1a1404;
+}
+
+.storefront-card-ribbon.is-available {
+  left: auto;
+  right: -44px;
+  transform: rotate(35deg);
+  background: linear-gradient(120deg, rgba(34, 197, 94, 0.95), rgba(74, 222, 128, 0.95));
+  color: #052e16;
+}
 .storefront-card-price-pill {
   position: absolute;
   right: 12px;
@@ -320,6 +378,7 @@
   font-weight: 600;
   letter-spacing: 0.02em;
   backdrop-filter: blur(8px);
+  z-index: 2;
 }
 
 .storefront-card-remove {
@@ -356,6 +415,7 @@
   background: rgba(5, 9, 18, 0.8);
   border: 1px solid rgba(255, 255, 255, 0.15);
   font-size: 12px;
+  z-index: 2;
 }
 
 .storefront-detail-page {
@@ -698,6 +758,47 @@
 .storefront-message-time {
   font-size: 10px;
   color: #9db0d5;
+}
+
+.storefront-message-quick {
+  display: grid;
+  gap: 8px;
+  margin: 6px 0 4px;
+}
+
+.storefront-message-quick-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: #9fb6df;
+}
+
+.storefront-message-quick-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.storefront-message-quick-btn {
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(15, 23, 42, 0.55);
+  color: #e2e8f0;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+  cursor: pointer;
+}
+
+.storefront-message-quick-btn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(96, 165, 250, 0.6);
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.25);
+}
+
+.storefront-message-quick-btn:focus-visible {
+  outline: 2px solid rgba(96, 165, 250, 0.6);
+  outline-offset: 2px;
 }
 
 .storefront-message-input {

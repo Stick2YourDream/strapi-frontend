@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type LinkPreview = {
   url?: string;
@@ -51,37 +51,33 @@ const parseYouTubeId = (url: string) => {
   return null;
 };
 
-const resolveEmbedOrigin = () => {
-  if (typeof window !== "undefined" && window.location?.origin) {
-    return window.location.origin;
-  }
-  const fallback = String(import.meta.env.VITE_PUBLIC_SITE_URL || "").trim();
-  return fallback.replace(/\/$/, "");
-};
+let ytApiPromise: Promise<void> | null = null;
 
-const resolveEmbedHost = (origin?: string) => {
-  const envHost = String(import.meta.env.VITE_YOUTUBE_EMBED_HOST || "").trim();
-  if (envHost) return envHost.replace(/^https?:\/\//, "").replace(/\/$/, "");
-  if (origin) {
-    try {
-      const host = new URL(origin).hostname.toLowerCase();
-      if (host.endsWith("azurewebsites.net")) {
-        return "www.youtube.com";
+const ensureYouTubeApi = () => {
+  if (typeof window === "undefined") return Promise.reject(new Error("No window"));
+  if ((window as any).YT?.Player) return Promise.resolve();
+  if (ytApiPromise) return ytApiPromise;
+  ytApiPromise = new Promise<void>((resolve, reject) => {
+    const existingCallback = (window as any).onYouTubeIframeAPIReady;
+    (window as any).onYouTubeIframeAPIReady = () => {
+      if (typeof existingCallback === "function") {
+        try {
+          existingCallback();
+        } catch {
+          // ignore callback errors
+        }
       }
-    } catch {
-      // ignore
+      resolve();
+    };
+    if (!document.querySelector('script[src="https://www.youtube.com/iframe_api"]')) {
+      const script = document.createElement("script");
+      script.src = "https://www.youtube.com/iframe_api";
+      script.async = true;
+      script.onerror = () => reject(new Error("Failed to load YouTube API"));
+      document.head.appendChild(script);
     }
-  }
-  return "www.youtube-nocookie.com";
-};
-
-const buildEmbedUrl = (videoId: string, origin?: string) => {
-  const params = new URLSearchParams({ autoplay: "1", rel: "0" });
-  if (origin) {
-    params.set("origin", origin);
-  }
-  const host = resolveEmbedHost(origin);
-  return `https://${host}/embed/${videoId}?${params.toString()}`;
+  });
+  return ytApiPromise;
 };
 
 export default function LinkPreviewCard({
@@ -104,7 +100,134 @@ export default function LinkPreviewCard({
     safePreview.image || (videoId ? `https://img.youtube.com/vi/${videoId}/hqdefault.jpg` : "");
   const hasImage = Boolean(fallbackImage);
   const [showEmbed, setShowEmbed] = useState(false);
-  const embedOrigin = resolveEmbedOrigin();
+  const [showTitleOverlay, setShowTitleOverlay] = useState(false);
+  const playerRef = useRef<any>(null);
+  const playerContainerRef = useRef<HTMLDivElement | null>(null);
+  const playerPollRef = useRef<number | null>(null);
+  const lastTimeRef = useRef<number>(0);
+  const overlayTimerRef = useRef<number | null>(null);
+
+  const triggerOverlay = useCallback(() => {
+    setShowTitleOverlay(true);
+    if (overlayTimerRef.current) {
+      window.clearTimeout(overlayTimerRef.current);
+    }
+    overlayTimerRef.current = window.setTimeout(() => {
+      setShowTitleOverlay(false);
+      overlayTimerRef.current = null;
+    }, 5000);
+  }, []);
+
+  useEffect(() => {
+    if (!showEmbed) {
+      setShowTitleOverlay(false);
+      if (overlayTimerRef.current) {
+        window.clearTimeout(overlayTimerRef.current);
+        overlayTimerRef.current = null;
+      }
+      return;
+    }
+    triggerOverlay();
+  }, [showEmbed, triggerOverlay]);
+
+  useEffect(() => {
+    if (!showEmbed || !videoId) {
+      if (playerRef.current) {
+        try {
+          playerRef.current.destroy();
+        } catch {
+          // ignore destroy errors
+        }
+        playerRef.current = null;
+      }
+      if (playerPollRef.current) {
+        window.clearInterval(playerPollRef.current);
+        playerPollRef.current = null;
+      }
+      lastTimeRef.current = 0;
+      return;
+    }
+    let cancelled = false;
+    const setupPlayer = async () => {
+      try {
+        await ensureYouTubeApi();
+      } catch {
+        return;
+      }
+      if (cancelled || !playerContainerRef.current) return;
+      if (playerRef.current) {
+        try {
+          playerRef.current.destroy();
+        } catch {
+          // ignore destroy errors
+        }
+        playerRef.current = null;
+      }
+      const origin = typeof window !== "undefined" ? window.location.origin : "";
+      playerRef.current = new (window as any).YT.Player(playerContainerRef.current, {
+        videoId,
+        playerVars: {
+          autoplay: 1,
+          mute: 0,
+          rel: 0,
+          playsinline: 1,
+          controls: 1,
+          fs: 1,
+          modestbranding: 1,
+          origin,
+        },
+        events: {
+          onReady: (event: any) => {
+            const player = event?.target;
+            if (!player || cancelled) return;
+            if (playerPollRef.current) {
+              window.clearInterval(playerPollRef.current);
+            }
+            playerPollRef.current = window.setInterval(() => {
+              try {
+                const currentTime = player.getCurrentTime?.() ?? 0;
+                if (currentTime <= 0.1 && lastTimeRef.current > 0.5) {
+                  triggerOverlay();
+                }
+                lastTimeRef.current = currentTime;
+              } catch {
+                // ignore polling errors
+              }
+            }, 250);
+          },
+          onStateChange: (event: any) => {
+            try {
+              const YT = (window as any).YT;
+              if (!YT?.PlayerState) return;
+              if (event?.data !== YT.PlayerState.PLAYING) return;
+              const currentTime = event?.target?.getCurrentTime?.() ?? 0;
+              if (currentTime <= 0.1) {
+                triggerOverlay();
+              }
+            } catch {
+              // ignore state errors
+            }
+          },
+        },
+      });
+    };
+    setupPlayer();
+    return () => {
+      cancelled = true;
+      if (playerRef.current) {
+        try {
+          playerRef.current.destroy();
+        } catch {
+          // ignore destroy errors
+        }
+        playerRef.current = null;
+      }
+      if (playerPollRef.current) {
+        window.clearInterval(playerPollRef.current);
+        playerPollRef.current = null;
+      }
+    };
+  }, [showEmbed, videoId, triggerOverlay]);
 
   if (!isYouTube) {
     return (
@@ -147,14 +270,14 @@ export default function LinkPreviewCard({
     >
       <div className="link-preview-media">
         {showEmbed && videoId ? (
-          <iframe
-            className="link-preview-embed"
-            src={buildEmbedUrl(videoId, embedOrigin)}
-            title={title}
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-            referrerPolicy="origin"
-            allowFullScreen
-          />
+          <>
+            <div className="link-preview-embed" ref={playerContainerRef} />
+            {showTitleOverlay && (
+              <div className="link-preview-yt-overlay" aria-hidden="true">
+                <div className="link-preview-yt-overlay-inner">{title}</div>
+              </div>
+            )}
+          </>
         ) : (
           <>
             {hasImage ? (

@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ClipboardEvent,
   type ChangeEvent,
   type CSSProperties,
   type KeyboardEvent,
@@ -69,6 +70,7 @@ import {
   faWaveSquare,
   faWindowMaximize,
   faWindowRestore,
+  faWandMagicSparkles,
   faXmark,
 } from "@fortawesome/free-solid-svg-icons";
 import { faFaceSmile as faFaceSmileRegular } from "@fortawesome/free-regular-svg-icons";
@@ -801,108 +803,201 @@ const BACKGROUND_OPTIONS = [
   { id: "backdrop10", label: "Wavy" },
 ];
 
-const AVATAR_PRESET_OPTIONS = [
+const AVATAR_PRESET_CATEGORIES = [
+  { id: "humans", label: "Humans" },
+  { id: "dogs", label: "Dogs" },
+  { id: "cats", label: "Cats" },
+  { id: "horses", label: "Horses" },
+  { id: "wildlife", label: "Wildlife" },
+  { id: "fun", label: "Fun" },
+] as const;
+
+type AvatarPresetCategory = (typeof AVATAR_PRESET_CATEGORIES)[number]["id"];
+
+type AvatarPresetOption = {
+  id: string;
+  label: string;
+  url: string;
+  category: AvatarPresetCategory;
+};
+
+const AVATAR_PRESET_OPTIONS: AvatarPresetOption[] = [
   {
     id: "human-alex",
-    label: "Human - Alex",
+    label: "Alex",
+    category: "humans",
     url: "/avatar-presets/human-alex.svg",
   },
   {
     id: "human-maya",
-    label: "Human - Maya",
+    label: "Maya",
+    category: "humans",
     url: "/avatar-presets/human-maya.svg",
   },
   {
     id: "human-jordan",
-    label: "Human - Jordan",
+    label: "Jordan",
+    category: "humans",
     url: "/avatar-presets/human-jordan.svg",
   },
   {
     id: "human-sofia",
-    label: "Human - Sofia",
+    label: "Sofia",
+    category: "humans",
     url: "/avatar-presets/human-sofia.svg",
   },
   {
     id: "human-ethan",
-    label: "Human - Ethan",
+    label: "Ethan",
+    category: "humans",
     url: "/avatar-presets/human-ethan.svg",
   },
   {
     id: "human-ava",
-    label: "Human - Ava",
+    label: "Ava",
+    category: "humans",
     url: "/avatar-presets/human-ava.svg",
   },
   {
     id: "human-noah",
-    label: "Human - Noah",
+    label: "Noah",
+    category: "humans",
     url: "/avatar-presets/human-noah.svg",
   },
   {
     id: "human-chloe",
-    label: "Human - Chloe",
+    label: "Chloe",
+    category: "humans",
     url: "/avatar-presets/human-chloe.svg",
   },
   {
     id: "dog-scout",
-    label: "Dog - Scout",
+    label: "Scout",
+    category: "dogs",
     url: "/avatar-presets/dog-scout.svg",
   },
   {
     id: "dog-nova",
-    label: "Dog - Nova",
+    label: "Nova",
+    category: "dogs",
     url: "/avatar-presets/dog-nova.svg",
   },
   {
+    id: "dog-husky",
+    label: "Husky",
+    category: "dogs",
+    url: "/avatar-presets/dog-husky.svg",
+  },
+  {
+    id: "dog-golden",
+    label: "Golden",
+    category: "dogs",
+    url: "/avatar-presets/dog-golden.svg",
+  },
+  {
     id: "cat-luna",
-    label: "Cat - Luna",
+    label: "Luna",
+    category: "cats",
     url: "/avatar-presets/cat-luna.svg",
   },
   {
     id: "cat-milo",
-    label: "Cat - Milo",
+    label: "Milo",
+    category: "cats",
     url: "/avatar-presets/cat-milo.svg",
   },
   {
+    id: "cat-oreo",
+    label: "Oreo",
+    category: "cats",
+    url: "/avatar-presets/cat-oreo.svg",
+  },
+  {
+    id: "cat-ginger",
+    label: "Ginger",
+    category: "cats",
+    url: "/avatar-presets/cat-ginger.svg",
+  },
+  {
     id: "horse-comet",
-    label: "Horse - Comet",
+    label: "Comet",
+    category: "horses",
     url: "/avatar-presets/horse-comet.svg",
   },
   {
     id: "horse-willow",
-    label: "Horse - Willow",
+    label: "Willow",
+    category: "horses",
     url: "/avatar-presets/horse-willow.svg",
   },
   {
-    id: "fun-lollipop",
-    label: "Talking Lollipop",
-    url: "/avatar-presets/fun-lollipop.svg",
+    id: "horse-ember",
+    label: "Ember",
+    category: "horses",
+    url: "/avatar-presets/horse-ember.svg",
   },
   {
-    id: "fun-robot",
-    label: "Robot Buddy",
-    url: "/avatar-presets/fun-robot.svg",
-  },
-  {
-    id: "fun-unicorn",
-    label: "Unicorn Pop",
-    url: "/avatar-presets/fun-unicorn.svg",
-  },
-  {
-    id: "fun-alien",
-    label: "Alien Host",
-    url: "/avatar-presets/fun-alien.svg",
+    id: "horse-storm",
+    label: "Storm",
+    category: "horses",
+    url: "/avatar-presets/horse-storm.svg",
   },
   {
     id: "fun-panda",
-    label: "Panda Pal",
+    label: "Panda",
+    category: "wildlife",
     url: "/avatar-presets/fun-panda.svg",
   },
   {
     id: "fun-fox",
-    label: "Fox Friend",
+    label: "Fox",
+    category: "wildlife",
     url: "/avatar-presets/fun-fox.svg",
   },
+  {
+    id: "fun-lollipop",
+    label: "Lollipop",
+    category: "fun",
+    url: "/avatar-presets/fun-lollipop.svg",
+  },
+  {
+    id: "fun-robot",
+    label: "Robot",
+    category: "fun",
+    url: "/avatar-presets/fun-robot.svg",
+  },
+  {
+    id: "fun-unicorn",
+    label: "Unicorn",
+    category: "fun",
+    url: "/avatar-presets/fun-unicorn.svg",
+  },
+  {
+    id: "fun-alien",
+    label: "Alien",
+    category: "fun",
+    url: "/avatar-presets/fun-alien.svg",
+  },
+  {
+    id: "fun-astronaut",
+    label: "Astronaut",
+    category: "fun",
+    url: "/avatar-presets/fun-astronaut.svg",
+  },
+  {
+    id: "fun-galaxy",
+    label: "Galaxy Unicorn",
+    category: "fun",
+    url: "/avatar-presets/fun-galaxy.svg",
+  },
 ];
+
+const AVATAR_PRESET_GROUPS = AVATAR_PRESET_CATEGORIES.map((category) => ({
+  ...category,
+  options: AVATAR_PRESET_OPTIONS.filter((option) => option.category === category.id).sort(
+    (left, right) => left.label.localeCompare(right.label),
+  ),
+})).filter((group) => group.options.length > 0);
 
 const AVATAR_EYE_STYLE_OPTIONS = [
   { id: "almond", label: "Almond" },
@@ -1202,6 +1297,16 @@ const renderMessageContent = (message: VideoCallMessage): ReactNode => {
       />
     );
   }
+  if (message.kind === "image" && message.body) {
+    return (
+      <img
+        className="video-chat-image"
+        src={message.body}
+        alt="Shared image"
+        loading="lazy"
+      />
+    );
+  }
   return (
     <span className="video-chat-inline-content">
       {renderEmoji3dTokens(message.body || "")}
@@ -1234,6 +1339,7 @@ export default function VideoCallModal({
     isVideoEnabled,
     isAudioEnabled,
     noiseSuppressionEnabled,
+    voiceFocusEnabled,
     lowLatencyMode,
     lowLatencySuggested,
     lowLatencySuggestionReason,
@@ -1255,6 +1361,7 @@ export default function VideoCallModal({
     toggleVideo,
     toggleAudio,
     toggleNoiseSuppression,
+    toggleVoiceFocus,
     toggleLowLatencyMode,
     setAudioInputDevice,
     setVideoInputDevice,
@@ -2119,6 +2226,10 @@ export default function VideoCallModal({
   const maskStrengthValue = Number.isFinite(videoEffects.maskStrength)
     ? Math.min(1, Math.max(0.2, videoEffects.maskStrength))
     : 0.85;
+  const softFocusValue = Number.isFinite(videoEffects.softFocusAmount)
+    ? Math.min(1, Math.max(0, videoEffects.softFocusAmount))
+    : 0.35;
+  const softFocusPercent = Math.round(softFocusValue * 100);
   const avatarOffsetXValue = Number.isFinite(videoEffects.avatarOffsetX)
     ? Math.min(0.5, Math.max(-0.5, videoEffects.avatarOffsetX))
     : 0;
@@ -3711,6 +3822,31 @@ export default function VideoCallModal({
     setChatInput("");
   };
 
+  const handleChatPaste = useCallback(
+    (event: ClipboardEvent<HTMLTextAreaElement>) => {
+      const clipboard = event.clipboardData;
+      if (!clipboard) return;
+      const imageItems = Array.from(clipboard.items).filter(
+        (item) => item.kind === "file" && item.type.startsWith("image/")
+      );
+      if (imageItems.length === 0) return;
+      if (!showCallUi) return;
+      event.preventDefault();
+      imageItems.forEach((item) => {
+        const file = item.getAsFile();
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = typeof reader.result === "string" ? reader.result : "";
+          if (!result) return;
+          sendMessage(result, "image");
+        };
+        reader.readAsDataURL(file);
+      });
+    },
+    [sendMessage, showCallUi]
+  );
+
   const handleEmojiPick = (emoji: string) => {
     setChatInput((prev) => `${prev}${emoji}`);
   };
@@ -4891,6 +5027,21 @@ export default function VideoCallModal({
                         {noiseSuppressionEnabled ? "On" : "Off"}
                       </span>
                     </button>
+                    <button
+                      type="button"
+                      className={`video-settings-tile${
+                        voiceFocusEnabled ? " is-active" : ""
+                      }`}
+                      onClick={toggleVoiceFocus}
+                      aria-pressed={voiceFocusEnabled}
+                      title="Noise gate and voice-focused filter"
+                    >
+                      <FontAwesomeIcon icon={faBolt} aria-hidden="true" />
+                      <span className="video-settings-label">Voice focus</span>
+                      <span className="video-settings-status">
+                        {voiceFocusEnabled ? "On" : "Off"}
+                      </span>
+                    </button>
                     {isStandaloneVideoApp && showMicSelector && (
                       <div className="video-settings-tile is-static is-select">
                         <FontAwesomeIcon icon={faMicrophone} aria-hidden="true" />
@@ -4956,6 +5107,10 @@ export default function VideoCallModal({
                       </>
                     )}
                   </div>
+                  <p className="video-settings-note">
+                    If you want a strength slider (light / medium / aggressive) or to make Voice
+                    Focus automatically enable Noise Filter, say the word.
+                  </p>
                 </section>
                 <section className="video-settings-section">
                   <h4>Video</h4>
@@ -4986,6 +5141,20 @@ export default function VideoCallModal({
                       <span className="video-settings-label">Mirror camera</span>
                       <span className="video-settings-status">
                         {videoEffects.mirror ? "On" : "Off"}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`video-settings-tile${
+                        videoEffects.softFocus ? " is-active" : ""
+                      }`}
+                      onClick={() => setVideoEffects({ softFocus: !videoEffects.softFocus })}
+                      aria-pressed={videoEffects.softFocus}
+                    >
+                      <FontAwesomeIcon icon={faWandMagicSparkles} aria-hidden="true" />
+                      <span className="video-settings-label">Soft focus</span>
+                      <span className="video-settings-status">
+                        {videoEffects.softFocus ? "On" : "Off"}
                       </span>
                     </button>
                     <button
@@ -5052,6 +5221,37 @@ export default function VideoCallModal({
                     </div>
                   </div>
                   <div className="video-settings-stack">
+                    <div className="video-settings-group">
+                      <div className="video-settings-row">
+                        <span className="video-settings-label">Soft focus strength</span>
+                        <span className="video-settings-hint">
+                          Smooths the camera image.
+                        </span>
+                      </div>
+                      <div className="video-settings-alpha">
+                        <input
+                          className="video-settings-range"
+                          type="range"
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={softFocusPercent}
+                          onChange={(event) =>
+                            setVideoEffects({
+                              softFocusAmount: Math.min(
+                                1,
+                                Math.max(0, Number(event.target.value) / 100)
+                              ),
+                            })
+                          }
+                          disabled={!videoEffects.softFocus}
+                          aria-label="Soft focus strength"
+                        />
+                        <span className="video-settings-alpha-value">
+                          {softFocusPercent}%
+                        </span>
+                      </div>
+                    </div>
                     <div className="video-settings-group">
                       <div className="video-settings-row">
                         <span className="video-settings-label">Mask strength</span>
@@ -5135,7 +5335,8 @@ export default function VideoCallModal({
                       <div className="video-settings-row">
                         <span className="video-settings-label">Avatar library</span>
                         <span className="video-settings-hint">
-                          Choose from 20 pre-built avatars.
+                          Choose from {AVATAR_PRESET_OPTIONS.length} pre-built avatars, sorted by
+                          category.
                         </span>
                       </div>
                       <div className="video-settings-row">
@@ -5150,10 +5351,14 @@ export default function VideoCallModal({
                                 ? "Current custom avatar"
                                 : "Choose preset avatar"}
                             </option>
-                            {AVATAR_PRESET_OPTIONS.map((option) => (
-                              <option key={option.id} value={option.id}>
-                                {option.label}
-                              </option>
+                            {AVATAR_PRESET_GROUPS.map((group) => (
+                              <optgroup key={group.id} label={group.label}>
+                                {group.options.map((option) => (
+                                  <option key={option.id} value={option.id}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </optgroup>
                             ))}
                             {!isStandaloneVideoApp && (
                               <option value={AVATAR_PRESET_PROFILE_SETTINGS_VALUE}>
@@ -7201,6 +7406,7 @@ export default function VideoCallModal({
                                       <textarea
                                         className="screen-share-overlay-input"
                                         value={chatInput}
+                                        onPaste={handleChatPaste}
                                         onChange={(event) =>
                                           setChatInput(sanitizePostText(event.target.value))
                                         }
@@ -7545,6 +7751,7 @@ export default function VideoCallModal({
                                     <textarea
                                       className="screen-share-overlay-input"
                                       value={chatInput}
+                                      onPaste={handleChatPaste}
                                       onChange={(event) =>
                                         setChatInput(sanitizePostText(event.target.value))
                                       }
@@ -7800,7 +8007,7 @@ export default function VideoCallModal({
                     key={message.id}
                     className={`video-chat-message${message.kind === "emoji" ? " is-emoji" : ""}${
                       message.kind === "gif" ? " is-gif" : ""
-                    }`}
+                    }${message.kind === "image" ? " is-image" : ""}`}
                   >
                     <div className="video-chat-meta">
                       <span>{resolveMessageName(message)}</span>
@@ -7814,7 +8021,7 @@ export default function VideoCallModal({
                     <div
                       className={`video-chat-body${
                         message.kind === "emoji" ? " is-emoji" : ""
-                      }`}
+                      }${message.kind === "image" ? " is-image" : ""}`}
                     >
                       {renderMessageContent(message)}
                     </div>
@@ -8134,6 +8341,7 @@ export default function VideoCallModal({
               <textarea
                 className="video-chat-textarea"
                 value={chatInput}
+                onPaste={handleChatPaste}
                 onChange={(event) => setChatInput(sanitizePostText(event.target.value))}
                 onKeyDown={(event) => {
                   if (event.key !== "Enter" || event.shiftKey) return;

@@ -1,9 +1,7 @@
 // src/routes/AppRoutes.tsx
 // import React from "react";
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import Login from "../pages/login";
-import Register from "../pages/register";
 import VerifyEmail from "../pages/verify-email";
 import ForgotPassword from "../pages/forgot-password";
 import ResetPassword from "../pages/reset-password";
@@ -40,11 +38,42 @@ import Storefront from "../pages/storefront";
 import StorefrontListing from "../pages/storefront-listing";
 import StorefrontSeller from "../pages/storefront-seller";
 import StorefrontPaymentMethods from "../pages/storefront-payment-methods";
+import AgeVerifyApp from "../modules/age-verify/AgeVerifyApp";
+import Support from "../pages/support";
+
+function AuthAliasRedirect({ mode }: { mode: "login" | "register" }): JSX.Element {
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  params.set("auth", mode === "register" ? "register" : "login");
+  const query = params.toString();
+  const to = query ? `/?${query}` : "/";
+  return <Navigate to={to} replace />;
+}
+
+const sanitizeRedirectTarget = (value: string | null) => {
+  const trimmed = String(value || "").trim();
+  if (!trimmed || !trimmed.startsWith("/") || trimmed.startsWith("//")) {
+    return null;
+  }
+  const lowered = trimmed.toLowerCase();
+  if (lowered.startsWith("/login") || lowered.startsWith("/register")) {
+    return null;
+  }
+  return trimmed;
+};
 
 export default function AppRoutes(): JSX.Element {
+  const location = useLocation();
   const { user, appSettings, sessionActive } = useAuth();
   const isAuthed = Boolean(user) || sessionActive;
-  const landingElement = isAuthed ? <Navigate to="/dashboard" replace /> : <Landing />;
+  const redirectTarget = sanitizeRedirectTarget(
+    new URLSearchParams(location.search).get("redirect")
+  );
+  const landingElement = isAuthed ? (
+    <Navigate to={redirectTarget || "/dashboard"} replace />
+  ) : (
+    <Landing />
+  );
   const newsroomEnabled = appSettings?.newsroomEnabled !== false;
   const storefrontEnabled = appSettings?.storefrontEnabled !== false;
 
@@ -54,22 +83,26 @@ export default function AppRoutes(): JSX.Element {
       <Route path="/" element={landingElement} />
       <Route path="/home" element={<Navigate to="/" replace />} />
 
-      {/* Login and Register pages */}
-      <Route path="/login" element={<Login />} />
+      {/* Auth entry routes now resolve to inline landing auth */}
+      <Route path="/login" element={<AuthAliasRedirect mode="login" />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
-      <Route path="/register" element={<Register />} />
+      <Route path="/register" element={<AuthAliasRedirect mode="register" />} />
       <Route path="/verify-email" element={<VerifyEmail />} />
+      <Route path="/age-verify/*" element={<AgeVerifyApp />} />
       <Route path="/terms" element={<Terms />} />
       <Route path="/marketplace-policy" element={<MarketplacePolicy />} />
       <Route path="/marketplace-fee-disclosure" element={<MarketplaceFeeDisclosure />} />
       <Route path="/privacy" element={<Privacy />} />
+      <Route path="/privacy-policy" element={<Navigate to="/privacy" replace />} />
       <Route path="/delete-account" element={<DeleteAccount />} />
       <Route path="/delete-data" element={<DeleteData />} />
       <Route path="/guidelines" element={<Guidelines />} />
       <Route path="/cookies" element={<Cookies />} />
+      <Route path="/cookie-policy" element={<Navigate to="/cookies" replace />} />
       <Route path="/safety" element={<Safety />} />
       <Route path="/report" element={<Report />} />
+      <Route path="/support" element={<Support />} />
       <Route path="/what-makes-us-different" element={<WhatMakesUsDifferent />} />
       <Route path="/apps" element={<Apps />} />
       <Route path="/downloads" element={<Downloads />} />

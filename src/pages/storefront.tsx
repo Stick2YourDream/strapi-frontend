@@ -8,29 +8,18 @@ import FullScreenLoader from "../components/FullScreenLoader";
 import TopbarSearch from "../components/TopbarSearch";
 import api from "../api/strapi";
 import AvatarImage from "../components/AvatarImage";
+import ProfilePhotoModal from "../components/ProfilePhotoModal";
 import { useAuth } from "../context/AuthContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { pickMediaUrls } from "../utils/media";
-
-const USE_DEMO_LISTINGS = import.meta.env.DEV;
-const STOREFRONT_DEMO_ENABLED_KEY = "storefront:demoListingsEnabled";
-const STOREFRONT_DEMO_COUNT_KEY = "storefront:demoListingsCount";
-const STOREFRONT_DEMO_MAX = 120;
-
-const readStorefrontDemoEnabled = () => {
-  if (typeof window === "undefined") return USE_DEMO_LISTINGS;
-  const raw = window.localStorage.getItem(STOREFRONT_DEMO_ENABLED_KEY);
-  if (raw === null) return USE_DEMO_LISTINGS;
-  return raw === "true";
-};
-
-const readStorefrontDemoCount = () => {
-  if (typeof window === "undefined") return 0;
-  const raw = Number(window.localStorage.getItem(STOREFRONT_DEMO_COUNT_KEY) || 0);
-  if (!Number.isFinite(raw)) return 0;
-  return Math.max(0, Math.min(STOREFRONT_DEMO_MAX, raw));
-};
+import {
+  STOREFRONT_DEMO_COUNT_KEY,
+  STOREFRONT_DEMO_ENABLED_KEY,
+  buildStorefrontDemoListings,
+  readStorefrontDemoCount,
+  readStorefrontDemoEnabled,
+} from "../data/storefront-demo";
 
 type StorefrontSeller = {
   id: string;
@@ -49,6 +38,10 @@ type StorefrontProduct = {
   rawId?: number;
   title: string;
   price: number;
+  status?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  soldAt?: string;
   category: string;
   condition: string;
   location: string;
@@ -73,11 +66,21 @@ const CATEGORY_OPTIONS = [
   "All",
   "Free",
   "Cars & Vehicles",
+  "Motorcycles",
+  "RVs & Campers",
+  "Auto Parts & Accessories",
   "Real Estate",
+  "Apartments & Rentals",
   "Electronics",
+  "Computers",
+  "Phones & Tablets",
+  "Cameras & Drones",
+  "Gaming",
   "Home & Garden",
   "Furniture",
   "Appliances",
+  "Tools",
+  "Building Materials",
   "Fashion",
   "Shoes",
   "Accessories",
@@ -91,247 +94,37 @@ const CATEGORY_OPTIONS = [
   "Music & Instruments",
   "Art & Collectibles",
   "Jewelry",
-  "Pets",
-  "Services",
+  "Pets & Supplies",
+  "Office & Business",
+  "Industrial & Commercial",
   "Tickets",
-  "Business & Industrial",
-  "Jobs",
   "Other",
 ];
 
-const CONDITION_OPTIONS = ["Any", "New", "Like new", "Good", "Fair"];
-
-const DEMO_IMAGE_SETS = [
-  [
-    "https://images.unsplash.com/photo-1512499617640-c2f999098c01?auto=format&fit=crop&w=900&q=80",
-    "https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&w=900&q=80",
-    "https://images.unsplash.com/photo-1487014679447-9f8336841d58?auto=format&fit=crop&w=900&q=80",
-  ],
-  [
-    "https://images.unsplash.com/photo-1526401485004-46910ecc8e51?auto=format&fit=crop&w=900&q=80",
-    "https://images.unsplash.com/photo-1517836357463-d25dfeac3438?auto=format&fit=crop&w=900&q=80",
-    "https://images.unsplash.com/photo-1518611012118-696072aa579a?auto=format&fit=crop&w=900&q=80",
-  ],
-  [
-    "https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?auto=format&fit=crop&w=900&q=80",
-    "https://images.unsplash.com/photo-1523206489230-c012c64b2b48?auto=format&fit=crop&w=900&q=80",
-    "https://images.unsplash.com/photo-1510557880182-3d4d3cba35a5?auto=format&fit=crop&w=900&q=80",
-  ],
-  [
-    "https://images.unsplash.com/photo-1452587925148-ce544e77e70d?auto=format&fit=crop&w=900&q=80",
-    "https://images.unsplash.com/photo-1519181245277-cffeb31da2e3?auto=format&fit=crop&w=900&q=80",
-    "https://images.unsplash.com/photo-1453672915606-6e4bafafbb9d?auto=format&fit=crop&w=900&q=80",
-  ],
-  [
-    "https://images.unsplash.com/photo-1505691938895-1758d7feb511?auto=format&fit=crop&w=900&q=80",
-    "https://images.unsplash.com/photo-1519710164239-da123dc03ef4?auto=format&fit=crop&w=900&q=80",
-    "https://images.unsplash.com/photo-1501045661006-fcebe0257c3f?auto=format&fit=crop&w=900&q=80",
-  ],
+const CONDITION_OPTIONS = ["Any", "New", "Good", "Fair", "Poor"];
+const BLOCKED_CATEGORIES = new Set(["services", "jobs"]);
+const BLOCKED_KEYWORDS = [
+  "adult toy",
+  "sex toy",
+  "dildo",
+  "sex doll",
+  "escort",
+  "prostitution",
+  "hooker",
+  "stripper",
+  "porn",
+  "explicit",
+  "nudity",
+  "onlyfans",
+  "cam show",
+  "sexual service",
+  "pay for sex",
 ];
+const hasBlockedKeyword = (value: string) =>
+  BLOCKED_KEYWORDS.some((keyword) => value.includes(keyword));
 
-const DEMO_TITLES = [
-  "Designer lounge chair",
-  "Portable espresso kit",
-  "Smart home starter set",
-  "Wireless noise-canceling headphones",
-  "Trail-ready camera backpack",
-  "Limited edition vinyl set",
-  "Ergonomic standing desk",
-  "Handmade ceramic dinnerware",
-  "Compact travel drone",
-  "Studio lighting kit",
-];
-
-const DEMO_LOCATIONS = [
-  "Seattle, WA",
-  "Austin, TX",
-  "Portland, OR",
-  "Denver, CO",
-  "San Diego, CA",
-  "Chicago, IL",
-];
-
-const DEFAULT_PRODUCTS: StorefrontProduct[] = [
-  {
-    id: "camera-kit",
-    title: "Vintage film camera kit",
-    price: 0.01,
-    category: "Collectibles",
-    condition: "Good",
-    location: "Seattle, WA",
-    description:
-      "Full 35mm starter kit with lenses, light meter, and fresh film rolls. Cleaned and ready to shoot.",
-    images: [
-      "https://images.unsplash.com/photo-1452587925148-ce544e77e70d?auto=format&fit=crop&w=900&q=80",
-      "https://images.unsplash.com/photo-1519181245277-cffeb31da2e3?auto=format&fit=crop&w=900&q=80",
-      "https://images.unsplash.com/photo-1453672915606-6e4bafafbb9d?auto=format&fit=crop&w=900&q=80",
-    ],
-    seller: {
-      id: "seller-1",
-      userId: 0,
-      name: "Avery Lopez",
-      rating: 4.9,
-      responseTime: "Typically replies within 1 hour",
-      verifiedLevel: "verified",
-      badges: ["ID verified", "Payout verified"],
-    },
-    stock: 1,
-    shipping: "Delivery arranged privately",
-    shippingEnabled: false,
-    shippingCarriers: [],
-    shippingInternational: false,
-    localPickup: true,
-    cashAccepted: true,
-    shippingNotes: "",
-    noShippingRequired: true,
-    isDemo: true,
-  },
-  {
-    id: "desk-setup",
-    title: "Minimalist desk setup bundle",
-    price: 0.01,
-    category: "Home",
-    condition: "Like new",
-    location: "Portland, OR",
-    description:
-      "Complete workspace set: oak desk, ergonomic chair, and adjustable lamp. Pickup preferred.",
-    images: [
-      "https://images.unsplash.com/photo-1487014679447-9f8336841d58?auto=format&fit=crop&w=900&q=80",
-      "https://images.unsplash.com/photo-1519710164239-da123dc03ef4?auto=format&fit=crop&w=900&q=80",
-      "https://images.unsplash.com/photo-1505691938895-1758d7feb511?auto=format&fit=crop&w=900&q=80",
-    ],
-    seller: {
-      id: "seller-2",
-      userId: 0,
-      name: "Morgan Tate",
-      rating: 4.7,
-      responseTime: "Typically replies within 2 hours",
-      verifiedLevel: "pending",
-      badges: ["ID verified", "Payment pending"],
-    },
-    stock: 1,
-    shipping: "Delivery arranged privately",
-    shippingEnabled: false,
-    shippingCarriers: [],
-    shippingInternational: false,
-    localPickup: true,
-    cashAccepted: true,
-    shippingNotes: "",
-    noShippingRequired: true,
-    isDemo: true,
-  },
-  {
-    id: "fitness-kit",
-    title: "At-home fitness starter kit",
-    price: 0.01,
-    category: "Fitness",
-    condition: "New",
-    location: "Austin, TX",
-    description:
-      "Resistance bands, yoga mat, and adjustable dumbbells. Unopened and ready to ship.",
-    images: [
-      "https://images.unsplash.com/photo-1517836357463-d25dfeac3438?auto=format&fit=crop&w=900&q=80",
-      "https://images.unsplash.com/photo-1518611012118-696072aa579a?auto=format&fit=crop&w=900&q=80",
-      "https://images.unsplash.com/photo-1526401485004-46910ecc8e51?auto=format&fit=crop&w=900&q=80",
-    ],
-    seller: {
-      id: "seller-3",
-      userId: 0,
-      name: "Jordan Reed",
-      rating: 4.8,
-      responseTime: "Typically replies within 30 minutes",
-      verifiedLevel: "verified",
-      badges: ["ID verified", "Payout verified"],
-    },
-    stock: 4,
-    shipping: "Delivery arranged privately",
-    shippingEnabled: false,
-    shippingCarriers: [],
-    shippingInternational: false,
-    localPickup: false,
-    cashAccepted: false,
-    shippingNotes: "",
-    noShippingRequired: true,
-    isDemo: true,
-  },
-  {
-    id: "smartphone",
-    title: "Unlocked smartphone 256GB",
-    price: 0.01,
-    category: "Electronics",
-    condition: "Good",
-    location: "Denver, CO",
-    description:
-      "Unlocked, lightly used, includes case and fast charger. Battery health 92%.",
-    images: [
-      "https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?auto=format&fit=crop&w=900&q=80",
-      "https://images.unsplash.com/photo-1510557880182-3d4d3cba35a5?auto=format&fit=crop&w=900&q=80",
-      "https://images.unsplash.com/photo-1523206489230-c012c64b2b48?auto=format&fit=crop&w=900&q=80",
-    ],
-    seller: {
-      id: "seller-4",
-      userId: 0,
-      name: "Skylar Brooks",
-      rating: 4.6,
-      responseTime: "Typically replies within 4 hours",
-      verifiedLevel: "verified",
-      badges: ["ID verified", "Phone verified"],
-    },
-    stock: 2,
-    shipping: "Delivery arranged privately",
-    shippingEnabled: false,
-    shippingCarriers: [],
-    shippingInternational: false,
-    localPickup: true,
-    cashAccepted: false,
-    shippingNotes: "",
-    noShippingRequired: true,
-    isDemo: true,
-  },
-];
-
-const buildDemoListings = (count: number, startIndex = 0): StorefrontProduct[] => {
-  const total = Math.max(1, Math.min(20, count));
-  return Array.from({ length: total }).map((_, index) => {
-    const seed = startIndex + index;
-    const title = DEMO_TITLES[seed % DEMO_TITLES.length];
-    const category = CATEGORY_OPTIONS[(seed % (CATEGORY_OPTIONS.length - 1)) + 1];
-    const condition = CONDITION_OPTIONS[(seed % (CONDITION_OPTIONS.length - 1)) + 1];
-    const location = DEMO_LOCATIONS[seed % DEMO_LOCATIONS.length];
-    const images = DEMO_IMAGE_SETS[seed % DEMO_IMAGE_SETS.length];
-    const price = 0.01;
-    return {
-      id: `demo-${seed + 1}`,
-      title,
-      price,
-      category,
-      condition,
-      location,
-      description:
-        "Demo listing for StoreFront previews. Swap this out with real seller inventory when live.",
-      images,
-      seller: {
-        id: `demo-seller-${seed % 4}`,
-        userId: 0,
-        name: "Demo Seller",
-        rating: 4.8,
-        responseTime: "Typically replies within 1 hour",
-        verifiedLevel: "verified",
-        badges: ["ID verified", "Payout verified"],
-      },
-      stock: 1 + (seed % 5),
-      shipping: "Delivery arranged privately",
-      shippingEnabled: false,
-      shippingCarriers: [],
-      shippingInternational: false,
-      localPickup: seed % 2 === 0,
-      cashAccepted: seed % 3 === 0,
-      shippingNotes: "",
-      noShippingRequired: true,
-      isDemo: true,
-    };
-  });
-};
+const SOLD_VISIBILITY_DAYS = 5;
+const SOLD_VISIBILITY_MS = SOLD_VISIBILITY_DAYS * 24 * 60 * 60 * 1000;
 
 const currency = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -375,12 +168,14 @@ export default function Storefront() {
   const [conditionFilter, setConditionFilter] = useState("Any");
   const [sortMode, setSortMode] = useState<"default" | "trending">("default");
   const [locationFilter, setLocationFilter] = useState("");
+  const [radiusMiles, setRadiusMiles] = useState("");
   const [minPrice, setMinPrice] = useState("");
   const [maxPrice, setMaxPrice] = useState("");
   const [verifiedOnly, setVerifiedOnly] = useState(false);
   const [freeOnly, setFreeOnly] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [photoModalOpen, setPhotoModalOpen] = useState(false);
   const { user, profile, logout } = useAuth();
   const loadingStartedRef = useRef(false);
   const listingGridRef = useRef<HTMLDivElement | null>(null);
@@ -397,10 +192,53 @@ export default function Storefront() {
     }
   }, [loadingListings]);
 
-  const demoListings = useMemo(() => {
-    if (!demoEnabled || previewMine) return [];
-    const extra = demoCount > 0 ? buildDemoListings(demoCount, 0) : [];
-    return [...DEFAULT_PRODUCTS, ...extra];
+  useEffect(() => {
+    if (!profile) return;
+    if (!locationFilter.trim() && profile.storefrontDefaultLocation) {
+      setLocationFilter(profile.storefrontDefaultLocation);
+    }
+    if (!radiusMiles && Number(profile.storefrontDefaultRadiusMiles) > 0) {
+      setRadiusMiles(String(profile.storefrontDefaultRadiusMiles));
+    }
+  }, [
+    locationFilter,
+    profile?.storefrontDefaultLocation,
+    profile?.storefrontDefaultRadiusMiles,
+    radiusMiles,
+  ]);
+
+  const demoListings = useMemo<StorefrontProduct[]>(() => {
+    if (!demoEnabled || previewMine || demoCount <= 0) return [];
+    return buildStorefrontDemoListings(demoCount).map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+      price: 0.01,
+      status: "active",
+      category: entry.category,
+      condition: entry.condition,
+      location: entry.location,
+      description: entry.description,
+      images: entry.images,
+      seller: {
+        id: "demo-seller",
+        userId: 0,
+        name: "Demo Seller",
+        rating: 4.8,
+        responseTime: "Typically replies within 1 hour",
+        verifiedLevel: "verified" as const,
+        badges: ["ID verified", "Payout verified"],
+      },
+      stock: entry.stock,
+      shipping: "Delivery arranged privately",
+      shippingEnabled: false,
+      shippingCarriers: [],
+      shippingInternational: false,
+      localPickup: entry.localPickup,
+      cashAccepted: entry.cashAccepted,
+      shippingNotes: "",
+      noShippingRequired: true,
+      isDemo: true,
+    } satisfies StorefrontProduct));
   }, [demoCount, demoEnabled, previewMine]);
 
   const loadListings = useCallback(async () => {
@@ -443,6 +281,10 @@ export default function Storefront() {
           rawId: Number(entry?.id ?? attrs.documentId ?? attrs.id) || undefined,
           title: String(attrs.title || "Untitled listing"),
           price: Number(attrs.price || 0),
+          status: String(attrs.status || "active"),
+          createdAt: String(attrs.createdAt || entry?.createdAt || ""),
+          updatedAt: String(attrs.updatedAt || entry?.updatedAt || ""),
+          soldAt: String(attrs.soldAt || ""),
           category: String(attrs.category || "General"),
           condition: String(attrs.condition || "Good"),
           location: String(attrs.location || "Flexible pickup"),
@@ -528,12 +370,15 @@ export default function Storefront() {
           },
         };
       });
-      const fallback = demoListings;
-      const combined = enriched.length ? [...demoListings, ...enriched] : fallback;
-      setProducts(combined);
+      const merged = [...demoListings, ...enriched];
+      setProducts(merged);
     } catch (err) {
-      setListingError("Unable to load listings right now.");
-      setProducts(demoListings);
+      if (demoListings.length > 0) {
+        setProducts(demoListings);
+      } else {
+        setListingError("Unable to load listings right now.");
+        setProducts([]);
+      }
     } finally {
       setLoadingListings(false);
     }
@@ -545,6 +390,29 @@ export default function Storefront() {
     const minValue = minPrice.trim() ? Number(minPrice) : null;
     const maxValue = maxPrice.trim() ? Number(maxPrice) : null;
     const filtered = products.filter((product) => {
+      const status = String(product.status || "active").toLowerCase();
+      if (!previewMine && ["pending", "draft", "archived"].includes(status)) {
+        return false;
+      }
+      if (status === "sold" && !previewMine) {
+        const soldAtRaw =
+          product.soldAt?.trim() ||
+          product.updatedAt?.trim() ||
+          product.createdAt?.trim() ||
+          "";
+        const soldAtMs = soldAtRaw ? Date.parse(soldAtRaw) : Number.NaN;
+        if (Number.isFinite(soldAtMs)) {
+          const ageMs = Date.now() - soldAtMs;
+          if (ageMs > SOLD_VISIBILITY_MS) {
+            return false;
+          }
+        }
+      }
+      const categoryLower = product.category.toLowerCase();
+      const contentCheck = `${product.title} ${product.description} ${product.category}`.toLowerCase();
+      if (BLOCKED_CATEGORIES.has(categoryLower) || hasBlockedKeyword(contentCheck)) {
+        return false;
+      }
       if (categoryFilter !== "All" && product.category !== categoryFilter) {
         return false;
       }
@@ -608,7 +476,13 @@ export default function Storefront() {
   };
 
   const handleOpenListing = (productId: string) => {
-    navigate(`/storefront/listing/${productId}`);
+    navigate(`/storefront/listing/${productId}`, {
+      state: {
+        query: query.trim(),
+        category: categoryFilter,
+        location: locationFilter.trim(),
+      },
+    });
   };
 
   useEffect(() => {
@@ -662,6 +536,10 @@ export default function Storefront() {
   return (
     <div className="dashboard-shell storefront-shell" style={pageBackground}>
       {showInitialLoader && <FullScreenLoader label="Loading storefront" />}
+      <ProfilePhotoModal
+        open={photoModalOpen}
+        onClose={() => setPhotoModalOpen(false)}
+      />
       <div className={`sidebar-shell ${menuOpen ? "open" : ""}`}>
         <div className="sidebar-topbar">
           <button className="brand" type="button" onClick={handleLogoClick} style={{ cursor: "pointer" }}>
@@ -726,6 +604,25 @@ export default function Storefront() {
                   onClick={() => handleProfileAction("/me")}
                 >
                   My Profile
+                </button>
+                <button
+                  className="mobile-profile-item"
+                  type="button"
+                  data-accent="settings"
+                  onClick={() => handleProfileAction("/me?view=settings")}
+                >
+                  Account settings
+                </button>
+                <button
+                  className="mobile-profile-item"
+                  type="button"
+                  onClick={() => {
+                    setPhotoModalOpen(true);
+                    setShowProfileMenu(false);
+                    setMenuOpen(false);
+                  }}
+                >
+                  {profile?.avatarUrl ? "Edit Profile Photo" : "Add Profile Photo"}
                 </button>
                 {user && (
                   <button
@@ -837,6 +734,24 @@ export default function Storefront() {
               >
                 My profile
               </button>
+              <button
+                className="btn ghost nav-btn sidebar-profile-menu-button"
+                type="button"
+                data-accent="settings"
+                onClick={() => handleProfileAction("/me?view=settings")}
+              >
+                Account settings
+              </button>
+              <button
+                className="btn ghost nav-btn sidebar-profile-menu-button"
+                type="button"
+                onClick={() => {
+                  setPhotoModalOpen(true);
+                  setShowProfileMenu(false);
+                }}
+              >
+                {profile?.avatarUrl ? "Edit Profile Photo" : "Add Profile Photo"}
+              </button>
                 {user && (
                   <button
                     className="btn ghost nav-btn sidebar-profile-menu-button"
@@ -899,6 +814,23 @@ export default function Storefront() {
                   onChange={(event) => setLocationFilter(event.target.value)}
                 />
               </label>
+              <label className="storefront-field" htmlFor="storefront-radius">
+                <span>Radius (miles)</span>
+                <input
+                  id="storefront-radius"
+                  type="number"
+                  min="1"
+                  step="1"
+                  placeholder="e.g. 25"
+                  value={radiusMiles}
+                  onChange={(event) => setRadiusMiles(event.target.value)}
+                />
+              </label>
+              <p className="storefront-field-hint">
+                The radius is stored and prefilled but not used to actually filter listings yet
+                because listings only have a text location string (no lat/long). If you want true
+                radius filtering, I can add geocoding + distance checks.
+              </p>
             </div>
 
             <div className="storefront-sidebar-group">
@@ -1026,7 +958,8 @@ export default function Storefront() {
             </div>
             <div className="storefront-stat">
               <span>Platform fee</span>
-              <strong>3%</strong>
+              <strong>2%</strong>
+              <small className="storefront-stat-note">4% for non-verified users</small>
             </div>
             <div className="storefront-stat">
               <span>Verified protection</span>
@@ -1048,12 +981,23 @@ export default function Storefront() {
             )}
 
             <div className="storefront-grid" ref={listingGridRef}>
-              {filteredProducts.map((product) => (
+              {filteredProducts.map((product) => {
+                const statusLower = String(product.status || "active").toLowerCase();
+                const isSold = statusLower === "sold";
+                const isPending = statusLower === "pending";
+                const isAvailable = statusLower === "active" || statusLower === "available";
+                return (
                 <div
                   key={product.id}
                   role="button"
                   tabIndex={0}
-                  className="storefront-card"
+                  className={`storefront-card ${
+                    isSold
+                      ? "is-sold"
+                      : isPending
+                      ? "is-pending"
+                      : ""
+                  }`}
                   onClick={() => handleOpenListing(product.id)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
@@ -1067,6 +1011,15 @@ export default function Storefront() {
                       <img src={product.images[0]} alt={product.title} />
                     ) : (
                       <div className="storefront-card-fallback" />
+                    )}
+                    {isSold && (
+                      <span className="storefront-card-ribbon is-sold">SOLD</span>
+                    )}
+                    {isPending && (
+                      <span className="storefront-card-ribbon is-pending">Pending</span>
+                    )}
+                    {isAvailable && (
+                      <span className="storefront-card-ribbon is-available">Available</span>
                     )}
                     <span className="storefront-card-condition">{product.condition}</span>
                     <span className="storefront-card-price-pill">
@@ -1095,7 +1048,8 @@ export default function Storefront() {
                     </div>
                   </div>
                 </div>
-              ))}
+              );
+            })}
             </div>
           </div>
         </section>

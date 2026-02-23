@@ -15,6 +15,10 @@ import {
   type ProfileVisibility,
   type VisibilityLevel,
 } from "../utils/profile-e2ee";
+import {
+  normalizeTimeLimitSettings,
+  type TimeLimitSettings,
+} from "../utils/time-limits";
 import { getOrCreateProfileKey } from "../utils/crypto";
 import {
   createKeyBackup,
@@ -31,6 +35,17 @@ interface User {
   email: string;
   username?: string;
   appRole?: "user" | "moderator" | "admin";
+  createdAt?: string | null;
+  ageVerified?: boolean;
+  ageVerifiedAt?: string | null;
+  ageVerificationRequired?: boolean;
+  ageVerificationDueAt?: string | null;
+  ageVerificationOverdue?: boolean;
+  ageVerificationDaysRemaining?: number | null;
+  ageVerificationDobMismatchAt?: string | null;
+  ageVerificationDobMismatchDueAt?: string | null;
+  ageVerificationDobMismatchOverdue?: boolean;
+  ageVerificationDobMismatchDaysRemaining?: number | null;
 }
 
 
@@ -74,7 +89,18 @@ interface ProfileSummary {
   activityVisibility?: VisibilityLevel;
   notificationSettings?: NotificationSettings;
   notificationReadState?: NotificationReadState;
+  timeLimitSettings?: TimeLimitSettings;
+  storefrontDefaultLocation?: string;
+  storefrontDefaultRadiusMiles?: number;
   lastSeenAt?: string;
+  avatarSchedule?: Record<
+    string,
+    {
+      id?: number;
+      url?: string;
+      updatedAt?: string;
+    }
+  >;
 }
 
 interface AppSettings {
@@ -89,6 +115,7 @@ interface AuthContextType {
   appSettings: AppSettings;
   authReady: boolean;
   sessionActive: boolean;
+  sessionStartedAt: number | null;
   sessionExpiresAt: number | null;
   keyBackupStatus: "unknown" | "ready" | "needs-setup" | "needs-restore";
   keyBackupLoading: boolean;
@@ -148,6 +175,21 @@ const parseJwtExpiry = (token: string | null) => {
   return null;
 };
 
+const parseJwtIssuedAt = (token: string | null) => {
+  const decoded = parseJwtPayload(token);
+  const rawIat = decoded?.iat;
+  if (typeof rawIat === "number") {
+    return rawIat > 10_000_000_000 ? rawIat : rawIat * 1000;
+  }
+  if (typeof rawIat === "string") {
+    const parsed = Number(rawIat);
+    if (Number.isFinite(parsed)) {
+      return parsed > 10_000_000_000 ? parsed : parsed * 1000;
+    }
+  }
+  return null;
+};
+
 const parseJwtUserId = (token: string | null) => {
   const decoded = parseJwtPayload(token);
   const rawId = decoded?.id ?? decoded?.userId ?? decoded?.sub;
@@ -175,6 +217,68 @@ const trySetItem = (storage: Storage | null | undefined, key: string, value: str
     return true;
   } catch {
     return false;
+  }
+};
+
+const normalizeBirthdayValue = (value?: string) => {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const datePart = raw.split("T")[0];
+  if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return datePart;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString().slice(0, 10);
+};
+
+const normalizePhoneValue = (value?: string) => {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return null;
+  if (digits.length < 10) return null;
+  return digits.slice(-10);
+};
+
+const normalizeRadiusValue = (value?: string | number | null) => {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(0, Math.round(parsed));
+};
+
+const LOGOUT_MESSAGE_KEY = "auth:logout-message";
+const TIME_LIMIT_STORAGE_PREFIX = "ysp-time-limit";
+
+const pickLogoutMessage = (reason?: string) => {
+  const generalMessages = [
+    "Thanks for showing up today. Keep shining and come back whenever you’re ready.",
+    "Nice work today. Take a breather and we’ll see you soon.",
+    "You made progress. Step away for a moment and come back refreshed.",
+    "Great effort. Take care of yourself and we’ll be here when you return.",
+  ];
+  const timeLimitMessages = [
+    "Time’s up for this session. You did great — take a break and we’ll see you soon.",
+    "Great focus. We logged you out so you can recharge.",
+    "Nice work staying on track. Take a pause and come back strong.",
+  ];
+  const pool = reason === "time-limit" ? timeLimitMessages : generalMessages;
+  return pool[Math.floor(Math.random() * pool.length)];
+};
+
+const storeLogoutMessage = (reason?: string) => {
+  if (typeof window === "undefined") return;
+  if (reason !== "user-action" && reason !== "time-limit") return;
+  try {
+    window.localStorage.setItem(LOGOUT_MESSAGE_KEY, pickLogoutMessage(reason));
+  } catch {
+    // ignore storage errors
+  }
+};
+
+const clearTimeLimitStorage = (userId: number) => {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(`${TIME_LIMIT_STORAGE_PREFIX}:${userId}`);
+  } catch {
+    // ignore storage errors
   }
 };
 
@@ -280,6 +384,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   });
   const [authReady, setAuthReady] = useState(false);
   const [sessionActive, setSessionActive] = useState(false);
+  const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null);
   const [sessionExpiresAt, setSessionExpiresAt] = useState<number | null>(null);
   const [keyBackupStatus, setKeyBackupStatus] =
     useState<AuthContextType["keyBackupStatus"]>("unknown");
@@ -336,10 +441,14 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         const resolvedExpiry = effectiveExpiry || fallbackExpiry;
 
         if (!effectiveExpiry || now < effectiveExpiry) {
+          const issuedAt = parseJwtIssuedAt(storedToken) || now;
           if (active) {
             setSessionActive(true);
             setSessionExpiresAt(resolvedExpiry);
+            setSessionStartedAt(issuedAt);
           }
+          lastLoginAtRef.current = issuedAt;
+          sessionStorage.setItem("auth:last-login-at", String(issuedAt));
           const baseSnapshot: AuthSnapshot = {
             token: storedToken,
             expiresAt: resolvedExpiry.toString(),
@@ -379,13 +488,27 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
           if (!storedUser) {
             try {
-              const res = await api.get("/users/me");
-              const payload = res.data || {};
+              const res = await api.get("/account/status");
+              const payload = res.data?.user || res.data || {};
               const recovered: User = {
                 id: Number(payload.id),
                 email: String(payload.email || ""),
                 username: payload.username || undefined,
                 appRole: payload.appRole || undefined,
+                ageVerified: payload.ageVerified ?? undefined,
+                ageVerifiedAt: payload.ageVerifiedAt ?? null,
+                ageVerificationRequired: payload.ageVerificationRequired ?? undefined,
+                ageVerificationDueAt: payload.ageVerificationDueAt ?? null,
+                ageVerificationOverdue: payload.ageVerificationOverdue ?? undefined,
+                ageVerificationDaysRemaining: payload.ageVerificationDaysRemaining ?? null,
+                ageVerificationDobMismatchAt:
+                  payload.ageVerificationDobMismatchAt ?? null,
+                ageVerificationDobMismatchDueAt:
+                  payload.ageVerificationDobMismatchDueAt ?? null,
+                ageVerificationDobMismatchOverdue:
+                  payload.ageVerificationDobMismatchOverdue ?? undefined,
+                ageVerificationDobMismatchDaysRemaining:
+                  payload.ageVerificationDobMismatchDaysRemaining ?? null,
               };
               if (Number.isFinite(recovered.id)) {
                 const userSnapshot: AuthSnapshot = {
@@ -402,7 +525,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
               if (active && !hasFallback) {
                 console.warn("Auth: unable to restore user from token.", error);
               } else if (!storedUser) {
-                console.warn("Auth: recovered user from token due to /users/me failure.", error);
+                console.warn("Auth: recovered user from token due to /account/status failure.", error);
               }
             }
           }
@@ -496,6 +619,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         payload = basePayload;
         if (!hasEncryptedProfile && Object.values(payload).some((value) => value)) {
           try {
+            const normalizedBirthday = normalizeBirthdayValue(payload.birthday);
+            const normalizedPhone = normalizePhoneValue(payload.phone);
+            const normalizedRadius = normalizeRadiusValue(payload.storefrontDefaultRadiusMiles);
             const encryptedProfile = await encryptProfilePayload(user.id, payload);
             await api.put("/profiles/me", {
               data: {
@@ -504,7 +630,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                 firstName: payload.firstName || "",
                 lastName: payload.lastName || "",
                 age: payload.age || "",
-                birthday: payload.birthday || "",
+                birthday: normalizedBirthday,
                 gender: payload.gender || "",
                 religion: payload.religion || "",
                 hobbies: payload.hobbies || "",
@@ -515,8 +641,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                 state: payload.state || "",
                 stateCode: payload.stateCode || "",
                 city: payload.city || "",
-                phone: payload.phone || "",
+                phone: normalizedPhone,
                 ...PROFILE_PII_CLEAR_FIELDS,
+                storefrontDefaultLocation: payload.storefrontDefaultLocation || "",
+                storefrontDefaultRadiusMiles: normalizedRadius,
               },
             });
           } catch (error) {
@@ -544,9 +672,14 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         }
       }
 
+      const normalizedPublicBirthday = normalizeBirthdayValue(payload?.birthday);
+      const normalizedPublicPhone = normalizePhoneValue(payload?.phone);
+      const normalizedPublicRadius = normalizeRadiusValue(
+        payload?.storefrontDefaultRadiusMiles ?? null
+      );
       const publicFields = {
         age: payload?.age || "",
-        birthday: payload?.birthday || "",
+        birthday: normalizedPublicBirthday,
         gender: payload?.gender || "",
         religion: payload?.religion || "",
         hobbies: payload?.hobbies || "",
@@ -557,14 +690,22 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         state: payload?.state || "",
         stateCode: payload?.stateCode || "",
         city: payload?.city || "",
-        phone: payload?.phone || "",
+        phone: normalizedPublicPhone,
+        storefrontDefaultLocation: payload?.storefrontDefaultLocation || "",
+        storefrontDefaultRadiusMiles: normalizedPublicRadius,
       };
-      const needsPublicUpdate = Object.entries(publicFields).some(
-        ([key, value]) => String(attrs?.[key] || "") !== String(value || "")
-      );
-      if (needsPublicUpdate) {
+      const changedPublicFields: Record<string, any> = {};
+      Object.entries(publicFields).forEach(([key, value]) => {
+        const current = attrs?.[key];
+        const currentComparable = current ?? "";
+        const nextComparable = value ?? "";
+        if (String(currentComparable) !== String(nextComparable)) {
+          changedPublicFields[key] = value;
+        }
+      });
+      if (Object.keys(changedPublicFields).length > 0) {
         try {
-          await api.put("/profiles/me", { data: publicFields });
+          await api.put("/profiles/me", { data: changedPublicFields });
         } catch (error) {
           console.warn("Unable to sync public profile fields:", error);
         }
@@ -577,9 +718,25 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           ? attrs.onboardingComplete
           : true;
 
-      const avatarUrl = pickMediaUrl(attrs.avatar, { kind: "avatar" });
+      const resolveScheduledAvatarUrl = () => {
+        const schedule = attrs?.avatarSchedule;
+        if (!schedule || typeof schedule !== "object") return undefined;
+        const dayIndex = new Date().getDay();
+        const dayKeys = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+        const dayKey = dayKeys[dayIndex] || "mon";
+        const entry = (schedule as Record<string, any>)[dayKey];
+        if (!entry) return undefined;
+        const entryUrl = typeof entry === "string" ? entry : entry?.url;
+        if (!entryUrl) return undefined;
+        return pickMediaUrl({ url: entryUrl }, { kind: "avatar" });
+      };
+
+      const scheduledAvatarUrl = resolveScheduledAvatarUrl();
+      const avatarUrl =
+        scheduledAvatarUrl || pickMediaUrl(attrs.avatar, { kind: "avatar" });
       const handle = attrs.handle || undefined;
       const notificationReadState = attrs?.notificationReadState || undefined;
+      const timeLimitSettings = normalizeTimeLimitSettings(attrs?.timeLimitSettings);
       const mergedPayload =
         profileDecryptFailedRef.current && lastGoodProfileRef.current
           ? { ...lastGoodProfileRef.current, ...payload }
@@ -590,6 +747,15 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         avatarUrl,
         handle,
         notificationReadState,
+        timeLimitSettings,
+        storefrontDefaultLocation: payload?.storefrontDefaultLocation || "",
+        storefrontDefaultRadiusMiles:
+          typeof payload?.storefrontDefaultRadiusMiles === "number"
+            ? payload.storefrontDefaultRadiusMiles
+            : payload?.storefrontDefaultRadiusMiles
+            ? Number(payload.storefrontDefaultRadiusMiles)
+            : undefined,
+        avatarSchedule: attrs?.avatarSchedule || undefined,
       };
       setProfile(nextProfile);
       lastGoodProfileRef.current = nextProfile;
@@ -858,8 +1024,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     // 30 days when remembered, otherwise 24 hours.
     const sessionDays = options?.rememberDevice ? 30 : 1;
     const now = Date.now();
-    lastLoginAtRef.current = now;
-    sessionStorage.setItem("auth:last-login-at", String(now));
+    const issuedAt = parseJwtIssuedAt(token) || now;
+    lastLoginAtRef.current = issuedAt;
+    sessionStorage.setItem("auth:last-login-at", String(issuedAt));
+    setSessionStartedAt(issuedAt);
     const requestedExpiresAt = now + sessionDays * 24 * 60 * 60 * 1000;
     const tokenExpiresAt = parseJwtExpiry(token);
     const effectiveExpiresAt = resolveEffectiveExpiry(
@@ -930,10 +1098,15 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       console.warn("Auth: logout requested", { reason, sinceLoginMs });
       console.trace("Auth logout stack");
     }
+    if (user?.id) {
+      clearTimeLimitStorage(user.id);
+    }
+    storeLogoutMessage(reason);
     setUser(null);
     setProfile(null);
     setProfileLoading(false);
     setSessionActive(false);
+    setSessionStartedAt(null);
     setSessionExpiresAt(null);
     setKeyBackupStatus("unknown");
     setKeyBackupLoading(false);
@@ -961,6 +1134,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         appSettings,
         authReady,
         sessionActive,
+        sessionStartedAt,
         sessionExpiresAt,
         keyBackupStatus,
         keyBackupLoading,
@@ -990,6 +1164,7 @@ export const StaticAuthProvider = ({ children }: { children: React.ReactNode }) 
       appSettings: { newsroomEnabled: true, storefrontEnabled: true },
       authReady: true,
       sessionActive: false,
+      sessionStartedAt: null,
       sessionExpiresAt: null,
       keyBackupStatus: "unknown",
       keyBackupLoading: false,

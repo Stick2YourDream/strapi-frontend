@@ -1,6 +1,7 @@
 // src/pages/Login.tsx
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useNavigate } from "react-router-dom";
+import { QRCodeCanvas } from "qrcode.react";
 import api from "../api/strapi";
 import type { AuthResponse, LoginStartResponse } from "../types/auth";
 import { useAuth } from "../context/AuthContext";
@@ -11,10 +12,14 @@ import { getOrCreateDeviceId } from "../utils/device-id";
 import { getDefaultDeviceLabel } from "../utils/device-approval";
 import { getStoredExpiresAt, getStoredToken } from "../utils/auth-storage";
 import { pickMediaUrl } from "../utils/media";
+import { AGE_VERIFY_API_BASE, AGE_VERIFY_PUBLIC_URL } from "../utils/age-verify";
+import { trackEvent } from "../utils/analytics";
 
 const SETTINGS_GLOBAL_KEY = "video-call-settings:global";
 const AUTH_DEBUG_SESSION_KEY = "auth:debug-last-login";
 const RECENT_LOGINS_KEY = "auth:recent-logins";
+const LOGOUT_MESSAGE_KEY = "auth:logout-message";
+const LOGIN_CHALLENGE_KEY = "auth:login-challenge";
 const MAX_RECENT_LOGINS = 4;
 
 type AuthDebugSnapshot = {
@@ -46,6 +51,13 @@ const loadBackgroundSettings = (raw: string | null) => {
 };
 
 type VerificationMethod = "sms" | "email" | "totp";
+type LoginChallengeSnapshot = {
+  challengeId: string;
+  method: VerificationMethod;
+  deliveryHint?: string | null;
+  identifier?: string;
+  createdAt: number;
+};
 
 type RecentLoginEntry = {
   id: number;
@@ -82,6 +94,51 @@ const loadRecentLogins = () => {
   } catch {
     return [] as RecentLoginEntry[];
   }
+};
+
+const loadLogoutMessage = () => {
+  if (typeof window === "undefined") return null;
+  const raw = window.localStorage.getItem(LOGOUT_MESSAGE_KEY);
+  if (!raw) return null;
+  window.localStorage.removeItem(LOGOUT_MESSAGE_KEY);
+  return raw;
+};
+
+const loadStoredChallenge = (): LoginChallengeSnapshot | null => {
+  if (typeof window === "undefined") return null;
+  const raw = window.sessionStorage.getItem(LOGIN_CHALLENGE_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as LoginChallengeSnapshot;
+    if (!parsed || typeof parsed !== "object") return null;
+    const createdAt = Number(parsed.createdAt || 0);
+    if (!Number.isFinite(createdAt)) return null;
+    // Drop stale challenges after 15 minutes.
+    if (Date.now() - createdAt > 15 * 60 * 1000) {
+      window.sessionStorage.removeItem(LOGIN_CHALLENGE_KEY);
+      return null;
+    }
+    const method = parsed.method as VerificationMethod | undefined;
+    if (!parsed.challengeId || !method) return null;
+    return {
+      challengeId: String(parsed.challengeId),
+      method,
+      deliveryHint: parsed.deliveryHint ?? null,
+      identifier: parsed.identifier ? String(parsed.identifier) : undefined,
+      createdAt,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const persistStoredChallenge = (snapshot: LoginChallengeSnapshot | null) => {
+  if (typeof window === "undefined") return;
+  if (!snapshot) {
+    window.sessionStorage.removeItem(LOGIN_CHALLENGE_KEY);
+    return;
+  }
+  window.sessionStorage.setItem(LOGIN_CHALLENGE_KEY, JSON.stringify(snapshot));
 };
 
 const persistRecentLogins = (entries: RecentLoginEntry[]) => {
@@ -143,6 +200,9 @@ export default function Login() {
   const [verifying, setVerifying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [logoutMessage, setLogoutMessage] = useState<string | null>(() =>
+    loadLogoutMessage()
+  );
   const [debugDetails, setDebugDetails] = useState<string | null>(null);
   const [lastLoginDebug, setLastLoginDebug] = useState<AuthDebugSnapshot | null>(() => {
     if (typeof window === "undefined") return null;
@@ -165,6 +225,16 @@ export default function Login() {
   const [selectedRecentLogin, setSelectedRecentLogin] =
     useState<RecentLoginEntry | null>(null);
   const [showAccountSwitch, setShowAccountSwitch] = useState(false);
+  const [showAgeVerifyModal, setShowAgeVerifyModal] = useState(false);
+  const [ageSessionId, setAgeSessionId] = useState<string | null>(null);
+  const [ageSessionStatus, setAgeSessionStatus] = useState("idle");
+  const [ageSessionError, setAgeSessionError] = useState<string | null>(null);
+  const [ageSessionLoading, setAgeSessionLoading] = useState(false);
+  const [ageMobileUrl, setAgeMobileUrl] = useState<string | null>(null);
+  const [ageQrUrl, setAgeQrUrl] = useState<string | null>(null);
+  const [ageToken, setAgeToken] = useState<string | null>(null);
+  const [ageVerifyApplying, setAgeVerifyApplying] = useState(false);
+  const [ageVerifyContact, setAgeVerifyContact] = useState("");
   const passwordInputRef = useRef<HTMLInputElement | null>(null);
   const { login, keyBackupStatus, keyBackupLoading } = useAuth();
   const navigate = useNavigate();
@@ -194,6 +264,18 @@ export default function Login() {
     if (typeof window === "undefined") return;
     window.localStorage.setItem("authDebug", "0");
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const stored = loadStoredChallenge();
+    if (!stored || challengeId) return;
+    setChallengeId(stored.challengeId);
+    setChallengeMethod(stored.method);
+    setDeliveryHint(stored.deliveryHint ?? null);
+    if (!identifier && stored.identifier) {
+      setIdentifier(stored.identifier);
+    }
+  }, [challengeId, identifier]);
 
   useEffect(() => {
     const handleStorage = (event: StorageEvent) => {
@@ -454,15 +536,21 @@ export default function Login() {
     setShowAlternateOptions(false);
     setAllowAlternateOnLogin(false);
     setShowLoginAlternateOptions(false);
+    persistStoredChallenge(null);
   };
 
   const completeLogin = (
     data: { jwt: string; user: AuthResponse["user"]; trustedDevice?: boolean },
     identifierUsed?: string
   ) => {
+    persistStoredChallenge(null);
     saveLoginDebug(data.jwt, rememberDevice);
     login(data.user, data.jwt, { rememberDevice });
     void updateRecentLogins(data.user, identifierUsed);
+    trackEvent("login_completed", {
+      verification_method: challengeMethod || "password",
+      trusted_device: Boolean(data.trustedDevice),
+    });
     if (data.trustedDevice) {
       setPendingTrustDecision(false);
       navigate(postLoginPath);
@@ -475,9 +563,9 @@ export default function Login() {
 
   useEffect(() => {
     if (!pendingTrustDecision) return;
-    if (keyBackupLoading || keyBackupStatus === "unknown") return;
+    if (!isVideoApp && (keyBackupLoading || keyBackupStatus === "unknown")) return;
     setPendingTrustDecision(false);
-    if (keyBackupStatus === "needs-restore") {
+    if (!isVideoApp && keyBackupStatus === "needs-restore") {
       setTrustModalOpen(false);
       setPendingRedirect(null);
       navigate(pendingRedirect || postLoginPath);
@@ -485,6 +573,7 @@ export default function Login() {
     }
     setTrustModalOpen(true);
   }, [
+    isVideoApp,
     keyBackupLoading,
     keyBackupStatus,
     navigate,
@@ -563,6 +652,13 @@ export default function Login() {
             : baseMessage
         );
       }
+      persistStoredChallenge({
+        challengeId: data.challengeId,
+        method: data.method,
+        deliveryHint: data.deliveryHint ?? null,
+        identifier: normalizedIdentifier,
+        createdAt: Date.now(),
+      });
       return true;
     }
 
@@ -590,6 +686,12 @@ export default function Login() {
       setError(
         "Account locked for 24 hours due to too many failed login attempts. Contact support@yoursocialplace.com to unlock."
       );
+      setDebugDetails(buildDebugDetails(err));
+      return;
+    }
+
+    if (msgLower.includes("time limit") && msgLower.includes("cooldown")) {
+      setError(msg);
       setDebugDetails(buildDebugDetails(err));
       return;
     }
@@ -632,7 +734,14 @@ export default function Login() {
     }
 
     if (status === 403) {
-      setError("Access denied. Your account may be blocked.");
+      if (msgLower.includes("age verification")) {
+        setError(
+          "Age verification required. Verify your age to unlock your account."
+        );
+        openAgeVerifyModal(identifier.trim());
+      } else {
+        setError("Access denied. Your account may be blocked.");
+      }
       setDebugDetails(buildDebugDetails(err));
       return;
     }
@@ -646,11 +755,16 @@ export default function Login() {
     setError(null);
     setInfo(null);
     setDebugDetails(null);
+    setLogoutMessage(null);
     resetVerificationState();
     setForceSecurityAfterLogin(false);
 
     try {
       setLoginLoading(true);
+      trackEvent("login_started", {
+        source: "login_form",
+        has_recent_login: hasRecentLogins,
+      });
 
       const deviceId = getOrCreateDeviceId();
       const normalizedIdentifier = identifier.trim().toLowerCase();
@@ -671,11 +785,12 @@ export default function Login() {
     }
   };
 
-  const handleTryAnotherWay = async (method: "email" | "sms") => {
+  const handleTryAnotherWay = async (method: VerificationMethod) => {
     if (alternateLoading || loginLoading || verifying) return;
     setError(null);
     setInfo(null);
     setDebugDetails(null);
+    setLogoutMessage(null);
 
     if (!identifier.trim() || !password.trim()) {
       setError("Enter your password to try another method.");
@@ -710,6 +825,7 @@ export default function Login() {
     setError(null);
     setInfo(null);
     setDebugDetails(null);
+    setLogoutMessage(null);
 
     if (!challengeId) {
       setError("Verification expired. Please log in again.");
@@ -723,6 +839,10 @@ export default function Login() {
 
     try {
       setVerifying(true);
+      trackEvent("login_started", {
+        source: "login_verification",
+        verification_method: challengeMethod || "unknown",
+      });
       const res = await api.post<AuthResponse>("/auth/login/verify", {
         challengeId,
         code: verificationCode.trim(),
@@ -778,6 +898,7 @@ export default function Login() {
     setError(null);
     setInfo(null);
     setDebugDetails(null);
+    setLogoutMessage(null);
     try {
       setResending(true);
       await api.post("/auth/login/resend", { challengeId });
@@ -804,7 +925,132 @@ export default function Login() {
     resetVerificationState();
     setError(null);
     setInfo(null);
+    setLogoutMessage(null);
   };
+
+  const resetAgeVerifyState = () => {
+    setAgeSessionId(null);
+    setAgeSessionStatus("idle");
+    setAgeSessionError(null);
+    setAgeSessionLoading(false);
+    setAgeMobileUrl(null);
+    setAgeQrUrl(null);
+    setAgeToken(null);
+    setAgeVerifyApplying(false);
+  };
+
+  const openAgeVerifyModal = (contactOverride?: string) => {
+    const contactValue = String((contactOverride ?? identifier) || "").trim();
+    setAgeVerifyContact(contactValue);
+    setShowAgeVerifyModal(true);
+    if (!ageSessionId && !ageSessionLoading) {
+      void createAgeSession();
+    }
+  };
+
+  const createAgeSession = async () => {
+    setAgeSessionError(null);
+    setAgeSessionLoading(true);
+    try {
+      const returnUrl = `${window.location.origin}/login`;
+      const res = await fetch(`${AGE_VERIFY_API_BASE}/session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          returnUrl,
+          publicBaseUrl: AGE_VERIFY_PUBLIC_URL || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || "Unable to start age verification.");
+      }
+      const sessionId = data?.data?.sessionId || null;
+      const serverQrUrl = data?.data?.qrUrl || null;
+      const serverMobileUrl = data?.data?.mobileUrl || null;
+      const computedMobile =
+        AGE_VERIFY_PUBLIC_URL && sessionId
+          ? `${AGE_VERIFY_PUBLIC_URL}/session/${sessionId}?mode=mobile`
+          : null;
+      const nextMobileUrl = computedMobile || serverMobileUrl;
+      setAgeSessionId(sessionId);
+      setAgeMobileUrl(nextMobileUrl);
+      setAgeQrUrl(computedMobile || serverQrUrl || nextMobileUrl);
+      setAgeSessionStatus("pending");
+    } catch (err: any) {
+      setAgeSessionError(err?.message || "Unable to start age verification.");
+    } finally {
+      setAgeSessionLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!showAgeVerifyModal || !ageSessionId || ageToken) return;
+    let active = true;
+    const poll = async () => {
+      try {
+        const res = await fetch(`${AGE_VERIFY_API_BASE}/session/${ageSessionId}`);
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data?.error || "Unable to check status.");
+        }
+        if (!active) return;
+        const status = data?.data?.status || "pending";
+        setAgeSessionStatus(status);
+        if (status === "verified" && data?.data?.token) {
+          setAgeToken(data.data.token);
+          setAgeSessionStatus("verified");
+        }
+        if (status === "failed" || status === "denied") {
+          setAgeSessionError(data?.data?.reason || "Verification failed.");
+        }
+      } catch (err: any) {
+        if (active) setAgeSessionError(err?.message || "Unable to check status.");
+      }
+    };
+    void poll();
+    const timer = window.setInterval(poll, 3000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [showAgeVerifyModal, ageSessionId, ageToken]);
+
+  useEffect(() => {
+    if (!showAgeVerifyModal || !ageToken || ageVerifyApplying) return;
+    if (!ageVerifyContact.trim()) {
+      setAgeSessionError("Enter your email or phone number to unlock your account.");
+      return;
+    }
+    let active = true;
+    const applyToken = async () => {
+      try {
+        setAgeVerifyApplying(true);
+        await api.post("/auth/age/verify-registration", {
+          token: ageToken,
+          contact: ageVerifyContact.trim(),
+        });
+        if (!active) return;
+        setInfo("Age verified. You can log in now.");
+        setError(null);
+        setShowAgeVerifyModal(false);
+        resetAgeVerifyState();
+      } catch (err: any) {
+        const message =
+          err?.response?.data?.error?.message ||
+          err?.response?.data?.message ||
+          err?.message ||
+          "Unable to apply age verification.";
+        if (active) setAgeSessionError(message);
+      } finally {
+        if (active) setAgeVerifyApplying(false);
+      }
+    };
+    void applyToken();
+    return () => {
+      active = false;
+    };
+  }, [showAgeVerifyModal, ageToken, ageVerifyApplying, ageVerifyContact]);
 
   return (
     <div
@@ -833,6 +1079,9 @@ export default function Login() {
               Sign in to Your Social Place and start making a difference.
             </p>
           </div>
+          {logoutMessage && (
+            <p className="auth-message info">{logoutMessage}</p>
+          )}
 
           {showRecentOnly && primaryRecentLogin && (
             <section className="auth-recent auth-recent--single" aria-label="Recent logins">
@@ -859,9 +1108,23 @@ export default function Login() {
                   onSubmit={handleLogin}
                   className="auth-card auth-card--recent"
                 >
+                  <input
+                    className="sr-only"
+                    type="text"
+                    name="username"
+                    autoComplete="username"
+                    value={
+                      selectedRecentLogin?.identifier ||
+                      primaryRecentLogin?.identifier ||
+                      ""
+                    }
+                    readOnly
+                    tabIndex={-1}
+                    aria-hidden="true"
+                  />
                   <div className="field">
                     <label>Password</label>
-                    <input
+                  <input
                       className="auth-input"
                       type="password"
                       placeholder="Password"
@@ -970,6 +1233,16 @@ export default function Login() {
                     <button
                       type="button"
                       className="btn ghost"
+                      onClick={() => void handleTryAnotherWay("totp")}
+                      disabled={alternateLoading || loginLoading || verifying}
+                    >
+                      {alternateLoading && alternateMethod === "totp"
+                        ? "Starting..."
+                        : "Use authenticator app"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn ghost"
                       onClick={() => void handleTryAnotherWay("email")}
                       disabled={alternateLoading || loginLoading || verifying}
                     >
@@ -1037,6 +1310,21 @@ export default function Login() {
             </div>
             {showAlternateOptions && (
               <div className="sms-actions">
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={() => void handleTryAnotherWay("totp")}
+                  disabled={
+                    alternateLoading ||
+                    loginLoading ||
+                    verifying ||
+                    challengeMethod === "totp"
+                  }
+                >
+                  {alternateLoading && alternateMethod === "totp"
+                    ? "Starting..."
+                    : "Use authenticator app"}
+                </button>
                 <button
                   type="button"
                   className="btn ghost"
@@ -1199,6 +1487,122 @@ export default function Login() {
                 disabled={trustModalLoading}
               >
                 Always confirm it's me
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showAgeVerifyModal && (
+        <div className="auth-age-overlay" role="dialog" aria-modal="true">
+          <div className="auth-age-modal">
+            <div className="auth-age-header">
+              <div>
+                <h2>Verify your age to unlock</h2>
+                <p>
+                  You can verify without logging in. We’ll unlock your account after
+                  verification.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="auth-age-close"
+                onClick={() => {
+                  setShowAgeVerifyModal(false);
+                  resetAgeVerifyState();
+                }}
+              >
+                X
+              </button>
+            </div>
+            <div className="auth-age-body">
+              <label className="field">
+                <span>Email or phone number</span>
+                <input
+                  className="auth-input"
+                  type="text"
+                  placeholder="Enter the email or phone on your account"
+                  value={ageVerifyContact}
+                  onChange={(e) => setAgeVerifyContact(e.target.value)}
+                />
+              </label>
+              <div className="auth-age-card">
+                <div className="auth-age-info">
+                  <div
+                    className={`auth-age-status ${
+                      ageSessionStatus === "verified"
+                        ? "verified"
+                        : ageSessionStatus === "failed" || ageSessionStatus === "denied"
+                        ? "failed"
+                        : ageSessionStatus !== "idle"
+                        ? "pending"
+                        : ""
+                    }`}
+                  >
+                    {ageSessionStatus === "verified"
+                      ? "Verified"
+                      : ageSessionStatus === "processing"
+                      ? "Processing..."
+                      : ageSessionStatus === "pending"
+                      ? "Pending"
+                      : ageSessionStatus === "failed"
+                      ? "Failed"
+                      : ageSessionStatus === "denied"
+                      ? "Denied"
+                      : "Not started"}
+                  </div>
+                  <div className="auth-age-actions">
+                    <button
+                      type="button"
+                      className="btn ghost"
+                      onClick={() => createAgeSession()}
+                      disabled={ageSessionLoading}
+                    >
+                      {ageSessionLoading ? "Starting..." : "Start verification"}
+                    </button>
+                    {ageMobileUrl && (
+                      <button
+                        type="button"
+                        className="btn ghost"
+                        onClick={() => {
+                          void navigator.clipboard?.writeText(ageMobileUrl);
+                        }}
+                      >
+                        Copy link
+                      </button>
+                    )}
+                  </div>
+                  {ageMobileUrl && (
+                    <div className="auth-age-link">
+                      <span>Mobile link</span>
+                      <a href={ageMobileUrl} target="_blank" rel="noreferrer">
+                        {ageMobileUrl}
+                      </a>
+                    </div>
+                  )}
+                  {ageSessionError && <p className="auth-message error">{ageSessionError}</p>}
+                  {ageVerifyApplying && (
+                    <p className="auth-message info">Applying verification...</p>
+                  )}
+                </div>
+                {ageQrUrl && (
+                  <div className="auth-age-qr">
+                    <QRCodeCanvas value={ageQrUrl} size={160} includeMargin />
+                    <span>Scan to continue</span>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="auth-age-footer">
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={() => {
+                  setShowAgeVerifyModal(false);
+                  resetAgeVerifyState();
+                }}
+              >
+                Close
               </button>
             </div>
           </div>

@@ -1,5 +1,6 @@
 // src/pages/Register.tsx
 import { CheckCircle2 } from "lucide-react";
+import { QRCodeCanvas } from "qrcode.react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import api from "../api/strapi";
@@ -14,6 +15,8 @@ import {
   formatPhoneInput,
   normalizeDialCode,
 } from "../utils/phone";
+import { AGE_VERIFY_API_BASE, AGE_VERIFY_PUBLIC_URL } from "../utils/age-verify";
+import { trackEvent } from "../utils/analytics";
 
 const slugifyHandle = (value: string) =>
   value
@@ -45,47 +48,6 @@ const getPasswordError = (password: string) => {
   return null;
 };
 
-const parseBirthdate = (value: string) => {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
-  if (!match) return null;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  if (!year || month < 1 || month > 12 || day < 1 || day > 31) return null;
-  const utcDate = new Date(Date.UTC(year, month - 1, day));
-  if (Number.isNaN(utcDate.getTime())) return null;
-  if (
-    utcDate.getUTCFullYear() !== year ||
-    utcDate.getUTCMonth() + 1 !== month ||
-    utcDate.getUTCDate() !== day
-  ) {
-    return null;
-  }
-  return { year, month, day };
-};
-
-const getAgeFromBirthdate = (value: string) => {
-  const parsed = parseBirthdate(value);
-  if (!parsed) return null;
-  const today = new Date();
-  const yearNow = today.getUTCFullYear();
-  const monthNow = today.getUTCMonth() + 1;
-  const dayNow = today.getUTCDate();
-  let age = yearNow - parsed.year;
-  const hadBirthday =
-    monthNow > parsed.month || (monthNow === parsed.month && dayNow >= parsed.day);
-  if (!hadBirthday) age -= 1;
-  if (age < 0) return null;
-  return age;
-};
-
-const getMaxBirthdate = () => {
-  const today = new Date();
-  const year = today.getFullYear() - 18;
-  const month = String(today.getMonth() + 1).padStart(2, "0");
-  const day = String(today.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-};
 
 const INTENT_CONFIG = {
   "build-habit": {
@@ -181,21 +143,15 @@ const parseContact = (value: string, dialCode: string): ParsedContact | null => 
   return null;
 };
 
-const SECURITY_QUESTION_OPTIONS = [
-  "What was the name of your first pet?",
-  "What city were you born in?",
-  "What is the last name of a favorite teacher?",
-  "What was your first car?",
-  "What is your mother's maiden name?",
-  "What street did you grow up on?",
-  "What was the name of your elementary school?",
-] as const;
+const SMS_CONSENT_TEXT =
+  "I agree to receive SMS security and marketplace alerts (U.S. only). Reply STOP to opt out.";
 
 const isDuplicateContactError = (message: string) => {
   const lower = String(message || "").toLowerCase();
   if (!lower) return false;
   return lower.includes("already in use") && (lower.includes("email") || lower.includes("phone"));
 };
+
 
 export default function Register() {
   const { t } = useTranslation();
@@ -204,7 +160,6 @@ export default function Register() {
     lastName: "",
     contact: "",
     smsCode: "",
-    birthday: "",
     password: "",
     confirmPassword: "",
     botField: "",
@@ -216,16 +171,10 @@ export default function Register() {
   const [selectedCountryCode, setSelectedCountryCode] = useState("US");
   const [countryError, setCountryError] = useState<string | null>(null);
   const [termsOpen, setTermsOpen] = useState(false);
-  const [termsAccepted, setTermsAccepted] = useState(false);
-  const [termsRead, setTermsRead] = useState(false);
+  const [smsConsent, setSmsConsent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [duplicateModalOpen, setDuplicateModalOpen] = useState(false);
-  const [securityQuestions, setSecurityQuestions] = useState([
-    { question: "", answer: "" },
-    { question: "", answer: "" },
-    { question: "", answer: "" },
-  ]);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [smsSending, setSmsSending] = useState(false);
   const [smsSent, setSmsSent] = useState(false);
@@ -236,6 +185,19 @@ export default function Register() {
   const [searchParams] = useSearchParams();
   const intentParam = searchParams.get("intent");
   const accessParam = searchParams.get("access");
+  const ageVerificationTokenParam = searchParams.get("ageVerificationToken");
+  const [ageSessionId, setAgeSessionId] = useState<string | null>(null);
+  const [ageQrUrl, setAgeQrUrl] = useState<string | null>(null);
+  const [ageMobileUrl, setAgeMobileUrl] = useState<string | null>(null);
+  const [ageSessionStatus, setAgeSessionStatus] = useState<string>("idle");
+  const [ageSessionError, setAgeSessionError] = useState<string | null>(null);
+  const [ageSessionLoading, setAgeSessionLoading] = useState(false);
+  const [ageModalOpen, setAgeModalOpen] = useState(false);
+  const [ageToken, setAgeToken] = useState<string | null>(
+    ageVerificationTokenParam || null
+  );
+  const [ageVerifyContact, setAgeVerifyContact] = useState<string | null>(null);
+  const [ageVerifyApplied, setAgeVerifyApplied] = useState(false);
   const intentKey = useMemo(() => normalizeIntent(intentParam), [intentParam]);
   const intentConfig = intentKey ? INTENT_CONFIG[intentKey] : null;
   usePageMeta({
@@ -247,7 +209,6 @@ export default function Register() {
   });
 
   const navigate = useNavigate();
-  const maxBirthdate = useMemo(() => getMaxBirthdate(), []);
   const contactDetails = useMemo(
     () => parseContact(form.contact, phoneDialCode),
     [form.contact, phoneDialCode]
@@ -271,6 +232,107 @@ export default function Register() {
       setAccessNotice(null);
     }
   }, [accessParam]);
+
+  useEffect(() => {
+    if (ageVerificationTokenParam) {
+      setAgeToken(ageVerificationTokenParam);
+      setAgeSessionStatus("verified");
+    }
+  }, [ageVerificationTokenParam]);
+
+
+  const createAgeSession = async () => {
+    setAgeSessionError(null);
+    setAgeSessionLoading(true);
+    try {
+      const returnUrl = `${window.location.origin}/register`;
+      const res = await fetch(`${AGE_VERIFY_API_BASE}/session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          returnUrl,
+          publicBaseUrl: AGE_VERIFY_PUBLIC_URL || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || "Unable to start age verification.");
+      }
+      const sessionId = data?.data?.sessionId || null;
+      const serverQrUrl = data?.data?.qrUrl || null;
+      const serverMobileUrl = data?.data?.mobileUrl || null;
+      const computedMobile =
+        AGE_VERIFY_PUBLIC_URL && sessionId
+          ? `${AGE_VERIFY_PUBLIC_URL}/session/${sessionId}?mode=mobile`
+          : null;
+      const nextMobileUrl = computedMobile || serverMobileUrl;
+      setAgeSessionId(sessionId);
+      setAgeMobileUrl(nextMobileUrl);
+      setAgeQrUrl(computedMobile || serverQrUrl || nextMobileUrl);
+      setAgeSessionStatus("pending");
+    } catch (err: any) {
+      setAgeSessionError(err?.message || "Unable to start age verification.");
+    } finally {
+      setAgeSessionLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!ageSessionId || ageToken) return;
+    let active = true;
+    const poll = async () => {
+      try {
+        const res = await fetch(`${AGE_VERIFY_API_BASE}/session/${ageSessionId}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.error || "Unable to check status.");
+        if (!active) return;
+        const status = data?.data?.status || "pending";
+        setAgeSessionStatus(status);
+        if (status === "verified" && data?.data?.token) {
+          setAgeToken(data.data.token);
+          setAgeSessionStatus("verified");
+        }
+        if (status === "failed" || status === "denied") {
+          setAgeSessionError(data?.data?.reason || "Verification failed.");
+        }
+      } catch (err: any) {
+        if (active) {
+          setAgeSessionError(err?.message || "Unable to check status.");
+        }
+      }
+    };
+    void poll();
+    const timer = window.setInterval(poll, 3000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [ageSessionId, ageToken]);
+
+  useEffect(() => {
+    if (!ageToken || !ageVerifyContact || ageVerifyApplied) return;
+    let active = true;
+    const applyToken = async () => {
+      try {
+        await api.post("/auth/age/verify-registration", {
+          token: ageToken,
+          contact: ageVerifyContact,
+        });
+        if (active) setAgeVerifyApplied(true);
+      } catch (err: any) {
+        const message =
+          err?.response?.data?.error?.message ||
+          err?.response?.data?.message ||
+          err?.message ||
+          "Unable to apply age verification.";
+        if (active) setAgeSessionError(message);
+      }
+    };
+    void applyToken();
+    return () => {
+      active = false;
+    };
+  }, [ageToken, ageVerifyContact, ageVerifyApplied]);
 
   useEffect(() => {
     let active = true;
@@ -374,6 +436,11 @@ export default function Register() {
 
   useEffect(() => {
     if (contactMode === "phone") return;
+    if (smsConsent) setSmsConsent(false);
+  }, [contactMode, smsConsent]);
+
+  useEffect(() => {
+    if (contactMode === "phone") return;
     if (dialCodeEditing) setDialCodeEditing(false);
   }, [contactMode, dialCodeEditing]);
 
@@ -415,18 +482,6 @@ export default function Register() {
     setDialCodeEditing(false);
   };
 
-  const updateSecurityQuestion = (
-    index: number,
-    field: "question" | "answer",
-    value: string
-  ) => {
-    setSecurityQuestions((prev) =>
-      prev.map((entry, idx) =>
-        idx === index ? { ...entry, [field]: value } : entry
-      )
-    );
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -454,44 +509,14 @@ export default function Register() {
     const contactPayload =
       contact.type === "phone" ? contact.phone : normalizedEmail || form.contact.trim();
 
-    if (!termsAccepted) {
-      setError("Please accept the Terms and Conditions and Privacy Policy.");
-      return;
-    }
-
-    if (!form.birthday) {
-      setError("Please enter your birthday.");
-      return;
-    }
-    const age = getAgeFromBirthdate(form.birthday);
-    if (age === null) {
-      setError("Please enter a valid birthday.");
-      return;
-    }
-    if (age < 18) {
-      setError("You must be 18 or older to sign up.");
+    if (contact.type === "phone" && !smsConsent) {
+      setError("Please consent to receive SMS security and marketplace alerts.");
       return;
     }
 
     const passwordError = getPasswordError(form.password);
     if (passwordError) {
       setError(passwordError);
-      return;
-    }
-
-    const trimmedSecurity = securityQuestions.map((entry) => ({
-      question: entry.question.trim(),
-      answer: entry.answer.trim(),
-    }));
-    if (trimmedSecurity.some((entry) => !entry.question || !entry.answer)) {
-      setError("Please answer all three security questions.");
-      return;
-    }
-    const uniqueQuestions = new Set(
-      trimmedSecurity.map((entry) => entry.question.toLowerCase())
-    );
-    if (uniqueQuestions.size !== trimmedSecurity.length) {
-      setError("Please choose three different security questions.");
       return;
     }
 
@@ -502,6 +527,11 @@ export default function Register() {
     }
 
     try {
+      trackEvent("signup_started", {
+        source: "register_form",
+        contact_type: contact.type,
+        has_intent: Boolean(intentKey),
+      });
       // ✅ custom route POST /api/register
       const res = await api.post<RegisterResponse>("/register", {
         contact: contactPayload,
@@ -512,13 +542,15 @@ export default function Register() {
         phoneNumber: contact.type === "phone" ? contact.phone : undefined,
         smsCode:
           contact.type === "phone" && hasSmsCode ? form.smsCode.trim() : undefined,
-        birthday: form.birthday,
         password: form.password,
         formStart: formStartRef.current,
         botField: form.botField,
-        termsAccepted,
+        termsAccepted: true,
         intent: intentKey || undefined,
-        securityQuestions: trimmedSecurity,
+        smsConsent: contact.type === "phone" ? smsConsent : false,
+        smsConsentText: contact.type === "phone" ? SMS_CONSENT_TEXT : undefined,
+        smsConsentSource: "register",
+        ageVerificationToken: ageToken || undefined,
       });
 
       // Best-effort: create a minimal profile shell; encrypted profile fields are set after login.
@@ -530,14 +562,10 @@ export default function Register() {
         const profileLocation: Record<string, string> = {};
         if (form.firstName.trim()) profileLocation.firstName = form.firstName.trim();
         if (form.lastName.trim()) profileLocation.lastName = form.lastName.trim();
-        if (form.birthday) profileLocation.birthday = form.birthday;
-        if (age !== null) profileLocation.age = String(age);
         if (registrationPhone) profileLocation.phone = registrationPhone;
         const registrationLocked: Record<string, boolean> = {};
         if (form.firstName.trim()) registrationLocked.firstName = true;
         if (form.lastName.trim()) registrationLocked.lastName = true;
-        if (form.birthday) registrationLocked.birthday = true;
-        if (age !== null) registrationLocked.age = true;
         if (registrationPhone) registrationLocked.phone = true;
         await api.post("/profiles", {
           data: {
@@ -560,6 +588,12 @@ export default function Register() {
           ? "Thanks for registering! You can now log in with your phone number and password."
           : "Thank you for registering with Your Social Place. Enter the 6-digit code sent to your email to finish setup.";
       setRegisteredMethod(contact.type);
+      setAgeVerifyContact(contactPayload || null);
+      trackEvent("signup_completed", {
+        source: "register_form",
+        contact_type: contact.type,
+        requires_confirmation: Boolean(res.data.requiresConfirmation),
+      });
       if (res.data.requiresConfirmation && contact.type === "email") {
         const confirmationId = String(res.data.emailConfirmationId || "").trim();
         if (!confirmationId) {
@@ -692,77 +726,67 @@ export default function Register() {
 
         <div className="field">
           <label>Phone number or email</label>
-          {contactMode === "phone" ? (
-            <>
-              <div className="register-contact-row">
-                <div className="register-phone-code">
-                  <span className="register-phone-code-value">
-                    +{phoneDialCode || "1"}
-                  </span>
-                  <button
-                    type="button"
-                    className="btn ghost register-code-edit"
-                    onClick={() => setDialCodeEditing((prev) => !prev)}
-                    disabled={!countryOptions.length}
-                  >
-                    {dialCodeEditing ? "Done" : "Edit"}
-                  </button>
-                </div>
-                <input
-                  className="auth-input register-phone-input"
-                  name="contact"
-                  type="text"
-                  inputMode="tel"
-                  placeholder="(555) 555-1234"
-                  onChange={handleChange}
-                  value={form.contact}
-                  autoComplete="tel"
-                  required
-                />
-                {contactDetails?.type === "phone" && (
-                  <button
-                    type="button"
-                    className="btn ghost sms-send"
-                    onClick={handleSendSms}
-                    disabled={smsSending || !form.contact.trim()}
-                  >
-                    {smsSending ? "Sending..." : smsSent ? "Resend code" : "Send code"}
-                  </button>
-                )}
+          <div
+            className={`register-contact-row${
+              contactMode === "phone" ? "" : " is-email"
+            }`}
+          >
+            {contactMode === "phone" && (
+              <div className="register-phone-code">
+                <span className="register-phone-code-value">
+                  +{phoneDialCode || "1"}
+                </span>
+                <button
+                  type="button"
+                  className="btn ghost register-code-edit"
+                  onClick={() => setDialCodeEditing((prev) => !prev)}
+                  disabled={!countryOptions.length}
+                >
+                  {dialCodeEditing ? "Done" : "Edit"}
+                </button>
               </div>
-              {dialCodeEditing && (
-                <div className="register-code-select">
-                  <select
-                    className="auth-input"
-                    value={selectedCountryCode}
-                    onChange={(event) => handleDialCodeSelect(event.target.value)}
-                  >
-                    {countryOptions.map((country) => {
-                      const dial = normalizeDialCode(country.phoneCode || "");
-                      const label = country.name || country.code || "Unknown";
-                      return (
-                        <option key={`${country.code}-${dial}`} value={country.code}>
-                          {label} {dial ? `(+${dial})` : ""}
-                        </option>
-                      );
-                    })}
-                  </select>
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="field-row">
-              <input
+            )}
+            <input
+              className={`auth-input ${
+                contactMode === "phone" ? "register-phone-input" : ""
+              }`}
+              name="contact"
+              type="text"
+              inputMode={contactMode === "phone" ? "tel" : "email"}
+              placeholder={contactMode === "phone" ? "(555) 555-1234" : "you@example.com"}
+              onChange={handleChange}
+              value={form.contact}
+              autoComplete={contactMode === "phone" ? "tel" : "email"}
+              required
+            />
+            {contactMode === "phone" && contactDetails?.type === "phone" && (
+              <button
+                type="button"
+                className="btn ghost sms-send"
+                onClick={handleSendSms}
+                disabled={smsSending || !form.contact.trim()}
+              >
+                {smsSending ? "Sending..." : smsSent ? "Resend code" : "Send code"}
+              </button>
+            )}
+          </div>
+          {contactMode === "phone" && dialCodeEditing && (
+            <div className="register-code-select">
+              <select
                 className="auth-input"
-                name="contact"
-                type="email"
-                inputMode="email"
-                placeholder="you@example.com"
-                onChange={handleChange}
-                value={form.contact}
-                autoComplete="email"
-                required
-              />
+                value={selectedCountryCode}
+                onChange={(event) => handleDialCodeSelect(event.target.value)}
+              >
+                {countryOptions.map((country) => {
+                  const dial = normalizeDialCode(country.phoneCode || "");
+                  const label = country.name || country.code || "Unknown";
+                  return (
+                    <option key={`${country.code}-${dial}`} value={country.code}>
+                      {label} {dial ? `(+${dial})` : ""}
+                    </option>
+                  );
+                })}
+              </select>
             </div>
           )}
           <small className="auth-hint">
@@ -805,21 +829,6 @@ export default function Register() {
         )}
 
         <div className="field">
-          <label>Birthday</label>
-          <input
-            className="auth-input"
-            name="birthday"
-            type="date"
-            max={maxBirthdate}
-            min="1900-01-01"
-            onChange={handleChange}
-            value={form.birthday}
-            required
-          />
-          <small className="auth-hint">You must be 18 or older to sign up.</small>
-        </div>
-
-        <div className="field">
           <label>Password</label>
           <input
             className="auth-input"
@@ -829,6 +838,7 @@ export default function Register() {
             onChange={handleChange}
             value={form.password}
             required
+            autoComplete="new-password"
           />
           <small className="auth-hint">
             At least 8 characters with upper/lowercase, a number, and a symbol (spaces allowed).
@@ -845,79 +855,66 @@ export default function Register() {
             onChange={handleChange}
             value={form.confirmPassword}
             required
+            autoComplete="new-password"
           />
         </div>
 
-        <div className="field">
-          <label>Security questions (required)</label>
-          <div className="security-questions">
-            {securityQuestions.map((entry, index) => (
-              <div className="security-question-row" key={`security-${index}`}>
-                <select
-                  className="auth-input"
-                  value={entry.question}
-                  onChange={(event) =>
-                    updateSecurityQuestion(index, "question", event.target.value)
-                  }
-                  required
-                >
-                  <option value="">Select a question</option>
-                  {SECURITY_QUESTION_OPTIONS.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  className="auth-input"
-                  type="text"
-                  placeholder="Answer"
-                  value={entry.answer}
-                  onChange={(event) =>
-                    updateSecurityQuestion(index, "answer", event.target.value)
-                  }
-                  required
-                />
-              </div>
-            ))}
-          </div>
-          <small className="auth-hint">
-            Used by support to verify your identity if your account is locked.
-          </small>
-        </div>
-
         <div className="terms-consent">
-          <label className={`terms-checkbox ${termsAccepted ? "checked" : ""}`}>
+          <label
+            className={`sms-consent-toggle ${smsConsent ? "checked" : ""} ${
+              contactMode !== "phone" ? "disabled" : ""
+            }`}
+          >
             <input
               type="checkbox"
-              checked={termsAccepted}
-              onChange={(e) => setTermsAccepted(e.target.checked)}
+              checked={smsConsent}
+              onChange={(event) => setSmsConsent(event.target.checked)}
+              disabled={contactMode !== "phone"}
             />
-            <span className="terms-checkmark" aria-hidden="true" />
+            <span className="sms-consent-slider" aria-hidden="true" />
             <span className="terms-copy">
-              I agree to the{" "}
-              <button
-                type="button"
-                className="terms-link"
-                onClick={() => {
-                  setTermsOpen(true);
-                  setTermsRead(false);
-                }}
-              >
-                Terms and Conditions
-              </button>
-              ,{" "}
-              <a className="terms-link" href="/privacy" target="_blank" rel="noreferrer">
-                Privacy Policy
-              </a>
-              , and{" "}
-              <a className="terms-link" href="/cookies" target="_blank" rel="noreferrer">
-                Cookie Policy
-              </a>
-              .
+              {SMS_CONSENT_TEXT}
+              <span className="sms-consent-meta">Message & data rates may apply.</span>
             </span>
           </label>
+          <p className="terms-inline">
+            By signing up, you agree to the{" "}
+            <button
+              type="button"
+              className="terms-link"
+              onClick={() => {
+                setTermsOpen(true);
+              }}
+            >
+              Terms and Conditions
+            </button>
+            ,{" "}
+            <a className="terms-link" href="/privacy" target="_blank" rel="noreferrer">
+              Privacy Policy
+            </a>
+            , and{" "}
+            <a className="terms-link" href="/cookies" target="_blank" rel="noreferrer">
+              Cookie Policy
+            </a>
+            .
+          </p>
         </div>
+
+        <section className="register-notice" aria-labelledby="register-notice-heading">
+          <h3 id="register-notice-heading">Notice at collection</h3>
+          <p>
+            When you create an account, we collect contact details, authentication data,
+            profile details you choose to provide, and security metadata to operate the service,
+            protect accounts, and enforce community safety rules.
+          </p>
+          <p>
+            We do not sell personal information. See{" "}
+            <a className="terms-link" href="/privacy#information-we-collect" target="_blank" rel="noreferrer">
+              Privacy Policy
+            </a>{" "}
+            for data categories, purposes, and rights request options.
+          </p>
+        </section>
 
         {error && <p className="auth-message error">{error}</p>}
         {info && !showSuccessModal && <p className="auth-message info">{info}</p>}
@@ -935,6 +932,113 @@ export default function Register() {
           </button>
         </div>
       </form>
+
+      {ageModalOpen && (
+        <div className="register-age-overlay" role="dialog" aria-modal="true">
+          <div className="register-age-modal">
+            <div className="register-age-modal-header">
+              <div>
+                <h3>Verify your age</h3>
+                <p className="muted">Live ID scan + liveness selfie required.</p>
+              </div>
+              <button
+                type="button"
+                className="register-access-close"
+                onClick={() => setAgeModalOpen(false)}
+              >
+                X
+              </button>
+            </div>
+            <div className="register-age-modal-body">
+              <div className="register-age-card">
+                <div className="register-age-info">
+                  <p className="register-age-copy">
+                    Scan the QR code with your phone to take live photos. File uploads are
+                    blocked.
+                  </p>
+                  <div
+                    className={`register-age-status ${
+                      ageToken
+                        ? "verified"
+                        : ageSessionStatus === "failed" || ageSessionStatus === "denied"
+                        ? "failed"
+                        : ageSessionStatus !== "idle"
+                        ? "pending"
+                        : ""
+                    }`}
+                  >
+                    {ageToken
+                      ? "Verified"
+                      : ageSessionStatus === "processing"
+                      ? "Processing…"
+                      : ageSessionStatus === "pending"
+                      ? "Pending"
+                      : ageSessionStatus === "failed"
+                      ? "Failed"
+                      : ageSessionStatus === "denied"
+                      ? "Denied"
+                      : "Not started"}
+                  </div>
+                  <div className="register-age-actions">
+                    <button
+                      type="button"
+                      className="btn ghost"
+                      onClick={() => createAgeSession()}
+                      disabled={ageSessionLoading}
+                    >
+                      {ageSessionLoading
+                        ? "Starting…"
+                        : ageToken
+                        ? "Re-verify"
+                        : "Start verification"}
+                    </button>
+                    {ageMobileUrl && (
+                      <button
+                        type="button"
+                        className="btn ghost"
+                        onClick={() => {
+                          void navigator.clipboard?.writeText(ageMobileUrl);
+                        }}
+                      >
+                        Copy link
+                      </button>
+                    )}
+                  </div>
+                  {ageMobileUrl && (
+                    <div className="register-age-link">
+                      <span>Mobile link</span>
+                      <a href={ageMobileUrl} target="_blank" rel="noreferrer">
+                        {ageMobileUrl}
+                      </a>
+                    </div>
+                  )}
+                  {ageSessionError && (
+                    <p className="auth-message error">{ageSessionError}</p>
+                  )}
+                  {ageToken && !ageSessionError && (
+                    <p className="auth-message info">
+                      {ageVerifyApplied
+                        ? "Age verification complete."
+                        : "Verification captured. Applying to your account..."}
+                    </p>
+                  )}
+                </div>
+                {ageQrUrl && (
+                  <div className="register-age-qr">
+                    <QRCodeCanvas value={ageQrUrl} size={160} includeMargin />
+                    <span>Scan to continue</span>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="register-age-modal-actions">
+              <button type="button" className="btn ghost" onClick={() => setAgeModalOpen(false)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {accessNotice && (
         <div className="register-access-overlay" role="dialog" aria-modal="true">
@@ -980,6 +1084,10 @@ export default function Register() {
             </div>
             <div className="register-success-body">
               <p>{successMessage}</p>
+              <p>
+                Next step: verify your age within 1 week to keep your account active. You
+                can find this anytime under Profile → Settings → Account &amp; Security.
+              </p>
             </div>
             <div className="register-success-actions">
               <button
@@ -988,6 +1096,19 @@ export default function Register() {
                 onClick={() => setShowSuccessModal(false)}
               >
                 Got it
+              </button>
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={() => {
+                  setShowSuccessModal(false);
+                  setAgeModalOpen(true);
+                  if (!ageSessionId && !ageSessionLoading) {
+                    void createAgeSession();
+                  }
+                }}
+              >
+                Verify age now
               </button>
               <button
                 type="button"
@@ -1057,12 +1178,6 @@ export default function Register() {
             </div>
             <div
               className="terms-modal-body"
-              onScroll={(event) => {
-                const target = event.currentTarget;
-                if (target.scrollTop + target.clientHeight >= target.scrollHeight - 8) {
-                  setTermsRead(true);
-                }
-              }}
             >
               {TERMS_SECTIONS.map((section) => (
                 <section key={section.title} className="terms-section">
@@ -1080,13 +1195,9 @@ export default function Register() {
               <button
                 className="btn primary"
                 type="button"
-                disabled={!termsRead}
-                onClick={() => {
-                  setTermsAccepted(true);
-                  setTermsOpen(false);
-                }}
+                onClick={() => setTermsOpen(false)}
               >
-                {termsRead ? "I Agree" : "Scroll to the end to enable"}
+                Close
               </button>
             </div>
           </div>

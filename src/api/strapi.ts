@@ -5,7 +5,19 @@ import axios, {
 } from "axios";
 
 let cachedToken: string | null = null;
-const apiBaseRaw = String(import.meta.env.VITE_API_URL || "").trim();
+const resolveApiBase = () => {
+  const raw = String(import.meta.env.VITE_API_URL || "").trim();
+  if (typeof window === "undefined") {
+    return raw || "http://localhost:1337/api";
+  }
+  if (!raw) return "/api";
+  const host = window.location.hostname;
+  const isLocalHost = host === "localhost" || host === "127.0.0.1";
+  const isLocalTarget = /^https?:\/\/(localhost|127\.0\.0\.1)(?::\d+)?/i.test(raw);
+  if (isLocalTarget && !isLocalHost) return "/api";
+  return raw;
+};
+const apiBaseRaw = resolveApiBase();
 const apiBaseNormalized = apiBaseRaw.replace(/\/+$/, "");
 const publicAuthEndpoints = new Set([
   "auth/local",
@@ -129,7 +141,7 @@ export const setAuthToken = (token: string | null) => {
 };
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL, // http://localhost:1337/api
+  baseURL: apiBaseRaw,
 });
 
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {

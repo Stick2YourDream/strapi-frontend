@@ -16,6 +16,8 @@ import { useAuth } from "../context/AuthContext";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { useUserPreferences } from "../context/UserPreferencesContext";
 import LinkPreviewCard from "../components/LinkPreviewCard";
+import PopupModal from "../components/PopupModal";
+import { pickMediaUrl } from "../utils/media";
 
 type ForumCategory = {
   id: number | string;
@@ -250,12 +252,44 @@ const findExplicitTerm = (value: string) => {
   return tokens.find((token) => EXPLICIT_TERMS.has(token)) || "";
 };
 
+const MAX_COMMENT_MEDIA_FILES = 4;
+const IMAGE_EXT_REGEX = /\.(?:png|jpe?g|webp|gif|bmp|avif)(?:\?|#|$)/i;
+const RELATIVE_UPLOAD_REGEX = /\/uploads\/[^\s)]+/g;
+const isImageFile = (file: File) => file.type.startsWith("image/");
+
 const extractFirstUrl = (text: string) => {
   const match = String(text || "").match(/(https?:\/\/[^\s]+|www\.[^\s]+)/i);
   if (!match) return "";
   let url = match[0].replace(/[),.!?]+$/, "");
   if (url.startsWith("www.")) url = `https://${url}`;
   return url;
+};
+const extractImageUrls = (text: string) => {
+  const safeText = String(text || "");
+  if (!safeText) return [];
+  const urls = new Set<string>();
+  const matches = safeText.match(/(https?:\/\/[^\s]+|www\.[^\s]+)/gi) ?? [];
+  matches.forEach((raw) => {
+    const cleaned = raw.replace(/[),.!?]+$/, "");
+    const href = cleaned.startsWith("www.") ? `https://${cleaned}` : cleaned;
+    if (IMAGE_EXT_REGEX.test(href) || IMAGE_EXT_REGEX.test(raw)) {
+      urls.add(href);
+    }
+  });
+  const relativeMatches = safeText.match(RELATIVE_UPLOAD_REGEX) ?? [];
+  relativeMatches.forEach((raw) => {
+    if (IMAGE_EXT_REGEX.test(raw)) {
+      urls.add(raw);
+    }
+  });
+  return Array.from(urls);
+};
+const stripImageUrls = (text: string, urls: string[]) => {
+  let cleaned = String(text || "");
+  urls.forEach((url) => {
+    cleaned = cleaned.replace(url, "");
+  });
+  return cleaned.replace(/\s{2,}/g, " ").trim();
 };
 
 const isYoutubeUrl = (value: string) => {
@@ -469,6 +503,11 @@ export default function Forums() {
     {}
   );
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
+  const [commentMediaFiles, setCommentMediaFiles] = useState<Record<string, File[]>>({});
+  const [commentMediaPreviews, setCommentMediaPreviews] = useState<
+    Record<string, string[]>
+  >({});
+  const commentPreviewRef = useRef<Record<string, string[]>>({});
   const [replyInputs, setReplyInputs] = useState<Record<string, string>>({});
   const [openReplies, setOpenReplies] = useState<Record<string, boolean>>({});
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
@@ -479,6 +518,10 @@ export default function Forums() {
   >({});
   const [commentEditing, setCommentEditing] = useState<Record<string, boolean>>({});
   const [commentDeleting, setCommentDeleting] = useState<Record<string, boolean>>({});
+  const [commentMenuOpen, setCommentMenuOpen] = useState<Record<string, boolean>>({});
+  const [activeCommentPostKey, setActiveCommentPostKey] = useState<string | null>(
+    null
+  );
   const [editingPostId, setEditingPostId] = useState<string | null>(null);
   const [editPostTitle, setEditPostTitle] = useState("");
   const [editPostBody, setEditPostBody] = useState("");
@@ -642,6 +685,83 @@ export default function Forums() {
     setPostMenuFor((prev) => (prev === postKey ? null : postKey));
   }, []);
 
+  const clearCommentAttachments = useCallback((attachmentKey: string) => {
+    setCommentMediaFiles((prev) => {
+      if (!(attachmentKey in prev)) return prev;
+      const next = { ...prev };
+      delete next[attachmentKey];
+      return next;
+    });
+    setCommentMediaPreviews((prev) => {
+      if (!(attachmentKey in prev)) return prev;
+      const next = { ...prev };
+      const urls = next[attachmentKey] || [];
+      if (typeof URL !== "undefined") {
+        urls.forEach((url) => URL.revokeObjectURL(url));
+      }
+      delete next[attachmentKey];
+      return next;
+    });
+  }, []);
+
+  const handleCommentFilesChange = useCallback(
+    (attachmentKey: string, files: FileList | null) => {
+      if (!files || files.length === 0) return;
+      const selected = Array.from(files).filter((file) => isImageFile(file));
+      if (selected.length === 0) {
+        setCommentError("Only image files are allowed for comments.");
+        return;
+      }
+      const limited = selected.slice(0, MAX_COMMENT_MEDIA_FILES);
+      if (selected.length > MAX_COMMENT_MEDIA_FILES) {
+        setCommentError(
+          `You can upload up to ${MAX_COMMENT_MEDIA_FILES} images per comment.`
+        );
+      }
+      setCommentMediaFiles((prev) => ({ ...prev, [attachmentKey]: limited }));
+      setCommentMediaPreviews((prev) => {
+        const next = { ...prev };
+        const urls = next[attachmentKey] || [];
+        if (typeof URL !== "undefined") {
+          urls.forEach((url) => URL.revokeObjectURL(url));
+        }
+        next[attachmentKey] = limited.map((file) => URL.createObjectURL(file));
+        return next;
+      });
+    },
+    []
+  );
+
+  const removeCommentAttachment = useCallback((attachmentKey: string, index: number) => {
+    setCommentMediaFiles((prev) => {
+      const current = prev[attachmentKey];
+      if (!current) return prev;
+      const nextFiles = current.filter((_, idx) => idx !== index);
+      const next = { ...prev };
+      if (nextFiles.length) {
+        next[attachmentKey] = nextFiles;
+      } else {
+        delete next[attachmentKey];
+      }
+      return next;
+    });
+    setCommentMediaPreviews((prev) => {
+      const current = prev[attachmentKey];
+      if (!current) return prev;
+      const nextUrls = current.filter((_, idx) => idx !== index);
+      if (typeof URL !== "undefined" && current[index]) {
+        URL.revokeObjectURL(current[index]);
+      }
+      const next = { ...prev };
+      if (nextUrls.length) {
+        next[attachmentKey] = nextUrls;
+      } else {
+        delete next[attachmentKey];
+      }
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null;
@@ -651,6 +771,19 @@ export default function Forums() {
     };
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, []);
+
+  useEffect(() => {
+    commentPreviewRef.current = commentMediaPreviews;
+  }, [commentMediaPreviews]);
+
+  useEffect(() => {
+    return () => {
+      if (typeof URL === "undefined") return;
+      Object.values(commentPreviewRef.current)
+        .flat()
+        .forEach((url) => URL.revokeObjectURL(url));
+    };
   }, []);
 
   const toggleReply = useCallback((commentId: string | number) => {
@@ -839,7 +972,9 @@ export default function Forums() {
       const inputKey = parentId ? String(parentId) : postKey;
       const body = parentId ? replyInputs[inputKey] : commentInputs[inputKey];
       const trimmed = String(body || "").trim();
-      if (!trimmed) return;
+      const attachmentKey = parentId ? `reply-${inputKey}` : `post-${postKey}`;
+      const attachments = commentMediaFiles[attachmentKey] ?? [];
+      if (!trimmed && attachments.length === 0) return;
       if (findExplicitTerm(trimmed)) {
         setCommentError("Explicit or sexual content isn't allowed in the forums.");
         return;
@@ -848,10 +983,22 @@ export default function Forums() {
       const submitKey = parentId ? `reply-${inputKey}` : `post-${postKey}`;
       setCommentSubmitting((prev) => ({ ...prev, [submitKey]: true }));
       setCommentError(null);
+      let combinedBody = "";
       try {
+        let attachmentUrls: string[] = [];
+        if (attachments.length > 0) {
+          const fd = new FormData();
+          attachments.forEach((file) => fd.append("files", file));
+          const uploadRes = await api.post("/upload", fd);
+          attachmentUrls = (uploadRes.data ?? [])
+            .map((item: { url?: string }) => item?.url)
+            .filter((url: string | undefined): url is string => Boolean(url));
+        }
+        combinedBody = [trimmed, ...attachmentUrls].filter(Boolean).join("\n");
+        if (!combinedBody.trim()) return;
         await api.post("/forum-post-comments", {
           data: {
-            body: trimmed,
+            body: combinedBody,
             post: postId,
             parent: parentApiId ?? parentId ?? null,
           },
@@ -863,6 +1010,7 @@ export default function Forums() {
         } else {
           setCommentInputs((prev) => ({ ...prev, [postKey]: "" }));
         }
+        clearCommentAttachments(attachmentKey);
       } catch (error) {
         const status = axios.isAxiosError(error) ? error.response?.status : undefined;
         if (status && status >= 500) {
@@ -876,7 +1024,7 @@ export default function Forums() {
             const parentMatch = parentId ? String(parentId) : "";
             const match = entries.some(
               (comment: ForumPostComment) =>
-                comment.body === trimmed &&
+                comment.body === combinedBody &&
                 (!parentMatch || String(comment.parentId || "") === parentMatch) &&
                 (user?.id ? comment.ownerId === user.id : true)
             );
@@ -898,7 +1046,7 @@ export default function Forums() {
         setCommentSubmitting((prev) => ({ ...prev, [submitKey]: false }));
       }
     },
-    [commentInputs, loadComments, replyInputs, user]
+    [clearCommentAttachments, commentInputs, commentMediaFiles, loadComments, replyInputs, user]
   );
 
   useEffect(() => {
@@ -931,6 +1079,10 @@ export default function Forums() {
     if (isDetailView) return;
     setFeedPage(1);
   }, [activeCategory, intentFilter, search, isDetailView]);
+
+  useEffect(() => {
+    setActiveCommentPostKey(null);
+  }, [postId]);
 
   useEffect(() => {
     if (!favoriteTopicError) return;
@@ -1366,21 +1518,6 @@ export default function Forums() {
       setReportSubmitting(false);
     }
   };
-
-  const openDiscussion = useCallback(
-    (post: ForumPost) => {
-      setPostMenuFor(null);
-      navigate(`/forums/${encodeURIComponent(getPostKey(post))}`);
-    },
-    [navigate, setPostMenuFor]
-  );
-
-  const scrollToComments = useCallback((commentKey: string) => {
-    const target = document.getElementById(`forum-comments-${commentKey}`);
-    if (target) {
-      target.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  }, []);
 
   const bumpEncouragement = async (postId: string | number) => {
     if (!user) {
@@ -1908,7 +2045,17 @@ export default function Forums() {
                 const commentKey = postKey;
                 const postComments = commentsByPost[commentKey] || [];
                 const commentCount = postComments.length;
-                const commentTree = isDetailView ? buildCommentTree(postComments) : [];
+                const commentTree = buildCommentTree(postComments);
+                const commentAttachmentKey = `post-${commentKey}`;
+                const commentAttachmentPreviews =
+                  commentMediaPreviews[commentAttachmentKey] ?? [];
+                const commentAttachmentFiles =
+                  commentMediaFiles[commentAttachmentKey] ?? [];
+                const isCommentsOpen = activeCommentPostKey === commentKey;
+                const closeCommentModal = () => {
+                  clearCommentAttachments(commentAttachmentKey);
+                  setActiveCommentPostKey(null);
+                };
                 const hasEncouraged = Boolean(quickReplies[postKey]?.encouraged);
                 const hasThanked = Boolean(quickReplies[postKey]?.thanked);
                 const encouragePending = quickReplySubmitting[`encourage-${postKey}`];
@@ -2025,17 +2172,9 @@ export default function Forums() {
                       <button
                         type="button"
                         className="forums-button ghost"
-                        onClick={() => {
-                          if (isDetailView) {
-                            scrollToComments(commentKey);
-                          } else {
-                            openDiscussion(post);
-                          }
-                        }}
+                        onClick={() => setActiveCommentPostKey(commentKey)}
                       >
-                        {isDetailView
-                          ? `Comment (${commentCount})`
-                          : `View discussion (${commentCount})`}
+                        {`Comment (${commentCount})`}
                       </button>
                       <button
                         type="button"
@@ -2083,38 +2222,107 @@ export default function Forums() {
                         </div>
                       </div>
                     ) : null}
-                    {isDetailView && (
+                    <PopupModal
+                      open={isCommentsOpen}
+                      title="Comments"
+                      onClose={closeCommentModal}
+                      className="comment-modal"
+                      bodyClassName="comment-modal-body"
+                    >
                       <div className="forums-comments" id={`forum-comments-${commentKey}`}>
                         <div className="forums-comment-form">
-                          <input
-                            className="forums-input"
-                            placeholder="Add a supportive comment..."
-                            value={commentInputs[commentKey] || ""}
-                            onChange={(event) =>
-                              setCommentInputs((prev) => ({
-                                ...prev,
-                                [commentKey]: event.target.value,
-                              }))
-                            }
-                          />
-                          <button
-                            type="button"
-                            className="forums-button primary"
-                            disabled={
-                              !commentInputs[commentKey]?.trim() ||
-                              commentSubmitting[`post-${commentKey}`]
-                            }
-                            onClick={() => submitComment(postApiId, commentKey)}
-                          >
-                            {commentSubmitting[`post-${commentKey}`] ? "Posting..." : "Post"}
-                          </button>
+                          <div className="forums-comment__reply-row">
+                            <input
+                              className="forums-input"
+                              placeholder="Add a supportive comment..."
+                              value={commentInputs[commentKey] || ""}
+                              onChange={(event) =>
+                                setCommentInputs((prev) => ({
+                                  ...prev,
+                                  [commentKey]: event.target.value,
+                                }))
+                              }
+                            />
+                            <button
+                              type="button"
+                              className="forums-button primary"
+                              disabled={
+                                (!commentInputs[commentKey]?.trim() &&
+                                  commentAttachmentFiles.length === 0) ||
+                                commentSubmitting[`post-${commentKey}`]
+                              }
+                              onClick={() => submitComment(postApiId, commentKey)}
+                            >
+                              {commentSubmitting[`post-${commentKey}`]
+                                ? "Posting..."
+                                : "Post"}
+                            </button>
+                          </div>
+                          <div className="comment-attachments">
+                            <label className="comment-upload">
+                              <input
+                                type="file"
+                                accept="image/*"
+                                multiple
+                                onChange={(event) => {
+                                  handleCommentFilesChange(
+                                    commentAttachmentKey,
+                                    event.target.files
+                                  );
+                                  event.target.value = "";
+                                }}
+                              />
+                              <span>
+                                {commentAttachmentFiles.length
+                                  ? "Change photos"
+                                  : "Add photos"}
+                              </span>
+                            </label>
+                            {commentAttachmentPreviews.length > 0 && (
+                              <div className="comment-attachment-list">
+                                {commentAttachmentPreviews.map((url, index) => (
+                                  <div
+                                    key={`${commentAttachmentKey}-${index}`}
+                                    className="comment-attachment"
+                                  >
+                                    <img
+                                      src={url}
+                                      alt="Comment attachment preview"
+                                      loading="lazy"
+                                      decoding="async"
+                                    />
+                                    <button
+                                      type="button"
+                                      className="comment-attachment-remove"
+                                      aria-label="Remove photo"
+                                      onClick={() =>
+                                        removeCommentAttachment(commentAttachmentKey, index)
+                                      }
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         </div>
                         {commentError && <div className="forums-status">{commentError}</div>}
                         {commentTree.length === 0 ? (
                           <p className="forums-status">No comments yet.</p>
                         ) : (
                           <ul className="forums-comment-list">
-                            {commentTree.map((comment) => (
+                            {commentTree.map((comment) => {
+                              const imageUrls = extractImageUrls(comment.body);
+                              const cleanedBody = stripImageUrls(comment.body, imageUrls);
+                              const displayBody =
+                                cleanedBody || (imageUrls.length ? "" : comment.body);
+                              const replyAttachmentKey = `reply-${String(comment.id)}`;
+                              const replyAttachmentPreviews =
+                                commentMediaPreviews[replyAttachmentKey] ?? [];
+                              const replyAttachmentFiles =
+                                commentMediaFiles[replyAttachmentKey] ?? [];
+                              return (
                               <li key={comment.id} className="forums-comment">
                                 <div className="forums-comment__header">
                                   <span className="forums-comment__author">
@@ -2124,6 +2332,65 @@ export default function Forums() {
                                     {new Date(comment.createdAt).toLocaleDateString()}
                                   </span>
                                 </div>
+                                {user?.id && comment.ownerId === user.id && (
+                                  <div className="comment-menu">
+                                    <button
+                                      className="comment-menu-button"
+                                      type="button"
+                                      aria-label="Comment actions"
+                                      aria-haspopup="menu"
+                                      aria-expanded={Boolean(
+                                        commentMenuOpen[String(comment.id)]
+                                      )}
+                                      onClick={() =>
+                                        setCommentMenuOpen((prev) => ({
+                                          ...prev,
+                                          [String(comment.id)]: !prev[String(comment.id)],
+                                        }))
+                                      }
+                                    >
+                                      <span className="comment-menu-dots" aria-hidden="true">
+                                        ⋯
+                                      </span>
+                                    </button>
+                                    {commentMenuOpen[String(comment.id)] && (
+                                      <div className="comment-menu-panel" role="menu">
+                                        <button
+                                          type="button"
+                                          className="comment-menu-item"
+                                          role="menuitem"
+                                          onClick={() => {
+                                            startEditComment(comment);
+                                            setCommentMenuOpen((prev) => ({
+                                              ...prev,
+                                              [String(comment.id)]: false,
+                                            }));
+                                          }}
+                                          disabled={editingCommentId === String(comment.id)}
+                                        >
+                                          Edit
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="comment-menu-item is-danger"
+                                          role="menuitem"
+                                          onClick={() => {
+                                            deleteComment(comment);
+                                            setCommentMenuOpen((prev) => ({
+                                              ...prev,
+                                              [String(comment.id)]: false,
+                                            }));
+                                          }}
+                                          disabled={commentDeleting[String(comment.id)]}
+                                        >
+                                          {commentDeleting[String(comment.id)]
+                                            ? "Deleting..."
+                                            : "Delete"}
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
                                 {editingCommentId === String(comment.id) ? (
                                   <div className="forums-comment__edit-form">
                                     <textarea
@@ -2160,9 +2427,26 @@ export default function Forums() {
                                   </div>
                                 ) : (
                                   <>
-                                    <p className="forums-comment__body">{comment.body}</p>
+                                    <p className="forums-comment__body">{displayBody}</p>
+                                    {imageUrls.length > 0 && (
+                                      <div className="comment-images">
+                                        {imageUrls.map((url, index) => {
+                                          const resolved =
+                                            pickMediaUrl(url, { kind: "post" }) || url;
+                                          return (
+                                            <img
+                                              key={`${comment.id}-img-${index}`}
+                                              src={resolved}
+                                              alt="Comment attachment"
+                                              loading="lazy"
+                                              decoding="async"
+                                            />
+                                          );
+                                        })}
+                                      </div>
+                                    )}
                                     {(() => {
-                                      const commentUrl = extractFirstUrl(comment.body);
+                                      const commentUrl = extractFirstUrl(cleanedBody);
                                       if (!isPreviewableUrl(commentUrl)) return null;
                                       const preview = previewCache[commentUrl];
                                       if (!preview) return null;
@@ -2185,67 +2469,117 @@ export default function Forums() {
                                   >
                                     Reply
                                   </button>
-                                  {user?.id && comment.ownerId === user.id && (
-                                    <>
-                                      <button
-                                        type="button"
-                                        className="forums-button ghost"
-                                        onClick={() => startEditComment(comment)}
-                                        disabled={editingCommentId === String(comment.id)}
-                                      >
-                                        Edit
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="forums-button ghost"
-                                        onClick={() => deleteComment(comment)}
-                                        disabled={commentDeleting[String(comment.id)]}
-                                      >
-                                        {commentDeleting[String(comment.id)]
-                                          ? "Deleting..."
-                                          : "Delete"}
-                                      </button>
-                                    </>
-                                  )}
                                 </div>
                                 {openReplies[String(comment.id)] && (
                                   <div className="forums-comment__reply-form">
-                                    <input
-                                      className="forums-input"
-                                      placeholder="Write a reply..."
-                                      value={replyInputs[String(comment.id)] || ""}
-                                      onChange={(event) =>
-                                        setReplyInputs((prev) => ({
-                                          ...prev,
-                                          [String(comment.id)]: event.target.value,
-                                        }))
-                                      }
-                                    />
-                                    <button
-                                      type="button"
-                                      className="forums-button primary"
-                                      disabled={
-                                        !replyInputs[String(comment.id)]?.trim() ||
-                                        commentSubmitting[`reply-${String(comment.id)}`]
-                                      }
-                                      onClick={() =>
-                                        submitComment(
-                                          postApiId,
-                                          commentKey,
-                                          comment.id,
-                                          comment.numericId ?? comment.documentId ?? comment.id
-                                        )
-                                      }
-                                    >
-                                      {commentSubmitting[`reply-${String(comment.id)}`]
-                                        ? "Replying..."
-                                        : "Reply"}
-                                    </button>
+                                    <div className="forums-comment__reply-row">
+                                      <input
+                                        className="forums-input"
+                                        placeholder="Write a reply..."
+                                        value={replyInputs[String(comment.id)] || ""}
+                                        onChange={(event) =>
+                                          setReplyInputs((prev) => ({
+                                            ...prev,
+                                            [String(comment.id)]: event.target.value,
+                                          }))
+                                        }
+                                      />
+                                      <button
+                                        type="button"
+                                        className="forums-button primary"
+                                        disabled={
+                                          (!replyInputs[String(comment.id)]?.trim() &&
+                                            replyAttachmentFiles.length === 0) ||
+                                          commentSubmitting[`reply-${String(comment.id)}`]
+                                        }
+                                        onClick={() =>
+                                          submitComment(
+                                            postApiId,
+                                            commentKey,
+                                            comment.id,
+                                            comment.numericId ??
+                                              comment.documentId ??
+                                              comment.id
+                                          )
+                                        }
+                                      >
+                                        {commentSubmitting[`reply-${String(comment.id)}`]
+                                          ? "Replying..."
+                                          : "Reply"}
+                                      </button>
+                                    </div>
+                                    <div className="comment-attachments">
+                                      <label className="comment-upload">
+                                        <input
+                                          type="file"
+                                          accept="image/*"
+                                          multiple
+                                          onChange={(event) => {
+                                            handleCommentFilesChange(
+                                              replyAttachmentKey,
+                                              event.target.files
+                                            );
+                                            event.target.value = "";
+                                          }}
+                                        />
+                                        <span>
+                                          {replyAttachmentFiles.length
+                                            ? "Change photos"
+                                            : "Add photos"}
+                                        </span>
+                                      </label>
+                                      {replyAttachmentPreviews.length > 0 && (
+                                        <div className="comment-attachment-list">
+                                          {replyAttachmentPreviews.map((url, index) => (
+                                            <div
+                                              key={`${replyAttachmentKey}-${index}`}
+                                              className="comment-attachment"
+                                            >
+                                              <img
+                                                src={url}
+                                                alt="Reply attachment preview"
+                                                loading="lazy"
+                                                decoding="async"
+                                              />
+                                              <button
+                                                type="button"
+                                                className="comment-attachment-remove"
+                                                aria-label="Remove photo"
+                                                onClick={() =>
+                                                  removeCommentAttachment(
+                                                    replyAttachmentKey,
+                                                    index
+                                                  )
+                                                }
+                                              >
+                                                ✕
+                                              </button>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
                                   </div>
                                 )}
                                 {comment.children && comment.children.length > 0 && (
                                   <ul className="forums-comment-children">
-                                    {comment.children.map((child) => (
+                                    {comment.children.map((child) => {
+                                      const childImageUrls = extractImageUrls(child.body);
+                                      const childCleanedBody = stripImageUrls(
+                                        child.body,
+                                        childImageUrls
+                                      );
+                                      const childDisplayBody =
+                                        childCleanedBody ||
+                                        (childImageUrls.length ? "" : child.body);
+                                      const childReplyAttachmentKey = `reply-${String(
+                                        child.id
+                                      )}`;
+                                      const childReplyAttachmentPreviews =
+                                        commentMediaPreviews[childReplyAttachmentKey] ?? [];
+                                      const childReplyAttachmentFiles =
+                                        commentMediaFiles[childReplyAttachmentKey] ?? [];
+                                      return (
                                       <li
                                         key={child.id}
                                         className="forums-comment forums-comment--child"
@@ -2258,6 +2592,70 @@ export default function Forums() {
                                             {new Date(child.createdAt).toLocaleDateString()}
                                           </span>
                                         </div>
+                                        {user?.id && child.ownerId === user.id && (
+                                          <div className="comment-menu">
+                                            <button
+                                              className="comment-menu-button"
+                                              type="button"
+                                              aria-label="Comment actions"
+                                              aria-haspopup="menu"
+                                              aria-expanded={Boolean(
+                                                commentMenuOpen[String(child.id)]
+                                              )}
+                                              onClick={() =>
+                                                setCommentMenuOpen((prev) => ({
+                                                  ...prev,
+                                                  [String(child.id)]: !prev[String(child.id)],
+                                                }))
+                                              }
+                                            >
+                                              <span
+                                                className="comment-menu-dots"
+                                                aria-hidden="true"
+                                              >
+                                                ⋯
+                                              </span>
+                                            </button>
+                                            {commentMenuOpen[String(child.id)] && (
+                                              <div className="comment-menu-panel" role="menu">
+                                                <button
+                                                  type="button"
+                                                  className="comment-menu-item"
+                                                  role="menuitem"
+                                                  onClick={() => {
+                                                    startEditComment(child);
+                                                    setCommentMenuOpen((prev) => ({
+                                                      ...prev,
+                                                      [String(child.id)]: false,
+                                                    }));
+                                                  }}
+                                                  disabled={
+                                                    editingCommentId === String(child.id)
+                                                  }
+                                                >
+                                                  Edit
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  className="comment-menu-item is-danger"
+                                                  role="menuitem"
+                                                  onClick={() => {
+                                                    deleteComment(child);
+                                                    setCommentMenuOpen((prev) => ({
+                                                      ...prev,
+                                                      [String(child.id)]: false,
+                                                    }));
+                                                  }}
+                                                  disabled={commentDeleting[String(child.id)]}
+                                                >
+                                                  {commentDeleting[String(child.id)]
+                                                    ? "Deleting..."
+                                                    : "Delete"}
+                                                </button>
+                                              </div>
+                                            )}
+                                          </div>
+                                        )}
                                         {editingCommentId === String(child.id) ? (
                                           <div className="forums-comment__edit-form">
                                             <textarea
@@ -2297,10 +2695,29 @@ export default function Forums() {
                                         ) : (
                                           <>
                                             <p className="forums-comment__body">
-                                              {child.body}
+                                              {childDisplayBody}
                                             </p>
+                                            {childImageUrls.length > 0 && (
+                                              <div className="comment-images">
+                                                {childImageUrls.map((url, index) => {
+                                                  const resolved =
+                                                    pickMediaUrl(url, { kind: "post" }) ||
+                                                    url;
+                                                  return (
+                                                    <img
+                                                      key={`${child.id}-img-${index}`}
+                                                      src={resolved}
+                                                      alt="Comment attachment"
+                                                      loading="lazy"
+                                                      decoding="async"
+                                                    />
+                                                  );
+                                                })}
+                                              </div>
+                                            )}
                                             {(() => {
-                                              const commentUrl = extractFirstUrl(child.body);
+                                              const commentUrl =
+                                                extractFirstUrl(childCleanedBody);
                                               if (!isPreviewableUrl(commentUrl)) return null;
                                               const preview = previewCache[commentUrl];
                                               if (!preview) return null;
@@ -2323,76 +2740,116 @@ export default function Forums() {
                                           >
                                             Reply
                                           </button>
-                                          {user?.id && child.ownerId === user.id && (
-                                            <>
-                                              <button
-                                                type="button"
-                                                className="forums-button ghost"
-                                                onClick={() => startEditComment(child)}
-                                                disabled={
-                                                  editingCommentId === String(child.id)
-                                                }
-                                              >
-                                                Edit
-                                              </button>
-                                              <button
-                                                type="button"
-                                                className="forums-button ghost"
-                                                onClick={() => deleteComment(child)}
-                                                disabled={commentDeleting[String(child.id)]}
-                                              >
-                                                {commentDeleting[String(child.id)]
-                                                  ? "Deleting..."
-                                                  : "Delete"}
-                                              </button>
-                                            </>
-                                          )}
                                         </div>
                                         {openReplies[String(child.id)] && (
                                           <div className="forums-comment__reply-form">
-                                            <input
-                                              className="forums-input"
-                                              placeholder="Write a reply..."
-                                              value={replyInputs[String(child.id)] || ""}
-                                              onChange={(event) =>
-                                                setReplyInputs((prev) => ({
-                                                  ...prev,
-                                                  [String(child.id)]: event.target.value,
-                                                }))
-                                              }
-                                            />
-                                            <button
-                                              type="button"
-                                              className="forums-button primary"
-                                              disabled={
-                                                !replyInputs[String(child.id)]?.trim() ||
-                                                commentSubmitting[`reply-${String(child.id)}`]
-                                              }
-                                              onClick={() =>
-                                                submitComment(
-                                                  postApiId,
-                                                  commentKey,
-                                                  child.id,
-                                                  child.numericId ?? child.documentId ?? child.id
-                                                )
-                                              }
-                                            >
-                                              {commentSubmitting[`reply-${String(child.id)}`]
-                                                ? "Replying..."
-                                                : "Reply"}
-                                            </button>
+                                            <div className="forums-comment__reply-row">
+                                              <input
+                                                className="forums-input"
+                                                placeholder="Write a reply..."
+                                                value={replyInputs[String(child.id)] || ""}
+                                                onChange={(event) =>
+                                                  setReplyInputs((prev) => ({
+                                                    ...prev,
+                                                    [String(child.id)]: event.target.value,
+                                                  }))
+                                                }
+                                              />
+                                              <button
+                                                type="button"
+                                                className="forums-button primary"
+                                                disabled={
+                                                  (!replyInputs[String(child.id)]?.trim() &&
+                                                    childReplyAttachmentFiles.length === 0) ||
+                                                  commentSubmitting[
+                                                    `reply-${String(child.id)}`
+                                                  ]
+                                                }
+                                                onClick={() =>
+                                                  submitComment(
+                                                    postApiId,
+                                                    commentKey,
+                                                    child.id,
+                                                    child.numericId ??
+                                                      child.documentId ??
+                                                      child.id
+                                                  )
+                                                }
+                                              >
+                                                {commentSubmitting[
+                                                  `reply-${String(child.id)}`
+                                                ]
+                                                  ? "Replying..."
+                                                  : "Reply"}
+                                              </button>
+                                            </div>
+                                            <div className="comment-attachments">
+                                              <label className="comment-upload">
+                                                <input
+                                                  type="file"
+                                                  accept="image/*"
+                                                  multiple
+                                                  onChange={(event) => {
+                                                    handleCommentFilesChange(
+                                                      childReplyAttachmentKey,
+                                                      event.target.files
+                                                    );
+                                                    event.target.value = "";
+                                                  }}
+                                                />
+                                                <span>
+                                                  {childReplyAttachmentFiles.length
+                                                    ? "Change photos"
+                                                    : "Add photos"}
+                                                </span>
+                                              </label>
+                                              {childReplyAttachmentPreviews.length > 0 && (
+                                                <div className="comment-attachment-list">
+                                                  {childReplyAttachmentPreviews.map(
+                                                    (url, index) => (
+                                                      <div
+                                                        key={`${childReplyAttachmentKey}-${index}`}
+                                                        className="comment-attachment"
+                                                      >
+                                                        <img
+                                                          src={url}
+                                                          alt="Reply attachment preview"
+                                                          loading="lazy"
+                                                          decoding="async"
+                                                        />
+                                                        <button
+                                                          type="button"
+                                                          className="comment-attachment-remove"
+                                                          aria-label="Remove photo"
+                                                          onClick={() =>
+                                                            removeCommentAttachment(
+                                                              childReplyAttachmentKey,
+                                                              index
+                                                            )
+                                                          }
+                                                        >
+                                                          ✕
+                                                        </button>
+                                                      </div>
+                                                    )
+                                                  )}
+                                                </div>
+                                              )}
+                                            </div>
                                           </div>
                                         )}
                                       </li>
-                                    ))}
+                                    );
+                                    })}
                                   </ul>
                                 )}
                               </li>
-                            ))}
+                            );
+                            })}
                           </ul>
                         )}
                       </div>
-                    )}
+                    </PopupModal>
                   </article>
                 );
               })}

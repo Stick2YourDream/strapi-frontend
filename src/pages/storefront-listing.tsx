@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import axios from "axios";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import "../css/dashboard.css";
 import "../css/storefront-listing.css";
@@ -9,9 +10,16 @@ import { useAuth } from "../context/AuthContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { pickMediaUrls } from "../utils/media";
+import {
+  STOREFRONT_DEMO_COUNT_KEY,
+  STOREFRONT_DEMO_ENABLED_KEY,
+  buildStorefrontDemoListings,
+  readStorefrontDemoCount,
+  readStorefrontDemoEnabled,
+} from "../data/storefront-demo";
 
-const PLATFORM_FEE_RATE = 0.03;
-const USE_DEMO_LISTINGS = import.meta.env.DEV;
+const VERIFIED_SELLER_FEE_RATE = 0.02;
+const STANDARD_SELLER_FEE_RATE = 0.04;
 
 type StorefrontSeller = {
   id: string;
@@ -27,9 +35,15 @@ type StorefrontSeller = {
 
 type StorefrontProduct = {
   id: string;
+  documentId?: string;
   rawId?: number;
   title: string;
   price: number;
+  status?: string;
+  auctionEnabled?: boolean;
+  auctionEndAt?: string;
+  startingBid?: number;
+  highestBid?: number;
   category: string;
   condition: string;
   location: string;
@@ -57,7 +71,7 @@ type StorefrontMessage = {
   timestamp: string;
 };
 
-type OfferStatus = "pending" | "accepted" | "declined" | "withdrawn";
+type OfferStatus = "pending" | "countered" | "accepted" | "declined" | "withdrawn";
 
 type StorefrontOffer = {
   id: string;
@@ -68,6 +82,22 @@ type StorefrontOffer = {
   offeredPrice: number;
   currency: string;
   status: OfferStatus;
+  createdAt: string;
+  note?: string;
+  lastActionBy?: "buyer" | "seller";
+};
+
+type BidStatus = "pending" | "accepted" | "declined" | "withdrawn";
+
+type StorefrontBid = {
+  id: string;
+  listingId: number;
+  bidderId?: number;
+  sellerId?: number;
+  bidderName: string;
+  amount: number;
+  currency: string;
+  status: BidStatus;
   createdAt: string;
 };
 
@@ -95,277 +125,73 @@ type VerificationStatus = {
   stripeIdentityStatus?: string;
 };
 
-type PaymentMethod = "paypal" | "stripe" | "cashapp" | "venmo" | "cash";
-
-const CATEGORY_OPTIONS = [
-  "All",
-  "Free",
-  "Cars & Vehicles",
-  "Real Estate",
-  "Electronics",
-  "Home & Garden",
-  "Furniture",
-  "Appliances",
-  "Fashion",
-  "Shoes",
-  "Accessories",
-  "Beauty",
-  "Health",
-  "Baby & Kids",
-  "Toys & Games",
-  "Sports & Outdoors",
-  "Fitness",
-  "Books",
-  "Music & Instruments",
-  "Art & Collectibles",
-  "Jewelry",
-  "Pets",
-  "Services",
-  "Tickets",
-  "Business & Industrial",
-  "Jobs",
-  "Other",
-];
-
-const CONDITION_OPTIONS = ["Any", "New", "Like new", "Good", "Fair"];
-
-const DEMO_IMAGE_SETS = [
-  [
-    "https://images.unsplash.com/photo-1512499617640-c2f999098c01?auto=format&fit=crop&w=900&q=80",
-    "https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&w=900&q=80",
-    "https://images.unsplash.com/photo-1487014679447-9f8336841d58?auto=format&fit=crop&w=900&q=80",
-  ],
-  [
-    "https://images.unsplash.com/photo-1526401485004-46910ecc8e51?auto=format&fit=crop&w=900&q=80",
-    "https://images.unsplash.com/photo-1517836357463-d25dfeac3438?auto=format&fit=crop&w=900&q=80",
-    "https://images.unsplash.com/photo-1518611012118-696072aa579a?auto=format&fit=crop&w=900&q=80",
-  ],
-  [
-    "https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?auto=format&fit=crop&w=900&q=80",
-    "https://images.unsplash.com/photo-1523206489230-c012c64b2b48?auto=format&fit=crop&w=900&q=80",
-    "https://images.unsplash.com/photo-1510557880182-3d4d3cba35a5?auto=format&fit=crop&w=900&q=80",
-  ],
-  [
-    "https://images.unsplash.com/photo-1452587925148-ce544e77e70d?auto=format&fit=crop&w=900&q=80",
-    "https://images.unsplash.com/photo-1519181245277-cffeb31da2e3?auto=format&fit=crop&w=900&q=80",
-    "https://images.unsplash.com/photo-1453672915606-6e4bafafbb9d?auto=format&fit=crop&w=900&q=80",
-  ],
-  [
-    "https://images.unsplash.com/photo-1505691938895-1758d7feb511?auto=format&fit=crop&w=900&q=80",
-    "https://images.unsplash.com/photo-1519710164239-da123dc03ef4?auto=format&fit=crop&w=900&q=80",
-    "https://images.unsplash.com/photo-1501045661006-fcebe0257c3f?auto=format&fit=crop&w=900&q=80",
-  ],
-];
-
-const DEMO_TITLES = [
-  "Designer lounge chair",
-  "Portable espresso kit",
-  "Smart home starter set",
-  "Wireless noise-canceling headphones",
-  "Trail-ready camera backpack",
-  "Limited edition vinyl set",
-  "Ergonomic standing desk",
-  "Handmade ceramic dinnerware",
-  "Compact travel drone",
-  "Studio lighting kit",
-];
-
-const DEMO_LOCATIONS = [
-  "Seattle, WA",
-  "Austin, TX",
-  "Portland, OR",
-  "Denver, CO",
-  "San Diego, CA",
-  "Chicago, IL",
-];
-
-const DEFAULT_PRODUCTS: StorefrontProduct[] = [
-  {
-    id: "camera-kit",
-    title: "Vintage film camera kit",
-    price: 0.01,
-    category: "Collectibles",
-    condition: "Good",
-    location: "Seattle, WA",
-    description:
-      "Full 35mm starter kit with lenses, light meter, and fresh film rolls. Cleaned and ready to shoot.",
-    images: [
-      "https://images.unsplash.com/photo-1452587925148-ce544e77e70d?auto=format&fit=crop&w=900&q=80",
-      "https://images.unsplash.com/photo-1519181245277-cffeb31da2e3?auto=format&fit=crop&w=900&q=80",
-      "https://images.unsplash.com/photo-1453672915606-6e4bafafbb9d?auto=format&fit=crop&w=900&q=80",
-    ],
-    seller: {
-      id: "seller-1",
-      userId: 0,
-      name: "Avery Lopez",
-      rating: 4.9,
-      responseTime: "Typically replies within 1 hour",
-      verifiedLevel: "verified",
-      badges: ["ID verified", "Payout verified"],
-    },
-    stock: 1,
-    shipping: "Delivery arranged privately",
-    shippingEnabled: false,
-    shippingCarriers: [],
-    shippingInternational: false,
-    localPickup: true,
-    cashAccepted: true,
-    shippingNotes: "",
-    noShippingRequired: true,
-    isDemo: true,
-  },
-  {
-    id: "desk-setup",
-    title: "Minimalist desk setup bundle",
-    price: 0.01,
-    category: "Home",
-    condition: "Like new",
-    location: "Portland, OR",
-    description:
-      "Complete workspace set: oak desk, ergonomic chair, and adjustable lamp. Pickup preferred.",
-    images: [
-      "https://images.unsplash.com/photo-1487014679447-9f8336841d58?auto=format&fit=crop&w=900&q=80",
-      "https://images.unsplash.com/photo-1519710164239-da123dc03ef4?auto=format&fit=crop&w=900&q=80",
-      "https://images.unsplash.com/photo-1505691938895-1758d7feb511?auto=format&fit=crop&w=900&q=80",
-    ],
-    seller: {
-      id: "seller-2",
-      userId: 0,
-      name: "Morgan Tate",
-      rating: 4.7,
-      responseTime: "Typically replies within 2 hours",
-      verifiedLevel: "pending",
-      badges: ["ID verified", "Payment pending"],
-    },
-    stock: 1,
-    shipping: "Delivery arranged privately",
-    shippingEnabled: false,
-    shippingCarriers: [],
-    shippingInternational: false,
-    localPickup: true,
-    cashAccepted: true,
-    shippingNotes: "",
-    noShippingRequired: true,
-    isDemo: true,
-  },
-  {
-    id: "fitness-kit",
-    title: "At-home fitness starter kit",
-    price: 0.01,
-    category: "Fitness",
-    condition: "New",
-    location: "Austin, TX",
-    description:
-      "Resistance bands, yoga mat, and adjustable dumbbells. Unopened and ready to ship.",
-    images: [
-      "https://images.unsplash.com/photo-1517836357463-d25dfeac3438?auto=format&fit=crop&w=900&q=80",
-      "https://images.unsplash.com/photo-1518611012118-696072aa579a?auto=format&fit=crop&w=900&q=80",
-      "https://images.unsplash.com/photo-1526401485004-46910ecc8e51?auto=format&fit=crop&w=900&q=80",
-    ],
-    seller: {
-      id: "seller-3",
-      userId: 0,
-      name: "Jordan Reed",
-      rating: 4.8,
-      responseTime: "Typically replies within 30 minutes",
-      verifiedLevel: "verified",
-      badges: ["ID verified", "Payout verified"],
-    },
-    stock: 4,
-    shipping: "Delivery arranged privately",
-    shippingEnabled: false,
-    shippingCarriers: [],
-    shippingInternational: false,
-    localPickup: false,
-    cashAccepted: false,
-    shippingNotes: "",
-    noShippingRequired: true,
-    isDemo: true,
-  },
-  {
-    id: "smartphone",
-    title: "Unlocked smartphone 256GB",
-    price: 0.01,
-    category: "Electronics",
-    condition: "Good",
-    location: "Denver, CO",
-    description:
-      "Unlocked, lightly used, includes case and fast charger. Battery health 92%.",
-    images: [
-      "https://images.unsplash.com/photo-1511707171634-5f897ff02aa9?auto=format&fit=crop&w=900&q=80",
-      "https://images.unsplash.com/photo-1510557880182-3d4d3cba35a5?auto=format&fit=crop&w=900&q=80",
-      "https://images.unsplash.com/photo-1523206489230-c012c64b2b48?auto=format&fit=crop&w=900&q=80",
-    ],
-    seller: {
-      id: "seller-4",
-      userId: 0,
-      name: "Skylar Brooks",
-      rating: 4.6,
-      responseTime: "Typically replies within 4 hours",
-      verifiedLevel: "verified",
-      badges: ["ID verified", "Phone verified"],
-    },
-    stock: 2,
-    shipping: "Delivery arranged privately",
-    shippingEnabled: false,
-    shippingCarriers: [],
-    shippingInternational: false,
-    localPickup: true,
-    cashAccepted: false,
-    shippingNotes: "",
-    noShippingRequired: true,
-    isDemo: true,
-  },
-];
-
-const DEFAULT_MESSAGES: StorefrontMessage[] = [];
-
-const buildDemoListings = (count: number, startIndex = 0): StorefrontProduct[] => {
-  const total = Math.max(1, Math.min(20, count));
-  return Array.from({ length: total }).map((_, index) => {
-    const seed = startIndex + index;
-    const title = DEMO_TITLES[seed % DEMO_TITLES.length];
-    const category = CATEGORY_OPTIONS[(seed % (CATEGORY_OPTIONS.length - 1)) + 1];
-    const condition = CONDITION_OPTIONS[(seed % (CONDITION_OPTIONS.length - 1)) + 1];
-    const location = DEMO_LOCATIONS[seed % DEMO_LOCATIONS.length];
-    const images = DEMO_IMAGE_SETS[seed % DEMO_IMAGE_SETS.length];
-    const price = 0.01;
-    return {
-      id: `demo-${seed + 1}`,
-      title,
-      price,
-      category,
-      condition,
-      location,
-      description:
-        "Demo listing for StoreFront previews. Swap this out with real seller inventory when live.",
-      images,
-      seller: {
-        id: `demo-seller-${seed % 4}`,
-        userId: 0,
-        name: "Demo Seller",
-        rating: 4.8,
-        responseTime: "Typically replies within 1 hour",
-        verifiedLevel: "verified",
-        badges: ["ID verified", "Payout verified"],
-      },
-      stock: 1 + (seed % 5),
-      shipping: "Delivery arranged privately",
-      shippingEnabled: false,
-      shippingCarriers: [],
-      shippingInternational: false,
-      localPickup: seed % 2 === 0,
-      cashAccepted: seed % 3 === 0,
-      shippingNotes: "",
-      noShippingRequired: true,
-      isDemo: true,
-    };
-  });
+const matchesListingId = (product: StorefrontProduct, id?: string | null) => {
+  if (!id) return false;
+  const compare = String(id);
+  if (product.id === compare) return true;
+  if (product.documentId && product.documentId === compare) return true;
+  if (product.rawId !== undefined && String(product.rawId) === compare) return true;
+  return false;
 };
 
-const DEMO_FALLBACK_PRODUCTS = USE_DEMO_LISTINGS
-  ? [...DEFAULT_PRODUCTS, ...buildDemoListings(20, 0)]
-  : [];
+const buildStorefrontProduct = (entry: any): StorefrontProduct => {
+  const attrs = normalize(entry);
+  const ownerData = attrs.owner?.data ?? attrs.owner;
+  const owner = normalize(ownerData);
+  const sellerId = getEntityId(ownerData) ?? 0;
+  const sellerName =
+    `${String(owner.firstName || "").trim()} ${String(owner.lastName || "").trim()}`.trim() ||
+    String(owner.username || "").trim() ||
+    String(owner.email || "").split("@")[0] ||
+    "Seller";
+  const images = pickMediaUrls(attrs.images, { kind: "post" });
+  const shippingSummary = attrs.localPickup
+    ? "Local pickup available"
+    : "Delivery arranged privately";
+  const documentId = String(entry?.documentId ?? attrs.documentId ?? "").trim();
+  const id = documentId || String(entry?.id ?? attrs.id ?? Date.now());
+  const rawId =
+    Number(entry?.id ?? attrs.id ?? attrs.documentId ?? documentId) || undefined;
+  return {
+    id,
+    documentId: documentId || undefined,
+    rawId,
+    title: String(attrs.title || "Untitled listing"),
+    price: Number(attrs.price || 0),
+    status: String(attrs.status || "active"),
+    auctionEnabled: Boolean(attrs.auctionEnabled),
+    auctionEndAt: attrs.auctionEndAt ? String(attrs.auctionEndAt) : undefined,
+    startingBid: Number(attrs.startingBid ?? 0) || undefined,
+    highestBid: Number(attrs.highestBid ?? 0) || undefined,
+    category: String(attrs.category || "General"),
+    condition: String(attrs.condition || "Good"),
+    location: String(attrs.location || "Flexible pickup"),
+    description: String(attrs.description || ""),
+    images,
+    seller: {
+      id: String(sellerId || "seller"),
+      userId: sellerId || undefined,
+      name: sellerName,
+      handle: String(owner.handle || "").trim() || undefined,
+      avatarUrl: String(owner.avatarUrl || "").trim() || undefined,
+      rating: Number(owner.rating || 4.7),
+      responseTime: "Typically replies within a few hours",
+      verifiedLevel: "unverified",
+      badges: ["Marketplace seller"],
+    },
+    stock: Number(attrs.stock ?? 1) || 1,
+    shipping: shippingSummary,
+    shippingEnabled: false,
+    shippingCarriers: [],
+    shippingInternational: false,
+    localPickup: typeof attrs.localPickup === "boolean" ? attrs.localPickup : false,
+    cashAccepted: Boolean(attrs.cashAccepted),
+    noShippingRequired: true,
+    shippingNotes: "",
+  } satisfies StorefrontProduct;
+};
+
+const DEFAULT_MESSAGES: StorefrontMessage[] = [];
 
 const currency = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -389,6 +215,16 @@ const formatCurrency = (value: number, currencyCode?: string) => {
 };
 
 const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
+
+const getApiErrorMessage = (err: unknown, fallback: string) => {
+  if (axios.isAxiosError(err)) {
+    const data = err.response?.data as
+      | { error?: { message?: string }; message?: string }
+      | undefined;
+    return data?.error?.message || data?.message || fallback;
+  }
+  return fallback;
+};
 
 const getEntityId = (value: any) => {
   if (!value) return null;
@@ -424,18 +260,25 @@ const buildSellerVerification = (status?: VerificationStatus | null): Verificati
   },
 ];
 
+const QUICK_BUYER_MESSAGES = [
+  "Hi! Is this still available?",
+  "Can you share a few more photos?",
+  "What's the lowest price you'd take?",
+  "Can we meet for local pickup?",
+  "Is shipping available?",
+  "What condition issues should I know about?",
+] as const;
+
 export default function StorefrontListing() {
   const { user } = useAuth();
   const { getBackgroundStyle } = useUserPreferences();
   const { listingId } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
-  const [products, setProducts] = useState<StorefrontProduct[]>(
-    USE_DEMO_LISTINGS ? DEMO_FALLBACK_PRODUCTS : []
-  );
-  const [selectedId, setSelectedId] = useState(
-    USE_DEMO_LISTINGS ? DEMO_FALLBACK_PRODUCTS[0]?.id || "" : ""
-  );
+  const [demoEnabled, setDemoEnabled] = useState(readStorefrontDemoEnabled);
+  const [demoCount, setDemoCount] = useState(readStorefrontDemoCount);
+  const [products, setProducts] = useState<StorefrontProduct[]>([]);
+  const [selectedId, setSelectedId] = useState("");
   const [messages, setMessages] = useState<StorefrontMessage[]>(DEFAULT_MESSAGES);
   const [messageDraft, setMessageDraft] = useState("");
   const [loadingListings, setLoadingListings] = useState(false);
@@ -448,6 +291,13 @@ export default function StorefrontListing() {
   const [offerNotice, setOfferNotice] = useState<string | null>(null);
   const [offerDraftPrice, setOfferDraftPrice] = useState("");
   const [offerDraftNote, setOfferDraftNote] = useState("");
+  const [bids, setBids] = useState<StorefrontBid[]>([]);
+  const [bidLoading, setBidLoading] = useState(false);
+  const [bidError, setBidError] = useState<string | null>(null);
+  const [bidNotice, setBidNotice] = useState<string | null>(null);
+  const [bidDraftAmount, setBidDraftAmount] = useState("");
+  const [counterDrafts, setCounterDrafts] = useState<Record<string, string>>({});
+  const [counterNotes, setCounterNotes] = useState<Record<string, string>>({});
   const [query] = useState("");
   const [categoryFilter] = useState("All");
   const [conditionFilter] = useState("Any");
@@ -459,12 +309,54 @@ export default function StorefrontListing() {
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [checkoutStatus, setCheckoutStatus] = useState<string | null>(null);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("paypal");
   const [verificationNotice, setVerificationNotice] = useState<string | null>(null);
   const [verificationError, setVerificationError] = useState<string | null>(null);
   const [verificationLoading, setVerificationLoading] = useState(false);
   const captureGuardRef = useRef<string | null>(null);
   const offerPanelRef = useRef<HTMLDivElement | null>(null);
+  const searchContext = useMemo(
+    () => (location.state && typeof location.state === "object" ? location.state : {}) as {
+      query?: string;
+      category?: string;
+      location?: string;
+    },
+    [location.state]
+  );
+  const searchQuery = String(searchContext?.query || "").trim().toLowerCase();
+  const searchCategory = String(searchContext?.category || "").trim();
+  const demoProducts = useMemo<StorefrontProduct[]>(() => {
+    if (!demoEnabled || demoCount <= 0) return [];
+    return buildStorefrontDemoListings(demoCount).map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+      price: 0.01,
+      status: "active",
+      category: entry.category,
+      condition: entry.condition,
+      location: entry.location,
+      description: entry.description,
+      images: entry.images,
+      seller: {
+        id: "demo-seller",
+        userId: 0,
+        name: "Demo Seller",
+        rating: 4.8,
+        responseTime: "Typically replies within 1 hour",
+        verifiedLevel: "verified" as const,
+        badges: ["ID verified", "Payout verified"],
+      },
+      stock: entry.stock,
+      shipping: "Delivery arranged privately",
+      shippingEnabled: false,
+      shippingCarriers: [],
+      shippingInternational: false,
+      localPickup: entry.localPickup,
+      cashAccepted: entry.cashAccepted,
+      noShippingRequired: true,
+      shippingNotes: "",
+      isDemo: true,
+    } satisfies StorefrontProduct));
+  }, [demoCount, demoEnabled]);
 
   usePageMeta({
     title: "StoreFront | Your Social Place",
@@ -479,6 +371,28 @@ export default function StorefrontListing() {
     [sellerVerification]
   );
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const syncDemo = () => {
+      setDemoEnabled(readStorefrontDemoEnabled());
+      setDemoCount(readStorefrontDemoCount());
+    };
+    const handleStorage = (event: StorageEvent) => {
+      if (
+        event.key === STOREFRONT_DEMO_ENABLED_KEY ||
+        event.key === STOREFRONT_DEMO_COUNT_KEY
+      ) {
+        syncDemo();
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener("storefront:demo-updated", syncDemo);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("storefront:demo-updated", syncDemo);
+    };
+  }, []);
+
   const loadListings = useCallback(async () => {
     setLoadingListings(true);
     setListingError(null);
@@ -487,52 +401,28 @@ export default function StorefrontListing() {
         "/marketplace-listings?populate[0]=images&populate[1]=owner&sort=createdAt:desc"
       );
       const entries = Array.isArray(res.data?.data) ? res.data.data : [];
-      const mapped: StorefrontProduct[] = entries.map((entry: any) => {
-        const attrs = normalize(entry);
-        const ownerData = attrs.owner?.data ?? attrs.owner;
-        const owner = normalize(ownerData);
-        const sellerId = getEntityId(ownerData) ?? 0;
-        const sellerName =
-          `${String(owner.firstName || "").trim()} ${String(owner.lastName || "").trim()}`.trim() ||
-          String(owner.username || "").trim() ||
-          String(owner.email || "").split("@")[0] ||
-          "Seller";
-        const images = pickMediaUrls(attrs.images, { kind: "post" });
-        const shippingSummary = attrs.localPickup
-          ? "Local pickup available"
-          : "Delivery arranged privately";
-        return {
-          id: String(entry?.id ?? attrs.documentId ?? attrs.id ?? Date.now()),
-          rawId: Number(entry?.id ?? attrs.documentId ?? attrs.id) || undefined,
-          title: String(attrs.title || "Untitled listing"),
-          price: Number(attrs.price || 0),
-          category: String(attrs.category || "General"),
-          condition: String(attrs.condition || "Good"),
-          location: String(attrs.location || "Flexible pickup"),
-          description: String(attrs.description || ""),
-          images,
-          seller: {
-            id: String(sellerId || "seller"),
-            userId: sellerId || undefined,
-            name: sellerName,
-            handle: String(owner.handle || "").trim() || undefined,
-            avatarUrl: String(owner.avatarUrl || "").trim() || undefined,
-            rating: Number(owner.rating || 4.7),
-            responseTime: "Typically replies within a few hours",
-            verifiedLevel: "unverified",
-            badges: ["Marketplace seller"],
-          },
-          stock: Number(attrs.stock ?? 1) || 1,
-          shipping: shippingSummary,
-          shippingEnabled: false,
-          shippingCarriers: [],
-          shippingInternational: false,
-          localPickup: typeof attrs.localPickup === "boolean" ? attrs.localPickup : false,
-          cashAccepted: Boolean(attrs.cashAccepted),
-          noShippingRequired: true,
-          shippingNotes: "",
-        } satisfies StorefrontProduct;
-      });
+      const mapped: StorefrontProduct[] = entries.map(buildStorefrontProduct);
+      if (listingId && !mapped.some((product) => matchesListingId(product, listingId))) {
+        try {
+          const directRes = await api.get(
+            `/marketplace-listings/${listingId}?populate[0]=images&populate[1]=owner`
+          );
+          const directEntry = directRes.data?.data;
+          if (directEntry) {
+            const directProduct = buildStorefrontProduct(directEntry);
+            const exists = mapped.some((product) => {
+              if (directProduct.rawId && product.rawId === directProduct.rawId) return true;
+              if (directProduct.documentId && product.documentId === directProduct.documentId) {
+                return true;
+              }
+              return product.id === directProduct.id;
+            });
+            if (!exists) mapped.push(directProduct);
+          }
+        } catch {
+          // Ignore direct fetch failures; listing may be private or unavailable.
+        }
+      }
       let verifiedMap = new Map<number, StorefrontSeller["verifiedLevel"]>();
       const sellerIds = Array.from(
         new Set(
@@ -587,29 +477,36 @@ export default function StorefrontListing() {
           },
         };
       });
-      const fallback = USE_DEMO_LISTINGS ? DEMO_FALLBACK_PRODUCTS : [];
-      const nextProducts = enriched.length ? enriched : fallback;
+      const nextProducts = [...demoProducts, ...enriched];
       setProducts(nextProducts);
       const nextSelectedId =
         listingId &&
-        nextProducts.some((product: StorefrontProduct) => product.id === listingId)
+        nextProducts.some((product: StorefrontProduct) =>
+          matchesListingId(product, listingId)
+        )
           ? listingId
           : nextProducts[0]?.id || "";
       setSelectedId(nextSelectedId);
     } catch (err) {
-      setListingError("Unable to load listings right now.");
-      const fallback = USE_DEMO_LISTINGS ? DEMO_FALLBACK_PRODUCTS : [];
-      setProducts(fallback);
-      const nextSelectedId =
-        listingId &&
-        fallback.some((product: StorefrontProduct) => product.id === listingId)
-          ? listingId
-          : fallback[0]?.id || "";
-      setSelectedId(nextSelectedId);
+      if (demoProducts.length > 0) {
+        setProducts(demoProducts);
+        const fallbackId =
+          listingId &&
+          demoProducts.some((product: StorefrontProduct) =>
+            matchesListingId(product, listingId)
+          )
+            ? listingId
+            : demoProducts[0]?.id || "";
+        setSelectedId(fallbackId);
+      } else {
+        setListingError("Unable to load listings right now.");
+        setProducts([]);
+        setSelectedId("");
+      }
     } finally {
       setLoadingListings(false);
     }
-  }, [listingId]);
+  }, [demoProducts, listingId]);
 
   const fetchVerificationForUser = useCallback(async (userId?: number | null) => {
     if (!userId) return null;
@@ -650,6 +547,21 @@ export default function StorefrontListing() {
     if (verificationLoading) return;
     setVerificationNotice(null);
     setVerificationError(null);
+
+    if (!user?.ageVerified) {
+      const params = new URLSearchParams(location.search);
+      params.set("ageVerify", "1");
+      setVerificationNotice("Starting age verification...");
+      navigate(
+        {
+          pathname: location.pathname,
+          search: params.toString() ? `?${params.toString()}` : "",
+          hash: location.hash,
+        },
+        { replace: false }
+      );
+      return;
+    }
 
     const payload: Partial<VerificationStatus> = {};
     type StatusKey = "sellerIdStatus" | "sellerPayoutStatus";
@@ -774,10 +686,17 @@ export default function StorefrontListing() {
               "Buyer",
             offeredPrice: Number(attrs.offeredPrice || 0),
             currency: String(attrs.currency || "USD").toUpperCase(),
-            status: (String(attrs.status || "pending") as OfferStatus) || "pending",
+            status:
+              (String(attrs.status || "pending").toLowerCase() as OfferStatus) ||
+              "pending",
             createdAt: attrs.createdAt
               ? new Date(attrs.createdAt).toLocaleString()
               : "",
+            note: attrs.note ? String(attrs.note) : undefined,
+            lastActionBy:
+              attrs.lastActionBy === "buyer" || attrs.lastActionBy === "seller"
+                ? attrs.lastActionBy
+                : "buyer",
           } satisfies StorefrontOffer;
         });
         setOffers(mapped);
@@ -785,6 +704,57 @@ export default function StorefrontListing() {
         setOfferError("Unable to load offers.");
       } finally {
         setOfferLoading(false);
+      }
+    },
+    [user?.id]
+  );
+
+  const loadBids = useCallback(
+    async (listing: StorefrontProduct | undefined) => {
+      if (!listing || !user?.id) {
+        setBids([]);
+        return;
+      }
+      const listingId = listing.rawId ?? Number(listing.id);
+      if (!Number.isFinite(listingId)) {
+        setBids([]);
+        return;
+      }
+      setBidLoading(true);
+      setBidError(null);
+      try {
+        const res = await api.get("/marketplace-bids/me", {
+          params: { listingId },
+        });
+        const mapped = (res.data?.data ?? []).map((entry: any) => {
+          const attrs = normalize(entry);
+          const bidderData = attrs.bidder?.data ?? attrs.bidder;
+          const bidder = normalize(bidderData);
+          const listingData = attrs.listing?.data ?? attrs.listing;
+          return {
+            id: String(entry.id ?? attrs.documentId ?? `${listingId}-${attrs.createdAt}`),
+            listingId: getEntityId(listingData) ?? listingId,
+            bidderId: getEntityId(bidderData) ?? undefined,
+            sellerId: getEntityId(attrs.seller) ?? undefined,
+            bidderName:
+              `${String(bidder.firstName || "").trim()} ${String(bidder.lastName || "").trim()}`.trim() ||
+              String(bidder.username || "").trim() ||
+              String(bidder.email || "").split("@")[0] ||
+              "Bidder",
+            amount: Number(attrs.amount || 0),
+            currency: String(attrs.currency || "USD").toUpperCase(),
+            status: (String(attrs.status || "pending").toLowerCase() as BidStatus) ||
+              "pending",
+            createdAt: attrs.createdAt
+              ? new Date(attrs.createdAt).toLocaleString()
+              : "",
+          } satisfies StorefrontBid;
+        });
+        setBids(mapped);
+      } catch {
+        setBidError("Unable to load bids.");
+      } finally {
+        setBidLoading(false);
       }
     },
     [user?.id]
@@ -816,15 +786,58 @@ export default function StorefrontListing() {
     return filtered;
   }, [categoryFilter, conditionFilter, products, query, sortMode]);
 
-  const selectedProduct = useMemo(
-    () => products.find((product) => product.id === selectedId) || filteredProducts[0],
-    [filteredProducts, products, selectedId]
-  );
+  const selectedProduct = useMemo(() => {
+    if (listingId) {
+      return products.find((product) => matchesListingId(product, listingId));
+    }
+    return (
+      products.find((product) => matchesListingId(product, selectedId)) ||
+      filteredProducts[0]
+    );
+  }, [filteredProducts, listingId, products, selectedId]);
+
+  const similarListings = useMemo(() => {
+    if (!selectedProduct) return [];
+    const activeListings = products.filter((item) => {
+      const status = String(item.status || "active").toLowerCase();
+      return status === "active" && item.id !== selectedProduct.id;
+    });
+    if (!activeListings.length) return [];
+    const preferredCategory =
+      searchCategory && searchCategory !== "All"
+        ? searchCategory
+        : selectedProduct.category;
+    const categoryMatch = activeListings.filter(
+      (item) => item.category === preferredCategory
+    );
+    const tokens = searchQuery.split(/\s+/).filter(Boolean);
+    const queryMatch =
+      tokens.length > 0
+        ? activeListings.filter((item) =>
+            tokens.some((token) =>
+              `${item.title} ${item.description} ${item.location} ${item.category}`
+                .toLowerCase()
+                .includes(token)
+            )
+          )
+        : [];
+    const combined = [...queryMatch, ...categoryMatch, ...activeListings];
+    const seen = new Set<string>();
+    const result: StorefrontProduct[] = [];
+    combined.forEach((item) => {
+      if (seen.has(item.id)) return;
+      seen.add(item.id);
+      result.push(item);
+    });
+    return result.slice(0, 4);
+  }, [products, searchQuery, selectedProduct]);
 
   const isListingOwner = selectedProduct?.seller.userId === user?.id;
-  const canMakeOffer = Boolean(selectedProduct && user?.id && !isListingOwner);
-  const canCashPickup = Boolean(selectedProduct?.localPickup && selectedProduct?.cashAccepted);
-
+  const listingStatus = String(selectedProduct?.status || "active").toLowerCase();
+  const isListingActive = listingStatus === "active";
+  const canMakeOffer = Boolean(
+    selectedProduct && user?.id && !isListingOwner && isListingActive
+  );
   const quickOfferOptions = useMemo(() => {
     if (!selectedProduct || !Number.isFinite(selectedProduct.price)) return [];
     if (selectedProduct.price <= 0) return [];
@@ -862,37 +875,14 @@ export default function StorefrontListing() {
     }
   }, [loadListings, location.search]);
 
-  const captureStripeReturn = useCallback(async () => {
-    if (typeof window === "undefined") return;
-    const params = new URLSearchParams(location.search);
-    const status = params.get("stripe");
-    const orderId = params.get("orderId");
-    const sessionId = params.get("session_id");
-    if (!status || !orderId) return;
-    const captureKey = `stripe:${orderId}:${sessionId ?? ""}`;
-    if (captureGuardRef.current === captureKey) return;
-    captureGuardRef.current = captureKey;
-    if (status === "cancel") {
-      setCheckoutStatus("Stripe checkout cancelled.");
-      return;
-    }
-    if (status !== "success" || !sessionId) {
-      return;
-    }
-    try {
-      await api.post(`/marketplace-orders/stripe/${orderId}/capture`, { sessionId });
-      setCheckoutStatus("Payment captured. Your order is confirmed.");
-      void loadListings();
-    } catch {
-      setCheckoutError("Unable to capture Stripe payment.");
-    }
-  }, [loadListings, location.search]);
-
   useEffect(() => {
     if (listingId) {
       return;
     }
-    if (selectedId && filteredProducts.some((product) => product.id === selectedId)) {
+    if (
+      selectedId &&
+      filteredProducts.some((product) => matchesListingId(product, selectedId))
+    ) {
       return;
     }
     if (filteredProducts[0]) {
@@ -913,32 +903,31 @@ export default function StorefrontListing() {
 
   useEffect(() => {
     void capturePayPalReturn();
-    void captureStripeReturn();
-  }, [capturePayPalReturn, captureStripeReturn]);
+  }, [capturePayPalReturn]);
 
   useEffect(() => {
     void loadConversation(selectedProduct);
     void loadSellerVerification(selectedProduct?.seller.userId ?? null);
     void loadOffers(selectedProduct);
-  }, [loadConversation, loadSellerVerification, loadOffers, selectedProduct]);
+    void loadBids(selectedProduct);
+  }, [loadConversation, loadSellerVerification, loadOffers, loadBids, selectedProduct]);
 
   useEffect(() => {
     setOfferNotice(null);
     setOfferError(null);
     setOfferDraftPrice("");
     setOfferDraftNote("");
+    setCounterDrafts({});
+    setCounterNotes({});
+    setBidNotice(null);
+    setBidError(null);
+    setBidDraftAmount("");
   }, [selectedProduct?.id]);
-
-  useEffect(() => {
-    if (!canCashPickup && paymentMethod === "cash") {
-      setPaymentMethod("paypal");
-    }
-  }, [canCashPickup, paymentMethod]);
 
   useEffect(() => {
     setCheckoutError(null);
     setCheckoutStatus(null);
-  }, [paymentMethod]);
+  }, [selectedProduct?.id]);
 
   const conversation = useMemo(() => {
     if (!selectedProduct) return [];
@@ -950,15 +939,74 @@ export default function StorefrontListing() {
     const listingId = selectedProduct.rawId ?? Number(selectedProduct.id);
     const relevant = offers.filter((offer) => offer.listingId === listingId);
     if (isListingOwner) {
-      return relevant.filter((offer) => offer.status === "pending");
+      return relevant.filter(
+        (offer) => offer.status === "pending" || offer.status === "countered"
+      );
     }
     return relevant.filter((offer) => offer.buyerId === user.id);
   }, [offers, isListingOwner, selectedProduct, user?.id]);
+
+  const bidsForDisplay = useMemo(() => {
+    if (!selectedProduct || !user?.id) return [];
+    const listingId = selectedProduct.rawId ?? Number(selectedProduct.id);
+    const relevant = bids.filter((bid) => bid.listingId === listingId);
+    if (isListingOwner) {
+      return relevant;
+    }
+    return relevant.filter((bid) => bid.bidderId === user.id);
+  }, [bids, isListingOwner, selectedProduct, user?.id]);
+
+  const highestBid = useMemo(() => {
+    if (!selectedProduct) return null;
+    const listingHighest = Number(selectedProduct.highestBid ?? 0);
+    const bidHighest = bids.reduce((max, bid) => Math.max(max, bid.amount || 0), 0);
+    const value = Math.max(listingHighest, bidHighest);
+    if (!Number.isFinite(value) || value <= 0) return null;
+    return value;
+  }, [bids, selectedProduct]);
+
+  const auctionEndAt = useMemo(() => {
+    if (!selectedProduct?.auctionEndAt) return null;
+    const parsed = new Date(selectedProduct.auctionEndAt);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }, [selectedProduct?.auctionEndAt]);
+
+  const auctionEnded = auctionEndAt ? auctionEndAt.getTime() <= Date.now() : false;
+
+  const highestPendingBid = useMemo(() => {
+    if (bidsForDisplay.length === 0) return null;
+    const pending = bidsForDisplay.filter((bid) => bid.status === "pending");
+    if (pending.length === 0) return null;
+    return pending.sort((a, b) => b.amount - a.amount)[0] ?? null;
+  }, [bidsForDisplay]);
+
+  const acceptedBid = useMemo(() => {
+    const bid = bidsForDisplay.find((item) => item.status === "accepted");
+    return bid ?? null;
+  }, [bidsForDisplay]);
 
   const acceptedOffer = useMemo(() => {
     if (isListingOwner) return null;
     return offersForDisplay.find((offer) => offer.status === "accepted") || null;
   }, [isListingOwner, offersForDisplay]);
+
+  const currentUserRole: "buyer" | "seller" = isListingOwner ? "seller" : "buyer";
+
+  const getOfferLastActorLabel = useCallback(
+    (offer: StorefrontOffer) => {
+      const lastActionBy = offer.lastActionBy ?? "buyer";
+      if (lastActionBy === "buyer") {
+        return isListingOwner ? "Buyer" : "You";
+      }
+      return isListingOwner ? "You" : "Seller";
+    },
+    [isListingOwner]
+  );
+
+  const isOfferAwaitingCurrentUser = useCallback(
+    (offer: StorefrontOffer) => (offer.lastActionBy ?? "buyer") !== currentUserRole,
+    [currentUserRole]
+  );
 
   const resolveListingIdPayload = (listing?: StorefrontProduct | null) => {
     if (!listing) return null;
@@ -971,6 +1019,10 @@ export default function StorefrontListing() {
 
   const handlePayWithPaypal = useCallback(async () => {
     if (!selectedProduct) return;
+    if (!isListingActive) {
+      setCheckoutError("Listing is not available for checkout.");
+      return;
+    }
     setCheckoutError(null);
     setCheckoutStatus(null);
     setCheckoutLoading(true);
@@ -983,16 +1035,11 @@ export default function StorefrontListing() {
       const res = await api.post("/marketplace-orders/paypal", {
         listingId,
         offerId: acceptedOffer?.id,
-        paymentMethod,
       });
       const approvalUrl = res.data?.approvalUrl;
       if (approvalUrl && typeof window !== "undefined") {
         window.open(approvalUrl, "_blank", "noopener,noreferrer");
-        setCheckoutStatus(
-          paymentMethod === "venmo"
-            ? "Approve the payment in PayPal (Venmo will appear if available)."
-            : "Approve the payment in PayPal to continue."
-        );
+        setCheckoutStatus("Approve the payment in PayPal to continue.");
       } else {
         setCheckoutError("PayPal approval link not available.");
       }
@@ -1001,69 +1048,7 @@ export default function StorefrontListing() {
     } finally {
       setCheckoutLoading(false);
     }
-  }, [acceptedOffer, canCashPickup, paymentMethod, selectedProduct]);
-
-  const handlePayWithStripe = useCallback(async () => {
-    if (!selectedProduct) return;
-    setCheckoutError(null);
-    setCheckoutStatus(null);
-    setCheckoutLoading(true);
-    try {
-      const listingId = resolveListingIdPayload(selectedProduct);
-      if (!listingId) {
-        setCheckoutError("Listing is not ready for checkout.");
-        return;
-      }
-      const res = await api.post("/marketplace-orders/stripe", {
-        listingId,
-        offerId: acceptedOffer?.id,
-        paymentMethod,
-      });
-      const checkoutUrl = res.data?.checkoutUrl;
-      if (checkoutUrl && typeof window !== "undefined") {
-        window.open(checkoutUrl, "_blank", "noopener,noreferrer");
-        setCheckoutStatus("Complete the Stripe checkout to continue.");
-      } else {
-        setCheckoutError("Stripe checkout link not available.");
-      }
-    } catch {
-      setCheckoutError("Unable to start Stripe checkout.");
-    } finally {
-      setCheckoutLoading(false);
-    }
-  }, [acceptedOffer, paymentMethod, selectedProduct]);
-
-  const handleManualPayment = useCallback(async () => {
-    if (!selectedProduct) return;
-    if (paymentMethod !== "cash") return;
-    if (!canCashPickup) {
-      setCheckoutError("Cash pickup is not available for this listing.");
-      return;
-    }
-    setCheckoutError(null);
-    setCheckoutStatus(null);
-    setCheckoutLoading(true);
-    try {
-      const listingId = resolveListingIdPayload(selectedProduct);
-      if (!listingId) {
-        setCheckoutError("Listing is not ready for checkout.");
-        return;
-      }
-      const res = await api.post("/marketplace-orders/manual", {
-        listingId,
-        offerId: acceptedOffer?.id,
-        paymentProvider: paymentMethod,
-      });
-      setCheckoutStatus(
-        res.data?.message ||
-          "Cash pickup selected. Message the seller to confirm time and location."
-      );
-    } catch {
-      setCheckoutError("Unable to record manual order.");
-    } finally {
-      setCheckoutLoading(false);
-    }
-  }, [acceptedOffer, paymentMethod, selectedProduct]);
+  }, [acceptedOffer, isListingActive, selectedProduct]);
 
   const effectivePrice = selectedProduct
     ? acceptedOffer
@@ -1071,7 +1056,14 @@ export default function StorefrontListing() {
       : selectedProduct.price
     : 0;
   const feeCurrency = acceptedOffer?.currency || "USD";
-  const platformFeeRate = paymentMethod === "cash" ? 0 : PLATFORM_FEE_RATE;
+  const platformFeeRate =
+    selectedProduct?.seller.verifiedLevel === "verified"
+      ? VERIFIED_SELLER_FEE_RATE
+      : STANDARD_SELLER_FEE_RATE;
+  const feeRateLabel =
+    platformFeeRate === VERIFIED_SELLER_FEE_RATE
+      ? "2% platform fee (verified seller)"
+      : "4% platform fee";
   const platformFee = effectivePrice * platformFeeRate;
   const sellerPayout = effectivePrice - platformFee;
 
@@ -1081,9 +1073,9 @@ export default function StorefrontListing() {
 
   const handleSubmitOffer = async () => {
     if (!selectedProduct || !user?.id || isListingOwner) return;
-    const listingId = selectedProduct.rawId ?? Number(selectedProduct.id);
+    const listingId = resolveListingIdPayload(selectedProduct);
     const offerPrice = Number(offerDraftPrice);
-    if (!Number.isFinite(listingId)) {
+    if (!listingId) {
       setOfferError("Listing is not ready for offers.");
       return;
     }
@@ -1106,8 +1098,8 @@ export default function StorefrontListing() {
       setOfferDraftPrice("");
       setOfferDraftNote("");
       await loadOffers(selectedProduct);
-    } catch {
-      setOfferError("Unable to send offer.");
+    } catch (err) {
+      setOfferError(getApiErrorMessage(err, "Unable to send offer."));
     } finally {
       setOfferLoading(false);
     }
@@ -1153,12 +1145,121 @@ export default function StorefrontListing() {
     }
   };
 
+  const handleCounterOffer = async (offerId: string) => {
+    if (!selectedProduct || !user?.id) return;
+    const draftValue = counterDrafts[offerId];
+    const noteValue = counterNotes[offerId];
+    const existingOffer = offers.find((offer) => offer.id === offerId);
+    const counterPrice = Number(draftValue ?? existingOffer?.offeredPrice);
+    if (!Number.isFinite(counterPrice) || counterPrice <= 0) {
+      setOfferError("Enter a valid counter amount.");
+      return;
+    }
+    setOfferError(null);
+    setOfferNotice(null);
+    setOfferLoading(true);
+    try {
+      await api.put(`/marketplace-offers/${offerId}`, {
+        data: {
+          status: "countered",
+          offeredPrice: counterPrice,
+          note: noteValue?.trim() || undefined,
+        },
+      });
+      setOfferNotice(
+        isListingOwner ? "Counter offer sent to the buyer." : "Counter offer sent to the seller."
+      );
+      setCounterDrafts((prev) => {
+        const next = { ...prev };
+        delete next[offerId];
+        return next;
+      });
+      setCounterNotes((prev) => {
+        const next = { ...prev };
+        delete next[offerId];
+        return next;
+      });
+      await loadOffers(selectedProduct);
+    } catch {
+      setOfferError("Unable to send counter offer.");
+    } finally {
+      setOfferLoading(false);
+    }
+  };
+
   const handleUpdateOffer = (offerId: string, status: OfferStatus) => {
     if (status === "withdrawn") {
       void handleWithdrawOffer(offerId);
       return;
     }
     void handleRespondOffer(offerId, status);
+  };
+
+  const handlePlaceBid = async () => {
+    if (!selectedProduct || !user?.id || isListingOwner) return;
+    if (!isListingActive) {
+      setBidError("Listing is not accepting bids.");
+      return;
+    }
+    if (!selectedProduct.auctionEnabled) {
+      setBidError("Bidding is not enabled for this listing.");
+      return;
+    }
+    const listingId = resolveListingIdPayload(selectedProduct);
+    const bidAmount = Number(bidDraftAmount);
+    if (!listingId) {
+      setBidError("Listing is not ready for bids.");
+      return;
+    }
+    if (!Number.isFinite(bidAmount) || bidAmount <= 0) {
+      setBidError("Enter a valid bid amount.");
+      return;
+    }
+    const buyNowPrice = Number(selectedProduct.price || 0);
+    if (Number.isFinite(buyNowPrice) && buyNowPrice > 0 && bidAmount > buyNowPrice) {
+      setBidError("Bid cannot exceed the buy now price.");
+      return;
+    }
+    setBidError(null);
+    setBidNotice(null);
+    setBidLoading(true);
+    try {
+      await api.post("/marketplace-bids", {
+        data: {
+          listing: listingId,
+          amount: bidAmount,
+        },
+      });
+      setBidNotice("Bid submitted.");
+      setBidDraftAmount("");
+      await loadBids(selectedProduct);
+    } catch (err) {
+      setBidError(getApiErrorMessage(err, "Unable to place bid."));
+    } finally {
+      setBidLoading(false);
+    }
+  };
+
+  const handleUpdateBid = async (bidId: string, status: BidStatus) => {
+    if (!selectedProduct || !user?.id) return;
+    setBidError(null);
+    setBidNotice(null);
+    setBidLoading(true);
+    try {
+      await api.put(`/marketplace-bids/${bidId}`, { data: { status } });
+      setBidNotice(
+        status === "accepted"
+          ? "Bid accepted."
+          : status === "declined"
+          ? "Bid declined."
+          : "Bid withdrawn."
+      );
+      await loadBids(selectedProduct);
+    } catch {
+      setBidError("Unable to update bid.");
+    } finally {
+      setBidLoading(false);
+    }
   };
 
   const handleSendMessage = async () => {
@@ -1183,6 +1284,12 @@ export default function StorefrontListing() {
     } catch {
       setChatError("Unable to send message.");
     }
+  };
+
+  const handleQuickMessage = (value: string) => {
+    const next = String(value || "").trim();
+    if (!next) return;
+    setMessageDraft(next);
   };
 
   const pageBackground = getBackgroundStyle("storefront") || getBackgroundStyle("dashboard");
@@ -1211,6 +1318,12 @@ export default function StorefrontListing() {
               <span className="storefront-price-pill">
                 {formatPrice(selectedProduct.price)}
               </span>
+              {String(selectedProduct.status || "active").toLowerCase() === "sold" && (
+                <span className="storefront-status-pill sold">Sold</span>
+              )}
+              {String(selectedProduct.status || "active").toLowerCase() === "pending" && (
+                <span className="storefront-status-pill pending">Pending</span>
+              )}
               {canMakeOffer && (
                 <button
                   className="btn ghost small"
@@ -1270,6 +1383,9 @@ export default function StorefrontListing() {
                     </div>
                   </div>
                   <div className="storefront-gallery">
+                    {String(selectedProduct.status || "active").toLowerCase() === "sold" && (
+                      <div className="storefront-sold-banner">Sold</div>
+                    )}
                     {selectedProduct.images.length === 0 && (
                       <div className="storefront-gallery-empty">
                         No additional images uploaded yet.
@@ -1295,6 +1411,68 @@ export default function StorefrontListing() {
                 </>
               )}
             </div>
+            {selectedProduct &&
+              String(selectedProduct.status || "active").toLowerCase() === "sold" &&
+              similarListings.length > 0 && (
+                <div className="storefront-panel storefront-similar">
+                  <div className="storefront-panel-header">
+                    <div>
+                      <p className="storefront-panel-eyebrow">Similar listings</p>
+                      <h3>Explore similar items</h3>
+                    </div>
+                    <span>Available now</span>
+                  </div>
+                  <div className="storefront-similar-grid">
+                    {similarListings.map((item) => (
+                      <div
+                        key={item.id}
+                        role="button"
+                        tabIndex={0}
+                        className="storefront-card"
+                        onClick={() => navigate(`/storefront/listing/${item.id}`)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            navigate(`/storefront/listing/${item.id}`);
+                          }
+                        }}
+                      >
+                        <div className="storefront-card-image">
+                          {item.images[0] ? (
+                            <img src={item.images[0]} alt={item.title} />
+                          ) : (
+                            <div className="storefront-card-fallback" />
+                          )}
+                          <span className="storefront-card-condition">
+                            {item.condition}
+                          </span>
+                          <span className="storefront-card-price-pill">
+                            {formatPrice(item.price)}
+                          </span>
+                        </div>
+                        <div className="storefront-card-body">
+                          <h3>{item.title}</h3>
+                          <p className="storefront-card-location">{item.location}</p>
+                          <div className="storefront-card-row">
+                            <span className="storefront-card-price">
+                              {formatPrice(item.price)}
+                            </span>
+                            <span className="storefront-card-stock">
+                              {item.stock} in stock
+                            </span>
+                          </div>
+                          <div className="storefront-card-tags">
+                            <span>{item.category}</span>
+                            {item.seller.verifiedLevel === "verified" && (
+                              <span className="is-verified">Verified seller</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
           </div>
 
           <aside className="storefront-detail-aside">
@@ -1304,9 +1482,7 @@ export default function StorefrontListing() {
                   <p className="storefront-panel-eyebrow">Transaction summary</p>
                   <h3>Estimated payout</h3>
                 </div>
-                <span className="storefront-fee-note">
-                  {paymentMethod === "cash" ? "0% platform fee (cash pickup)" : "3% platform fee"}
-                </span>
+                <span className="storefront-fee-note">{feeRateLabel}</span>
               </div>
               <div className="storefront-fee-row">
                 <span>{acceptedOffer ? "Original price" : "Listing price"}</span>
@@ -1323,7 +1499,7 @@ export default function StorefrontListing() {
                 </div>
               )}
               <div className="storefront-fee-row">
-                <span>{paymentMethod === "cash" ? "Platform fee (cash pickup)" : "Platform fee"}</span>
+                <span>Platform fee</span>
                 <strong>-{formatCurrency(platformFee, feeCurrency)}</strong>
               </div>
               <div className="storefront-fee-row total">
@@ -1331,80 +1507,14 @@ export default function StorefrontListing() {
                 <strong>{formatCurrency(sellerPayout, feeCurrency)}</strong>
               </div>
               {!isListingOwner && (
-                <div className="storefront-payment-methods" role="radiogroup" aria-label="Payment methods">
+                <div className="storefront-payment-methods" aria-label="Payment methods">
                   <p className="storefront-panel-eyebrow">Payment method</p>
-                  <label className="storefront-payment-option">
-                    <input
-                      type="radio"
-                      name="payment-method"
-                      value="stripe"
-                      checked={paymentMethod === "stripe"}
-                      onChange={() => setPaymentMethod("stripe")}
-                    />
-                    <span className="storefront-payment-icon stripe" aria-hidden="true">
-                      S
-                    </span>
-                    <span>Pay online (Card via Stripe)</span>
-                  </label>
-                  <label className="storefront-payment-option">
-                    <input
-                      type="radio"
-                      name="payment-method"
-                      value="cashapp"
-                      checked={paymentMethod === "cashapp"}
-                      onChange={() => setPaymentMethod("cashapp")}
-                    />
-                    <span className="storefront-payment-icon cashapp" aria-hidden="true">
-                      $
-                    </span>
-                    <span>Pay with Cash App (via Stripe)</span>
-                  </label>
-                  <label className="storefront-payment-option">
-                    <input
-                      type="radio"
-                      name="payment-method"
-                      value="paypal"
-                      checked={paymentMethod === "paypal"}
-                      onChange={() => setPaymentMethod("paypal")}
-                    />
+                  <div className="storefront-payment-option">
                     <span className="storefront-payment-icon paypal" aria-hidden="true">
                       P
                     </span>
                     <span>Pay online (PayPal)</span>
-                  </label>
-                  <label className="storefront-payment-option">
-                    <input
-                      type="radio"
-                      name="payment-method"
-                      value="venmo"
-                      checked={paymentMethod === "venmo"}
-                      onChange={() => setPaymentMethod("venmo")}
-                    />
-                    <span className="storefront-payment-icon venmo" aria-hidden="true">
-                      V
-                    </span>
-                    <span>Pay online (Venmo via PayPal)</span>
-                  </label>
-                  {canCashPickup && (
-                    <label className="storefront-payment-option">
-                      <input
-                        type="radio"
-                        name="payment-method"
-                        value="cash"
-                        checked={paymentMethod === "cash"}
-                        onChange={() => setPaymentMethod("cash")}
-                      />
-                      <span className="storefront-payment-icon cash" aria-hidden="true">
-                        $
-                      </span>
-                      <span>Pay with cash on pickup (no platform fee)</span>
-                    </label>
-                  )}
-                  {!canCashPickup && (
-                    <p className="storefront-thread-empty">
-                      Cash pickup is not available for this listing.
-                    </p>
-                  )}
+                  </div>
                 </div>
               )}
               {checkoutError && (
@@ -1413,44 +1523,14 @@ export default function StorefrontListing() {
               {checkoutStatus && (
                 <p className="storefront-status success">{checkoutStatus}</p>
               )}
-              {!isListingOwner &&
-                (paymentMethod === "paypal" || paymentMethod === "venmo") && (
-                  <button
-                    className="btn primary"
-                    type="button"
-                    disabled={checkoutLoading || !selectedProduct}
-                    onClick={handlePayWithPaypal}
-                  >
-                    {checkoutLoading
-                      ? "Connecting..."
-                      : paymentMethod === "venmo"
-                        ? "Pay with Venmo"
-                        : "Pay with PayPal"}
-                  </button>
-                )}
-              {!isListingOwner &&
-                (paymentMethod === "stripe" || paymentMethod === "cashapp") && (
-                  <button
-                    className="btn primary"
-                    type="button"
-                    disabled={checkoutLoading || !selectedProduct}
-                    onClick={handlePayWithStripe}
-                  >
-                    {checkoutLoading
-                      ? "Connecting..."
-                      : paymentMethod === "cashapp"
-                        ? "Pay with Cash App"
-                        : "Pay with card"}
-                  </button>
-                )}
-              {!isListingOwner && paymentMethod === "cash" && (
+              {!isListingOwner && (
                 <button
-                  className="btn ghost"
+                  className="btn primary"
                   type="button"
-                  disabled={checkoutLoading}
-                  onClick={handleManualPayment}
+                  disabled={checkoutLoading || !selectedProduct}
+                  onClick={handlePayWithPaypal}
                 >
-                  {checkoutLoading ? "Saving..." : "Confirm cash pickup"}
+                  {checkoutLoading ? "Connecting..." : "Pay with PayPal"}
                 </button>
               )}
               <a className="storefront-policy-link" href="/marketplace-policy">
@@ -1499,6 +1579,23 @@ export default function StorefrontListing() {
                   </div>
                 ))}
               </div>
+              {!isListingOwner && (
+                <div className="storefront-message-quick">
+                  <span className="storefront-message-quick-label">Quick messages</span>
+                  <div className="storefront-message-quick-list">
+                    {QUICK_BUYER_MESSAGES.map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        className="storefront-message-quick-btn"
+                        onClick={() => handleQuickMessage(preset)}
+                      >
+                        {preset}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="storefront-message-input">
                 <input
                   type="text"
@@ -1512,11 +1609,146 @@ export default function StorefrontListing() {
               </div>
             </div>
 
+            {selectedProduct?.auctionEnabled && (
+              <div className="storefront-panel storefront-auction">
+                <div className="storefront-panel-header">
+                  <div>
+                    <p className="storefront-panel-eyebrow">Auction</p>
+                    <h3>Place a bid</h3>
+                  </div>
+                  <span
+                    className={`storefront-auction-pill ${
+                      auctionEnded ? "ended" : "live"
+                    }`}
+                  >
+                    {auctionEnded ? "Auction ended" : "Live"}
+                  </span>
+                </div>
+                <div className="storefront-auction-grid">
+                  <div>
+                    <span>Ends</span>
+                    <strong>
+                      {auctionEndAt ? auctionEndAt.toLocaleString() : "TBD"}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Starting bid</span>
+                    <strong>
+                      {formatPrice(Number(selectedProduct.startingBid || 0))}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Current bid</span>
+                    <strong>
+                      {formatPrice(
+                        Number(highestBid ?? selectedProduct.startingBid ?? 0)
+                      )}
+                    </strong>
+                  </div>
+                </div>
+                {bidError && <p className="storefront-form-error">{bidError}</p>}
+                {bidNotice && <p className="storefront-status success">{bidNotice}</p>}
+                {!isListingOwner && !auctionEnded && (
+                  <div className="storefront-auction-form">
+                    <input
+                      type="number"
+                      min={0.01}
+                      step={0.01}
+                      placeholder="Your bid"
+                      value={bidDraftAmount}
+                      onChange={(event) => setBidDraftAmount(event.target.value)}
+                    />
+                    <button
+                      className="btn primary"
+                      type="button"
+                      onClick={handlePlaceBid}
+                      disabled={bidLoading}
+                    >
+                      {bidLoading ? "Submitting..." : "Place bid"}
+                    </button>
+                  </div>
+                )}
+                {!isListingOwner && auctionEnded && (
+                  <p className="storefront-thread-empty">
+                    Auction ended. Waiting on seller acceptance.
+                  </p>
+                )}
+                {bidLoading && <p className="storefront-thread-empty">Loading bids…</p>}
+                {!bidLoading && bidsForDisplay.length === 0 && (
+                  <p className="storefront-thread-empty">
+                    {isListingOwner
+                      ? "No bids yet."
+                      : "No bids yet. Be the first to bid."}
+                  </p>
+                )}
+                {!bidLoading && bidsForDisplay.length > 0 && (
+                  <div className="storefront-auction-list">
+                    {bidsForDisplay.map((bid) => (
+                      <div key={bid.id} className={`storefront-auction-card ${bid.status}`}>
+                        <div>
+                          <strong>{isListingOwner ? bid.bidderName : "You"}</strong>
+                          <span>
+                            {formatPrice(bid.amount)} • {bid.createdAt}
+                          </span>
+                        </div>
+                        <div className="storefront-auction-actions">
+                          {isListingOwner &&
+                            auctionEnded &&
+                            bid.status === "pending" &&
+                            bid.id === highestPendingBid?.id && (
+                              <button
+                                className="btn primary small"
+                                type="button"
+                                onClick={() => handleUpdateBid(bid.id, "accepted")}
+                              >
+                                Accept winner
+                              </button>
+                            )}
+                          {isListingOwner &&
+                            auctionEnded &&
+                            bid.status === "pending" && (
+                              <button
+                                className="btn ghost small"
+                                type="button"
+                                onClick={() => handleUpdateBid(bid.id, "declined")}
+                              >
+                                Decline
+                              </button>
+                            )}
+                          {!isListingOwner &&
+                            bid.status === "pending" &&
+                            !auctionEnded && (
+                              <button
+                                className="btn ghost small"
+                                type="button"
+                                onClick={() => handleUpdateBid(bid.id, "withdrawn")}
+                              >
+                                Withdraw
+                              </button>
+                            )}
+                          {bid.status !== "pending" && (
+                            <span className={`storefront-auction-pill ${bid.status}`}>
+                              {bid.status}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {acceptedBid && (
+                  <p className="storefront-status success">
+                    Winning bid accepted.
+                  </p>
+                )}
+              </div>
+            )}
+
             <div className="storefront-panel storefront-offer" ref={offerPanelRef}>
               <div className="storefront-panel-header">
                 <div>
                   <p className="storefront-panel-eyebrow">Bargain</p>
-                  <h3>{isListingOwner ? "Pending offers" : "Send an offer"}</h3>
+                  <h3>{isListingOwner ? "Open offers" : "Send an offer"}</h3>
                 </div>
                 {selectedProduct && (
                   <span className="storefront-price-pill">
@@ -1572,7 +1804,7 @@ export default function StorefrontListing() {
               {!offerLoading && offersForDisplay.length === 0 && (
                 <p className="storefront-thread-empty">
                   {isListingOwner
-                    ? "No pending offers yet."
+                    ? "No open offers yet."
                     : "No offers yet. Submit your bargain to get started."}
                 </p>
               )}
@@ -1580,46 +1812,106 @@ export default function StorefrontListing() {
                 <div className="storefront-offer-list">
                   {offersForDisplay.map((offer) => (
                     <div key={offer.id} className={`storefront-offer-card ${offer.status}`}>
-                      <div>
-                        <strong>{offer.buyerName}</strong>
-                        <span>
-                          {formatCurrency(offer.offeredPrice, offer.currency)} • {offer.createdAt}
+                      <div className="storefront-offer-head">
+                        <div>
+                          <strong>{isListingOwner ? offer.buyerName : "You"}</strong>
+                          <span>
+                            {formatCurrency(offer.offeredPrice, offer.currency)} •{" "}
+                            {offer.createdAt}
+                          </span>
+                        </div>
+                        <span className={`storefront-offer-pill ${offer.status}`}>
+                          {offer.status}
                         </span>
                       </div>
+                      {offer.note && (
+                        <p className="storefront-offer-note">{offer.note}</p>
+                      )}
+                      {(offer.status === "pending" || offer.status === "countered") && (
+                        <p className="storefront-offer-meta">
+                          {offer.status === "countered"
+                            ? `Countered by ${getOfferLastActorLabel(offer)} | ${
+                                isOfferAwaitingCurrentUser(offer)
+                                  ? "Your move"
+                                  : "Awaiting response"
+                              }`
+                            : isListingOwner
+                              ? "Waiting on your response"
+                              : "Waiting on seller response"}
+                        </p>
+                      )}
                       <div className="storefront-offer-actions">
-                        {isListingOwner && offer.status === "pending" && (
-                          <>
-                            <button
-                              className="btn primary small"
-                              type="button"
-                              onClick={() => handleUpdateOffer(offer.id, "accepted")}
-                            >
-                              Accept
-                            </button>
+                        {(offer.status === "pending" || offer.status === "countered") &&
+                          isOfferAwaitingCurrentUser(offer) && (
+                            <>
+                              <button
+                                className="btn primary small"
+                                type="button"
+                                onClick={() => handleUpdateOffer(offer.id, "accepted")}
+                              >
+                                Accept
+                              </button>
+                              <button
+                                className="btn ghost small"
+                                type="button"
+                                onClick={() => handleUpdateOffer(offer.id, "declined")}
+                              >
+                                Decline
+                              </button>
+                            </>
+                          )}
+                        {!isListingOwner &&
+                          (offer.status === "pending" || offer.status === "countered") && (
                             <button
                               className="btn ghost small"
                               type="button"
-                              onClick={() => handleUpdateOffer(offer.id, "declined")}
+                              onClick={() => handleUpdateOffer(offer.id, "withdrawn")}
                             >
-                              Decline
+                              Withdraw
                             </button>
-                          </>
-                        )}
-                        {!isListingOwner && offer.status === "pending" && (
-                          <button
-                            className="btn ghost small"
-                            type="button"
-                            onClick={() => handleUpdateOffer(offer.id, "withdrawn")}
-                          >
-                            Withdraw
-                          </button>
-                        )}
-                        {offer.status !== "pending" && (
-                          <span className={`storefront-offer-pill ${offer.status}`}>
-                            {offer.status}
-                          </span>
-                        )}
+                          )}
                       </div>
+                      {(offer.status === "pending" || offer.status === "countered") &&
+                        isOfferAwaitingCurrentUser(offer) && (
+                          <div className="storefront-offer-counter">
+                            <input
+                              type="number"
+                              min={0.01}
+                              step={0.01}
+                              placeholder="Counter offer"
+                              value={
+                                counterDrafts[offer.id] ??
+                                (Number.isFinite(offer.offeredPrice)
+                                  ? offer.offeredPrice.toFixed(2)
+                                  : "")
+                              }
+                              onChange={(event) =>
+                                setCounterDrafts((prev) => ({
+                                  ...prev,
+                                  [offer.id]: event.target.value,
+                                }))
+                              }
+                            />
+                            <input
+                              type="text"
+                              placeholder="Optional note"
+                              value={counterNotes[offer.id] ?? ""}
+                              onChange={(event) =>
+                                setCounterNotes((prev) => ({
+                                  ...prev,
+                                  [offer.id]: event.target.value,
+                                }))
+                              }
+                            />
+                            <button
+                              className="btn ghost small"
+                              type="button"
+                              onClick={() => handleCounterOffer(offer.id)}
+                            >
+                              Counter
+                            </button>
+                          </div>
+                        )}
                     </div>
                   ))}
                 </div>

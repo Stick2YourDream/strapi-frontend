@@ -19,6 +19,7 @@ import {
   Settings,
   Shield,
   Store,
+  Timer,
   User,
   Users,
   UsersRound,
@@ -36,6 +37,7 @@ import {
 import { pickMediaUrl } from "../utils/media";
 import "../css/sidebar.css";
 import AvatarImage from "./AvatarImage";
+import ProfilePhotoModal from "./ProfilePhotoModal";
 
 type ProfileSummary = {
   displayName: string;
@@ -51,6 +53,8 @@ type SettingsSection =
   | "security"
   | "privacy"
   | "notifications"
+  | "storefront"
+  | "time-limits"
   | "language"
   | "changes";
 
@@ -59,6 +63,8 @@ const SETTINGS_SECTIONS: { id: SettingsSection; label: string }[] = [
   { id: "security", label: "Account & Security" },
   { id: "privacy", label: "Visibility & Discoverability" },
   { id: "notifications", label: "Sound, Vibration & Quiet Hours" },
+  { id: "storefront", label: "Storefront Defaults" },
+  { id: "time-limits", label: "Time Limits" },
   { id: "language", label: "Language Options" },
   { id: "changes", label: "Changes & Deactivation" },
 ];
@@ -68,6 +74,8 @@ const SETTINGS_SECTION_ICONS: Record<SettingsSection, ReactNode> = {
   security: <Lock size={18} />,
   privacy: <EyeOff size={18} />,
   notifications: <Bell size={18} />,
+  storefront: <Store size={18} />,
+  "time-limits": <Timer size={18} />,
   language: <Languages size={18} />,
   changes: <RefreshCcw size={18} />,
 };
@@ -126,6 +134,7 @@ export default function Sidebar({
   const [menuOpen, setMenuOpen] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [photoModalOpen, setPhotoModalOpen] = useState(false);
   const {
     counts,
     total,
@@ -135,7 +144,12 @@ export default function Sidebar({
     previews,
     acceptFriendRequest,
     sendBirthdayMessage,
-  } = useNotifications(user?.id, profile?.notificationSettings, profile?.notificationReadState);
+  } = useNotifications(
+    user?.id,
+    profile?.notificationSettings,
+    profile?.notificationReadState,
+    user?.createdAt || null
+  );
   const [acceptingRequests, setAcceptingRequests] = useState<Record<string, boolean>>({});
   const [birthdaySending, setBirthdaySending] = useState<Record<string, boolean>>({});
 
@@ -326,9 +340,12 @@ export default function Sidebar({
     if (counts.messages <= 0) return "";
     if (!previews.messages) return "You have new messages.";
     const snippet = trimPreviewText(previews.messages.body, 64);
+    const listingHint = previews.messages.listingTitle
+      ? ` about "${previews.messages.listingTitle}"`
+      : "";
     return snippet
-      ? `${previews.messages.senderName} sent you a new message: "${snippet}"`
-      : `${previews.messages.senderName} sent you a new message.`;
+      ? `${previews.messages.senderName} sent you a new message${listingHint}: "${snippet}"`
+      : `${previews.messages.senderName} sent you a new message${listingHint}.`;
   }, [counts.messages, previews.messages]);
 
   const birthdayPreviewText = useMemo(() => {
@@ -387,13 +404,31 @@ export default function Sidebar({
     return actor ? `${actor} posted a group update.` : "New group update received.";
   }, [counts.groupUpdates, previews.groupUpdates]);
 
-  const groupUpdatesTarget = useMemo(() => {
-    const message = String(previews.groupUpdates?.message || "").toLowerCase();
-    if (message.includes("device approval")) {
-      return "/me?view=settings&section=security";
-    }
-    return "/groups";
-  }, [previews.groupUpdates?.message]);
+  const groupUpdatesTarget = "/groups";
+
+  const securityPreviewText = useMemo(() => {
+    if (counts.security <= 0) return "";
+    if (!previews.security) return "New security alerts are waiting.";
+    const snippet = trimPreviewText(previews.security.message, 72);
+    if (snippet) return snippet;
+    const actor = previews.security.actorName;
+    return actor ? `${actor} sent a security update.` : "New security update received.";
+  }, [counts.security, previews.security]);
+
+  const marketplacePreviewText = useMemo(() => {
+    if (counts.marketplace <= 0) return "";
+    if (!previews.marketplace) return "New marketplace updates are waiting.";
+    const snippet = trimPreviewText(previews.marketplace.message, 72);
+    if (snippet) return snippet;
+    const actor = previews.marketplace.actorName;
+    return actor ? `${actor} sent a marketplace update.` : "New marketplace update received.";
+  }, [counts.marketplace, previews.marketplace]);
+
+  const securityTarget = "/me?view=settings&section=security";
+  const marketplaceTarget = "/storefront";
+  const messageTarget = previews.messages?.listingId
+    ? "/storefront/seller#messages"
+    : "/friends";
 
   const likesPreviewText = useMemo(() => {
     if (counts.likes <= 0) return "";
@@ -438,7 +473,7 @@ export default function Sidebar({
         <button
           type="button"
           className="sidebar-notification-item is-action"
-          onClick={() => handleNotificationAction("/friends")}
+          onClick={() => handleNotificationAction(messageTarget)}
         >
           <span>New messages</span>
           <span className="sidebar-notification-count">{counts.messages}</span>
@@ -637,6 +672,40 @@ export default function Sidebar({
         <button
           type="button"
           className="sidebar-notification-item is-action"
+          onClick={() => handleNotificationAction(securityTarget)}
+        >
+          <span>Security</span>
+          <span className="sidebar-notification-count">{counts.security}</span>
+        </button>
+        {counts.security > 0 && securityPreviewText && (
+          <div className="sidebar-notification-preview">
+            <span className="sidebar-notification-preview-text">
+              {securityPreviewText}
+            </span>
+          </div>
+        )}
+      </div>
+      <div className="sidebar-notification-group">
+        <button
+          type="button"
+          className="sidebar-notification-item is-action"
+          onClick={() => handleNotificationAction(marketplaceTarget)}
+        >
+          <span>Marketplace</span>
+          <span className="sidebar-notification-count">{counts.marketplace}</span>
+        </button>
+        {counts.marketplace > 0 && marketplacePreviewText && (
+          <div className="sidebar-notification-preview">
+            <span className="sidebar-notification-preview-text">
+              {marketplacePreviewText}
+            </span>
+          </div>
+        )}
+      </div>
+      <div className="sidebar-notification-group">
+        <button
+          type="button"
+          className="sidebar-notification-item is-action"
           onClick={() => handleNotificationAction("/dashboard")}
         >
           <span>Comments on your posts</span>
@@ -671,7 +740,9 @@ export default function Sidebar({
   );
 
   return (
-    <div className={`sidebar-shell ${menuOpen ? "open" : ""}`}>
+    <>
+      <ProfilePhotoModal open={photoModalOpen} onClose={() => setPhotoModalOpen(false)} />
+      <div className={`sidebar-shell ${menuOpen ? "open" : ""}`}>
       <div className="sidebar-topbar">
         <button className="brand" type="button" onClick={handleLogoClick} style={{ cursor: "pointer" }}>
           <span className="brand-mark" aria-hidden="true">
@@ -737,6 +808,34 @@ export default function Sidebar({
                     </span>
                     <span>My Dashboard</span>
                   </button>
+                  <button
+                    className="mobile-profile-item"
+                    type="button"
+                    data-accent="profile-photo"
+                    onClick={() => {
+                      setPhotoModalOpen(true);
+                      setMenuOpen(false);
+                      setShowProfileMenu(false);
+                    }}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <User size={18} />
+                    </span>
+                    <span>
+                      {profileCard?.avatarUrl ? "Edit Profile Photo" : "Add Profile Photo"}
+                    </span>
+                  </button>
+                  <button
+                    className="mobile-profile-item"
+                    type="button"
+                    data-accent="settings"
+                    onClick={() => handleProfileAction("/me?view=settings")}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <Settings size={18} />
+                    </span>
+                    <span>Account settings</span>
+                  </button>
                   {sidebarContent && (
                     <>
                       <div className="mobile-profile-divider" />
@@ -783,6 +882,34 @@ export default function Sidebar({
                       <User size={18} />
                     </span>
                     <span>My Profile</span>
+                  </button>
+                  <button
+                    className="mobile-profile-item"
+                    type="button"
+                    data-accent="profile-photo"
+                    onClick={() => {
+                      setPhotoModalOpen(true);
+                      setMenuOpen(false);
+                      setShowProfileMenu(false);
+                    }}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <User size={18} />
+                    </span>
+                    <span>
+                      {profileCard?.avatarUrl ? "Edit Profile Photo" : "Add Profile Photo"}
+                    </span>
+                  </button>
+                  <button
+                    className="mobile-profile-item"
+                    type="button"
+                    data-accent="settings"
+                    onClick={() => handleProfileAction("/me?view=settings")}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <Settings size={18} />
+                    </span>
+                    <span>Account settings</span>
                   </button>
                   {canToggleSettings && (
                     <button
@@ -853,6 +980,28 @@ export default function Sidebar({
                       <MessageSquare size={18} />
                     </span>
                     <span>Forums</span>
+                  </button>
+                  <button
+                    className={`mobile-profile-item${
+                      storefrontEnabled ? "" : " mobile-profile-item--disabled"
+                    }${active === "storefront" ? " is-active" : ""}`}
+                    type="button"
+                    data-accent="storefront"
+                    disabled={!storefrontEnabled}
+                    aria-disabled={!storefrontEnabled}
+                    onClick={() => {
+                      if (!storefrontEnabled) return;
+                      handleProfileAction("/storefront");
+                    }}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <Store size={18} />
+                    </span>
+                    <span>
+                      {storefrontEnabled
+                        ? "StoreFront"
+                        : "StoreFront (Coming Soon!)"}
+                    </span>
                   </button>
                   <button
                     className={`mobile-profile-item${
@@ -1124,6 +1273,22 @@ export default function Sidebar({
                   <button
                     className="btn ghost nav-btn sidebar-profile-menu-button"
                     type="button"
+                    data-accent="profile-photo"
+                    onClick={() => {
+                      setPhotoModalOpen(true);
+                      setShowProfileMenu(false);
+                    }}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <User size={18} />
+                    </span>
+                    <span>
+                      {profileCard?.avatarUrl ? "Edit Profile Photo" : "Add Profile Photo"}
+                    </span>
+                  </button>
+                  <button
+                    className="btn ghost nav-btn sidebar-profile-menu-button"
+                    type="button"
                     data-accent="logout"
                     onClick={() => {
                       logout("user-action");
@@ -1349,6 +1514,7 @@ export default function Sidebar({
       </aside>
 
       {menuOpen && <button className="sidebar-overlay" type="button" onClick={() => setMenuOpen(false)} aria-label="Close menu overlay" />}
-    </div>
+      </div>
+    </>
   );
 }

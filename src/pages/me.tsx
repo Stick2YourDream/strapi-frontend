@@ -22,6 +22,8 @@ import Sidebar from "../components/Sidebar";
 import TopbarSearch from "../components/TopbarSearch";
 import LanguageMenu from "../components/LanguageMenu";
 import LinkPreviewCard from "../components/LinkPreviewCard";
+import ProfilePhotoModal from "../components/ProfilePhotoModal";
+import PopupModal from "../components/PopupModal";
 import { HOBBY_OPTIONS } from "./me_hobbies";
 import { RELIGION_OPTIONS } from "./me_religions";
 import { usePageMeta } from "../hooks/usePageMeta";
@@ -38,9 +40,21 @@ import {
   type ProfilePayload,
   type VisibilityLevel,
 } from "../utils/profile-e2ee";
+import {
+  DEFAULT_TIME_LIMIT_MINUTES,
+  TIME_LIMIT_OPTIONS,
+  normalizeTimeLimitSettings,
+  type TimeLimitSettings,
+} from "../utils/time-limits";
 import { pickMediaUrl } from "../utils/media";
 import { sanitizePostText } from "../utils/emoji";
 import { getOrCreateDeviceId } from "../utils/device-id";
+import {
+  detectDesktopOs,
+  downloadBlob,
+  exportProfileArchive,
+  getExportInstructions,
+} from "../utils/profile-export";
 import {
   approveDeviceKeyRequest,
   listDeviceKeyRequests,
@@ -64,6 +78,8 @@ const SETTINGS_SECTION_IDS = [
   "security",
   "privacy",
   "notifications",
+  "storefront",
+  "time-limits",
   "language",
   "changes",
 ] as const;
@@ -72,6 +88,16 @@ type SettingsSection = (typeof SETTINGS_SECTION_IDS)[number];
 
 const isSettingsSection = (value: string | null): value is SettingsSection =>
   Boolean(value) && SETTINGS_SECTION_IDS.includes(value as SettingsSection);
+
+const SECURITY_QUESTION_OPTIONS = [
+  "What was the name of your first pet?",
+  "What city were you born in?",
+  "What is the last name of a favorite teacher?",
+  "What was your first car?",
+  "What is your mother's maiden name?",
+  "What street did you grow up on?",
+  "What was the name of your elementary school?",
+] as const;
 
 type Profile = {
   firstName: string;
@@ -98,6 +124,9 @@ type Profile = {
   externalIndexingEnabled: boolean;
   activityVisibility: VisibilityLevel;
   notificationSettings: NotificationSettings;
+  timeLimitSettings: TimeLimitSettings;
+  storefrontDefaultLocation: string;
+  storefrontDefaultRadiusMiles: string;
   handle?: string;
   avatarUrl?: string;
   onboardingComplete?: boolean;
@@ -233,6 +262,12 @@ type AccountStatus = {
   emailChangeAvailableAt?: string | null;
   emailCooldownDays?: number;
   deactivationDays?: number;
+  ageVerified?: boolean;
+  ageVerifiedAt?: string | null;
+  ageVerificationRequired?: boolean;
+  ageVerificationDueAt?: string | null;
+  ageVerificationOverdue?: boolean;
+  ageVerificationDaysRemaining?: number | null;
 };
 
 type LinkPreview = {
@@ -266,6 +301,7 @@ const TIME_OPTIONS = Array.from({ length: 48 }, (_, index) => {
   return { value, label };
 });
 
+const MAX_HOBBIES = 15;
 const normalizeHobby = (value: string) => value.trim().replace(/\s+/g, " ");
 const hobbyKey = (value: string) => normalizeHobby(value).toLowerCase();
 const parseHobbies = (value: string) => {
@@ -285,6 +321,31 @@ const parseHobbies = (value: string) => {
 const normalizeLocation = (value: string) => value.trim().toLowerCase();
 const matchByName = <T extends { name: string }>(list: T[], value: string) =>
   list.find((item) => normalizeLocation(item.name) === normalizeLocation(value));
+
+const parseStorefrontLocation = (value: string) => {
+  const parts = String(value || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (parts.length === 0) {
+    return { city: "", state: "" };
+  }
+  if (parts.length === 1) {
+    return { city: "", state: parts[0] };
+  }
+  const state = parts[parts.length - 1];
+  const city = parts.slice(0, -1).join(", ");
+  return { city, state };
+};
+
+const formatStorefrontLocation = (city: string, state: string) =>
+  [String(city || "").trim(), String(state || "").trim()].filter(Boolean).join(", ");
+
+const STOREFRONT_RADIUS_OPTIONS = [
+  { value: "25", label: "<25 miles" },
+  { value: "100", label: "25-100 miles" },
+  { value: "150", label: ">100 miles" },
+];
 
 const normalizeReactionCounts = (value: unknown, fallbackLikes?: number): ReactionCounts => {
   const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
@@ -404,12 +465,42 @@ const MAX_UPLOAD_LABEL = "1 GB";
 const MAX_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024;
 const MAX_VIDEO_UPLOAD_LABEL = "100 MB";
 const MAX_TRUSTED_CIRCLES = 5;
+const MAX_COMMENT_MEDIA_FILES = 4;
+const IMAGE_EXT_REGEX = /\.(?:png|jpe?g|webp|gif|bmp|avif)(?:\?|#|$)/i;
+const RELATIVE_UPLOAD_REGEX = /\/uploads\/[^\s)]+/g;
 const extractFirstUrl = (text: string) => {
   const match = text.match(/(https?:\/\/[^\s]+|www\.[^\s]+)/i);
   if (!match) return "";
   let url = match[0].replace(/[),.!?]+$/, "");
   if (url.startsWith("www.")) url = `https://${url}`;
   return url;
+};
+const extractImageUrls = (text: string) => {
+  const safeText = String(text || "");
+  if (!safeText) return [];
+  const urls = new Set<string>();
+  const matches = safeText.match(/(https?:\/\/[^\s]+|www\.[^\s]+)/gi) ?? [];
+  matches.forEach((raw) => {
+    const cleaned = raw.replace(/[),.!?]+$/, "");
+    const href = cleaned.startsWith("www.") ? `https://${cleaned}` : cleaned;
+    if (IMAGE_EXT_REGEX.test(href) || IMAGE_EXT_REGEX.test(raw)) {
+      urls.add(href);
+    }
+  });
+  const relativeMatches = safeText.match(RELATIVE_UPLOAD_REGEX) ?? [];
+  relativeMatches.forEach((raw) => {
+    if (IMAGE_EXT_REGEX.test(raw)) {
+      urls.add(raw);
+    }
+  });
+  return Array.from(urls);
+};
+const stripImageUrls = (text: string, urls: string[]) => {
+  let cleaned = String(text || "");
+  urls.forEach((url) => {
+    cleaned = cleaned.replace(url, "");
+  });
+  return cleaned.replace(/\s{2,}/g, " ").trim();
 };
 const isYoutubeUrl = (value: string) => {
   try {
@@ -535,6 +626,12 @@ const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   vibrationEnabled: true,
   pushEnabled: false,
   newsEnabled: true,
+};
+
+const DEFAULT_TIME_LIMIT_SETTINGS: TimeLimitSettings = {
+  enabled: false,
+  durationMinutes: DEFAULT_TIME_LIMIT_MINUTES,
+  cooldownUntil: null,
 };
 
 const goalsStorageKeyFor = (userId?: number | null) =>
@@ -677,7 +774,9 @@ export default function Me() {
   const location = useLocation();
   const {
     user,
+    keyBackupStatus,
     refreshProfile,
+    refreshKeyBackup,
     logout,
     updateUser,
   } = useAuth();
@@ -729,6 +828,9 @@ export default function Me() {
     externalIndexingEnabled: false,
     activityVisibility: "public",
     notificationSettings: DEFAULT_NOTIFICATION_SETTINGS,
+    timeLimitSettings: DEFAULT_TIME_LIMIT_SETTINGS,
+    storefrontDefaultLocation: "",
+    storefrontDefaultRadiusMiles: "",
     handle: "",
   });
 
@@ -736,19 +838,18 @@ export default function Me() {
   const profilePayloadRef = useRef<ProfilePayload | null>(null);
   const registrationLocksRef = useRef<RegistrationLocks>({});
   const hobbySnapshotRef = useRef<string[]>([]);
-  const hobbyBlurTimeoutRef = useRef<number | null>(null);
   const profileIdRef = useRef<string | number | null>(null);
   const handleFixAttemptedRef = useRef(false);
   const phoneRepairAttemptedRef = useRef(false);
   const mediaFoldersLoadedRef = useRef(false);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
-  const [avatarRotateBusy, setAvatarRotateBusy] = useState(false);
-  const [avatarRotateError, setAvatarRotateError] = useState<string | null>(null);
+  const [photoModalOpen, setPhotoModalOpen] = useState(false);
   const [posts, setPosts] = useState<MediaPost[]>([]);
   const [profileMedia, setProfileMedia] = useState<ProfileMediaItem[]>([]);
   const [profileMediaLoading, setProfileMediaLoading] = useState(false);
   const [profileMediaError, setProfileMediaError] = useState<string | null>(null);
+  const [profileDecryptFailed, setProfileDecryptFailed] = useState(false);
   const [mediaTab, setMediaTab] = useState<"all" | "photo" | "video">("all");
   const [mediaFolderFilter, setMediaFolderFilter] = useState<string>(MEDIA_FOLDER_ALL);
   const [mediaPage, setMediaPage] = useState(1);
@@ -829,7 +930,13 @@ export default function Me() {
   const [postComments, setPostComments] = useState<Record<string, CommentItem[]>>({});
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
   const [commentEdits, setCommentEdits] = useState<Record<string, string>>({});
+  const [commentMediaFiles, setCommentMediaFiles] = useState<Record<string, File[]>>({});
+  const [commentMediaPreviews, setCommentMediaPreviews] = useState<
+    Record<string, string[]>
+  >({});
+  const commentPreviewRef = useRef<Record<string, string[]>>({});
   const [editingComments, setEditingComments] = useState<Record<string, boolean>>({});
+  const [commentMenuOpen, setCommentMenuOpen] = useState<Record<string, boolean>>({});
   const [openCommentsFor, setOpenCommentsFor] = useState<Record<string, boolean>>({});
   const [shareMenuFor, setShareMenuFor] = useState<string | null>(null);
   const [postMenuFor, setPostMenuFor] = useState<string | null>(null);
@@ -873,6 +980,19 @@ export default function Me() {
     window.addEventListener("ysp-goals-updated", handleSync);
     return () => window.removeEventListener("ysp-goals-updated", handleSync);
   }, [goalsStorageKey]);
+
+  useEffect(() => {
+    commentPreviewRef.current = commentMediaPreviews;
+  }, [commentMediaPreviews]);
+
+  useEffect(() => {
+    return () => {
+      if (typeof URL === "undefined") return;
+      Object.values(commentPreviewRef.current)
+        .flat()
+        .forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, []);
   useEffect(() => {
     if (typeof window === "undefined") return;
     const sectionParam = searchParams.get("section");
@@ -903,9 +1023,10 @@ export default function Me() {
   }, []);
   const [hobbyInput, setHobbyInput] = useState("");
   const [hobbyList, setHobbyList] = useState<string[]>([]);
-  const [activeHobbyPicker, setActiveHobbyPicker] = useState<
+  const [activeHobbyModal, setActiveHobbyModal] = useState<
     "onboarding" | "profile" | null
   >(null);
+  const [hobbyError, setHobbyError] = useState<string | null>(null);
   const [friendOptions, setFriendOptions] = useState<FriendOption[]>([]);
   const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
   const [deleteAccountError, setDeleteAccountError] = useState<string | null>(null);
@@ -916,12 +1037,31 @@ export default function Me() {
   const [stateOptions, setStateOptions] = useState<LocationOption[]>([]);
   const [cityOptions, setCityOptions] = useState<LocationOption[]>([]);
   const [locationError, setLocationError] = useState<string | null>(null);
+  const [storefrontStateOptions, setStorefrontStateOptions] = useState<
+    LocationOption[]
+  >([]);
+  const [storefrontCityOptions, setStorefrontCityOptions] = useState<LocationOption[]>(
+    []
+  );
+  const [storefrontLocationState, setStorefrontLocationState] = useState("");
+  const [storefrontLocationStateCode, setStorefrontLocationStateCode] = useState("");
+  const [storefrontLocationCity, setStorefrontLocationCity] = useState("");
+  const [storefrontLocationError, setStorefrontLocationError] = useState<string | null>(
+    null
+  );
   const [onboardingActive, setOnboardingActive] = useState(false);
   const [onboardingStep, setOnboardingStep] = useState(0);
   const [onboardingError, setOnboardingError] = useState<string | null>(null);
   const [appearanceError, setAppearanceError] = useState<string | null>(null);
   const [appearanceUploading, setAppearanceUploading] = useState(false);
   const [appearanceCollapsed, setAppearanceCollapsed] = useState(true);
+  const [storefrontSettingsSaving, setStorefrontSettingsSaving] = useState(false);
+  const [storefrontSettingsError, setStorefrontSettingsError] = useState<string | null>(
+    null
+  );
+  const [storefrontSettingsSuccess, setStorefrontSettingsSuccess] = useState<
+    string | null
+  >(null);
   const [profileInfoOpen, setProfileInfoOpen] = useState(false);
   const [profileView, setProfileView] = useState<"overview" | "content">("overview");
   const [contentGalleryOpen, setContentGalleryOpen] = useState(false);
@@ -951,6 +1091,22 @@ export default function Me() {
   const [phoneChangeVerifying, setPhoneChangeVerifying] = useState(false);
   const [phoneChangeError, setPhoneChangeError] = useState<string | null>(null);
   const [phoneChangeSuccess, setPhoneChangeSuccess] = useState<string | null>(null);
+  const [securityQuestions, setSecurityQuestions] = useState([
+    { question: "", answer: "" },
+    { question: "", answer: "" },
+    { question: "", answer: "" },
+  ]);
+  const [securityQuestionsSavedAt, setSecurityQuestionsSavedAt] = useState<
+    string | null
+  >(null);
+  const [securityQuestionsLoading, setSecurityQuestionsLoading] = useState(false);
+  const [securityQuestionsSaving, setSecurityQuestionsSaving] = useState(false);
+  const [securityQuestionsError, setSecurityQuestionsError] = useState<string | null>(
+    null
+  );
+  const [securityQuestionsSuccess, setSecurityQuestionsSuccess] = useState<
+    string | null
+  >(null);
   const [passwordResetLoading, setPasswordResetLoading] = useState(false);
   const [passwordResetError, setPasswordResetError] = useState<string | null>(null);
   const [passwordResetSuccess, setPasswordResetSuccess] = useState<string | null>(null);
@@ -977,9 +1133,15 @@ export default function Me() {
   const [notificationSaving, setNotificationSaving] = useState(false);
   const [notificationError, setNotificationError] = useState<string | null>(null);
   const [notificationSuccess, setNotificationSuccess] = useState<string | null>(null);
+  const [timeLimitSaving, setTimeLimitSaving] = useState(false);
+  const [timeLimitError, setTimeLimitError] = useState<string | null>(null);
+  const [timeLimitSuccess, setTimeLimitSuccess] = useState<string | null>(null);
   const [accountStatus, setAccountStatus] = useState<AccountStatus | null>(null);
   const [accountStatusLoading, setAccountStatusLoading] = useState(false);
   const [accountStatusError, setAccountStatusError] = useState<string | null>(null);
+  const [exportLoading, setExportLoading] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportSuccess, setExportSuccess] = useState<string | null>(null);
   const [emailDraft, setEmailDraft] = useState("");
   const [emailChangeLoading, setEmailChangeLoading] = useState(false);
   const [emailChangeError, setEmailChangeError] = useState<string | null>(null);
@@ -1018,6 +1180,35 @@ export default function Me() {
     setContentGalleryOpen(true);
     setContentPostsOpen(false);
   }, [isGalleryPage]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    let active = true;
+    setSecurityQuestionsLoading(true);
+    setSecurityQuestionsError(null);
+    setSecurityQuestionsSuccess(null);
+    api
+      .get("/auth/security-questions")
+      .then((res) => {
+        if (!active) return;
+        const questions = Array.isArray(res.data?.questions)
+          ? res.data.questions.filter(Boolean).slice(0, 3)
+          : [];
+        setSecurityQuestions(buildSecurityQuestionState(questions));
+        setSecurityQuestionsSavedAt(res.data?.setAt || null);
+      })
+      .catch(() => {
+        if (!active) return;
+        setSecurityQuestionsError("Unable to load security questions.");
+      })
+      .finally(() => {
+        if (!active) return;
+        setSecurityQuestionsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [user?.id]);
 
   useEffect(() => {
     if (mediaMoveModalItem) return;
@@ -1463,7 +1654,22 @@ export default function Me() {
     return null;
   }, [pushEnabled, pushStatus]);
 
-  const apiBase = (import.meta.env.VITE_API_URL || "").replace(/\/api$/, "");
+  const ageVerificationDueAt =
+    user?.ageVerificationDueAt ?? accountStatus?.ageVerificationDueAt ?? null;
+  const ageVerificationOverdue =
+    user?.ageVerificationOverdue ?? accountStatus?.ageVerificationOverdue ?? false;
+  const ageVerificationDaysRemaining =
+    user?.ageVerificationDaysRemaining ??
+    accountStatus?.ageVerificationDaysRemaining ??
+    (ageVerificationDueAt
+      ? Math.max(
+          0,
+          Math.ceil((new Date(ageVerificationDueAt).getTime() - Date.now()) / 86400000)
+        )
+      : null);
+  const ageVerified =
+    user?.ageVerified === true || accountStatus?.ageVerified === true;
+
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
   const getEntity = (entry: any) => entry?.data ?? entry ?? null;
   const getEntityId = (entry: any) => {
@@ -1870,6 +2076,84 @@ export default function Me() {
     setPostMenuFor(null);
     setVisibilityModalPost(null);
     setEditPostModalPost(null);
+  };
+
+  const clearCommentAttachments = (commentKey: string) => {
+    setCommentMediaFiles((prev) => {
+      if (!(commentKey in prev)) return prev;
+      const next = { ...prev };
+      delete next[commentKey];
+      return next;
+    });
+    setCommentMediaPreviews((prev) => {
+      if (!(commentKey in prev)) return prev;
+      const next = { ...prev };
+      const urls = next[commentKey] || [];
+      if (typeof URL !== "undefined") {
+        urls.forEach((url) => URL.revokeObjectURL(url));
+      }
+      delete next[commentKey];
+      return next;
+    });
+  };
+
+  const handleCommentFilesChange = (commentKey: string, files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const selected = Array.from(files).filter((file) => isImageFile(file));
+    if (selected.length === 0) {
+      setError("Only image files are allowed for comments.");
+      return;
+    }
+    const limited = selected.slice(0, MAX_COMMENT_MEDIA_FILES);
+    if (selected.length > MAX_COMMENT_MEDIA_FILES) {
+      setError(`You can upload up to ${MAX_COMMENT_MEDIA_FILES} images per comment.`);
+    }
+    for (const file of limited) {
+      if (file.size > MAX_UPLOAD_BYTES) {
+        setError(`Images must be under ${MAX_UPLOAD_LABEL}.`);
+        return;
+      }
+    }
+    setCommentMediaFiles((prev) => ({ ...prev, [commentKey]: limited }));
+    setCommentMediaPreviews((prev) => {
+      const next = { ...prev };
+      const urls = next[commentKey] || [];
+      if (typeof URL !== "undefined") {
+        urls.forEach((url) => URL.revokeObjectURL(url));
+      }
+      next[commentKey] = limited.map((file) => URL.createObjectURL(file));
+      return next;
+    });
+  };
+
+  const removeCommentAttachment = (commentKey: string, index: number) => {
+    setCommentMediaFiles((prev) => {
+      const current = prev[commentKey];
+      if (!current) return prev;
+      const nextFiles = current.filter((_, idx) => idx !== index);
+      const next = { ...prev };
+      if (nextFiles.length) {
+        next[commentKey] = nextFiles;
+      } else {
+        delete next[commentKey];
+      }
+      return next;
+    });
+    setCommentMediaPreviews((prev) => {
+      const current = prev[commentKey];
+      if (!current) return prev;
+      const nextUrls = current.filter((_, idx) => idx !== index);
+      if (typeof URL !== "undefined" && current[index]) {
+        URL.revokeObjectURL(current[index]);
+      }
+      const next = { ...prev };
+      if (nextUrls.length) {
+        next[commentKey] = nextUrls;
+      } else {
+        delete next[commentKey];
+      }
+      return next;
+    });
   };
   const toggleShareMenu = (postKey: string) => {
     setShareMenuFor((prev) => (prev === postKey ? null : postKey));
@@ -2291,13 +2575,21 @@ export default function Me() {
       fd.append("files", file);
       const uploadRes = await api.post("/upload", fd);
       const uploaded = uploadRes.data?.[0];
-      const url = uploaded?.url;
+      const uploadId = Number(uploaded?.id);
+      let url = pickMediaUrl(uploaded, { kind: "cover" });
+      if (Number.isFinite(uploadId)) {
+        try {
+          const refreshed = await api.get(`/upload/files/${uploadId}`);
+          url = pickMediaUrl(refreshed.data, { kind: "cover" }) || url;
+        } catch {
+          // Keep initial URL if refresh lookup fails.
+        }
+      }
       if (!url) {
         setAppearanceError("Upload failed. Please try again.");
         return;
       }
-      const resolvedUrl = url.startsWith("/") ? `${apiBase}${url}` : url;
-      setBackgroundAll({ image: resolvedUrl });
+      setBackgroundAll({ image: url });
     } catch {
       setAppearanceError("Unable to upload the background image.");
     } finally {
@@ -2503,6 +2795,12 @@ export default function Me() {
         emailChangeAvailableAt: data.emailChangeAvailableAt ?? null,
         emailCooldownDays: data.emailCooldownDays ?? undefined,
         deactivationDays: data.deactivationDays ?? data.accountDeactivationDays ?? undefined,
+        ageVerified: data.user?.ageVerified ?? undefined,
+        ageVerifiedAt: data.user?.ageVerifiedAt ?? null,
+        ageVerificationRequired: data.user?.ageVerificationRequired ?? undefined,
+        ageVerificationDueAt: data.user?.ageVerificationDueAt ?? null,
+        ageVerificationOverdue: data.user?.ageVerificationOverdue ?? undefined,
+        ageVerificationDaysRemaining: data.user?.ageVerificationDaysRemaining ?? null,
       };
       setAccountStatus(status);
       if (data.user?.id) {
@@ -2532,6 +2830,17 @@ export default function Me() {
     const normalizedNotificationSettings = normalizeNotificationSettings(
       nextProfile.notificationSettings
     );
+    const normalizedTimeLimitSettings = normalizeTimeLimitSettings(
+      nextProfile.timeLimitSettings
+    );
+    const normalizedStorefrontLocation = String(
+      nextProfile.storefrontDefaultLocation || ""
+    ).trim();
+    const storefrontRadiusNumeric = Number(nextProfile.storefrontDefaultRadiusMiles);
+    const normalizedStorefrontRadius =
+      Number.isFinite(storefrontRadiusNumeric) && storefrontRadiusNumeric > 0
+        ? Math.round(storefrontRadiusNumeric)
+        : null;
     const normalizedActivityVisibility = normalizeVisibility(
       nextProfile.activityVisibility,
       "public"
@@ -2569,6 +2878,9 @@ export default function Me() {
       externalIndexingEnabled,
       activityVisibility: normalizedActivityVisibility,
       notificationSettings: normalizedNotificationSettings,
+      storefrontDefaultLocation: normalizedStorefrontLocation,
+      storefrontDefaultRadiusMiles:
+        normalizedStorefrontRadius === null ? undefined : normalizedStorefrontRadius,
     };
     const encryptedProfile = await encryptProfilePayload(user.id, updatedPayload);
     await api.put("/profiles/me", {
@@ -2581,8 +2893,11 @@ export default function Me() {
         externalIndexingEnabled,
         activityVisibility: normalizedActivityVisibility,
         notificationSettings: normalizedNotificationSettings,
+        timeLimitSettings: normalizedTimeLimitSettings,
         showPhoneOnProfile: nextProfile.showPhoneOnProfile,
         phone: normalizedPhone,
+        storefrontDefaultLocation: normalizedStorefrontLocation,
+        storefrontDefaultRadiusMiles: normalizedStorefrontRadius,
       },
     });
     profilePayloadRef.current = updatedPayload;
@@ -2594,7 +2909,11 @@ export default function Me() {
       externalIndexingEnabled,
       activityVisibility: normalizedActivityVisibility,
       notificationSettings: normalizedNotificationSettings,
+      timeLimitSettings: normalizedTimeLimitSettings,
       showPhoneOnProfile: nextProfile.showPhoneOnProfile,
+      storefrontDefaultLocation: normalizedStorefrontLocation,
+      storefrontDefaultRadiusMiles:
+        normalizedStorefrontRadius === null ? "" : String(normalizedStorefrontRadius),
     }));
     if (profileSnapshotRef.current) {
       profileSnapshotRef.current = {
@@ -2605,7 +2924,11 @@ export default function Me() {
         externalIndexingEnabled,
         activityVisibility: normalizedActivityVisibility,
         notificationSettings: normalizedNotificationSettings,
+        timeLimitSettings: normalizedTimeLimitSettings,
         showPhoneOnProfile: nextProfile.showPhoneOnProfile,
+        storefrontDefaultLocation: normalizedStorefrontLocation,
+        storefrontDefaultRadiusMiles:
+          normalizedStorefrontRadius === null ? "" : String(normalizedStorefrontRadius),
       };
     }
     void refreshProfile();
@@ -2680,6 +3003,65 @@ export default function Me() {
     }
   };
 
+  const handleSaveTimeLimitSettings = async () => {
+    setTimeLimitError(null);
+    setTimeLimitSuccess(null);
+    setTimeLimitSaving(true);
+    try {
+      await persistProfileSettings(profile);
+      setTimeLimitSuccess("Time limit settings saved.");
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to save time limit settings.";
+        setTimeLimitError(String(msg));
+      } else {
+        setTimeLimitError("Unable to save time limit settings.");
+      }
+    } finally {
+      setTimeLimitSaving(false);
+    }
+  };
+
+  const handleSaveStorefrontSettings = async () => {
+    setStorefrontSettingsError(null);
+    setStorefrontSettingsSuccess(null);
+    setStorefrontSettingsSaving(true);
+    try {
+      const radiusRaw = String(profile.storefrontDefaultRadiusMiles || "").trim();
+      const radiusNumber = Number(radiusRaw);
+      if (radiusRaw && (!Number.isFinite(radiusNumber) || radiusNumber <= 0)) {
+        setStorefrontSettingsError("Radius must be a positive number.");
+        setStorefrontSettingsSaving(false);
+        return;
+      }
+      const normalizedProfile: Profile = {
+        ...profile,
+        storefrontDefaultLocation: String(profile.storefrontDefaultLocation || "").trim(),
+        storefrontDefaultRadiusMiles: radiusRaw
+          ? String(Math.round(radiusNumber))
+          : "",
+      };
+      setProfile(normalizedProfile);
+      await persistProfileSettings(normalizedProfile);
+      setStorefrontSettingsSuccess("StoreFront defaults saved.");
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          "Unable to save StoreFront defaults.";
+        setStorefrontSettingsError(String(msg));
+      } else {
+        setStorefrontSettingsError("Unable to save StoreFront defaults.");
+      }
+    } finally {
+      setStorefrontSettingsSaving(false);
+    }
+  };
+
   const updatePrivacySetting = (field: keyof PrivacySettings, value: VisibilityLevel) => {
     setProfile((prev) => ({
       ...prev,
@@ -2751,6 +3133,24 @@ export default function Me() {
     }
   };
 
+  const handleExportProfile = async () => {
+    if (!user?.id) return;
+    setExportError(null);
+    setExportSuccess(null);
+    setExportLoading(true);
+    try {
+      const os = detectDesktopOs();
+      const { blob, filename } = await exportProfileArchive({ userId: user.id, os });
+      downloadBlob(blob, filename);
+      setExportSuccess(`Export ready. ${getExportInstructions(os)}`);
+    } catch (err) {
+      console.error("Profile export failed", err);
+      setExportError("Unable to export your profile right now. Please try again.");
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
   const handleDeactivateAccount = async () => {
     if (!user) return;
     setDeactivateError(null);
@@ -2817,6 +3217,24 @@ export default function Me() {
     setPhoneChangeCode("");
     setPhoneChangeHint(null);
     setPhoneChangeError(null);
+  };
+
+  const buildSecurityQuestionState = (questions: string[] = []) => [
+    { question: questions[0] || "", answer: "" },
+    { question: questions[1] || "", answer: "" },
+    { question: questions[2] || "", answer: "" },
+  ];
+
+  const updateSecurityQuestion = (
+    index: number,
+    field: "question" | "answer",
+    value: string
+  ) => {
+    setSecurityQuestions((prev) =>
+      prev.map((entry, idx) =>
+        idx === index ? { ...entry, [field]: value } : entry
+      )
+    );
   };
 
   const handleStartPhoneChange = async () => {
@@ -2945,26 +3363,95 @@ export default function Me() {
     }
   };
 
-  const handlePasswordReset = async () => {
-    if (!user?.email) {
-      setPasswordResetError("Email address not available.");
-      return;
+  const handleSaveSecurityQuestions = async () => {
+    setSecurityQuestionsError(null);
+    setSecurityQuestionsSuccess(null);
+    const trimmed = securityQuestions.map((entry) => ({
+      question: entry.question.trim(),
+      answer: entry.answer.trim(),
+    }));
+    const hasAny = trimmed.some((entry) => entry.question || entry.answer);
+    if (hasAny) {
+      if (trimmed.some((entry) => !entry.question || !entry.answer)) {
+        setSecurityQuestionsError("Please answer all three security questions.");
+        return;
+      }
+      const unique = new Set(trimmed.map((entry) => entry.question.toLowerCase()));
+      if (unique.size !== trimmed.length) {
+        setSecurityQuestionsError("Please choose three different security questions.");
+        return;
+      }
     }
-    setPasswordResetError(null);
-    setPasswordResetSuccess(null);
-    setPasswordResetLoading(true);
+    setSecurityQuestionsSaving(true);
     try {
-      await api.post("/auth/forgot-password", { email: user.email });
-      setPasswordResetSuccess("Reset email sent. Check your inbox.");
+      const payload = hasAny ? trimmed : [];
+      const res = await api.post("/auth/security-questions", {
+        securityQuestions: payload,
+      });
+      setSecurityQuestionsSavedAt(res.data?.setAt || null);
+      setSecurityQuestionsSuccess(
+        hasAny ? "Security questions saved." : "Security questions cleared."
+      );
+      if (!hasAny) {
+        setSecurityQuestions(buildSecurityQuestionState([]));
+      }
     } catch (err) {
       if (axios.isAxiosError(err)) {
         const msg =
           err.response?.data?.error?.message ||
           err.response?.data?.message ||
-          "Unable to send reset email.";
+          "Unable to save security questions.";
+        setSecurityQuestionsError(String(msg));
+      } else {
+        setSecurityQuestionsError("Unable to save security questions.");
+      }
+    } finally {
+      setSecurityQuestionsSaving(false);
+    }
+  };
+
+  const handleClearSecurityQuestions = () => {
+    setSecurityQuestions(buildSecurityQuestionState([]));
+    setSecurityQuestionsSuccess(null);
+    setSecurityQuestionsError(null);
+  };
+
+  const isPhonePlaceholderAccount = String(user?.email || "")
+    .trim()
+    .toLowerCase()
+    .endsWith("@phone.yoursocialplace.local");
+
+  const handlePasswordReset = async () => {
+    setPasswordResetError(null);
+    setPasswordResetSuccess(null);
+    setPasswordResetLoading(true);
+    try {
+      if (isPhonePlaceholderAccount) {
+        await api.post("/auth/password-reset/sms");
+        setPasswordResetSuccess("Reset link sent to your phone number.");
+      } else {
+        if (!user?.email) {
+          setPasswordResetError("Email address not available.");
+          return;
+        }
+        await api.post("/auth/forgot-password", { email: user.email });
+        setPasswordResetSuccess("Reset email sent. Check your inbox.");
+      }
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const msg =
+          err.response?.data?.error?.message ||
+          err.response?.data?.message ||
+          (isPhonePlaceholderAccount
+            ? "Unable to send password reset link to your phone number."
+            : "Unable to send reset email.");
         setPasswordResetError(String(msg));
       } else {
-        setPasswordResetError("Unable to send reset email.");
+        setPasswordResetError(
+          isPhonePlaceholderAccount
+            ? "Unable to send password reset link to your phone number."
+            : "Unable to send reset email."
+        );
       }
     } finally {
       setPasswordResetLoading(false);
@@ -3197,69 +3684,6 @@ export default function Me() {
     };
   }, [avatarFile]);
 
-  const loadImageFromBlob = (blob: Blob) =>
-    new Promise<HTMLImageElement>((resolve, reject) => {
-      const url = URL.createObjectURL(blob);
-      const img = new Image();
-      img.onload = () => {
-        URL.revokeObjectURL(url);
-        resolve(img);
-      };
-      img.onerror = () => {
-        URL.revokeObjectURL(url);
-        reject(new Error("Unable to load image."));
-      };
-      img.src = url;
-    });
-
-  const rotateBlob = async (blob: Blob, degrees: number) => {
-    const img = await loadImageFromBlob(blob);
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return blob;
-    const radians = (degrees * Math.PI) / 180;
-    const swap = Math.abs(degrees) % 180 === 90;
-    const width = img.naturalWidth;
-    const height = img.naturalHeight;
-    canvas.width = swap ? height : width;
-    canvas.height = swap ? width : height;
-    ctx.translate(canvas.width / 2, canvas.height / 2);
-    ctx.rotate(radians);
-    ctx.drawImage(img, -width / 2, -height / 2);
-    const outputType = blob.type || "image/jpeg";
-    return new Promise<Blob>((resolve) => {
-      canvas.toBlob((output) => resolve(output || blob), outputType, 0.92);
-    });
-  };
-
-  const handleRotateAvatar = async () => {
-    if (avatarRotateBusy) return;
-    setAvatarRotateError(null);
-    if (!avatarFile && !profile.avatarUrl) {
-      setAvatarRotateError("Upload an avatar first.");
-      return;
-    }
-    setAvatarRotateBusy(true);
-    try {
-      const sourceBlob = avatarFile
-        ? avatarFile
-        : await fetch(profile.avatarUrl as string).then((res) => res.blob());
-      const rotatedBlob = await rotateBlob(sourceBlob, 90);
-      const extension = rotatedBlob.type.includes("png") ? "png" : "jpg";
-      const rotatedFile = new File(
-        [rotatedBlob],
-        `avatar-rotated-${Date.now()}.${extension}`,
-        { type: rotatedBlob.type || "image/jpeg" }
-      );
-      setAvatarFile(rotatedFile);
-    } catch {
-      setAvatarRotateError("Unable to rotate avatar. Please try again.");
-    } finally {
-      setAvatarRotateBusy(false);
-    }
-  };
-
-
   const handleCountryChange = (value: string) => {
     const match = value ? matchByName(countryOptions, value) : undefined;
     setProfile((prev) => ({
@@ -3288,6 +3712,42 @@ export default function Me() {
 
   const handleCityChange = (value: string) => {
     setProfile((prev) => ({ ...prev, city: value }));
+  };
+
+  const handleStorefrontStateChange = (value: string) => {
+    if (!value) {
+      setStorefrontLocationState("");
+      setStorefrontLocationStateCode("");
+      setStorefrontLocationCity("");
+      setStorefrontCityOptions([]);
+      setProfile((prev) => ({
+        ...prev,
+        storefrontDefaultLocation: "",
+      }));
+      return;
+    }
+    const match = storefrontStateOptions.find((option) => option.code === value);
+    const stateName = match?.name || value;
+    const stateCode = match?.code || value;
+    setStorefrontLocationState(stateName);
+    setStorefrontLocationStateCode(stateCode);
+    setStorefrontLocationCity("");
+    setStorefrontCityOptions([]);
+    setProfile((prev) => ({
+      ...prev,
+      storefrontDefaultLocation: formatStorefrontLocation("", stateName),
+    }));
+  };
+
+  const handleStorefrontCityChange = (value: string) => {
+    setStorefrontLocationCity(value);
+    setProfile((prev) => ({
+      ...prev,
+      storefrontDefaultLocation: formatStorefrontLocation(
+        value,
+        storefrontLocationState
+      ),
+    }));
   };
 
   useEffect(() => {
@@ -3440,6 +3900,88 @@ export default function Me() {
   }, [profile.countryCode, profile.stateCode, stateOptions.length]);
 
   useEffect(() => {
+    const parsed = parseStorefrontLocation(profile.storefrontDefaultLocation || "");
+    setStorefrontLocationState(parsed.state);
+    setStorefrontLocationCity(parsed.city);
+  }, [profile.storefrontDefaultLocation]);
+
+  useEffect(() => {
+    let active = true;
+    const loadStorefrontStates = async () => {
+      try {
+        const res = await api.get("/locations/states", {
+          params: { country: "US" },
+        });
+        const list = (res.data?.data ?? []).map((state: any) => ({
+          name: state.name,
+          code: state.code || state.isoCode || "",
+          countryCode: state.countryCode,
+        }));
+        if (active) {
+          setStorefrontStateOptions(list);
+          setStorefrontLocationError(null);
+        }
+      } catch {
+        if (active) setStorefrontLocationError("Unable to load states.");
+      }
+    };
+    loadStorefrontStates();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!storefrontLocationState) {
+      setStorefrontLocationStateCode("");
+      return;
+    }
+    const match =
+      matchByName(storefrontStateOptions, storefrontLocationState) ||
+      storefrontStateOptions.find(
+        (option) =>
+          option.code &&
+          option.code.toLowerCase() === storefrontLocationState.toLowerCase()
+      );
+    const nextCode = match?.code || storefrontLocationStateCode;
+    if (nextCode && nextCode !== storefrontLocationStateCode) {
+      setStorefrontLocationStateCode(nextCode);
+    }
+    if (match?.name && match.name !== storefrontLocationState) {
+      setStorefrontLocationState(match.name);
+    }
+  }, [storefrontLocationState, storefrontLocationStateCode, storefrontStateOptions]);
+
+  useEffect(() => {
+    if (!storefrontLocationStateCode) {
+      setStorefrontCityOptions([]);
+      return;
+    }
+    let active = true;
+    const loadStorefrontCities = async () => {
+      try {
+        const res = await api.get("/locations/cities", {
+          params: { country: "US", state: storefrontLocationStateCode },
+        });
+        const list = (res.data?.data ?? []).map((city: any) => ({
+          name: city.name,
+          code: city.name,
+        }));
+        if (active) {
+          setStorefrontCityOptions(list);
+          setStorefrontLocationError(null);
+        }
+      } catch {
+        if (active) setStorefrontLocationError("Unable to load cities.");
+      }
+    };
+    loadStorefrontCities();
+    return () => {
+      active = false;
+    };
+  }, [storefrontLocationStateCode]);
+
+  useEffect(() => {
     if (onboardingActive) setOnboardingStep(0);
   }, [onboardingActive]);
 
@@ -3510,19 +4052,24 @@ export default function Me() {
     user,
   ]);
 
-const setProfileFromEntry = async (entry: any) => {
+  const setProfileFromEntry = async (entry: any) => {
     if (!entry) return;
     const attrs = normalize(entry);
     profileIdRef.current = entry?.documentId ?? entry?.id ?? null;
 
     const basePayload = buildProfilePayloadFromAttrs(attrs);
     let payload: ProfilePayload | null = null;
-    if (attrs.encryptedProfile && user?.id) {
+    const hasEncryptedProfile = Boolean(attrs.encryptedProfile);
+    if (hasEncryptedProfile && user?.id) {
       try {
         payload = await decryptOwnProfilePayload(user.id, attrs.encryptedProfile);
+        setProfileDecryptFailed(false);
       } catch {
         payload = null;
+        setProfileDecryptFailed(true);
       }
+    } else {
+      setProfileDecryptFailed(false);
     }
     if (payload) {
       payload = { ...basePayload, ...payload };
@@ -3575,6 +4122,15 @@ const setProfileFromEntry = async (entry: any) => {
     const notificationSettings = normalizeNotificationSettings(
       payload.notificationSettings
     );
+    const timeLimitSettings = normalizeTimeLimitSettings(attrs.timeLimitSettings);
+    const storefrontDefaultLocation = String(
+      payload.storefrontDefaultLocation ?? attrs.storefrontDefaultLocation ?? ""
+    ).trim();
+    const storefrontRadiusValue =
+      payload.storefrontDefaultRadiusMiles ?? attrs.storefrontDefaultRadiusMiles;
+    const storefrontDefaultRadiusMiles = Number.isFinite(Number(storefrontRadiusValue))
+      ? String(Math.max(0, Number(storefrontRadiusValue)))
+      : "";
     const phoneDialCode = normalizeDialCode(payload.phoneDialCode || "");
     const nextProfile: Profile = {
       firstName: payload.firstName || "",
@@ -3601,6 +4157,9 @@ const setProfileFromEntry = async (entry: any) => {
       externalIndexingEnabled,
       activityVisibility,
       notificationSettings,
+      timeLimitSettings,
+      storefrontDefaultLocation,
+      storefrontDefaultRadiusMiles,
       handle: attrs.handle || "",
       avatarUrl: pickMediaUrl(attrs.avatar, { kind: "avatar" }),
       onboardingComplete,
@@ -4396,9 +4955,15 @@ const setProfileFromEntry = async (entry: any) => {
       setHobbyInput("");
       return;
     }
+    if (hobbyList.length >= MAX_HOBBIES) {
+      setHobbyError(`You can add up to ${MAX_HOBBIES} hobbies.`);
+      setHobbyInput("");
+      return;
+    }
     const next = [...hobbyList, match];
     updateHobbies(next);
     setHobbyInput("");
+    setHobbyError(null);
   };
 
   const addHobby = () => {
@@ -4409,22 +4974,28 @@ const setProfileFromEntry = async (entry: any) => {
     const key = hobbyKey(target);
     const next = hobbyList.filter((hobby) => hobbyKey(hobby) !== key);
     updateHobbies(next);
+    setHobbyError(null);
   };
 
-  const openHobbyPicker = (target: "onboarding" | "profile") => {
-    if (hobbyBlurTimeoutRef.current) {
-      window.clearTimeout(hobbyBlurTimeoutRef.current);
+  const toggleHobbyValue = (value: string) => {
+    const key = hobbyKey(value);
+    if (hobbyList.some((hobby) => hobbyKey(hobby) === key)) {
+      removeHobby(value);
+      return;
     }
-    setActiveHobbyPicker(target);
+    addHobbyValue(value);
   };
 
-  const closeHobbyPicker = () => {
-    if (hobbyBlurTimeoutRef.current) {
-      window.clearTimeout(hobbyBlurTimeoutRef.current);
-    }
-    hobbyBlurTimeoutRef.current = window.setTimeout(() => {
-      setActiveHobbyPicker(null);
-    }, 120);
+  const openHobbyModal = (target: "onboarding" | "profile") => {
+    setActiveHobbyModal(target);
+    setHobbyInput("");
+    setHobbyError(null);
+  };
+
+  const closeHobbyModal = () => {
+    setActiveHobbyModal(null);
+    setHobbyInput("");
+    setHobbyError(null);
   };
 
   const hobbySuggestions = useMemo(() => {
@@ -4434,56 +5005,22 @@ const setProfileFromEntry = async (entry: any) => {
       if (selected.has(hobbyKey(hobby))) return false;
       return term ? hobby.toLowerCase().includes(term) : true;
     });
-    return matches.slice(0, 12);
+    return matches.slice(0, 24);
   }, [hobbyInput, hobbyList]);
 
   const renderHobbyPicker = (target: "onboarding" | "profile") => (
     <label className="profile-field">
       <span className="profile-field-label">Hobbies</span>
       <div className="hobby-picker">
-        <div className="hobby-input-row">
-          <div className="hobby-input-wrap">
-            <input
-              className="auth-input"
-              placeholder="Search hobbies"
-              value={hobbyInput}
-              onChange={(e) => setHobbyInput(e.target.value)}
-              onFocus={() => openHobbyPicker(target)}
-              onBlur={closeHobbyPicker}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  addHobby();
-                }
-              }}
-            />
-            {activeHobbyPicker === target && (
-              <div className="hobby-dropdown">
-                {hobbySuggestions.length ? (
-                  hobbySuggestions.map((hobby) => (
-                    <button
-                      key={hobby}
-                      className="hobby-option"
-                      type="button"
-                      onMouseDown={(event) => {
-                        event.preventDefault();
-                        addHobbyValue(hobby);
-                        openHobbyPicker(target);
-                      }}
-                    >
-                      {hobby}
-                    </button>
-                  ))
-                ) : (
-                  <div className="hobby-option is-empty">No matches</div>
-                )}
-              </div>
-            )}
-          </div>
-          <button className="btn ghost" type="button" onClick={addHobby}>
-            Add
-          </button>
-        </div>
+        <button
+          className="btn ghost"
+          type="button"
+          onClick={() => openHobbyModal(target)}
+        >
+          {hobbyList.length
+            ? `Edit hobbies (${hobbyList.length}/${MAX_HOBBIES})`
+            : "Add hobbies"}
+        </button>
         {hobbyList.length ? (
           <ul className="profile-list">
             {hobbyList.map((hobby) => (
@@ -4508,7 +5045,7 @@ const setProfileFromEntry = async (entry: any) => {
           </p>
         )}
         <small style={{ color: "#9ca3af" }}>
-          Choose from the suggestions and add one hobby at a time.
+          Choose up to {MAX_HOBBIES} hobbies.
         </small>
       </div>
     </label>
@@ -4651,6 +5188,9 @@ const setProfileFromEntry = async (entry: any) => {
             externalIndexingEnabled: false,
             activityVisibility: "public",
             notificationSettings: DEFAULT_NOTIFICATION_SETTINGS,
+            storefrontDefaultLocation: "",
+            storefrontDefaultRadiusMiles: "",
+            timeLimitSettings: DEFAULT_TIME_LIMIT_SETTINGS,
             handle: lockedUniqueHandle, // show the locked handle even if empty profile
             onboardingComplete: false,
           });
@@ -4883,6 +5423,14 @@ const setProfileFromEntry = async (entry: any) => {
       const normalizedExternalIndexingEnabled = Boolean(
         mergedProfile.externalIndexingEnabled
       );
+      const normalizedStorefrontLocation = String(
+        mergedProfile.storefrontDefaultLocation || ""
+      ).trim();
+      const storefrontRadiusNumeric = Number(mergedProfile.storefrontDefaultRadiusMiles);
+      const normalizedStorefrontRadius =
+        Number.isFinite(storefrontRadiusNumeric) && storefrontRadiusNumeric > 0
+          ? Math.round(storefrontRadiusNumeric)
+          : undefined;
 
       const nextPayload: ProfilePayload = {
         ...existingPayload,
@@ -4928,6 +5476,8 @@ const setProfileFromEntry = async (entry: any) => {
         externalIndexingEnabled: normalizedExternalIndexingEnabled,
         activityVisibility: normalizedActivityVisibility,
         notificationSettings: normalizedNotificationSettings,
+        storefrontDefaultLocation: normalizedStorefrontLocation,
+        storefrontDefaultRadiusMiles: normalizedStorefrontRadius,
         onboardingComplete,
       };
 
@@ -4950,7 +5500,7 @@ const setProfileFromEntry = async (entry: any) => {
             firstName: publicFirstName,
             lastName: publicLastName,
             age: nextPayload.age,
-            birthday: normalizedBirthday,
+            birthday: normalizedBirthday || null,
             gender: nextPayload.gender,
             religion: nextPayload.religion,
             hobbies: nextPayload.hobbies,
@@ -4972,10 +5522,12 @@ const setProfileFromEntry = async (entry: any) => {
           privacySettings: normalizedPrivacySettings,
           searchIndexingEnabled: normalizedSearchIndexingEnabled,
           externalIndexingEnabled: normalizedExternalIndexingEnabled,
-          activityVisibility: normalizedActivityVisibility,
-          notificationSettings: normalizedNotificationSettings,
-          ...PROFILE_PII_CLEAR_FIELDS,
-        };
+            activityVisibility: normalizedActivityVisibility,
+            notificationSettings: normalizedNotificationSettings,
+            storefrontDefaultLocation: normalizedStorefrontLocation,
+            storefrontDefaultRadiusMiles: normalizedStorefrontRadius ?? null,
+            ...PROFILE_PII_CLEAR_FIELDS,
+          };
         if (avatarId) data.avatar = avatarId;
         return data;
       };
@@ -5100,6 +5652,13 @@ const setProfileFromEntry = async (entry: any) => {
   );
 
   if (!user) return null;
+
+  const handleOpenKeyBackup = () => {
+    refreshKeyBackup();
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("key-backup:open"));
+    }
+  };
 
   const displayName =
     (profile.firstName || profile.lastName
@@ -5241,6 +5800,8 @@ const setProfileFromEntry = async (entry: any) => {
   const isDeactivated =
     Boolean(accountStatus?.deactivatedUntil) &&
     new Date(accountStatus?.deactivatedUntil as string).getTime() > Date.now();
+  const exportOs = useMemo(() => detectDesktopOs(), []);
+  const exportHint = useMemo(() => getExportInstructions(exportOs), [exportOs]);
   const leftInfo = [
     ["First Name", profile.firstName],
     ["Last Name", profile.lastName],
@@ -5263,12 +5824,32 @@ const setProfileFromEntry = async (entry: any) => {
     ["Occupation", profile.occupation],
     ["Bio", profile.bio],
   ];
+  const hasVisibleProfileData = Boolean(
+    String(profile.firstName || "").trim() ||
+      String(profile.lastName || "").trim() ||
+      String(profile.age || "").trim() ||
+      String(profile.birthday || "").trim() ||
+      String(profile.religion || "").trim() ||
+      String(profile.gender || "").trim() ||
+      String(profile.phone || "").trim() ||
+      String(profile.country || "").trim() ||
+      String(profile.state || "").trim() ||
+      String(profile.city || "").trim() ||
+      String(profile.hobbies || "").trim() ||
+      String(profile.occupation || "").trim() ||
+      String(profile.bio || "").trim()
+  );
+  const showProfileKeyWarning =
+    (profileDecryptFailed || keyBackupStatus === "needs-restore") &&
+    !hasVisibleProfileData;
 
   const SETTINGS_SECTIONS: { id: SettingsSection; label: string }[] = [
     { id: "appearance", label: "Background & Chat" },
     { id: "security", label: "Account & Security" },
     { id: "privacy", label: "Visibility & Discoverability" },
     { id: "notifications", label: "Sound, Vibration & Quiet Hours" },
+    { id: "storefront", label: "StoreFront Defaults" },
+    { id: "time-limits", label: "Time Limits" },
     { id: "language", label: "Language Options" },
     { id: "changes", label: "Changes & Deactivation" },
   ];
@@ -5342,6 +5923,31 @@ const setProfileFromEntry = async (entry: any) => {
   }, [settingsMenuOpen]);
   const renderProfileHeader = () => (
     <div className="panel-grid" style={{ marginBottom: "16px" }}>
+      {showProfileKeyWarning && (
+        <section className="panel profile-key-warning">
+          <div className="profile-key-warning-inner">
+            <div>
+              <p className="profile-key-warning-title">Unlock your profile</p>
+              <p className="profile-key-warning-text">
+                Your profile data is encrypted and can’t be unlocked on this device yet.
+                Restore your key backup to load your details.
+              </p>
+            </div>
+            <div className="profile-key-warning-actions">
+              <button className="btn primary" type="button" onClick={handleOpenKeyBackup}>
+                Restore profile
+              </button>
+              <button
+                className="btn ghost"
+                type="button"
+                onClick={refreshKeyBackup}
+              >
+                Refresh
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
       <section className="panel profile-header-panel">
         <div className="profile-header-avatar-overlay" aria-hidden="true">
           {avatarImg ? (
@@ -5883,6 +6489,10 @@ const setProfileFromEntry = async (entry: any) => {
 
   return (
     <div className="dashboard-shell" style={getBackgroundStyle("profile")}>
+      <ProfilePhotoModal
+        open={photoModalOpen}
+        onClose={() => setPhotoModalOpen(false)}
+      />
       {errorModal && (
         <div
           style={{
@@ -5956,6 +6566,89 @@ const setProfileFromEntry = async (entry: any) => {
           </div>
         </div>
       )}
+
+      <PopupModal
+        open={activeHobbyModal !== null}
+        title="Choose hobbies"
+        onClose={closeHobbyModal}
+        bodyClassName="comment-modal-body"
+      >
+        <div className="hobby-modal">
+          <div className="hobby-modal__summary">
+            <span>
+              {hobbyList.length}/{MAX_HOBBIES} selected
+            </span>
+            <button
+              className="btn ghost"
+              type="button"
+              onClick={() => updateHobbies([])}
+              disabled={!hobbyList.length}
+            >
+              Clear all
+            </button>
+          </div>
+          <div className="hobby-modal__search">
+            <input
+              className="auth-input"
+              placeholder="Search hobbies"
+              value={hobbyInput}
+              onChange={(e) => setHobbyInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addHobby();
+                }
+              }}
+            />
+          </div>
+          {hobbyError && <p className="status status-error">{hobbyError}</p>}
+          <div className="hobby-modal__list">
+            {hobbySuggestions.length ? (
+              hobbySuggestions.map((hobby) => {
+                const isSelected = hobbyList.some(
+                  (entry) => hobbyKey(entry) === hobbyKey(hobby)
+                );
+                return (
+                  <button
+                    key={hobby}
+                    className={`hobby-option${isSelected ? " is-selected" : ""}`}
+                    type="button"
+                    onClick={() => toggleHobbyValue(hobby)}
+                    disabled={!isSelected && hobbyList.length >= MAX_HOBBIES}
+                  >
+                    <span>{hobby}</span>
+                    <span className="hobby-option__state">
+                      {isSelected ? "Added" : "Add"}
+                    </span>
+                  </button>
+                );
+              })
+            ) : (
+              <div className="hobby-option is-empty">No matches</div>
+            )}
+          </div>
+          {hobbyList.length > 0 && (
+            <div className="hobby-modal__selected">
+              {hobbyList.map((hobby) => (
+                <button
+                  key={hobby}
+                  type="button"
+                  className="hobby-chip"
+                  onClick={() => removeHobby(hobby)}
+                >
+                  <span>{hobby}</span>
+                  <span aria-hidden="true">✕</span>
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="hobby-modal__actions">
+            <button className="btn primary" type="button" onClick={closeHobbyModal}>
+              Done
+            </button>
+          </div>
+        </div>
+      </PopupModal>
 
       {deleteAccountOpen && (
         <div
@@ -7258,28 +7951,16 @@ const setProfileFromEntry = async (entry: any) => {
 
                   <label className="profile-field">
                     <span className="profile-field-label">Avatar</span>
-                    <input
-                      type="file"
-                      className="auth-input"
-                      accept="image/*"
-                      onChange={(e) => setAvatarFile(e.target.files?.[0] || null)}
-                    />
-                    <div className="profile-avatar-actions">
-                      <button
-                        className="btn ghost"
-                        type="button"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          handleRotateAvatar();
-                        }}
-                        disabled={avatarRotateBusy || (!avatarFile && !profile.avatarUrl)}
-                      >
-                        {avatarRotateBusy ? "Rotating..." : "Rotate avatar"}
-                      </button>
-                    </div>
-                    {avatarRotateError && (
-                      <small className="profile-avatar-error">{avatarRotateError}</small>
-                    )}
+                    <button
+                      className="btn primary profile-avatar-editor-button"
+                      type="button"
+                      onClick={() => setPhotoModalOpen(true)}
+                    >
+                      {profile.avatarUrl ? "Edit Profile Photo" : "Add Profile Photo"}
+                    </button>
+                    <small className="profile-avatar-helper">
+                      Use the photo studio to crop, enhance, and schedule your avatars.
+                    </small>
                   </label>
 
                   <div className="profile-actions">
@@ -7695,7 +8376,9 @@ const setProfileFromEntry = async (entry: any) => {
               <div className="security-card">
                 <h4>Password reset</h4>
                 <p className="security-muted">
-                  We will email a reset link to {user.email}.
+                  {isPhonePlaceholderAccount
+                    ? "We will send a password reset link to your phone number."
+                    : "We will email a reset link to your email address."}
                 </p>
                 <button
                   className="btn ghost"
@@ -7703,7 +8386,11 @@ const setProfileFromEntry = async (entry: any) => {
                   onClick={handlePasswordReset}
                   disabled={passwordResetLoading}
                 >
-                  {passwordResetLoading ? "Sending..." : "Send reset email"}
+                  {passwordResetLoading
+                    ? "Sending..."
+                    : isPhonePlaceholderAccount
+                    ? "Send reset link"
+                    : "Send reset email"}
                 </button>
                 {passwordResetError && (
                   <p className="status status-error">{passwordResetError}</p>
@@ -7896,6 +8583,118 @@ const setProfileFromEntry = async (entry: any) => {
                 )}
                 {phoneChangeSuccess && (
                   <p className="status status-success">{phoneChangeSuccess}</p>
+                )}
+              </div>
+
+              <div className="security-card">
+                <h4>Age verification</h4>
+                <p className="security-muted">
+                  Verify your age within 1 week of account creation to keep your account
+                  active.
+                </p>
+                {ageVerified ? (
+                  <p className="status status-success">Age verified.</p>
+                ) : ageVerificationOverdue ? (
+                  <p className="status status-error">
+                    Verification overdue. Please verify now to unlock your account.
+                  </p>
+                ) : (
+                  <p className="status status-warning">
+                    Verification required{ageVerificationDaysRemaining !== null
+                      ? ` (${ageVerificationDaysRemaining} day${
+                          ageVerificationDaysRemaining === 1 ? "" : "s"
+                        } left)`
+                      : ""}.
+                  </p>
+                )}
+                {!ageVerified && (
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={() => navigate("/me?section=security&ageVerify=1")}
+                  >
+                    Verify now
+                  </button>
+                )}
+                {ageVerificationDueAt && !ageVerified && (
+                  <p className="security-muted">
+                    Verification due {formatDateTime(ageVerificationDueAt)}.
+                  </p>
+                )}
+                {ageVerified && user?.ageVerifiedAt && (
+                  <p className="security-muted">
+                    Verified {formatDateTime(user.ageVerifiedAt)}.
+                  </p>
+                )}
+              </div>
+
+              <div className="security-card">
+                <h4>Security questions (optional)</h4>
+                <p className="security-muted">
+                  Add three questions for support to verify your identity if your account is
+                  locked. Answers are never shown, so re-enter them to update.
+                </p>
+                {securityQuestionsLoading ? (
+                  <p className="security-muted">Loading security questions…</p>
+                ) : (
+                  <div className="security-questions security-questions--stack">
+                    {securityQuestions.map((entry, index) => (
+                      <div className="security-question-row" key={`security-${index}`}>
+                        <select
+                          className="auth-input"
+                          value={entry.question}
+                          onChange={(event) =>
+                            updateSecurityQuestion(index, "question", event.target.value)
+                          }
+                        >
+                          <option value="">Select a question</option>
+                          {SECURITY_QUESTION_OPTIONS.map((option) => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          className="auth-input"
+                          type="text"
+                          placeholder="Answer"
+                          value={entry.answer}
+                          onChange={(event) =>
+                            updateSecurityQuestion(index, "answer", event.target.value)
+                          }
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="security-actions">
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={handleClearSecurityQuestions}
+                    disabled={securityQuestionsSaving}
+                  >
+                    Clear
+                  </button>
+                  <button
+                    className="btn primary"
+                    type="button"
+                    onClick={handleSaveSecurityQuestions}
+                    disabled={securityQuestionsSaving || securityQuestionsLoading}
+                  >
+                    {securityQuestionsSaving ? "Saving..." : "Save"}
+                  </button>
+                </div>
+                {securityQuestionsSavedAt && (
+                  <p className="security-muted">
+                    Last updated {formatDateTime(securityQuestionsSavedAt)}.
+                  </p>
+                )}
+                {securityQuestionsError && (
+                  <p className="status status-error">{securityQuestionsError}</p>
+                )}
+                {securityQuestionsSuccess && (
+                  <p className="status status-success">{securityQuestionsSuccess}</p>
                 )}
               </div>
             </div>
@@ -8861,6 +9660,226 @@ const setProfileFromEntry = async (entry: any) => {
         </div>
         )}
 
+        {isSettingsView && settingsSection === "storefront" && (
+        <div className="panel-grid">
+          <section className="panel profile-settings-panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">StoreFront</p>
+                <h3>Default Location</h3>
+                <p className="panel-sub">
+                  Set a default location and radius to prefill StoreFront filters.
+                </p>
+              </div>
+            </div>
+
+            <div className="security-grid">
+              <div className="security-card security-card-wide">
+                <h4>Search defaults</h4>
+                <p className="security-muted">
+                  This only affects your StoreFront filters, not what others see.
+                </p>
+                <div className="security-row">
+                  <label className="profile-field">
+                    <span className="profile-field-label">State</span>
+                    <select
+                      className="auth-input"
+                      value={storefrontLocationStateCode || ""}
+                      onChange={(event) => handleStorefrontStateChange(event.target.value)}
+                    >
+                      <option value="">Select a state</option>
+                      {storefrontLocationState &&
+                        !storefrontStateOptions.some(
+                          (state) =>
+                            state.code === storefrontLocationStateCode ||
+                            state.name.toLowerCase() ===
+                              storefrontLocationState.toLowerCase()
+                        ) && (
+                          <option value={storefrontLocationStateCode || storefrontLocationState}>
+                            {storefrontLocationState}
+                          </option>
+                        )}
+                      {storefrontStateOptions.map((state) => (
+                        <option key={state.code || state.name} value={state.code || state.name}>
+                          {state.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="profile-field">
+                    <span className="profile-field-label">City</span>
+                    <select
+                      className="auth-input"
+                      value={storefrontLocationCity}
+                      onChange={(event) => handleStorefrontCityChange(event.target.value)}
+                      disabled={!storefrontLocationStateCode || storefrontCityOptions.length === 0}
+                    >
+                      <option value="">Select a city</option>
+                      {storefrontLocationCity &&
+                        !storefrontCityOptions.some(
+                          (city) =>
+                            city.name.toLowerCase() === storefrontLocationCity.toLowerCase()
+                        ) && (
+                          <option value={storefrontLocationCity}>
+                            {storefrontLocationCity}
+                          </option>
+                        )}
+                      {storefrontCityOptions.map((city) => (
+                        <option key={city.code || city.name} value={city.name}>
+                          {city.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                {storefrontLocationError && (
+                  <p className="profile-location-error">{storefrontLocationError}</p>
+                )}
+                <div className="security-row">
+                  <label className="profile-field">
+                    <span className="profile-field-label">Radius (miles)</span>
+                    <select
+                      className="auth-input"
+                      value={
+                        STOREFRONT_RADIUS_OPTIONS.some(
+                          (option) => option.value === profile.storefrontDefaultRadiusMiles
+                        )
+                          ? profile.storefrontDefaultRadiusMiles
+                          : ""
+                      }
+                      onChange={(event) =>
+                        setProfile({
+                          ...profile,
+                          storefrontDefaultRadiusMiles: event.target.value,
+                        })
+                      }
+                    >
+                      <option value="">Select a radius</option>
+                      {STOREFRONT_RADIUS_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <p className="security-muted">
+                  The radius is stored and prefilled but not used to actually filter listings yet
+                  because listings only have a text location string (no lat/long). If you want
+                  true radius filtering, I can add geocoding + distance checks.
+                </p>
+              </div>
+            </div>
+
+            <div className="settings-actions">
+              <button
+                className="btn ghost"
+                type="button"
+                onClick={handleSaveStorefrontSettings}
+                disabled={storefrontSettingsSaving}
+              >
+                {storefrontSettingsSaving ? "Saving..." : "Save StoreFront defaults"}
+              </button>
+            </div>
+            {storefrontSettingsError && (
+              <p className="status status-error">{storefrontSettingsError}</p>
+            )}
+            {storefrontSettingsSuccess && (
+              <p className="status status-success">{storefrontSettingsSuccess}</p>
+            )}
+          </section>
+        </div>
+        )}
+
+        {isSettingsView && settingsSection === "time-limits" && (
+        <div className="panel-grid">
+          <section className="panel profile-settings-panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Discipline</p>
+                <h3>Time Limits</h3>
+                <p className="panel-sub">
+                  Set a session timer to stay focused. We’ll warn you at 10 minutes and
+                  1 minute left, then sign you out and start a 10-minute cooldown.
+                </p>
+              </div>
+            </div>
+
+            <div className="security-grid">
+              <div className="security-card">
+                <h4>Session timer</h4>
+                <p className="security-muted">
+                  Choose how long you want each session to last.
+                </p>
+                <label className="profile-check">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(profile.timeLimitSettings.enabled)}
+                    onChange={(e) =>
+                      setProfile({
+                        ...profile,
+                        timeLimitSettings: {
+                          ...profile.timeLimitSettings,
+                          enabled: e.target.checked,
+                        },
+                      })
+                    }
+                  />
+                  <span className="profile-check__track" aria-hidden="true">
+                    <span className="profile-check__thumb" />
+                  </span>
+                  <span className="profile-check__label">Enable time limits</span>
+                </label>
+                <div className="security-row">
+                  <select
+                    className="auth-input"
+                    value={
+                      profile.timeLimitSettings.durationMinutes ??
+                      DEFAULT_TIME_LIMIT_MINUTES
+                    }
+                    onChange={(e) =>
+                      setProfile({
+                        ...profile,
+                        timeLimitSettings: {
+                          ...profile.timeLimitSettings,
+                          durationMinutes: Number(e.target.value),
+                        },
+                      })
+                    }
+                    disabled={!profile.timeLimitSettings.enabled}
+                  >
+                    {TIME_LIMIT_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="security-muted">Cooldown: 10 minutes</span>
+                </div>
+                <p className="security-muted">
+                  You’ll get a heads-up at 10 minutes and 1 minute remaining.
+                </p>
+              </div>
+            </div>
+
+            <div className="settings-actions">
+              <button
+                className="btn ghost"
+                type="button"
+                onClick={handleSaveTimeLimitSettings}
+                disabled={timeLimitSaving}
+              >
+                {timeLimitSaving ? "Saving..." : "Save time limit settings"}
+              </button>
+            </div>
+            {timeLimitError && <p className="status status-error">{timeLimitError}</p>}
+            {timeLimitSuccess && (
+              <p className="status status-success">{timeLimitSuccess}</p>
+            )}
+          </section>
+        </div>
+        )}
+
         {isSettingsView && settingsSection === "language" && (
         <div className="panel-grid">
           <section className="panel profile-settings-panel profile-settings-panel--language">
@@ -8935,11 +9954,32 @@ const setProfileFromEntry = async (entry: any) => {
                 )}
               </div>
 
+              <div className="security-card">
+                <h4>Export profile data</h4>
+                <p className="security-muted">
+                  Download your profile, photos, and videos as a zip archive. {exportHint}
+                </p>
+                <div className="security-actions">
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={handleExportProfile}
+                    disabled={exportLoading}
+                  >
+                    {exportLoading ? "Preparing..." : "Download export"}
+                  </button>
+                </div>
+                {exportError && <p className="status status-error">{exportError}</p>}
+                {exportSuccess && (
+                  <p className="status status-success">{exportSuccess}</p>
+                )}
+              </div>
+
               <div className="security-card security-card-wide">
                 <h4>Deactivate vs. delete</h4>
                 <p className="security-muted">
-                  Deactivation hides your profile and removes it from search for up to {deactivationDays} days.
-                  Deleting removes your account and data permanently.
+                  Deactivation hides your profile and removes it from search for up to{" "}
+                  {deactivationDays} days. Deleting removes your account and data permanently.
                 </p>
                 <div className="privacy-grid">
                   <label className="profile-field">
@@ -9669,6 +10709,12 @@ const setProfileFromEntry = async (entry: any) => {
             const commentKey = String(p.numericId ?? p.id);
             const comments = postComments[commentKey] ?? [];
             const isCommentsOpen = Boolean(openCommentsFor[commentKey]);
+            const commentAttachmentPreviews = commentMediaPreviews[commentKey] ?? [];
+            const commentAttachmentFiles = commentMediaFiles[commentKey] ?? [];
+            const closeCommentModal = () => {
+              clearCommentAttachments(commentKey);
+              setOpenCommentsFor((prev) => ({ ...prev, [commentKey]: false }));
+            };
             const showShareMenu = shareMenuFor === postKey;
             const showPostMenu = postMenuFor === postKey;
             const shareUrl = buildShareUrl(postKey);
@@ -9957,10 +11003,12 @@ const setProfileFromEntry = async (entry: any) => {
                         {sharesCount}
                       </span>
                     </div>
-                    <div className="post-action-bar">
-                    <div className="post-action-group">
-                      <button
-                        className="post-action-btn"
+                      <div className="post-action-bar">
+                      <div className="post-action-group">
+                        <button
+                        className={`post-action-btn${
+                          myReaction === "👍" ? " is-reacted" : ""
+                        }`}
                         type="button"
                         aria-pressed={myReaction === "👍"}
                         onClick={() => void handleReaction(p, postKey, "👍")}
@@ -9971,9 +11019,11 @@ const setProfileFromEntry = async (entry: any) => {
                         <span>Like</span>
                       </button>
                     </div>
-                    <div className="post-action-group">
-                      <button
-                        className="post-action-btn"
+                      <div className="post-action-group">
+                        <button
+                        className={`post-action-btn${
+                          myReaction === "❤️" ? " is-reacted" : ""
+                        }`}
                         type="button"
                         aria-pressed={myReaction === "❤️"}
                         onClick={() => void handleReaction(p, postKey, "❤️")}
@@ -10117,8 +11167,14 @@ const setProfileFromEntry = async (entry: any) => {
                   {shareNotice[postKey] && (
                     <p className="post-action-notice">{shareNotice[postKey]}</p>
                   )}
-                  {isCommentsOpen && (
-                    <div className="comments">
+                    <PopupModal
+                      open={isCommentsOpen}
+                      title="Comments"
+                      onClose={closeCommentModal}
+                      className="comment-modal"
+                      bodyClassName="comment-modal-body"
+                    >
+                    <div className="comments comments--modal">
                       <p className="eyebrow">Comments</p>
                       {comments.length > 0 ? (
                         <ul className="comment-list">
@@ -10126,6 +11182,10 @@ const setProfileFromEntry = async (entry: any) => {
                             const commentIdKey = String(c.documentId ?? c.numericId ?? c.id);
                             const isEditing = Boolean(editingComments[commentIdKey]);
                             const editValue = commentEdits[commentIdKey] ?? c.body;
+                            const imageUrls = extractImageUrls(c.body);
+                            const cleanedBody = stripImageUrls(c.body, imageUrls);
+                            const displayBody =
+                              cleanedBody || (imageUrls.length ? "" : c.body);
                             return (
                             <li key={c.id} className="comment-item">
                               <div className="comment-author">{c.owner || "User"}</div>
@@ -10196,10 +11256,27 @@ const setProfileFromEntry = async (entry: any) => {
                                   </div>
                                 </div>
                               ) : (
-                                <div className="comment-body">{c.body}</div>
+                                <div className="comment-body">{displayBody}</div>
+                              )}
+                              {!isEditing && imageUrls.length > 0 && (
+                                <div className="comment-images">
+                                  {imageUrls.map((url, index) => {
+                                    const resolved =
+                                      pickMediaUrl(url, { kind: "post" }) || url;
+                                    return (
+                                      <img
+                                        key={`${commentIdKey}-${index}`}
+                                        src={resolved}
+                                        alt="Comment attachment"
+                                        loading="lazy"
+                                        decoding="async"
+                                      />
+                                    );
+                                  })}
+                                </div>
                               )}
                               {(() => {
-                                const commentUrl = extractFirstUrl(c.body);
+                                const commentUrl = extractFirstUrl(cleanedBody);
                                 if (!isPreviewableUrl(commentUrl)) return null;
                                 const preview = previewCache[commentUrl];
                                 if (!preview) return null;
@@ -10214,126 +11291,104 @@ const setProfileFromEntry = async (entry: any) => {
                                 );
                               })()}
                               {user?.id === c.ownerId && (
-                                <div className="comment-actions">
+                                <div className="comment-menu">
                                   <button
-                                    className="btn ghost"
+                                    className="comment-menu-button"
                                     type="button"
-                                    onClick={() => {
-                                      setEditingComments((prev) => ({
+                                    aria-label="Comment actions"
+                                    aria-haspopup="menu"
+                                    aria-expanded={Boolean(commentMenuOpen[commentIdKey])}
+                                    onClick={() =>
+                                      setCommentMenuOpen((prev) => ({
                                         ...prev,
-                                        [commentIdKey]: true,
-                                      }));
-                                      setCommentEdits((prev) => ({
-                                        ...prev,
-                                        [commentIdKey]: c.body,
-                                      }));
-                                    }}
+                                        [commentIdKey]: !prev[commentIdKey],
+                                      }))
+                                    }
                                   >
-                                    Edit
+                                    <span className="comment-menu-dots" aria-hidden="true">
+                                      ⋯
+                                    </span>
                                   </button>
-                                  <button
-                                    className="btn ghost comment-delete"
-                                    type="button"
-                                    onClick={async () => {
-                                    const numericId =
-                                      c.numericId ??
-                                      (typeof c.id === "number" ? c.id : Number(c.id));
-                                    const removeIds = new Set<string>();
-                                    removeIds.add(String(c.id));
-                                    if (c.documentId) {
-                                      removeIds.add(String(c.documentId));
-                                    }
-                                    if (Number.isFinite(numericId)) {
-                                      removeIds.add(String(numericId));
-                                    }
-                                    try {
-                                      setError(null);
-                                      const attempts: string[] = [];
-                                      if (c.documentId) {
-                                        attempts.push(`/comments/${c.documentId}`);
-                                      }
-                                      if (Number.isFinite(numericId)) {
-                                        attempts.push(`/comments/${numericId}`);
-                                      }
-                                      attempts.push(`/comments/${c.id}`);
-
-                                      let removed = false;
-                                      for (const path of attempts) {
-                                        try {
-                                          await api.delete(path);
-                                          removed = true;
-                                          break;
-                                        } catch (err) {
-                                          if (
-                                            axios.isAxiosError(err) &&
-                                            err.response?.status === 404
-                                          ) {
-                                            continue;
-                                          }
-                                          throw err;
-                                        }
-                                      }
-
-                                      if (!removed) {
-                                        setError("Failed to delete comment.");
-                                        return;
-                                      }
-
-                                      setPostComments((prev) => ({
-                                        ...prev,
-                                        [commentKey]: (prev[commentKey] || []).filter(
-                                          (comment) => {
-                                            if (removeIds.has(String(comment.id))) {
-                                              return false;
-                                            }
-                                            if (
-                                              comment.documentId &&
-                                              removeIds.has(String(comment.documentId))
-                                            ) {
-                                              return false;
-                                            }
-                                            if (
-                                              Number.isFinite(comment.numericId) &&
-                                              removeIds.has(String(comment.numericId))
-                                            ) {
-                                              return false;
-                                            }
-                                            return true;
-                                          }
-                                        ),
-                                      }));
-
-                                      try {
-                                        const refreshed = await fetchCommentsForPostIds([
-                                          commentKey,
-                                        ]);
-                                        if (Object.keys(refreshed).length) {
-                                          setPostComments((prev) => ({
+                                  {commentMenuOpen[commentIdKey] && (
+                                    <div className="comment-menu-panel" role="menu">
+                                      <button
+                                        className="comment-menu-item"
+                                        type="button"
+                                        role="menuitem"
+                                        onClick={() => {
+                                          setEditingComments((prev) => ({
                                             ...prev,
-                                            ...refreshed,
+                                            [commentIdKey]: true,
                                           }));
-                                        }
-                                      } catch (err) {
-                                        console.warn(
-                                          "Comment refresh failed after delete",
-                                          err
-                                        );
-                                      }
-                                    } catch (err) {
-                                      const status = axios.isAxiosError(err)
-                                        ? err.response?.status
-                                        : undefined;
-                                      if (status && status >= 500) {
-                                        try {
-                                          const refreshed = await fetchCommentsForPostIds([
-                                            commentKey,
-                                          ]);
-                                          let stillThere = true;
-                                          setPostComments((prev) => {
-                                            const refreshedList = refreshed[commentKey];
-                                            const nextList = Array.isArray(refreshedList)
-                                              ? refreshedList
-                                              : (prev[commentKey] || []).filter((comment) => {
+                                          setCommentEdits((prev) => ({
+                                            ...prev,
+                                            [commentIdKey]: c.body,
+                                          }));
+                                          setCommentMenuOpen((prev) => ({
+                                            ...prev,
+                                            [commentIdKey]: false,
+                                          }));
+                                        }}
+                                      >
+                                        Edit
+                                      </button>
+                                      <button
+                                        className="comment-menu-item is-danger"
+                                        type="button"
+                                        role="menuitem"
+                                        onClick={async () => {
+                                          setCommentMenuOpen((prev) => ({
+                                            ...prev,
+                                            [commentIdKey]: false,
+                                          }));
+                                          const numericId =
+                                            c.numericId ??
+                                            (typeof c.id === "number" ? c.id : Number(c.id));
+                                          const removeIds = new Set<string>();
+                                          removeIds.add(String(c.id));
+                                          if (c.documentId) {
+                                            removeIds.add(String(c.documentId));
+                                          }
+                                          if (Number.isFinite(numericId)) {
+                                            removeIds.add(String(numericId));
+                                          }
+                                          try {
+                                            setError(null);
+                                            const attempts: string[] = [];
+                                            if (c.documentId) {
+                                              attempts.push(`/comments/${c.documentId}`);
+                                            }
+                                            if (Number.isFinite(numericId)) {
+                                              attempts.push(`/comments/${numericId}`);
+                                            }
+                                            attempts.push(`/comments/${c.id}`);
+
+                                            let removed = false;
+                                            for (const path of attempts) {
+                                              try {
+                                                await api.delete(path);
+                                                removed = true;
+                                                break;
+                                              } catch (err) {
+                                                if (
+                                                  axios.isAxiosError(err) &&
+                                                  err.response?.status === 404
+                                                ) {
+                                                  continue;
+                                                }
+                                                throw err;
+                                              }
+                                            }
+
+                                            if (!removed) {
+                                              setError("Failed to delete comment.");
+                                              return;
+                                            }
+
+                                            setPostComments((prev) => ({
+                                              ...prev,
+                                              [commentKey]: (prev[commentKey] || []).filter(
+                                                (comment) => {
                                                   if (removeIds.has(String(comment.id))) {
                                                     return false;
                                                   }
@@ -10350,45 +11405,108 @@ const setProfileFromEntry = async (entry: any) => {
                                                     return false;
                                                   }
                                                   return true;
+                                                }
+                                              ),
+                                            }));
+
+                                            try {
+                                              const refreshed = await fetchCommentsForPostIds([
+                                                commentKey,
+                                              ]);
+                                              if (Object.keys(refreshed).length) {
+                                                setPostComments((prev) => ({
+                                                  ...prev,
+                                                  ...refreshed,
+                                                }));
+                                              }
+                                            } catch (err) {
+                                              console.warn(
+                                                "Comment refresh failed after delete",
+                                                err
+                                              );
+                                            }
+                                          } catch (err) {
+                                            const status = axios.isAxiosError(err)
+                                              ? err.response?.status
+                                              : undefined;
+                                            if (status && status >= 500) {
+                                              try {
+                                                const refreshed = await fetchCommentsForPostIds([
+                                                  commentKey,
+                                                ]);
+                                                let stillThere = true;
+                                                setPostComments((prev) => {
+                                                  const refreshedList = refreshed[commentKey];
+                                                  const nextList = Array.isArray(refreshedList)
+                                                    ? refreshedList
+                                                    : (prev[commentKey] || []).filter(
+                                                        (comment) => {
+                                                          if (
+                                                            removeIds.has(String(comment.id))
+                                                          ) {
+                                                            return false;
+                                                          }
+                                                          if (
+                                                            comment.documentId &&
+                                                            removeIds.has(
+                                                              String(comment.documentId)
+                                                            )
+                                                          ) {
+                                                            return false;
+                                                          }
+                                                          if (
+                                                            Number.isFinite(
+                                                              comment.numericId
+                                                            ) &&
+                                                            removeIds.has(
+                                                              String(comment.numericId)
+                                                            )
+                                                          ) {
+                                                            return false;
+                                                          }
+                                                          return true;
+                                                        }
+                                                      );
+                                                  stillThere = nextList.some((comment) => {
+                                                    if (removeIds.has(String(comment.id))) {
+                                                      return true;
+                                                    }
+                                                    if (
+                                                      comment.documentId &&
+                                                      removeIds.has(String(comment.documentId))
+                                                    ) {
+                                                      return true;
+                                                    }
+                                                    if (
+                                                      Number.isFinite(comment.numericId) &&
+                                                      removeIds.has(String(comment.numericId))
+                                                    ) {
+                                                      return true;
+                                                    }
+                                                    return false;
+                                                  });
+                                                  return {
+                                                    ...prev,
+                                                    ...refreshed,
+                                                    [commentKey]: nextList,
+                                                  };
                                                 });
-                                            stillThere = nextList.some((comment) => {
-                                              if (removeIds.has(String(comment.id))) {
-                                                return true;
+                                                if (!stillThere) {
+                                                  return;
+                                                }
+                                              } catch {
+                                                // fall through to error message
                                               }
-                                              if (
-                                                comment.documentId &&
-                                                removeIds.has(String(comment.documentId))
-                                              ) {
-                                                return true;
-                                              }
-                                              if (
-                                                Number.isFinite(comment.numericId) &&
-                                                removeIds.has(String(comment.numericId))
-                                              ) {
-                                                return true;
-                                              }
-                                              return false;
-                                            });
-                                            return {
-                                              ...prev,
-                                              ...refreshed,
-                                              [commentKey]: nextList,
-                                            };
-                                          });
-                                          if (!stillThere) {
-                                            return;
+                                            }
+                                            console.error("Delete comment failed", err);
+                                            setError("Failed to delete comment.");
                                           }
-                                        } catch {
-                                          // fall through to error message
-                                        }
-                                      }
-                                      console.error("Delete comment failed", err);
-                                      setError("Failed to delete comment.");
-                                    }
-                                  }}
-                                  >
-                                    Delete
-                                  </button>
+                                        }}
+                                      >
+                                        Delete
+                                      </button>
+                                    </div>
+                                  )}
                                 </div>
                               )}
                             </li>
@@ -10399,53 +11517,125 @@ const setProfileFromEntry = async (entry: any) => {
                         <p className="status">No comments yet.</p>
                       )}
                       <div className="comment-form">
-                        <input
-                          className="auth-input"
-                          placeholder="Add a comment..."
-                          value={commentInputs[commentKey] || ""}
-                          onChange={(e) =>
-                            setCommentInputs((prev) => ({
-                              ...prev,
-                              [commentKey]: sanitizePostText(e.target.value),
-                            }))
-                          }
-                        />
-                        <button
-                          className="btn primary"
-                          type="button"
-                          disabled={!commentInputs[commentKey]?.trim()}
-                          onClick={async () => {
-                            const body = (commentInputs[commentKey] || "").trim();
-                            if (!body) return;
-                            try {
-                              await api.post("/comments", {
-                                data: {
-                                  body,
-                                  target_type: "user",
-                                  target_id: p.numericId ?? p.id,
-                                },
-                              });
-                              await refreshCommentsForPost(p.numericId ?? p.id);
-                              setCommentInputs((prev) => ({ ...prev, [commentKey]: "" }));
-                            } catch (err) {
-                              console.error("Add comment failed", err);
-                              if (axios.isAxiosError(err)) {
-                                const msg =
-                                  err.response?.data?.error?.message ||
-                                  err.response?.data?.message ||
-                                  "Failed to add comment.";
-                                setError(String(msg));
-                              } else {
-                                setError("Failed to add comment.");
-                              }
+                        <div className="comment-form-row">
+                          <input
+                            className="auth-input"
+                            placeholder="Add a comment..."
+                            value={commentInputs[commentKey] || ""}
+                            onChange={(e) =>
+                              setCommentInputs((prev) => ({
+                                ...prev,
+                                [commentKey]: sanitizePostText(e.target.value),
+                              }))
                             }
-                          }}
-                        >
-                          Comment
-                        </button>
+                          />
+                          <button
+                            className="btn primary"
+                            type="button"
+                            disabled={
+                              !commentInputs[commentKey]?.trim() &&
+                              commentAttachmentFiles.length === 0
+                            }
+                            onClick={async () => {
+                              const body = (commentInputs[commentKey] || "").trim();
+                              if (!body && commentAttachmentFiles.length === 0) return;
+                              try {
+                                let attachmentUrls: string[] = [];
+                                if (commentAttachmentFiles.length > 0) {
+                                  const fd = new FormData();
+                                  commentAttachmentFiles.forEach((file) =>
+                                    fd.append("files", file)
+                                  );
+                                  const uploadRes = await api.post("/upload", fd);
+                                  attachmentUrls = (uploadRes.data ?? [])
+                                    .map((item: { url?: string }) => item?.url)
+                                    .filter(
+                                      (url: string | undefined): url is string =>
+                                        Boolean(url)
+                                    );
+                                }
+                                const combinedBody = [body, ...attachmentUrls]
+                                  .filter(Boolean)
+                                  .join("\n");
+                                if (!combinedBody.trim()) return;
+                                await api.post("/comments", {
+                                  data: {
+                                    body: combinedBody,
+                                    target_type: "user",
+                                    target_id: p.numericId ?? p.id,
+                                  },
+                                });
+                                await refreshCommentsForPost(p.numericId ?? p.id);
+                                setCommentInputs((prev) => ({
+                                  ...prev,
+                                  [commentKey]: "",
+                                }));
+                                clearCommentAttachments(commentKey);
+                              } catch (err) {
+                                console.error("Add comment failed", err);
+                                if (axios.isAxiosError(err)) {
+                                  const msg =
+                                    err.response?.data?.error?.message ||
+                                    err.response?.data?.message ||
+                                    "Failed to add comment.";
+                                  setError(String(msg));
+                                } else {
+                                  setError("Failed to add comment.");
+                                }
+                              }
+                            }}
+                          >
+                            Comment
+                          </button>
+                        </div>
+                        <div className="comment-attachments">
+                          <label className="comment-upload">
+                            <input
+                              type="file"
+                              accept="image/*"
+                              multiple
+                              onChange={(e) => {
+                                handleCommentFilesChange(commentKey, e.target.files);
+                                e.target.value = "";
+                              }}
+                            />
+                            <span>
+                              {commentAttachmentFiles.length
+                                ? "Change photos"
+                                : "Add photos"}
+                            </span>
+                          </label>
+                          {commentAttachmentPreviews.length > 0 && (
+                            <div className="comment-attachment-list">
+                              {commentAttachmentPreviews.map((url, index) => (
+                                <div
+                                  key={`${commentKey}-attachment-${index}`}
+                                  className="comment-attachment"
+                                >
+                                  <img
+                                    src={url}
+                                    alt="New attachment preview"
+                                    loading="lazy"
+                                    decoding="async"
+                                  />
+                                  <button
+                                    type="button"
+                                    className="comment-attachment-remove"
+                                    aria-label="Remove photo"
+                                    onClick={() =>
+                                      removeCommentAttachment(commentKey, index)
+                                    }
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  )}
+                  </PopupModal>
                 </div>
               </article>
             );

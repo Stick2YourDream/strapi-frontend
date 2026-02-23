@@ -11,12 +11,15 @@
 
 .release-notes-modal {
   width: min(720px, 100%);
+  max-height: min(90vh, 760px);
   border-radius: 20px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: linear-gradient(160deg, rgba(18, 24, 40, 0.98), rgba(8, 12, 22, 0.98));
   color: #e9ecf5;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
   padding: 22px 24px 20px;
+  display: flex;
+  flex-direction: column;
 }
 
 .release-notes-header {
@@ -59,6 +62,8 @@
 
 .release-notes-body {
   padding: 16px 4px 6px;
+  overflow-y: auto;
+  flex: 1 1 auto;
 }
 
 .release-notes-body ul {

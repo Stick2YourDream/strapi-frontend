@@ -89,18 +89,17 @@ export default function ChatDock() {
   const friendMenuRef = useRef<HTMLDivElement | null>(null);
   const chatPrefs = preferences.chat;
 
-  const hideForRoute = [
-    "/",
-    "/home",
-    "/landing",
-    "/login",
-    "/register",
-    "/terms",
-    "/privacy",
-    "/guidelines",
-  ].includes(
-    location.pathname
-  );
+  const hideForRoute =
+    [
+      "/",
+      "/home",
+      "/landing",
+      "/login",
+      "/register",
+      "/terms",
+      "/privacy",
+      "/guidelines",
+    ].includes(location.pathname) || location.pathname.startsWith("/age-verify");
 
   const friendList = useMemo(() => {
     if (!activeFriend?.userId) return friendOptions;
@@ -157,6 +156,9 @@ export default function ChatDock() {
       if (!entry) return;
       const nextWidth = Math.round(entry.contentRect.width);
       const nextHeight = Math.round(entry.contentRect.height);
+      if (nextWidth < 160 || nextHeight < 52) {
+        return;
+      }
       resizeSnapshotRef.current = { width: nextWidth, height: nextHeight };
       if (resizeTimeoutRef.current) {
         window.clearTimeout(resizeTimeoutRef.current);
@@ -447,8 +449,14 @@ export default function ChatDock() {
     ...(isMobile
       ? {}
       : popoutMinimized
-      ? { width: chatPrefs.minimizedWidth, height: chatPrefs.minimizedHeight }
-      : { width: chatPrefs.width, height: chatPrefs.height }),
+      ? {
+          width: Math.max(160, chatPrefs.minimizedWidth || 0),
+          height: Math.max(52, chatPrefs.minimizedHeight || 0),
+        }
+      : {
+          width: Math.max(260, chatPrefs.width || 0),
+          height: Math.max(220, chatPrefs.height || 0),
+        }),
     ["--chat-font-size" as any]: `${chatPrefs.fontSize}px`,
   };
 

@@ -10,6 +10,7 @@ import { useAuth } from "../context/AuthContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";
 import { usePageMeta } from "../hooks/usePageMeta";
 import LinkPreviewCard from "../components/LinkPreviewCard";
+import PopupModal from "../components/PopupModal";
 import { sanitizePostText } from "../utils/emoji";
 import { formatPostUpdateLabel } from "../utils/time";
 import { pickMediaUrl, pickMediaUrls } from "../utils/media";
@@ -78,6 +79,10 @@ type LinkPreview = {
   siteName?: string;
   type?: string;
 };
+
+const MAX_COMMENT_MEDIA_FILES = 4;
+const IMAGE_EXT_REGEX = /\.(?:png|jpe?g|webp|gif|bmp|avif)(?:\?|#|$)/i;
+const RELATIVE_UPLOAD_REGEX = /\/uploads\/[^\s)]+/g;
 
 const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
 const getEntity = (entry: any) => entry?.data ?? entry ?? null;
@@ -157,12 +162,40 @@ const buildGroupStyle = (group: GroupDetail) => {
 };
 
 const isVideoUrl = (value?: string) => !!value && /\.(mp4|webm|mov)$/i.test(value);
+const isImageFile = (file: File) => file.type.startsWith("image/");
 const extractFirstUrl = (text: string) => {
   const match = text.match(/(https?:\/\/[^\s]+|www\.[^\s]+)/i);
   if (!match) return "";
   let url = match[0].replace(/[),.!?]+$/, "");
   if (url.startsWith("www.")) url = `https://${url}`;
   return url;
+};
+const extractImageUrls = (text: string) => {
+  const safeText = String(text || "");
+  if (!safeText) return [];
+  const urls = new Set<string>();
+  const matches = safeText.match(/(https?:\/\/[^\s]+|www\.[^\s]+)/gi) ?? [];
+  matches.forEach((raw) => {
+    const cleaned = raw.replace(/[),.!?]+$/, "");
+    const href = cleaned.startsWith("www.") ? `https://${cleaned}` : cleaned;
+    if (IMAGE_EXT_REGEX.test(href) || IMAGE_EXT_REGEX.test(raw)) {
+      urls.add(href);
+    }
+  });
+  const relativeMatches = safeText.match(RELATIVE_UPLOAD_REGEX) ?? [];
+  relativeMatches.forEach((raw) => {
+    if (IMAGE_EXT_REGEX.test(raw)) {
+      urls.add(raw);
+    }
+  });
+  return Array.from(urls);
+};
+const stripImageUrls = (text: string, urls: string[]) => {
+  let cleaned = String(text || "");
+  urls.forEach((url) => {
+    cleaned = cleaned.replace(url, "");
+  });
+  return cleaned.replace(/\s{2,}/g, " ").trim();
 };
 
 export default function GroupDetail() {
@@ -183,7 +216,15 @@ export default function GroupDetail() {
   const [postComments, setPostComments] = useState<Record<string, CommentItem[]>>({});
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
   const [commentEdits, setCommentEdits] = useState<Record<string, string>>({});
+  const [commentMediaFiles, setCommentMediaFiles] = useState<
+    Record<string, File[]>
+  >({});
+  const [commentMediaPreviews, setCommentMediaPreviews] = useState<
+    Record<string, string[]>
+  >({});
+  const commentPreviewRef = useRef<Record<string, string[]>>({});
   const [editingComments, setEditingComments] = useState<Record<string, boolean>>({});
+  const [commentMenuOpen, setCommentMenuOpen] = useState<Record<string, boolean>>({});
   const [openCommentsFor, setOpenCommentsFor] = useState<Record<string, boolean>>({});
   const [shareMenuFor, setShareMenuFor] = useState<string | null>(null);
   const [postMenuFor, setPostMenuFor] = useState<string | null>(null);
@@ -458,6 +499,19 @@ export default function GroupDetail() {
     linkPreviewRef.current = linkPreviews;
   }, [linkPreviews]);
 
+  useEffect(() => {
+    commentPreviewRef.current = commentMediaPreviews;
+  }, [commentMediaPreviews]);
+
+  useEffect(() => {
+    return () => {
+      if (typeof URL === "undefined") return;
+      Object.values(commentPreviewRef.current)
+        .flat()
+        .forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, []);
+
   const fetchLinkPreview = useCallback(async (url: string) => {
     if (!url) return;
     if (linkPreviewRef.current[url] !== undefined) return;
@@ -722,6 +776,81 @@ export default function GroupDetail() {
     setOpenCommentsFor((prev) => ({ ...prev, [postKey]: !prev[postKey] }));
     setShareMenuFor(null);
     setPostMenuFor(null);
+  }, []);
+
+  const clearCommentAttachments = useCallback((commentKey: string) => {
+    setCommentMediaFiles((prev) => {
+      if (!(commentKey in prev)) return prev;
+      const next = { ...prev };
+      delete next[commentKey];
+      return next;
+    });
+    setCommentMediaPreviews((prev) => {
+      if (!(commentKey in prev)) return prev;
+      const next = { ...prev };
+      const urls = next[commentKey] || [];
+      if (typeof URL !== "undefined") {
+        urls.forEach((url) => URL.revokeObjectURL(url));
+      }
+      delete next[commentKey];
+      return next;
+    });
+  }, []);
+
+  const handleCommentFilesChange = useCallback(
+    (commentKey: string, files: FileList | null) => {
+      if (!files || files.length === 0) return;
+      const selected = Array.from(files).filter((file) => isImageFile(file));
+      if (selected.length === 0) {
+        setError("Only image files are allowed for comments.");
+        return;
+      }
+      const limited = selected.slice(0, MAX_COMMENT_MEDIA_FILES);
+      if (selected.length > MAX_COMMENT_MEDIA_FILES) {
+        setError(`You can upload up to ${MAX_COMMENT_MEDIA_FILES} images per comment.`);
+      }
+      setCommentMediaFiles((prev) => ({ ...prev, [commentKey]: limited }));
+      setCommentMediaPreviews((prev) => {
+        const next = { ...prev };
+        const urls = next[commentKey] || [];
+        if (typeof URL !== "undefined") {
+          urls.forEach((url) => URL.revokeObjectURL(url));
+        }
+        next[commentKey] = limited.map((file) => URL.createObjectURL(file));
+        return next;
+      });
+    },
+    [setError]
+  );
+
+  const removeCommentAttachment = useCallback((commentKey: string, index: number) => {
+    setCommentMediaFiles((prev) => {
+      const current = prev[commentKey];
+      if (!current) return prev;
+      const nextFiles = current.filter((_, idx) => idx !== index);
+      const next = { ...prev };
+      if (nextFiles.length) {
+        next[commentKey] = nextFiles;
+      } else {
+        delete next[commentKey];
+      }
+      return next;
+    });
+    setCommentMediaPreviews((prev) => {
+      const current = prev[commentKey];
+      if (!current) return prev;
+      const nextUrls = current.filter((_, idx) => idx !== index);
+      if (typeof URL !== "undefined" && current[index]) {
+        URL.revokeObjectURL(current[index]);
+      }
+      const next = { ...prev };
+      if (nextUrls.length) {
+        next[commentKey] = nextUrls;
+      } else {
+        delete next[commentKey];
+      }
+      return next;
+    });
   }, []);
 
   const toggleShareMenu = useCallback((postKey: string) => {
@@ -1285,6 +1414,12 @@ export default function GroupDetail() {
                     const commentKey = String(post.numericId ?? post.id);
                     const comments = postComments[commentKey] ?? [];
                     const isCommentsOpen = Boolean(openCommentsFor[commentKey]);
+                    const commentAttachmentPreviews = commentMediaPreviews[commentKey] ?? [];
+                    const commentAttachmentFiles = commentMediaFiles[commentKey] ?? [];
+                    const closeCommentModal = () => {
+                      clearCommentAttachments(commentKey);
+                      setOpenCommentsFor((prev) => ({ ...prev, [commentKey]: false }));
+                    };
                     const showShareMenu = shareMenuFor === postKey;
                     const showPostMenu = postMenuFor === postKey;
                     const authorLabel = post.ownerName || "Member";
@@ -1413,37 +1548,37 @@ export default function GroupDetail() {
                           <>
                             {post.title && <h4>{post.title}</h4>}
                             {post.body && <p>{post.body}</p>}
-                          </>
-                        )}
-                        {previewData && (
-                          <LinkPreviewCard
-                            preview={previewData}
-                            url={previewData.url || postUrl}
-                            compact
-                          />
-                        )}
-                        {post.mediaUrls.length > 0 && (
-                          <div className="group-post-media">
-                            {post.mediaUrls.map((url) =>
-                              isVideoUrl(url) ? (
-                                <video
-                                  key={url}
-                                  src={url}
-                                  controls
-                                  playsInline
-                                  preload="metadata"
-                                />
-                              ) : (
-                                <img
-                                  key={url}
-                                  src={url}
-                                  alt="Group post media"
-                                  loading="lazy"
-                                  decoding="async"
-                                />
-                              )
+                            {previewData && (
+                              <LinkPreviewCard
+                                preview={previewData}
+                                url={previewData.url || postUrl}
+                                compact
+                              />
                             )}
-                          </div>
+                            {post.mediaUrls.length > 0 && (
+                              <div className="group-post-media">
+                                {post.mediaUrls.map((url) =>
+                                  isVideoUrl(url) ? (
+                                    <video
+                                      key={url}
+                                      src={url}
+                                      controls
+                                      playsInline
+                                      preload="metadata"
+                                    />
+                                  ) : (
+                                    <img
+                                      key={url}
+                                      src={url}
+                                      alt="Group post media"
+                                      loading="lazy"
+                                      decoding="async"
+                                    />
+                                  )
+                                )}
+                              </div>
+                            )}
+                          </>
                         )}
                         <div className="post-actions">
                           <div className="post-action-counts">
@@ -1483,7 +1618,9 @@ export default function GroupDetail() {
                           <div className="post-action-bar">
                           <div className="post-action-group">
                             <button
-                              className="post-action-btn"
+                              className={`post-action-btn${
+                                myReaction === "👍" ? " is-reacted" : ""
+                              }`}
                               type="button"
                               aria-pressed={myReaction === "👍"}
                               onClick={() => void handleReaction(post, postKey, "👍")}
@@ -1496,7 +1633,9 @@ export default function GroupDetail() {
                           </div>
                           <div className="post-action-group">
                             <button
-                              className="post-action-btn"
+                              className={`post-action-btn${
+                                myReaction === "❤️" ? " is-reacted" : ""
+                              }`}
                               type="button"
                               aria-pressed={myReaction === "❤️"}
                               onClick={() => void handleReaction(post, postKey, "❤️")}
@@ -1640,22 +1779,32 @@ export default function GroupDetail() {
                         {shareNotice[postKey] && (
                           <p className="post-action-notice">{shareNotice[postKey]}</p>
                         )}
-                        {isCommentsOpen && (
-                          <div className="comments">
+                        <PopupModal
+                          open={isCommentsOpen}
+                          title="Comments"
+                          onClose={closeCommentModal}
+                          className="comment-modal"
+                          bodyClassName="comment-modal-body"
+                        >
+                          <div className="comments comments--modal">
                             <p className="eyebrow">Comments</p>
                             {comments.length > 0 ? (
                               <ul className="comment-list">
-                                {comments.map((c) => {
-                                  const commentIdKey = String(
-                                    c.documentId ?? c.numericId ?? c.id
-                                  );
-                                  const isEditing = Boolean(editingComments[commentIdKey]);
-                                  const editValue = commentEdits[commentIdKey] ?? c.body;
-                                  return (
-                                  <li key={c.id} className="comment-item">
-                                    <div className="comment-author">{c.owner || "Member"}</div>
-                                    {isEditing ? (
-                                      <div className="comment-edit">
+                            {comments.map((c) => {
+                              const commentIdKey = String(
+                                c.documentId ?? c.numericId ?? c.id
+                              );
+                              const isEditing = Boolean(editingComments[commentIdKey]);
+                              const editValue = commentEdits[commentIdKey] ?? c.body;
+                              const imageUrls = extractImageUrls(c.body);
+                              const cleanedBody = stripImageUrls(c.body, imageUrls);
+                              const displayBody =
+                                cleanedBody || (imageUrls.length ? "" : c.body);
+                              return (
+                              <li key={c.id} className="comment-item">
+                                <div className="comment-author">{c.owner || "Member"}</div>
+                                {isEditing ? (
+                                  <div className="comment-edit">
                                         <textarea
                                           className="auth-input comment-edit-input"
                                           value={editValue}
@@ -1719,111 +1868,159 @@ export default function GroupDetail() {
                                             Save
                                           </button>
                                         </div>
-                                      </div>
-                                    ) : (
-                                      <div className="comment-body">{c.body}</div>
-                                    )}
-                                    {user?.id === c.ownerId && (
-                                      <div className="comment-actions">
-                                        <button
-                                          className="btn ghost"
-                                          type="button"
-                                          onClick={() => {
-                                            setEditingComments((prev) => ({
-                                              ...prev,
-                                              [commentIdKey]: true,
-                                            }));
-                                            setCommentEdits((prev) => ({
-                                              ...prev,
-                                              [commentIdKey]: c.body,
-                                            }));
-                                          }}
-                                        >
-                                          Edit
-                                        </button>
-                                        <button
-                                          className="btn ghost comment-delete"
-                                          type="button"
-                                          onClick={async () => {
-                                            const numericId =
-                                              c.numericId ??
-                                              (typeof c.id === "number"
-                                                ? c.id
-                                                : Number(c.id));
-                                            const removeIds = new Set<string>();
-                                            removeIds.add(String(c.id));
-                                            if (c.documentId) {
-                                              removeIds.add(String(c.documentId));
-                                            }
-                                            if (Number.isFinite(numericId)) {
-                                              removeIds.add(String(numericId));
-                                            }
-                                            try {
-                                              setError(null);
-                                              const attempts: string[] = [];
+                                    </div>
+                                  ) : (
+                                    <div className="comment-body">{displayBody}</div>
+                                  )}
+                                  {!isEditing && imageUrls.length > 0 && (
+                                    <div className="comment-images">
+                                      {imageUrls.map((url, index) => {
+                                        const resolved =
+                                          pickMediaUrl(url, { kind: "post" }) || url;
+                                        return (
+                                          <img
+                                            key={`${commentIdKey}-${index}`}
+                                            src={resolved}
+                                            alt="Comment attachment"
+                                            loading="lazy"
+                                            decoding="async"
+                                          />
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                  {user?.id === c.ownerId && (
+                                    <div className="comment-menu">
+                                      <button
+                                        className="comment-menu-button"
+                                        type="button"
+                                        aria-label="Comment actions"
+                                        aria-haspopup="menu"
+                                        aria-expanded={Boolean(commentMenuOpen[commentIdKey])}
+                                        onClick={() =>
+                                          setCommentMenuOpen((prev) => ({
+                                            ...prev,
+                                            [commentIdKey]: !prev[commentIdKey],
+                                          }))
+                                        }
+                                      >
+                                        <span className="comment-menu-dots" aria-hidden="true">
+                                          ⋯
+                                        </span>
+                                      </button>
+                                      {commentMenuOpen[commentIdKey] && (
+                                        <div className="comment-menu-panel" role="menu">
+                                          <button
+                                            className="comment-menu-item"
+                                            type="button"
+                                            role="menuitem"
+                                            onClick={() => {
+                                              setEditingComments((prev) => ({
+                                                ...prev,
+                                                [commentIdKey]: true,
+                                              }));
+                                              setCommentEdits((prev) => ({
+                                                ...prev,
+                                                [commentIdKey]: c.body,
+                                              }));
+                                              setCommentMenuOpen((prev) => ({
+                                                ...prev,
+                                                [commentIdKey]: false,
+                                              }));
+                                            }}
+                                          >
+                                            Edit
+                                          </button>
+                                          <button
+                                            className="comment-menu-item is-danger"
+                                            type="button"
+                                            role="menuitem"
+                                            onClick={async () => {
+                                              setCommentMenuOpen((prev) => ({
+                                                ...prev,
+                                                [commentIdKey]: false,
+                                              }));
+                                              const numericId =
+                                                c.numericId ??
+                                                (typeof c.id === "number"
+                                                  ? c.id
+                                                  : Number(c.id));
+                                              const removeIds = new Set<string>();
+                                              removeIds.add(String(c.id));
                                               if (c.documentId) {
-                                                attempts.push(`/comments/${c.documentId}`);
+                                                removeIds.add(String(c.documentId));
                                               }
                                               if (Number.isFinite(numericId)) {
-                                                attempts.push(`/comments/${numericId}`);
+                                                removeIds.add(String(numericId));
                                               }
-                                              attempts.push(`/comments/${c.id}`);
-
-                                              let removed = false;
-                                              for (const path of attempts) {
-                                                try {
-                                                  await api.delete(path);
-                                                  removed = true;
-                                                  break;
-                                                } catch (err: unknown) {
-                                                  if (
-                                                    axios.isAxiosError(err) &&
-                                                    err.response?.status === 404
-                                                  ) {
-                                                    continue;
-                                                  }
-                                                  throw err;
+                                              try {
+                                                setError(null);
+                                                const attempts: string[] = [];
+                                                if (c.documentId) {
+                                                  attempts.push(`/comments/${c.documentId}`);
                                                 }
-                                              }
+                                                if (Number.isFinite(numericId)) {
+                                                  attempts.push(`/comments/${numericId}`);
+                                                }
+                                                attempts.push(`/comments/${c.id}`);
 
-                                              if (!removed) {
-                                                setError("Failed to delete comment.");
-                                                return;
-                                              }
-
-                                              setPostComments((prev) => ({
-                                                ...prev,
-                                                [commentKey]: (prev[commentKey] || []).filter(
-                                                  (comment) => {
-                                                    if (removeIds.has(String(comment.id))) {
-                                                      return false;
-                                                    }
+                                                let removed = false;
+                                                for (const path of attempts) {
+                                                  try {
+                                                    await api.delete(path);
+                                                    removed = true;
+                                                    break;
+                                                  } catch (err: unknown) {
                                                     if (
-                                                      comment.documentId &&
-                                                      removeIds.has(String(comment.documentId))
+                                                      axios.isAxiosError(err) &&
+                                                      err.response?.status === 404
                                                     ) {
-                                                      return false;
+                                                      continue;
                                                     }
-                                                    if (
-                                                      Number.isFinite(comment.numericId) &&
-                                                      removeIds.has(String(comment.numericId))
-                                                    ) {
-                                                      return false;
-                                                    }
-                                                    return true;
+                                                    throw err;
                                                   }
-                                                ),
-                                              }));
-                                            } catch (err) {
-                                              console.error("Delete comment failed", err);
-                                              setError("Failed to delete comment");
-                                            }
-                                          }}
-                                        >
-                                          Delete
-                                        </button>
-                                      </div>
-                                    )}
+                                                }
+
+                                                if (!removed) {
+                                                  setError("Failed to delete comment.");
+                                                  return;
+                                                }
+
+                                                setPostComments((prev) => ({
+                                                  ...prev,
+                                                  [commentKey]: (prev[commentKey] || []).filter(
+                                                    (comment) => {
+                                                      if (removeIds.has(String(comment.id))) {
+                                                        return false;
+                                                      }
+                                                      if (
+                                                        comment.documentId &&
+                                                        removeIds.has(String(comment.documentId))
+                                                      ) {
+                                                        return false;
+                                                      }
+                                                      if (
+                                                        Number.isFinite(comment.numericId) &&
+                                                        removeIds.has(String(comment.numericId))
+                                                      ) {
+                                                        return false;
+                                                      }
+                                                      return true;
+                                                    }
+                                                  ),
+                                                }));
+                                              } catch (err) {
+                                                console.error("Delete comment failed", err);
+                                                setError("Failed to delete comment");
+                                              }
+                                            }}
+                                          >
+                                            Delete
+                                          </button>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
                                   </li>
                                 );
                                 })}
@@ -1832,53 +2029,125 @@ export default function GroupDetail() {
                               <p className="status">No comments yet.</p>
                             )}
                             <div className="comment-form">
-                              <input
-                                className="auth-input"
-                                placeholder="Add a comment..."
-                                value={commentInputs[commentKey] || ""}
-                                onChange={(e) =>
-                                  setCommentInputs((prev) => ({
-                                    ...prev,
-                                    [commentKey]: sanitizePostText(e.target.value),
-                                  }))
-                                }
-                              />
-                              <button
-                                className="btn primary"
-                                type="button"
-                                disabled={!commentInputs[commentKey]?.trim()}
-                                onClick={async () => {
-                                  const body = (commentInputs[commentKey] || "").trim();
-                                  if (!body) return;
-                                  try {
-                                    await api.post("/comments", {
-                                      data: {
-                                        body,
-                                        target_type: "group-post",
-                                        target_id: post.numericId ?? post.id,
-                                      },
-                                    });
-                                    await refreshCommentsForPost(post.numericId ?? post.id);
-                                    setCommentInputs((prev) => ({ ...prev, [commentKey]: "" }));
-                                  } catch (err) {
-                                    console.error("Add comment failed", err);
-                                    if (axios.isAxiosError(err)) {
-                                      const msg =
-                                        err.response?.data?.error?.message ||
-                                        err.response?.data?.message ||
-                                        "Failed to add comment";
-                                      setError(String(msg));
-                                    } else {
-                                      setError("Failed to add comment");
-                                    }
+                              <div className="comment-form-row">
+                                <input
+                                  className="auth-input"
+                                  placeholder="Add a comment..."
+                                  value={commentInputs[commentKey] || ""}
+                                  onChange={(e) =>
+                                    setCommentInputs((prev) => ({
+                                      ...prev,
+                                      [commentKey]: sanitizePostText(e.target.value),
+                                    }))
                                   }
-                                }}
-                              >
-                                Comment
-                              </button>
+                                />
+                                <button
+                                  className="btn primary"
+                                  type="button"
+                                  disabled={
+                                    !commentInputs[commentKey]?.trim() &&
+                                    commentAttachmentFiles.length === 0
+                                  }
+                                  onClick={async () => {
+                                    const body = (commentInputs[commentKey] || "").trim();
+                                    if (!body && commentAttachmentFiles.length === 0) return;
+                                    try {
+                                      let attachmentUrls: string[] = [];
+                                      if (commentAttachmentFiles.length > 0) {
+                                        const fd = new FormData();
+                                        commentAttachmentFiles.forEach((file) =>
+                                          fd.append("files", file)
+                                        );
+                                        const uploadRes = await api.post("/upload", fd);
+                                        attachmentUrls = (uploadRes.data ?? [])
+                                          .map((item: { url?: string }) => item?.url)
+                                          .filter(
+                                            (url: string | undefined): url is string =>
+                                              Boolean(url)
+                                          );
+                                      }
+                                      const combinedBody = [body, ...attachmentUrls]
+                                        .filter(Boolean)
+                                        .join("\n");
+                                      if (!combinedBody.trim()) return;
+                                      await api.post("/comments", {
+                                        data: {
+                                          body: combinedBody,
+                                          target_type: "group-post",
+                                          target_id: post.numericId ?? post.id,
+                                        },
+                                      });
+                                      await refreshCommentsForPost(post.numericId ?? post.id);
+                                      setCommentInputs((prev) => ({
+                                        ...prev,
+                                        [commentKey]: "",
+                                      }));
+                                      clearCommentAttachments(commentKey);
+                                    } catch (err) {
+                                      console.error("Add comment failed", err);
+                                      if (axios.isAxiosError(err)) {
+                                        const msg =
+                                          err.response?.data?.error?.message ||
+                                          err.response?.data?.message ||
+                                          "Failed to add comment";
+                                        setError(String(msg));
+                                      } else {
+                                        setError("Failed to add comment");
+                                      }
+                                    }
+                                  }}
+                                >
+                                  Comment
+                                </button>
+                              </div>
+                              <div className="comment-attachments">
+                                <label className="comment-upload">
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    multiple
+                                    onChange={(e) => {
+                                      handleCommentFilesChange(commentKey, e.target.files);
+                                      e.target.value = "";
+                                    }}
+                                  />
+                                  <span>
+                                    {commentAttachmentFiles.length
+                                      ? "Change photos"
+                                      : "Add photos"}
+                                  </span>
+                                </label>
+                                {commentAttachmentPreviews.length > 0 && (
+                                  <div className="comment-attachment-list">
+                                    {commentAttachmentPreviews.map((url, index) => (
+                                      <div
+                                        key={`${commentKey}-attachment-${index}`}
+                                        className="comment-attachment"
+                                      >
+                                        <img
+                                          src={url}
+                                          alt="New attachment preview"
+                                          loading="lazy"
+                                          decoding="async"
+                                        />
+                                        <button
+                                          type="button"
+                                          className="comment-attachment-remove"
+                                          aria-label="Remove photo"
+                                          onClick={() =>
+                                            removeCommentAttachment(commentKey, index)
+                                          }
+                                        >
+                                          ✕
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           </div>
-                        )}
+                        </PopupModal>
                       </div>
                     );
                   })}

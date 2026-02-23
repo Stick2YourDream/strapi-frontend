@@ -1,13 +1,20 @@
+:root {
+  --footer-ink: #080d19;
+  --footer-ink-2: #0f182b;
+}
+
 .landing-footer {
-  margin-top: 60px;
   display: grid;
   grid-template-columns: 1fr;
-  gap: 24px;
+  gap: 2rem;
   padding: 32px 28px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   text-align: center;
   justify-items: center;
-  background: rgba(10, 12, 22, 0.6);
+    background:
+    radial-gradient(circle at 8% 8%, rgba(36, 211, 227, 0.16), rgba(36, 211, 227, 0)),
+    radial-gradient(circle at 100% 100%, rgba(63, 141, 255, 0.12), rgba(63, 141, 255, 0)),
+    linear-gradient(165deg, var(--footer-ink), var(--footer-ink-2));
   border-radius: 18px;
 }
 
@@ -99,22 +106,27 @@
   font-size: 0.8rem;
   border-radius: 999px;
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
-  color: #0b0d14;
+  color: #ffffff;
   font-weight: 700;
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
   transition: transform 160ms ease, box-shadow 160ms ease;
 }
 
+.footer-apps .footer-app-badge:visited,
+.footer-apps .footer-app-badge:hover,
+.footer-apps .footer-app-badge:focus-visible {
+  color: #ffffff;
+}
+
 .footer-apps .footer-app-badge.secondary {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 1);
   color: var(--mist);
   box-shadow: none;
 }
 
 .footer-apps .footer-app-badge:hover {
   transform: translateY(-1px);
-  color: inherit;
 }
 
 .footer-column a:hover {

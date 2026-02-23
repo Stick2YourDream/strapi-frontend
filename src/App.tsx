@@ -7,6 +7,8 @@ import KeyBackupModal from "./components/KeyBackupModal";
 import ReleaseNotesModal from "./components/ReleaseNotesModal";
 import UpdateNotice from "./components/UpdateNotice";
 import AuthDebugOverlay from "./components/AuthDebugOverlay";
+import TimeLimitManager from "./components/TimeLimitManager";
+import DobMismatchNotice from "./components/DobMismatchNotice";
 
 export default function App() {
   return (
@@ -18,6 +20,8 @@ export default function App() {
       <ReleaseNotesModal />
       <UpdateNotice />
       <AuthDebugOverlay />
+      <TimeLimitManager />
+      <DobMismatchNotice />
     </BrowserRouter>
   );
 }

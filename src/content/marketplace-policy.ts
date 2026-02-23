@@ -1,6 +1,6 @@
 export const MARKETPLACE_POLICY_TITLE = "StoreFront Delivery & Pickup Guidance";
-export const MARKETPLACE_POLICY_UPDATED = "Updated February 6, 2026";
-export const MARKETPLACE_POLICY_VERSION = "2026-02-06";
+export const MARKETPLACE_POLICY_UPDATED = "Updated February 18, 2026";
+export const MARKETPLACE_POLICY_VERSION = "2026-02-18";
 
 export const MARKETPLACE_POLICY_SECTIONS = [
   {
@@ -55,6 +55,7 @@ export const MARKETPLACE_POLICY_SECTIONS = [
     title: "Compliance and prohibited items",
     body: [
       "Users must comply with all applicable laws, including restricted or regulated item rules.",
+      "Service listings and adult/explicit items are prohibited on StoreFront.",
       "Your Social Place may remove listings, cancel transactions, or suspend accounts that violate platform policies or legal requirements.",
     ],
   },

@@ -23,7 +23,7 @@ export default function SiteFooter() {
           <span className="footer-title">Explore</span>
           {!user && (
             <>
-              <a href="/login">Login</a>
+              <a href="/">Login</a>
               <a href="/register">Create account</a>
             </>
           )}
@@ -53,6 +53,7 @@ export default function SiteFooter() {
         </div>
         <div className="footer-column footer-contact">
           <span className="footer-title">Connect</span>
+          <a href="/support">Support</a>
           <a href="mailto:support@yoursocialplace.com">Contact</a>
           <a className="footer-muted" href="mailto:support@yoursocialplace.com">
             support@yoursocialplace.com

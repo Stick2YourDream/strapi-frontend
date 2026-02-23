@@ -68,6 +68,19 @@ export default function KeyBackupModal() {
     setTrustedDeviceLoading(false);
   }, [keyBackupStatus]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleForceOpen = () => {
+      setDismissed(false);
+      setShowRecoveryCodes(false);
+      setShowAlternateMethods(false);
+    };
+    window.addEventListener("key-backup:open", handleForceOpen);
+    return () => {
+      window.removeEventListener("key-backup:open", handleForceOpen);
+    };
+  }, []);
+
   const mode = useMemo(() => {
     if (!user) return "hidden";
     if (showRecoveryCodes) return "setup";
@@ -93,12 +106,12 @@ export default function KeyBackupModal() {
   }, [isVisible]);
 
   useEffect(() => {
-    if (!restoreSuccess || typeof window === "undefined") return;
+    if (!restoreSuccess && !resetSuccess) return;
     const timer = window.setTimeout(() => {
-      window.location.reload();
-    }, 1200);
+      setDismissed(true);
+    }, 900);
     return () => window.clearTimeout(timer);
-  }, [restoreSuccess]);
+  }, [restoreSuccess, resetSuccess]);
 
   useEffect(() => {
     if (mode !== "restore") return;
@@ -235,9 +248,6 @@ export default function KeyBackupModal() {
         return;
       }
       setResetSuccess(true);
-      if (typeof window !== "undefined") {
-        window.setTimeout(() => window.location.reload(), 1200);
-      }
     } catch {
       setRecoveryEmailError("Unable to verify the recovery code.");
     } finally {

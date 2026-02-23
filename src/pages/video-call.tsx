@@ -436,16 +436,24 @@ export default function VideoCallHome() {
                                 const checked = group.memberIds.includes(friend.userId);
                                 return (
                                   <label key={friend.userId} className="video-app__group-option">
-                                    <input
-                                      type="checkbox"
-                                      checked={checked}
-                                      onChange={() => toggleMember(group.id, friend.userId)}
-                                    />
-                                    <span className="video-app__group-option-name">
-                                      {friend.displayName}
-                                    </span>
-                                    <span className="video-app__group-option-handle">
-                                      {friend.handle ? `@${friend.handle}` : "Friend"}
+                                    <div className="video-app__group-option-text">
+                                      <span className="video-app__group-option-name">
+                                        {friend.displayName}
+                                      </span>
+                                      <span className="video-app__group-option-handle">
+                                        {friend.handle ? `@${friend.handle}` : "Friend"}
+                                      </span>
+                                    </div>
+                                    <span className="video-app__group-toggle">
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={() => toggleMember(group.id, friend.userId)}
+                                        aria-label={`Select ${friend.displayName}`}
+                                      />
+                                      <span className="video-app__group-toggle-track">
+                                        <span className="video-app__group-toggle-thumb" />
+                                      </span>
                                     </span>
                                   </label>
                                 );

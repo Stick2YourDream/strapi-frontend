@@ -20,6 +20,7 @@ import { Target } from "lucide-react";
 import { useImpactStats } from "../hooks/useImpactStats";
 import { useNewsPreference } from "../hooks/useNewsPreference";
 import LinkPreviewCard from "../components/LinkPreviewCard";
+import PopupModal from "../components/PopupModal";
 // import NewsWidget from "../components/NewsWidget";
 import "../css/news-widget.css";
 
@@ -73,6 +74,7 @@ type ReactionCounts = {
 type PostMediaItem = {
   id: number;
   url: string;
+  fullUrl: string;
   isVideo: boolean;
 };
 
@@ -108,6 +110,7 @@ type NormalizedPost = {
 
 type PostFilter = "all" | "admin" | "friends" | "private" | "public";
 type PostSort = "newest" | "oldest";
+type PostSource = NormalizedPost["source"];
 
 type LinkPreview = {
   url: string;
@@ -131,6 +134,9 @@ type PostsState = {
   comments: unknown[];
   admin: unknown[];
 };
+
+const isPostSource = (value: string): value is PostSource =>
+  value === "user" || value === "group" || value === "admin";
 
 const goalsStorageKeyFor = (userId?: number | null) =>
   userId ? `ysp-goals-${userId}` : "ysp-goals-guest";
@@ -376,10 +382,23 @@ const getMediaIdFromItem = (item: unknown) => {
 const getMediaItemsFromField = (field: unknown): PostMediaItem[] =>
   resolveMediaItems(field)
     .map((item) => {
-      const url = pickMediaUrl(item, { kind: "post" });
       const id = getMediaIdFromItem(item);
-      if (!url || !id) return null;
-      return { id, url, isVideo: isVideoUrl(url) };
+      if (!id) return null;
+      const url =
+        pickMediaUrl(item, { kind: "post", size: "medium" }) ||
+        pickMediaUrl(item, { kind: "post" });
+      const fullUrl =
+        pickMediaUrl(item, { kind: "post", size: "large" }) ||
+        pickMediaUrl(item, { kind: "post", size: "original" }) ||
+        url;
+      if (!url) return null;
+      const resolvedFullUrl = fullUrl || url;
+      return {
+        id,
+        url,
+        fullUrl: resolvedFullUrl,
+        isVideo: isVideoUrl(resolvedFullUrl),
+      };
     })
     .filter((entry): entry is PostMediaItem => Boolean(entry));
 const getEntityId = (entry: unknown) => {
@@ -423,6 +442,7 @@ const MAX_UPLOAD_LABEL = "1 GB";
 const MAX_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024;
 const MAX_VIDEO_UPLOAD_LABEL = "100 MB";
 const MAX_POST_MEDIA_FILES = 10;
+const MAX_COMMENT_MEDIA_FILES = 4;
 const USERS_POST_POPULATE =
   "populate[0]=Users_Pictures&populate[1]=owner&populate[2]=feedbackTarget&populate[3]=trustedCircle";
 const GROUP_POST_POPULATE = "populate[0]=media&populate[1]=owner&populate[2]=group";
@@ -430,6 +450,8 @@ const ADMIN_POST_POPULATE = "populate[0]=Pictures";
 const URL_REGEX =
   /\b((?:https?:\/\/)?(?:www\.)?(?:(?:[a-z0-9-]+\.)+[a-z]{2,}|localhost|\d{1,3}(?:\.\d{1,3}){3})(?::\d{2,5})?)(?:\/[^\s]*)?/gi;
 const TRAILING_PUNCTUATION = /[),.!?]+$/;
+const IMAGE_EXT_REGEX = /\.(?:png|jpe?g|webp|gif|bmp|avif)(?:\?|#|$)/i;
+const RELATIVE_UPLOAD_REGEX = /\/uploads\/[^\s)]+/g;
 const normalizeLink = (raw: string) => {
   const cleaned = raw.replace(TRAILING_PUNCTUATION, "");
   const hasProtocol = /^https?:\/\//i.test(cleaned);
@@ -456,6 +478,36 @@ const extractFirstUrl = (text: string) => {
     return normalizeLink(raw).href;
   }
   return "";
+};
+const extractImageUrls = (text: string) => {
+  const safeText = String(text || "");
+  if (!safeText) return [];
+  const urls = new Set<string>();
+  const matches = Array.from(safeText.matchAll(URL_REGEX));
+  matches.forEach((match) => {
+    const raw = match[0];
+    const start = match.index ?? 0;
+    const prevChar = start > 0 ? safeText[start - 1] : "";
+    if (prevChar === "@") return;
+    const { href } = normalizeLink(raw);
+    if (IMAGE_EXT_REGEX.test(href) || IMAGE_EXT_REGEX.test(raw)) {
+      urls.add(href);
+    }
+  });
+  const relativeMatches = safeText.match(RELATIVE_UPLOAD_REGEX) ?? [];
+  relativeMatches.forEach((raw) => {
+    if (IMAGE_EXT_REGEX.test(raw)) {
+      urls.add(raw);
+    }
+  });
+  return Array.from(urls);
+};
+const stripImageUrls = (text: string, urls: string[]) => {
+  let cleaned = String(text || "");
+  urls.forEach((url) => {
+    cleaned = cleaned.replace(url, "");
+  });
+  return cleaned.replace(/\s{2,}/g, " ").trim();
 };
 const linkifyText = (text: string) => {
   const safeText = String(text || "");
@@ -533,10 +585,11 @@ const mediaDescriptor = (mediaUrl?: string, hasLink?: boolean) => {
   if (hasLink) return "with a link";
   return "";
 };
-const getPostMediaUrls = (post: NormalizedPost) => {
+const getPostMediaUrls = (post: NormalizedPost, options?: { preferFull?: boolean }) => {
+  const preferFull = Boolean(options?.preferFull);
   if (post.mediaItems && post.mediaItems.length) {
     return post.mediaItems
-      .map((item) => item.url)
+      .map((item) => (preferFull ? item.fullUrl || item.url : item.url))
       .filter(Boolean)
       .slice(0, MAX_POST_MEDIA_FILES);
   }
@@ -781,6 +834,7 @@ export default function Dashboard() {
   const [submitting, setSubmitting] = useState(false);
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerExpanded, setComposerExpanded] = useState(false);
+  const [checkInModalOpen, setCheckInModalOpen] = useState(false);
   const [postVisibility, setPostVisibility] = useState("friends");
   const [postTrustedCircleId, setPostTrustedCircleId] = useState<number | "">("");
   const [postSignalTag, setPostSignalTag] = useState<SignalTag>("none");
@@ -799,7 +853,15 @@ export default function Dashboard() {
   const [trustedCircleOptions, setTrustedCircleOptions] = useState<TrustedCircleOption[]>([]);
   const [commentInputs, setCommentInputs] = useState<Record<string | number, string>>({});
   const [commentEdits, setCommentEdits] = useState<Record<string, string>>({});
+  const [commentMediaFiles, setCommentMediaFiles] = useState<
+    Record<string | number, File[]>
+  >({});
+  const [commentMediaPreviews, setCommentMediaPreviews] = useState<
+    Record<string | number, string[]>
+  >({});
+  const commentPreviewRef = useRef<Record<string | number, string[]>>({});
   const [editingComments, setEditingComments] = useState<Record<string, boolean>>({});
+  const [commentMenuOpen, setCommentMenuOpen] = useState<Record<string, boolean>>({});
   const [openCommentsFor, setOpenCommentsFor] = useState<Record<string | number, boolean>>(
     {}
   );
@@ -822,6 +884,7 @@ export default function Dashboard() {
     null
   );
   const [postEditing, setPostEditing] = useState<Record<string, boolean>>({});
+  const [visiblePostKeys, setVisiblePostKeys] = useState<Record<string, boolean>>({});
   const [goalsModalOpen, setGoalsModalOpen] = useState(false);
   const [formFilePreviewUrls, setFormFilePreviewUrls] = useState<string[]>([]);
   const [formDragActive, setFormDragActive] = useState(false);
@@ -845,9 +908,20 @@ export default function Dashboard() {
   const loadIdRef = useRef(0);
   const [showGoToTop, setShowGoToTop] = useState(false);
   const hashFetchRef = useRef<string | null>(null);
+  const postObserverRef = useRef<IntersectionObserver | null>(null);
+  const postObserverTargetsRef = useRef<Map<Element, string>>(new Map());
 
   const navigate = useNavigate();
   const location = useLocation();
+  const sharedPostTarget = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    const rawPost = String(params.get("post") || params.get("postId") || "").trim();
+    const postKey = rawPost.replace(/^post-/, "");
+    if (!postKey) return null;
+    const rawSource = String(params.get("source") || "").trim().toLowerCase();
+    const source = isPostSource(rawSource) ? rawSource : null;
+    return { postKey, source };
+  }, [location.search]);
   const hashHandledRef = useRef<string | null>(null);
   const { user, profile, sessionActive } = useAuth();
   const { getBackgroundStyle } = useUserPreferences();
@@ -881,24 +955,51 @@ export default function Dashboard() {
   }, [goalsStorageKey]);
 
   useEffect(() => {
+    commentPreviewRef.current = commentMediaPreviews;
+  }, [commentMediaPreviews]);
+
+  useEffect(() => {
+    return () => {
+      if (typeof URL === "undefined") return;
+      Object.values(commentPreviewRef.current)
+        .flat()
+        .forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, []);
+
+  useEffect(() => {
     if (typeof window === "undefined") return;
     const handleStartCheckIn = (event: Event) => {
       const detail = (event as CustomEvent<{ goal?: string }>).detail;
       setGoalsModalOpen(false);
-      setComposerOpen(true);
-      setComposerExpanded(true);
+      setCheckInModalOpen(true);
       setPostSignalTag("check-in");
+      setPostTemplateId("check-in");
+      setFormError(null);
+      setFormFiles([]);
+      const template = POST_TEMPLATES.find((item) => item.id === "check-in");
+      if (template) {
+        setFormContent((prev) => (prev.trim() ? prev : template.body));
+      }
       if (detail?.goal) {
         setCheckInGoal(detail.goal);
       }
-      window.setTimeout(() => {
-        const target = document.getElementById("post-composer");
-        target?.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 50);
     };
     window.addEventListener("ysp-goals-start-checkin", handleStartCheckIn as EventListener);
     return () =>
       window.removeEventListener("ysp-goals-start-checkin", handleStartCheckIn as EventListener);
+  }, []);
+
+  const closeCheckInModal = useCallback(() => {
+    setCheckInModalOpen(false);
+    setFormError(null);
+    setFormContent("");
+    setFormFiles([]);
+    setPostSignalTag("none");
+    setPostTemplateId("");
+    setCheckInGoal("");
+    setCheckInTarget("feed");
+    setCheckInGroupId("");
   }, []);
 
   const applyTemplate = useCallback(
@@ -1130,11 +1231,11 @@ export default function Dashboard() {
   }, [postVisibility]);
 
   useEffect(() => {
-    if (showCheckInOptions) {
+    if (showCheckInOptions && !checkInModalOpen) {
       setComposerOpen(true);
       setComposerExpanded(true);
     }
-  }, [showCheckInOptions]);
+  }, [showCheckInOptions, checkInModalOpen]);
 
   useEffect(() => {
     if (!showCheckInOptions) {
@@ -2174,63 +2275,119 @@ export default function Dashboard() {
     );
   }, [activePostKey, categorizedPosts]);
 
-  const fetchUserPostByKey = useCallback(async (postKey: string) => {
-    if (!postKey) return false;
-    try {
-      const res = await api.get(`/users-posts/${postKey}?${USERS_POST_POPULATE}`);
-      const entry = res.data?.data;
-      if (!entry) return false;
-      setPosts((prev) => ({
-        ...prev,
-        user: mergePostLists(prev.user, [entry]),
-      }));
-      return true;
-    } catch {
+  const fetchPostByTarget = useCallback(
+    async (postKey: string, source?: PostSource | null) => {
+      if (!postKey) return false;
+
+      const attempts: Array<{
+        endpoint: string;
+        listKey: keyof Pick<PostsState, "user" | "group" | "admin">;
+      }> = [];
+
+      if (!source || source === "user") {
+        attempts.push({
+          endpoint: `/users-posts/${postKey}?${USERS_POST_POPULATE}`,
+          listKey: "user",
+        });
+      }
+      if (!source || source === "group") {
+        attempts.push({
+          endpoint: `/group-posts/${postKey}?${GROUP_POST_POPULATE}`,
+          listKey: "group",
+        });
+      }
+      if (!source || source === "admin") {
+        attempts.push({
+          endpoint: `/posts/${postKey}?${ADMIN_POST_POPULATE}`,
+          listKey: "admin",
+        });
+      }
+
+      for (const attempt of attempts) {
+        try {
+          const res = await api.get(attempt.endpoint);
+          const entry = res.data?.data;
+          if (!entry) continue;
+          setPosts((prev) => ({
+            ...prev,
+            [attempt.listKey]: mergePostLists(prev[attempt.listKey], [entry]),
+          }));
+          return true;
+        } catch {
+          // Try the next source bucket.
+        }
+      }
+
       return false;
-    }
-  }, []);
+    },
+    []
+  );
 
   useEffect(() => {
-    const hash = location.hash;
-    if (!hash) return;
-    const hashKey = `${location.key}:${hash}`;
-    if (hashHandledRef.current === hashKey && visiblePosts.length) return;
-    const id = hash.replace(/^#/, "");
-    if (!id) return;
-    const postKey = id.startsWith("post-") ? id.slice(5) : id;
-    if (!postKey) return;
+    const hashId = location.hash.replace(/^#/, "");
+    const hashPostKey = hashId ? (hashId.startsWith("post-") ? hashId.slice(5) : hashId) : "";
+    const targetPostKey = sharedPostTarget?.postKey || hashPostKey;
+    const targetSource = sharedPostTarget?.source ?? null;
+    if (!targetPostKey) return;
+
+    const targetId = `post-${targetPostKey}`;
+    const targetHash = `#${targetId}`;
+    const targetStateKey = `${location.key}:${targetPostKey}:${targetSource ?? "any"}`;
+    if (hashHandledRef.current === targetStateKey && visiblePosts.length) return;
+
     if (postFilter !== "all") {
       setPostFilter("all");
     }
-    const existingPost = categorizedPosts.ordered.find(
-      (post) => String(post.id) === postKey
-    );
-    if (existingPost) {
-      hashHandledRef.current = hashKey;
-      const target = document.getElementById(id);
+
+    const existingPost = categorizedPosts.ordered.find((post) => {
+      if (String(post.id) !== targetPostKey) return false;
+      if (targetSource && post.source !== targetSource) return false;
+      return true;
+    });
+
+    const scrollToTarget = () => {
+      const target = document.getElementById(targetId);
       if (target) {
         target.scrollIntoView({ behavior: "smooth", block: "start" });
       }
+    };
+
+    const syncHash = () => {
+      if (location.hash === targetHash) return;
+      navigate(
+        { pathname: location.pathname, search: location.search, hash: targetId },
+        { replace: true }
+      );
+    };
+
+    if (existingPost) {
+      hashHandledRef.current = targetStateKey;
+      syncHash();
+      scrollToTarget();
       return;
     }
-    if (hashFetchRef.current === postKey) return;
-    hashFetchRef.current = postKey;
+
+    const fetchKey = `${targetSource ?? "any"}:${targetPostKey}`;
+    if (hashFetchRef.current === fetchKey) return;
+    hashFetchRef.current = fetchKey;
     void (async () => {
-      const loaded = await fetchUserPostByKey(postKey);
+      const loaded = await fetchPostByTarget(targetPostKey, targetSource);
       hashFetchRef.current = null;
       if (!loaded) return;
-      hashHandledRef.current = hashKey;
-      const target = document.getElementById(id);
-      if (target) {
-        target.scrollIntoView({ behavior: "smooth", block: "start" });
-      }
+      hashHandledRef.current = targetStateKey;
+      syncHash();
+      scrollToTarget();
     })();
   }, [
     categorizedPosts.ordered,
-    fetchUserPostByKey,
+    fetchPostByTarget,
     location.hash,
     location.key,
+    location.pathname,
+    location.search,
+    navigate,
     postFilter,
+    sharedPostTarget,
     visiblePosts.length,
   ]);
 
@@ -2464,6 +2621,7 @@ export default function Dashboard() {
       setPostTrustedCircleId("");
       setComposerExpanded(false);
       setComposerOpen(false);
+      setCheckInModalOpen(false);
       pushImpactNotice("Post created successfully.");
       await reloadPosts({ silent: true });
     } catch (err: unknown) {
@@ -2758,16 +2916,16 @@ export default function Dashboard() {
     ]
   );
 
-  const buildShareUrl = useCallback((postKey: string) => {
+  const buildShareUrl = useCallback((post: NormalizedPost) => {
     if (typeof window === "undefined") return "";
     const fallbackOrigin = String(import.meta.env.VITE_PUBLIC_SITE_URL || "").trim();
     const origin = window.location.origin;
-    const base = origin.startsWith("http") ? origin : fallbackOrigin;
+    const base = /^https?:\/\//i.test(origin) ? origin : fallbackOrigin;
     if (!base) return "";
-    const path = window.location.pathname?.startsWith("/")
-      ? window.location.pathname
-      : "/dashboard";
-    return `${base}${path}#post-${postKey}`;
+    const params = new URLSearchParams();
+    params.set("post", String(post.id));
+    params.set("source", post.source);
+    return `${base}/dashboard?${params.toString()}#post-${post.id}`;
   }, []);
 
   const updatePostMetric = useCallback(
@@ -3035,6 +3193,90 @@ export default function Dashboard() {
     setPostMenuFor(null);
   }, []);
 
+  const clearCommentAttachments = useCallback((commentKey: string | number) => {
+    setCommentMediaFiles((prev) => {
+      if (!(commentKey in prev)) return prev;
+      const next = { ...prev };
+      delete next[commentKey];
+      return next;
+    });
+    setCommentMediaPreviews((prev) => {
+      if (!(commentKey in prev)) return prev;
+      const next = { ...prev };
+      const urls = next[commentKey] || [];
+      if (typeof URL !== "undefined") {
+        urls.forEach((url) => URL.revokeObjectURL(url));
+      }
+      delete next[commentKey];
+      return next;
+    });
+  }, []);
+
+  const handleCommentFilesChange = useCallback(
+    (commentKey: string | number, files: FileList | null) => {
+      if (!files || files.length === 0) return;
+      const selected = Array.from(files).filter((file) => isImageFile(file));
+      if (selected.length === 0) {
+        setError("Only image files are allowed for comments.");
+        return;
+      }
+      const limited = selected.slice(0, MAX_COMMENT_MEDIA_FILES);
+      if (selected.length > MAX_COMMENT_MEDIA_FILES) {
+        setError(`You can upload up to ${MAX_COMMENT_MEDIA_FILES} images per comment.`);
+      }
+      for (const file of limited) {
+        if (file.size > MAX_UPLOAD_BYTES) {
+          setError(`Images must be under ${MAX_UPLOAD_LABEL}.`);
+          return;
+        }
+      }
+      setCommentMediaFiles((prev) => ({ ...prev, [commentKey]: limited }));
+      setCommentMediaPreviews((prev) => {
+        const next = { ...prev };
+        const urls = next[commentKey] || [];
+        if (typeof URL !== "undefined") {
+          urls.forEach((url) => URL.revokeObjectURL(url));
+        }
+        next[commentKey] = limited.map((file) => URL.createObjectURL(file));
+        return next;
+      });
+    },
+    [setError]
+  );
+
+  const removeCommentAttachment = useCallback(
+    (commentKey: string | number, index: number) => {
+      setCommentMediaFiles((prev) => {
+        const current = prev[commentKey];
+        if (!current) return prev;
+        const nextFiles = current.filter((_, idx) => idx !== index);
+        const next = { ...prev };
+        if (nextFiles.length) {
+          next[commentKey] = nextFiles;
+        } else {
+          delete next[commentKey];
+        }
+        return next;
+      });
+      setCommentMediaPreviews((prev) => {
+        const current = prev[commentKey];
+        if (!current) return prev;
+        const nextUrls = current.filter((_, idx) => idx !== index);
+        if (typeof URL !== "undefined" && current[index]) {
+          URL.revokeObjectURL(current[index]);
+        }
+        const next = { ...prev };
+        if (nextUrls.length) {
+          next[commentKey] = nextUrls;
+        } else {
+          delete next[commentKey];
+        }
+        return next;
+      });
+    },
+    []
+  );
+
   const toggleShareMenu = useCallback((postKey: string) => {
     setShareMenuFor((prev) => (prev === postKey ? null : postKey));
     setPostMenuFor(null);
@@ -3083,7 +3325,7 @@ export default function Dashboard() {
 
   const handleDescriptorAction = useCallback(
     async (post: NormalizedPost, postKey: string, descriptor: string) => {
-      const primaryMediaUrl = getPostMediaUrls(post)[0];
+      const primaryMediaUrl = getPostMediaUrls(post, { preferFull: true })[0];
       if (
         descriptor === "with a picture" &&
         primaryMediaUrl &&
@@ -3116,6 +3358,56 @@ export default function Dashboard() {
     },
     [copyToClipboard, pushShareNotice, showCopyToast]
   );
+
+  useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") {
+      const eager: Record<string, boolean> = {};
+      orderedPosts.forEach((post) => {
+        eager[String(post.id)] = true;
+      });
+      setVisiblePostKeys((prev) => ({ ...eager, ...prev }));
+      return;
+    }
+    postObserverRef.current?.disconnect();
+    postObserverRef.current = new IntersectionObserver(
+      (entries) => {
+        setVisiblePostKeys((prev) => {
+          let changed = false;
+          const next = { ...prev };
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting && entry.intersectionRatio <= 0) return;
+            const key = postObserverTargetsRef.current.get(entry.target);
+            if (!key || next[key]) return;
+            next[key] = true;
+            changed = true;
+          });
+          return changed ? next : prev;
+        });
+      },
+      { rootMargin: "220px 0px", threshold: 0.12 }
+    );
+    postObserverTargetsRef.current.forEach((_key, node) => {
+      postObserverRef.current?.observe(node);
+    });
+    return () => {
+      postObserverRef.current?.disconnect();
+    };
+  }, [orderedPosts]);
+
+  const registerPostNode = useCallback((postKey: string) => {
+    return (node: HTMLElement | null) => {
+      const map = postObserverTargetsRef.current;
+      for (const [element, key] of map.entries()) {
+        if (key === postKey && element !== node) {
+          postObserverRef.current?.unobserve(element);
+          map.delete(element);
+        }
+      }
+      if (!node) return;
+      map.set(node, postKey);
+      postObserverRef.current?.observe(node);
+    };
+  }, []);
 
   const closePostModal = useCallback(() => {
     setActivePostKey(null);
@@ -3206,7 +3498,9 @@ export default function Dashboard() {
   const activePreview = activePostUrl ? previewCache[activePostUrl] : undefined;
   const activePreviewImage = activePreview?.image;
   const activeIsYoutube = activePostUrl ? isYoutubeUrl(activePostUrl) : false;
-  const activeMediaUrls = activePost ? getPostMediaUrls(activePost) : [];
+  const activeMediaUrls = activePost
+    ? getPostMediaUrls(activePost, { preferFull: true })
+    : [];
   const activeMediaLayout = getMediaGridLayout(activeMediaUrls.length);
   const activeDescriptor = activePost
     ? mediaDescriptor(activeMediaUrls[0], Boolean(activePostUrl))
@@ -3844,7 +4138,7 @@ export default function Dashboard() {
               </div>
             )}
 
-            {orderedPosts.map((post) => {
+            {orderedPosts.map((post, index) => {
               const { goal: checkInGoalLabel, content: displayContent } =
                 extractCheckInGoal(post.content, post.signalTag);
               const postUrl = extractFirstUrl(displayContent);
@@ -3879,9 +4173,15 @@ export default function Dashboard() {
                   : post.mediaItems || [];
               const commentKey = String(post.numericId ?? post.id);
               const isCommentsOpen = Boolean(openCommentsFor[commentKey]);
+              const commentAttachmentPreviews = commentMediaPreviews[commentKey] ?? [];
+              const commentAttachmentFiles = commentMediaFiles[commentKey] ?? [];
+              const closeCommentModal = () => {
+                clearCommentAttachments(commentKey);
+                setOpenCommentsFor((prev) => ({ ...prev, [commentKey]: false }));
+              };
               const showShareMenu = shareMenuFor === postKey;
               const showPostMenu = postMenuFor === postKey;
-              const shareUrl = buildShareUrl(postKey);
+              const shareUrl = buildShareUrl(post);
               const shareText = post.title
                 ? `${authorLabel}: ${post.title}`
                 : `${authorLabel} posted an update.`;
@@ -3899,6 +4199,8 @@ export default function Dashboard() {
               const commentsCount = post.comments?.length ?? 0;
               const isDescriptorActionable =
                 descriptor === "with a picture" || descriptor === "with a link";
+              const isPostVisible = Boolean(visiblePostKeys[postKey]) || index < 3;
+              const shouldRenderMedia = isPostVisible;
 
               return (
                 <article
@@ -3907,6 +4209,7 @@ export default function Dashboard() {
                   className={`post-card${showShareMenu ? " is-popover-open" : ""}${
                     post.signalTag === "support-request" ? " post-card--support" : ""
                   }${post.signalTag === "win" ? " post-card--win" : ""}`}
+                  ref={registerPostNode(postKey)}
                 >
                   <div className="post-meta-bar">
                     <span className="post-meta-name">{authorLabel}</span>
@@ -4024,26 +4327,33 @@ export default function Dashboard() {
 
                   {mediaCount > 0 ? (
                     mediaCount === 1 ? (
-                      <div className="post-media">
-                        {primaryMediaUrl && isVideoUrl(primaryMediaUrl) ? (
-                          <video
-                            controls
-                            playsInline
-                            preload="metadata"
-                            style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                          >
-                            <source src={primaryMediaUrl} />
-                          </video>
-                        ) : (
-                          <img
-                            src={primaryMediaUrl}
-                            alt={post.title}
-                            loading="lazy"
-                            decoding="async"
-                          />
-                        )}
-                      </div>
-                    ) : (
+                      shouldRenderMedia ? (
+                        <div className="post-media">
+                          {primaryMediaUrl && isVideoUrl(primaryMediaUrl) ? (
+                            <video
+                              controls
+                              playsInline
+                              preload="metadata"
+                              style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                            >
+                              <source src={primaryMediaUrl} />
+                            </video>
+                          ) : (
+                            <img
+                              src={primaryMediaUrl}
+                              alt={post.title}
+                              loading="lazy"
+                              decoding="async"
+                            />
+                          )}
+                        </div>
+                      ) : (
+                        <div className="post-media placeholder">
+                          <span>Loading media…</span>
+                          <span className="dots" aria-hidden="true" />
+                        </div>
+                      )
+                    ) : shouldRenderMedia ? (
                       <div
                         className="post-media-grid"
                         style={{
@@ -4073,16 +4383,28 @@ export default function Dashboard() {
                             </div>
                           ))}
                       </div>
+                    ) : (
+                      <div className="post-media placeholder">
+                        <span>Loading media…</span>
+                        <span className="dots" aria-hidden="true" />
+                      </div>
                     )
                   ) : showPreviewMedia ? (
-                    <div className="post-media link-preview-media">
-                      <img
-                        src={previewImage}
-                        alt={preview?.title || post.title}
-                        loading="lazy"
-                        decoding="async"
-                      />
-                    </div>
+                    shouldRenderMedia ? (
+                      <div className="post-media link-preview-media">
+                        <img
+                          src={previewImage}
+                          alt={preview?.title || post.title}
+                          loading="lazy"
+                          decoding="async"
+                        />
+                      </div>
+                    ) : (
+                      <div className="post-media placeholder">
+                        <span>Loading preview…</span>
+                        <span className="dots" aria-hidden="true" />
+                      </div>
+                    )
                   ) : null}
 
                   <div className="post-body">
@@ -4252,7 +4574,9 @@ export default function Dashboard() {
                       <div className="post-action-bar">
                       <div className="post-action-group">
                         <button
-                          className="post-action-btn"
+                          className={`post-action-btn${
+                            myReaction === "👍" ? " is-reacted" : ""
+                          }`}
                           type="button"
                           aria-pressed={myReaction === "👍"}
                           onClick={() => void handleReaction(post, postKey, "👍")}
@@ -4265,7 +4589,9 @@ export default function Dashboard() {
                       </div>
                       <div className="post-action-group">
                         <button
-                          className="post-action-btn"
+                          className={`post-action-btn${
+                            myReaction === "❤️" ? " is-reacted" : ""
+                          }`}
                           type="button"
                           aria-pressed={myReaction === "❤️"}
                           onClick={() => void handleReaction(post, postKey, "❤️")}
@@ -4409,8 +4735,14 @@ export default function Dashboard() {
                     {shareNotice[postKey] && (
                       <p className="post-action-notice">{shareNotice[postKey]}</p>
                     )}
-                    {isCommentsOpen && (
-                      <div className="comments">
+                    <PopupModal
+                      open={isCommentsOpen}
+                      title="Comments"
+                      onClose={closeCommentModal}
+                      className="comment-modal"
+                      bodyClassName="comment-modal-body"
+                    >
+                      <div className="comments comments--modal">
                         <p className="eyebrow">Comments</p>
                         {post.comments && post.comments.length > 0 ? (
                           <ul className="comment-list">
@@ -4420,6 +4752,10 @@ export default function Dashboard() {
                               );
                               const isEditing = Boolean(editingComments[commentIdKey]);
                               const editValue = commentEdits[commentIdKey] ?? c.body;
+                              const imageUrls = extractImageUrls(c.body);
+                              const cleanedBody = stripImageUrls(c.body, imageUrls);
+                              const displayBody =
+                                cleanedBody || (imageUrls.length ? "" : c.body);
                               return (
                               <li key={c.id} className="comment-item">
                                 <div className="comment-author">{c.owner || "User"}</div>
@@ -4489,10 +4825,27 @@ export default function Dashboard() {
                                     </div>
                                   </div>
                                 ) : (
-                                  <div className="comment-body">{c.body}</div>
+                                  <div className="comment-body">{displayBody}</div>
+                                )}
+                                {!isEditing && imageUrls.length > 0 && (
+                                  <div className="comment-images">
+                                    {imageUrls.map((url, index) => {
+                                      const resolved =
+                                        pickMediaUrl(url, { kind: "post" }) || url;
+                                      return (
+                                        <img
+                                          key={`${commentIdKey}-${index}`}
+                                          src={resolved}
+                                          alt="Comment attachment"
+                                          loading="lazy"
+                                          decoding="async"
+                                        />
+                                      );
+                                    })}
+                                  </div>
                                 )}
                                 {(() => {
-                                  const commentUrl = extractFirstUrl(c.body);
+                                  const commentUrl = extractFirstUrl(cleanedBody);
                                   if (!isPreviewableUrl(commentUrl)) return null;
                                   const preview = previewCache[commentUrl];
                                   if (!preview) return null;
@@ -4507,157 +4860,188 @@ export default function Dashboard() {
                                   );
                                 })()}
                                 {user?.id === c.ownerId && (
-                                  <div className="comment-actions">
+                                  <div className="comment-menu">
                                     <button
-                                      className="btn ghost"
+                                      className="comment-menu-button"
                                       type="button"
-                                      onClick={() => {
-                                        setEditingComments((prev) => ({
+                                      aria-label="Comment actions"
+                                      aria-haspopup="menu"
+                                      aria-expanded={Boolean(commentMenuOpen[commentIdKey])}
+                                      onClick={() =>
+                                        setCommentMenuOpen((prev) => ({
                                           ...prev,
-                                          [commentIdKey]: true,
-                                        }));
-                                        setCommentEdits((prev) => ({
-                                          ...prev,
-                                          [commentIdKey]: c.body,
-                                        }));
-                                      }}
+                                          [commentIdKey]: !prev[commentIdKey],
+                                        }))
+                                      }
                                     >
-                                      Edit
+                                      <span className="comment-menu-dots" aria-hidden="true">
+                                        ⋯
+                                      </span>
                                     </button>
-                                    <button
-                                      className="btn ghost comment-delete"
-                                      type="button"
-                                      onClick={async () => {
-                                      const numericId =
-                                        c.numericId ??
-                                        (typeof c.id === "number" ? c.id : Number(c.id));
-                                      const removeIds = new Set<string>();
-                                      removeIds.add(String(c.id));
-                                      if (c.documentId) {
-                                        removeIds.add(String(c.documentId));
-                                      }
-                                      if (Number.isFinite(numericId)) {
-                                        removeIds.add(String(numericId));
-                                      }
-                                      try {
-                                        setError(null);
-                                        const attempts: string[] = [];
-                                        if (c.documentId) {
-                                          attempts.push(`/comments/${c.documentId}`);
-                                        }
-                                        if (Number.isFinite(numericId)) {
-                                          attempts.push(`/comments/${numericId}`);
-                                        }
-                                        attempts.push(`/comments/${c.id}`);
-
-                                        let removed = false;
-                                        for (const path of attempts) {
-                                          try {
-                                            await api.delete(path);
-                                            removed = true;
-                                            break;
-                                          } catch (err: unknown) {
-                                            if (
-                                              axios.isAxiosError(err) &&
-                                              err.response?.status === 404
-                                            ) {
-                                              continue;
-                                            }
-                                            throw err;
-                                          }
-                                        }
-
-                                        if (!removed) {
-                                          setError("Failed to delete comment.");
-                                          return;
-                                        }
-
-                                        setPosts((prev) => ({
-                                          ...prev,
-                                          comments: (prev.comments ?? []).filter(
-                                            (entry) => {
-                                              const record = asRecord(entry);
-                                              const attrs = normalize(entry);
-                                              const entryId = record.id ?? attrs.id;
-                                              const entryDoc =
-                                                record.documentId ?? attrs.documentId;
-                                              if (entryId !== undefined) {
-                                                if (removeIds.has(String(entryId))) {
-                                                  return false;
-                                                }
-                                              }
-                                              if (entryDoc !== undefined) {
-                                                if (removeIds.has(String(entryDoc))) {
-                                                  return false;
-                                                }
-                                              }
-                                              return true;
-                                            }
-                                          ),
-                                        }));
-
-                                        try {
-                                          const res = await api.get(
-                                            "/comments?populate=owner&sort=createdAt:desc&pagination[pageSize]=500"
-                                          );
-                                          setPosts((prev) => ({
-                                            ...prev,
-                                            comments: res.data?.data ?? [],
-                                          }));
-                                        } catch (err: unknown) {
-                                          console.warn(
-                                            "Comment refresh failed after delete",
-                                            err
-                                          );
-                                        }
-                                      } catch (err: unknown) {
-                                        const status = axios.isAxiosError(err)
-                                          ? err.response?.status
-                                          : undefined;
-                                        if (status && status >= 500) {
-                                          try {
-                                            const res = await api.get(
-                                              "/comments?populate=owner&sort=createdAt:desc&pagination[pageSize]=500"
-                                            );
-                                            const nextComments = res.data?.data ?? [];
-                                            setPosts((prev) => ({
+                                    {commentMenuOpen[commentIdKey] && (
+                                      <div className="comment-menu-panel" role="menu">
+                                        <button
+                                          className="comment-menu-item"
+                                          type="button"
+                                          role="menuitem"
+                                          onClick={() => {
+                                            setEditingComments((prev) => ({
                                               ...prev,
-                                              comments: nextComments,
+                                              [commentIdKey]: true,
                                             }));
-                                            const stillThere = nextComments.some(
-                                              (entry: unknown) => {
-                                                const record = asRecord(entry);
-                                                const attrs = normalize(entry);
-                                                const entryId = record.id ?? attrs.id;
-                                                const entryDoc =
-                                                  record.documentId ?? attrs.documentId;
-                                                if (entryId !== undefined) {
-                                                  if (removeIds.has(String(entryId))) {
-                                                    return true;
-                                                  }
-                                                }
-                                                if (entryDoc !== undefined) {
-                                                  if (removeIds.has(String(entryDoc))) {
-                                                    return true;
-                                                  }
-                                                }
-                                                return false;
-                                              }
-                                            );
-                                            if (!stillThere) {
-                                              return;
+                                            setCommentEdits((prev) => ({
+                                              ...prev,
+                                              [commentIdKey]: c.body,
+                                            }));
+                                            setCommentMenuOpen((prev) => ({
+                                              ...prev,
+                                              [commentIdKey]: false,
+                                            }));
+                                          }}
+                                        >
+                                          Edit
+                                        </button>
+                                        <button
+                                          className="comment-menu-item is-danger"
+                                          type="button"
+                                          role="menuitem"
+                                          onClick={async () => {
+                                            setCommentMenuOpen((prev) => ({
+                                              ...prev,
+                                              [commentIdKey]: false,
+                                            }));
+                                            const numericId =
+                                              c.numericId ??
+                                              (typeof c.id === "number" ? c.id : Number(c.id));
+                                            const removeIds = new Set<string>();
+                                            removeIds.add(String(c.id));
+                                            if (c.documentId) {
+                                              removeIds.add(String(c.documentId));
                                             }
-                                          } catch {
-                                            // fall through to error message
-                                          }
-                                        }
-                                        console.error("Delete comment failed", err);
-                                        setError("Failed to delete comment");
-                                      }
-                                      }}
-                                    >
-                                      Delete
-                                    </button>
+                                            if (Number.isFinite(numericId)) {
+                                              removeIds.add(String(numericId));
+                                            }
+                                            try {
+                                              setError(null);
+                                              const attempts: string[] = [];
+                                              if (c.documentId) {
+                                                attempts.push(`/comments/${c.documentId}`);
+                                              }
+                                              if (Number.isFinite(numericId)) {
+                                                attempts.push(`/comments/${numericId}`);
+                                              }
+                                              attempts.push(`/comments/${c.id}`);
+
+                                              let removed = false;
+                                              for (const path of attempts) {
+                                                try {
+                                                  await api.delete(path);
+                                                  removed = true;
+                                                  break;
+                                                } catch (err: unknown) {
+                                                  if (
+                                                    axios.isAxiosError(err) &&
+                                                    err.response?.status === 404
+                                                  ) {
+                                                    continue;
+                                                  }
+                                                  throw err;
+                                                }
+                                              }
+
+                                              if (!removed) {
+                                                setError("Failed to delete comment.");
+                                                return;
+                                              }
+
+                                              setPosts((prev) => ({
+                                                ...prev,
+                                                comments: (prev.comments ?? []).filter(
+                                                  (entry) => {
+                                                    const record = asRecord(entry);
+                                                    const attrs = normalize(entry);
+                                                    const entryId = record.id ?? attrs.id;
+                                                    const entryDoc =
+                                                      record.documentId ?? attrs.documentId;
+                                                    if (entryId !== undefined) {
+                                                      if (removeIds.has(String(entryId))) {
+                                                        return false;
+                                                      }
+                                                    }
+                                                    if (entryDoc !== undefined) {
+                                                      if (removeIds.has(String(entryDoc))) {
+                                                        return false;
+                                                      }
+                                                    }
+                                                    return true;
+                                                  }
+                                                ),
+                                              }));
+
+                                              try {
+                                                const res = await api.get(
+                                                  "/comments?populate=owner&sort=createdAt:desc&pagination[pageSize]=500"
+                                                );
+                                                setPosts((prev) => ({
+                                                  ...prev,
+                                                  comments: res.data?.data ?? [],
+                                                }));
+                                              } catch (err: unknown) {
+                                                console.warn(
+                                                  "Comment refresh failed after delete",
+                                                  err
+                                                );
+                                              }
+                                            } catch (err: unknown) {
+                                              const status = axios.isAxiosError(err)
+                                                ? err.response?.status
+                                                : undefined;
+                                              if (status && status >= 500) {
+                                                try {
+                                                  const res = await api.get(
+                                                    "/comments?populate=owner&sort=createdAt:desc&pagination[pageSize]=500"
+                                                  );
+                                                  const nextComments = res.data?.data ?? [];
+                                                  setPosts((prev) => ({
+                                                    ...prev,
+                                                    comments: nextComments,
+                                                  }));
+                                                  const stillThere = nextComments.some(
+                                                    (entry: unknown) => {
+                                                      const record = asRecord(entry);
+                                                      const attrs = normalize(entry);
+                                                      const entryId = record.id ?? attrs.id;
+                                                      const entryDoc =
+                                                        record.documentId ?? attrs.documentId;
+                                                      if (entryId !== undefined) {
+                                                        if (removeIds.has(String(entryId))) {
+                                                          return true;
+                                                        }
+                                                      }
+                                                      if (entryDoc !== undefined) {
+                                                        if (removeIds.has(String(entryDoc))) {
+                                                          return true;
+                                                        }
+                                                      }
+                                                      return false;
+                                                    }
+                                                  );
+                                                  if (!stillThere) {
+                                                    return;
+                                                  }
+                                                } catch {
+                                                  // fall through to error message
+                                                }
+                                              }
+                                              console.error("Delete comment failed", err);
+                                              setError("Failed to delete comment");
+                                            }
+                                          }}
+                                        >
+                                          Delete
+                                        </button>
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                               </li>
@@ -4697,73 +5081,145 @@ export default function Dashboard() {
                           </div>
                         )}
                         <div className="comment-form">
-                          <input
-                            className="auth-input"
-                            placeholder="Add a comment..."
-                            value={commentInputs[commentKey] || ""}
-                            onChange={(e) =>
-                              setCommentInputs((prev) => ({
-                                ...prev,
-                                [commentKey]: sanitizePostText(e.target.value),
-                              }))
-                            }
-                          />
-                          <button
-                            className="btn primary"
-                            type="button"
-                            disabled={!commentInputs[commentKey]?.trim()}
-                            onClick={async () => {
-                              const body = (commentInputs[commentKey] || "").trim();
-                              if (!body) return;
-                              try {
-                                const targetType =
-                                  post.source === "admin"
-                                    ? "admin"
-                                    : post.source === "group"
-                                    ? "group-post"
-                                    : "user";
-                                await api.post("/comments", {
-                                  data: {
-                                    body,
-                                    target_type: targetType,
-                                    target_id: post.numericId ?? post.id,
-                                  },
-                                });
-                                if (
-                                  post.signalTag === "support-request" &&
-                                  post.ownerId &&
-                                  post.ownerId !== userId
-                                ) {
-                                  bumpStat("supportReplies", 1);
-                                  pushImpactNotice("Thanks for supporting someone today.");
-                                }
-                                const res = await api.get(
-                                  "/comments?populate=owner&sort=createdAt:desc&pagination[pageSize]=500"
-                                );
-                                setPosts((prev) => ({
+                          <div className="comment-form-row">
+                            <input
+                              className="auth-input"
+                              placeholder="Add a comment..."
+                              value={commentInputs[commentKey] || ""}
+                              onChange={(e) =>
+                                setCommentInputs((prev) => ({
                                   ...prev,
-                                  comments: res.data?.data ?? [],
-                                }));
-                                setCommentInputs((prev) => ({ ...prev, [commentKey]: "" }));
-                              } catch (err: unknown) {
-                                console.error("Add comment failed", err);
-                                if (axios.isAxiosError(err)) {
-                                  const msg =
-                                    err.response?.data?.error?.message ||
-                                    err.response?.data?.message ||
-                                    "Failed to add comment";
-                                  setError(String(msg));
-                                } else {
-                                  setError("Failed to add comment");
-                                }
+                                  [commentKey]: sanitizePostText(e.target.value),
+                                }))
                               }
-                            }}
-                          >
-                            Comment
-                          </button>
+                            />
+                            <button
+                              className="btn primary"
+                              type="button"
+                              disabled={
+                                !commentInputs[commentKey]?.trim() &&
+                                commentAttachmentFiles.length === 0
+                              }
+                              onClick={async () => {
+                                const body = (commentInputs[commentKey] || "").trim();
+                                if (!body && commentAttachmentFiles.length === 0) return;
+                                try {
+                                  const targetType =
+                                    post.source === "admin"
+                                      ? "admin"
+                                      : post.source === "group"
+                                      ? "group-post"
+                                      : "user";
+                                  let attachmentUrls: string[] = [];
+                                  if (commentAttachmentFiles.length > 0) {
+                                    const fd = new FormData();
+                                    commentAttachmentFiles.forEach((file) =>
+                                      fd.append("files", file)
+                                    );
+                                    const uploadRes = await api.post("/upload", fd);
+                                    attachmentUrls = (uploadRes.data ?? [])
+                                      .map((item: { url?: string }) => item?.url)
+                                      .filter(
+                                        (url: string | undefined): url is string =>
+                                          Boolean(url)
+                                      );
+                                  }
+                                  const combinedBody = [body, ...attachmentUrls]
+                                    .filter(Boolean)
+                                    .join("\n");
+                                  if (!combinedBody.trim()) return;
+                                  await api.post("/comments", {
+                                    data: {
+                                      body: combinedBody,
+                                      target_type: targetType,
+                                      target_id: post.numericId ?? post.id,
+                                    },
+                                  });
+                                  if (
+                                    post.signalTag === "support-request" &&
+                                    post.ownerId &&
+                                    post.ownerId !== userId
+                                  ) {
+                                    bumpStat("supportReplies", 1);
+                                    pushImpactNotice("Thanks for supporting someone today.");
+                                  }
+                                  const res = await api.get(
+                                    "/comments?populate=owner&sort=createdAt:desc&pagination[pageSize]=500"
+                                  );
+                                  setPosts((prev) => ({
+                                    ...prev,
+                                    comments: res.data?.data ?? [],
+                                  }));
+                                  setCommentInputs((prev) => ({
+                                    ...prev,
+                                    [commentKey]: "",
+                                  }));
+                                  clearCommentAttachments(commentKey);
+                                } catch (err: unknown) {
+                                  console.error("Add comment failed", err);
+                                  if (axios.isAxiosError(err)) {
+                                    const msg =
+                                      err.response?.data?.error?.message ||
+                                      err.response?.data?.message ||
+                                      "Failed to add comment";
+                                    setError(String(msg));
+                                  } else {
+                                    setError("Failed to add comment");
+                                  }
+                                }
+                              }}
+                            >
+                              Comment
+                            </button>
+                          </div>
+                          <div className="comment-attachments">
+                            <label className="comment-upload">
+                              <input
+                                type="file"
+                                accept="image/*"
+                                multiple
+                                onChange={(e) => {
+                                  handleCommentFilesChange(commentKey, e.target.files);
+                                  e.target.value = "";
+                                }}
+                              />
+                              <span>
+                                {commentAttachmentFiles.length
+                                  ? "Change photos"
+                                  : "Add photos"}
+                              </span>
+                            </label>
+                            {commentAttachmentPreviews.length > 0 && (
+                              <div className="comment-attachment-list">
+                                {commentAttachmentPreviews.map((url, index) => (
+                                  <div
+                                    key={`${commentKey}-attachment-${index}`}
+                                    className="comment-attachment"
+                                  >
+                                    <img
+                                      src={url}
+                                      alt="New attachment preview"
+                                      loading="lazy"
+                                      decoding="async"
+                                    />
+                                    <button
+                                      type="button"
+                                      className="comment-attachment-remove"
+                                      aria-label="Remove photo"
+                                      onClick={() =>
+                                        removeCommentAttachment(commentKey, index)
+                                      }
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    )}
+                    </PopupModal>
                   </div>
                 </article>
               );
@@ -4788,6 +5244,167 @@ export default function Dashboard() {
       </>
     )}
       </div>
+
+      <PopupModal
+        open={checkInModalOpen}
+        title="Start check-in"
+        onClose={closeCheckInModal}
+        bodyClassName="comment-modal-body"
+      >
+        <div className="checkin-modal">
+          <textarea
+            className="auth-input"
+            value={formContent}
+            onChange={(e) => {
+              setFormContent(sanitizePostText(e.target.value));
+              setFormError(null);
+            }}
+            placeholder="Today I'm focused on..."
+            rows={6}
+          />
+          {showCheckInOptions && (
+            <div className="post-composer__checkin">
+              <div className="post-composer__checkin-field">
+                <span className="post-template-label">Goal (optional)</span>
+                <select
+                  className="auth-input post-feedback-select"
+                  value={checkInGoal}
+                  onChange={(e) => setCheckInGoal(e.target.value)}
+                >
+                  <option value="">No goal selected</option>
+                  {availableGoals.map((goal) => (
+                    <option key={goal} value={goal}>
+                      {goal}
+                    </option>
+                  ))}
+                </select>
+                {availableGoals.length === 0 && (
+                  <span className="post-composer__hint">
+                    Add goals in Goals &amp; Trackers to pick one here.
+                  </span>
+                )}
+              </div>
+              <div className="post-composer__checkin-field">
+                <span className="post-template-label">Share</span>
+                <select
+                  className="auth-input post-feedback-select"
+                  value={checkInTarget}
+                  onChange={(e) =>
+                    setCheckInTarget(e.target.value as "feed" | "trusted")
+                  }
+                >
+                  <option value="feed">My feed</option>
+                  <option value="trusted">Trusted circle</option>
+                </select>
+              </div>
+              {checkInTarget === "trusted" && (
+                <div className="post-composer__checkin-field">
+                  <span className="post-template-label">Trusted circle</span>
+                  <select
+                    className="auth-input post-feedback-select"
+                    value={checkInGroupId}
+                    onChange={(e) =>
+                      setCheckInGroupId(e.target.value ? Number(e.target.value) : "")
+                    }
+                  >
+                    <option value="">Select a circle</option>
+                    {trustedCircleOptions.map((group) => (
+                      <option key={group.id} value={group.id}>
+                        {group.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="post-composer__hint-link"
+                    onClick={() => navigate("/friends")}
+                  >
+                    Set Trusted Friends
+                  </button>
+                  {trustedCircleOptions.length === 0 && (
+                    <span className="post-composer__hint">
+                      Create a trusted circle in My Trusted Circles to use it here.
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          {formFilePreviewUrls.length > 0 && (
+            <div className="post-composer__media-preview">
+              <div
+                className={`post-composer__media-grid${
+                  formFilePreviewUrls.length === 1 ? " is-single" : ""
+                }`}
+              >
+                {formFilePreviewUrls.map((url, index) => {
+                  const file = formFiles[index];
+                  const isVideo = file ? isVideoFile(file) : false;
+                  return (
+                    <div
+                      key={`${file?.name || "media"}-${index}`}
+                      className="post-composer__media-thumb"
+                    >
+                      {isVideo ? (
+                        <video muted playsInline preload="metadata">
+                          <source src={url} />
+                        </video>
+                      ) : (
+                        <img
+                          src={url}
+                          alt="Upload preview"
+                          loading="lazy"
+                          decoding="async"
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          <div className="post-composer__actions">
+            <div className="post-composer__tools">
+              <label className="post-composer__tool">
+                <input
+                  type="file"
+                  accept="image/*,video/*"
+                  multiple
+                  onChange={(e) => {
+                    const files = e.target.files;
+                    handleComposerFiles(files);
+                    e.target.value = "";
+                  }}
+                />
+                <span>{formFiles.length ? "Change media" : "Add photo/video"}</span>
+              </label>
+              <span className="post-composer__file">
+                {formFiles.length
+                  ? `${formFiles.length} file${formFiles.length === 1 ? "" : "s"} selected`
+                  : "No media selected"}
+              </span>
+              {formFiles.length > 0 && (
+                <button
+                  className="btn ghost"
+                  type="button"
+                  onClick={() => setFormFiles([])}
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+            <button
+              className="btn primary"
+              type="button"
+              disabled={submitting}
+              onClick={createPost}
+            >
+              {submitting ? "Posting..." : "Post check-in"}
+            </button>
+          </div>
+          {formError && <p className="auth-message error">{formError}</p>}
+        </div>
+      </PopupModal>
 
       {goalsModalOpen && (
         <div
@@ -5017,264 +5634,21 @@ export default function Dashboard() {
                 )}
               </div>
 
-                {activePost.comments.length > 0 && (
-                <div className="post-modal__comments">
-                  <p className="eyebrow">Comments</p>
-                  <ul className="comment-list">
-                    {activePost.comments.map((comment) => {
-                      const commentIdKey = String(
-                        comment.documentId ?? comment.numericId ?? comment.id
-                      );
-                      const isEditing = Boolean(editingComments[commentIdKey]);
-                      const editValue = commentEdits[commentIdKey] ?? comment.body;
-                      return (
-                        <li key={comment.id} className="comment-item">
-                          <div className="comment-author">{comment.owner || "User"}</div>
-                          {isEditing ? (
-                            <div className="comment-edit">
-                              <textarea
-                                className="auth-input comment-edit-input"
-                                value={editValue}
-                                onChange={(event) =>
-                                  setCommentEdits((prev) => ({
-                                    ...prev,
-                                    [commentIdKey]: sanitizePostText(event.target.value),
-                                  }))
-                                }
-                              />
-                              <div className="comment-edit-actions">
-                                <button
-                                  className="btn ghost"
-                                  type="button"
-                                  onClick={() => {
-                                    setEditingComments((prev) => {
-                                      const next = { ...prev };
-                                      delete next[commentIdKey];
-                                      return next;
-                                    });
-                                    setCommentEdits((prev) => {
-                                      const next = { ...prev };
-                                      delete next[commentIdKey];
-                                      return next;
-                                    });
-                                  }}
-                                >
-                                  Cancel
-                                </button>
-                                <button
-                                  className="btn primary"
-                                  type="button"
-                                  onClick={async () => {
-                                    try {
-                                      const updated = await updateCommentBody(
-                                        comment,
-                                        editValue
-                                      );
-                                      if (!updated) return;
-                                      setEditingComments((prev) => {
-                                        const next = { ...prev };
-                                        delete next[commentIdKey];
-                                        return next;
-                                      });
-                                      setCommentEdits((prev) => {
-                                        const next = { ...prev };
-                                        delete next[commentIdKey];
-                                        return next;
-                                      });
-                                    } catch (err: unknown) {
-                                      const msg = axios.isAxiosError(err)
-                                        ? err.response?.data?.error?.message ||
-                                          err.response?.data?.message ||
-                                          "Failed to update comment."
-                                        : "Failed to update comment.";
-                                      setError(String(msg));
-                                    }
-                                  }}
-                                >
-                                  Save
-                                </button>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="comment-body">{comment.body}</div>
-                          )}
-                          {(() => {
-                            const commentUrl = extractFirstUrl(comment.body);
-                            if (!isPreviewableUrl(commentUrl)) return null;
-                            const preview = previewCache[commentUrl];
-                            if (!preview) return null;
-                            return (
-                              <div className="comment-preview">
-                                <LinkPreviewCard
-                                  preview={preview}
-                                  url={preview.url || commentUrl}
-                                  compact
-                                />
-                              </div>
-                            );
-                          })()}
-                          {user?.id === comment.ownerId && (
-                            <div className="comment-actions">
-                              <button
-                                className="btn ghost"
-                                type="button"
-                                onClick={() => {
-                                  setEditingComments((prev) => ({
-                                    ...prev,
-                                    [commentIdKey]: true,
-                                  }));
-                                  setCommentEdits((prev) => ({
-                                    ...prev,
-                                    [commentIdKey]: comment.body,
-                                  }));
-                                }}
-                              >
-                                Edit
-                              </button>
-                              <button
-                                className="btn ghost comment-delete"
-                                type="button"
-                                onClick={async () => {
-                                  const numericId =
-                                    comment.numericId ??
-                                    (typeof comment.id === "number"
-                                      ? comment.id
-                                      : Number(comment.id));
-                                  const removeIds = new Set<string>();
-                                  removeIds.add(String(comment.id));
-                                  if (comment.documentId) {
-                                    removeIds.add(String(comment.documentId));
-                                  }
-                                  if (Number.isFinite(numericId)) {
-                                    removeIds.add(String(numericId));
-                                  }
-                                  try {
-                                    setError(null);
-                                    const attempts: string[] = [];
-                                    if (comment.documentId) {
-                                      attempts.push(`/comments/${comment.documentId}`);
-                                    }
-                                    if (Number.isFinite(numericId)) {
-                                      attempts.push(`/comments/${numericId}`);
-                                    }
-                                    attempts.push(`/comments/${comment.id}`);
+              <div className="post-modal__comments">
+                <button
+                  className="btn ghost"
+                  type="button"
+                  onClick={() => {
+                    const commentKey = String(activePost.numericId ?? activePost.id);
+                    toggleComments(commentKey);
+                    closePostModal();
+                  }}
+                >
+                  View comments ({activePost.comments?.length ?? 0})
+                </button>
+              </div>
 
-                                    let removed = false;
-                                    for (const path of attempts) {
-                                      try {
-                                        await api.delete(path);
-                                        removed = true;
-                                        break;
-                                      } catch (err: unknown) {
-                                        if (
-                                          axios.isAxiosError(err) &&
-                                          err.response?.status === 404
-                                        ) {
-                                          continue;
-                                        }
-                                        throw err;
-                                      }
-                                    }
-
-                                    if (!removed) {
-                                      setError("Failed to delete comment.");
-                                      return;
-                                    }
-
-                                    setPosts((prev) => ({
-                                      ...prev,
-                                      comments: (prev.comments ?? []).filter((entry) => {
-                                        const record = asRecord(entry);
-                                        const attrs = normalize(entry);
-                                        const entryId = record.id ?? attrs.id;
-                                        const entryDoc =
-                                          record.documentId ?? attrs.documentId;
-                                        if (entryId !== undefined) {
-                                          if (removeIds.has(String(entryId))) {
-                                            return false;
-                                          }
-                                        }
-                                        if (entryDoc !== undefined) {
-                                          if (removeIds.has(String(entryDoc))) {
-                                            return false;
-                                          }
-                                        }
-                                        return true;
-                                      }),
-                                    }));
-
-                                    try {
-                                      const res = await api.get(
-                                        "/comments?populate=owner&sort=createdAt:desc&pagination[pageSize]=500"
-                                      );
-                                      setPosts((prev) => ({
-                                        ...prev,
-                                        comments: res.data?.data ?? [],
-                                      }));
-                                    } catch (err: unknown) {
-                                      console.warn(
-                                        "Comment refresh failed after delete",
-                                        err
-                                      );
-                                    }
-                                  } catch (err: unknown) {
-                                    const status = axios.isAxiosError(err)
-                                      ? err.response?.status
-                                      : undefined;
-                                    if (status && status >= 500) {
-                                      try {
-                                        const res = await api.get(
-                                          "/comments?populate=owner&sort=createdAt:desc&pagination[pageSize]=500"
-                                        );
-                                        const nextComments = res.data?.data ?? [];
-                                        setPosts((prev) => ({
-                                          ...prev,
-                                          comments: nextComments,
-                                        }));
-                                        const stillThere = nextComments.some(
-                                          (entry: unknown) => {
-                                            const record = asRecord(entry);
-                                            const attrs = normalize(entry);
-                                            const entryId = record.id ?? attrs.id;
-                                            const entryDoc =
-                                              record.documentId ?? attrs.documentId;
-                                            if (entryId !== undefined) {
-                                              if (removeIds.has(String(entryId))) {
-                                                return true;
-                                              }
-                                            }
-                                            if (entryDoc !== undefined) {
-                                              if (removeIds.has(String(entryDoc))) {
-                                                return true;
-                                              }
-                                            }
-                                            return false;
-                                          }
-                                        );
-                                        if (!stillThere) {
-                                          return;
-                                        }
-                                      } catch {
-                                        // fall through to error message
-                                      }
-                                    }
-                                    console.error("Delete comment failed", err);
-                                    setError("Failed to delete comment");
-                                  }
-                                }}
-                              >
-                                Delete
-                              </button>
-                            </div>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              )}
-            </div>
-            <div className="post-modal__mobile-actions">
+              <div className="post-modal__mobile-actions">
               <button
                 className="post-modal__close-btn"
                 type="button"
@@ -5287,6 +5661,7 @@ export default function Dashboard() {
               <span className="post-modal__hint">Tap outside to close</span>
             </div>
           </div>
+        </div>
         </div>
       )}
       {actionError && (

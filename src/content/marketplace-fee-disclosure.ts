@@ -1,6 +1,6 @@
 export const MARKETPLACE_FEE_TITLE = "StoreFront Platform Fee Disclosure";
-export const MARKETPLACE_FEE_UPDATED = "Updated February 4, 2026";
-export const MARKETPLACE_FEE_VERSION = "2026-02-04";
+export const MARKETPLACE_FEE_UPDATED = "Updated February 22, 2026";
+export const MARKETPLACE_FEE_VERSION = "2026-02-22";
 
 export const MARKETPLACE_FEE_SECTIONS = [
   {
@@ -13,7 +13,8 @@ export const MARKETPLACE_FEE_SECTIONS = [
   {
     title: "Platform fee for online payments",
     body: [
-      "Online payments processed through StoreFront are subject to a 3% platform fee.",
+      "Online payments processed through StoreFront are subject to a platform fee.",
+      "Verified sellers pay a 2% platform fee. Non-verified sellers pay a 4% platform fee until verification is complete.",
       "The fee is calculated on the listing price or the accepted offer amount, whichever is applicable.",
       "Platform fees are withheld from seller payouts.",
     ],

@@ -50,8 +50,8 @@ const STOREFRONT_DEMO_ENABLED_KEY = "storefront:demoListingsEnabled";
 const STOREFRONT_DEMO_COUNT_KEY = "storefront:demoListingsCount";
 const STOREFRONT_DASHBOARD_MOCK_ENABLED_KEY = "storefront:sellerDashboardMockEnabled";
 const STOREFRONT_DASHBOARD_MOCK_DATA_KEY = "storefront:sellerDashboardMockData";
-const STOREFRONT_DEMO_MAX = 120;
-const DEFAULT_STOREFRONT_DEMO_ENABLED = import.meta.env.DEV;
+const STOREFRONT_DEMO_MAX = 20;
+const DEFAULT_STOREFRONT_DEMO_ENABLED = false;
 const DEFAULT_SELLER_DASHBOARD_MOCK = {
   listings: [
     {

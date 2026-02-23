@@ -1,0 +1,270 @@
+.id-capture-module {
+  width: 100%;
+}
+
+.id-capture-module .icon-button {
+  background: transparent;
+  border: none;
+  color: inherit;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+  opacity: 0.85;
+  pointer-events: auto;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.id-capture-module .icon-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.id-capture-module .icon-button:hover {
+  opacity: 1;
+  transform: translateY(-2px);
+}
+
+.id-capture-module .icon-button .icon {
+  line-height: 1;
+}
+
+.id-capture-module .capture-preview {
+  object-fit: contain;
+  background: rgba(5, 8, 15, 0.9);
+}
+
+.id-capture-overlay .camera-panel {
+  background: #020409;
+}
+
+.id-capture-overlay .camera-frame::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 50% 35%, rgba(2, 6, 23, 0.05), rgba(2, 6, 23, 0.2)),
+    linear-gradient(180deg, rgba(2, 6, 23, 0.18), rgba(2, 6, 23, 0.08) 40%, rgba(2, 6, 23, 0.18));
+  pointer-events: none;
+  z-index: 0;
+}
+
+.id-capture-overlay .camera-video,
+.id-capture-overlay .camera-overlay-canvas {
+  position: relative;
+  z-index: 2;
+}
+
+.id-guide {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.id-guide-front::before {
+  content: "";
+  position: absolute;
+  left: 10%;
+  top: 20%;
+  width: 80%;
+  height: 55%;
+  border: 2px solid rgba(56, 189, 248, 0.7);
+  border-radius: 18px;
+  box-shadow:
+    0 0 18px rgba(56, 189, 248, 0.35),
+    inset 0 0 0 2px rgba(15, 23, 42, 0.4);
+}
+
+.id-guide-barcode::before {
+  content: "";
+  position: absolute;
+  left: 9%;
+  top: 60%;
+  width: 82%;
+  height: 24%;
+  border: 2px dashed rgba(34, 197, 94, 0.95);
+  border-radius: 16px;
+  box-shadow:
+    0 0 14px rgba(34, 197, 94, 0.35),
+    inset 0 0 0 2px rgba(12, 20, 38, 0.5);
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.id-guide-barcode span,
+.id-guide-dob span {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  color: rgba(224, 255, 250, 0.92);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-shadow: 0 4px 10px rgba(0, 0, 0, 0.6);
+}
+
+.id-guide-barcode span {
+  top: 56%;
+}
+
+.id-guide-dob::before {
+  content: "";
+  position: absolute;
+  left: 20%;
+  top: 46%;
+  width: 60%;
+  height: 12%;
+  border: 2px dashed rgba(248, 250, 252, 0.75);
+  border-radius: 12px;
+  box-shadow: 0 0 12px rgba(148, 163, 184, 0.35);
+}
+
+.id-guide-dob span {
+  top: 41%;
+}
+
+.id-header {
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  text-align: center;
+  font-size: 15px;
+  gap: 2px;
+}
+
+.id-prompt {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  max-width: min(560px, calc(100% - 24px));
+  background: rgba(10, 16, 28, 0.78);
+  border: 1px solid rgba(125, 211, 252, 0.35);
+  border-radius: 18px;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 24px rgba(2, 6, 23, 0.45);
+  z-index: 6;
+}
+
+.id-prompt strong {
+  font-size: 15px;
+  letter-spacing: 0.02em;
+}
+
+.id-prompt span {
+  font-weight: 500;
+  color: rgba(226, 232, 240, 0.9);
+}
+
+.id-prompt .id-tip {
+  font-size: 13px;
+  color: rgba(148, 163, 184, 0.92);
+}
+
+.id-status {
+  position: absolute;
+  bottom: 118px;
+  left: 12px;
+  right: 12px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  font-size: 14px;
+}
+
+.id-action-bar {
+  gap: 22px;
+}
+
+.id-countdown {
+  display: grid;
+  inset: auto;
+  bottom: 236px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+}
+
+.id-countdown::before {
+  width: 96px;
+  height: 96px;
+  box-shadow:
+    0 8px 20px rgba(14, 116, 144, 0.25),
+    inset 0 0 0 4px rgba(15, 23, 42, 0.5);
+}
+
+.id-countdown .countdown-ring-inner {
+  width: 64px;
+  height: 64px;
+  font-size: 32px;
+}
+
+.id-action-bar .icon-button {
+  color: #e7efff;
+  opacity: 0.9;
+}
+
+.id-action-bar .icon-button .icon {
+  font-size: 32px;
+}
+
+.id-action-bar .icon-button.icon-capture .icon {
+  color: #60a5fa;
+  text-shadow:
+    0 0 14px rgba(96, 165, 250, 0.75),
+    0 0 22px rgba(59, 130, 246, 0.5);
+}
+
+.id-action-bar .icon-button.icon-cancel .icon {
+  color: #ef4444;
+  font-size: 36px;
+  text-shadow:
+    0 0 12px rgba(239, 68, 68, 0.8),
+    0 0 24px rgba(239, 68, 68, 0.55);
+}
+
+.id-action-bar .icon-button.icon-switch .icon {
+  color: #38bdf8;
+}
+
+@media (max-width: 700px) {
+  .id-status {
+    bottom: 132px;
+  }
+
+  .id-action-bar {
+    gap: 16px;
+  }
+
+  .id-prompt {
+    top: 12px;
+    font-size: 13px;
+  }
+
+  .id-countdown {
+    bottom: 250px;
+  }
+
+  .id-countdown::before {
+    width: 84px;
+    height: 84px;
+  }
+
+  .id-countdown .countdown-ring-inner {
+    width: 56px;
+    height: 56px;
+    font-size: 28px;
+  }
+}

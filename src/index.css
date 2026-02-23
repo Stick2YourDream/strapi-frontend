@@ -6,6 +6,12 @@
 :root {
   --app-font: "Manrope", "Inter", "Segoe UI", "Helvetica Neue", Arial, system-ui,
     -apple-system, sans-serif;
+  --ysp-brand-blue: #3f8dff;
+  --ysp-brand-cyan: #24d3e3;
+  --ysp-brand-blue-rgb: 63, 141, 255;
+  --ysp-brand-cyan-rgb: 36, 211, 227;
+  --ysp-brand-ink: #080d19;
+  --ysp-brand-ink-2: #0f182b;
 }
 
 html, body {

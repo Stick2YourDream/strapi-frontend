@@ -1318,7 +1318,7 @@ export default function News() {
 
         {newsEnabled && (
           <>
-            <section className="news-stats is-hidden" aria-hidden="true">
+            <section className="news-stats is-hidden" aria-hidden="false">
               <div className="news-stat-card">
                 <span className="news-stat-label">Articles</span>
                 <span className="news-stat-value">{articleCountDisplay}</span>

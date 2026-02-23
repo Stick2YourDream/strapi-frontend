@@ -102,6 +102,15 @@ const routes = [
     },
   },
   {
+    path: "/support",
+    meta: {
+      title: "Support & Contact | Your Social Place",
+      description:
+        "Contact support, report safety concerns, and get help with your Your Social Place account.",
+      url: `${BASE_URL}/support`,
+    },
+  },
+  {
     path: "/what-makes-us-different",
     meta: {
       title: "What Makes Us Different | Your Social Place",

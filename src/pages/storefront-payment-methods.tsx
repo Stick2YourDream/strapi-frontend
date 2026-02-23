@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "../css/storefront-payment-methods.css";
 import Sidebar from "../components/Sidebar";
@@ -6,91 +6,17 @@ import api from "../api/strapi";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { useUserPreferences } from "../context/UserPreferencesContext";
 
-type PaymentMethodId = "paypal" | "venmo" | "cashapp";
-
-type PaymentMethodOption = {
-  id: PaymentMethodId;
-  name: string;
-  icon: string;
-  helper: string;
-  hint: string;
-  inputLabel?: string;
-  placeholder?: string;
-  websiteUrl?: string;
-  websiteLabel?: string;
-};
-
-const PAYMENT_METHODS: PaymentMethodOption[] = [
-  {
-    id: "paypal",
-    name: "PayPal",
-    icon: "PP",
-    helper: "Connect your PayPal business account for payouts.",
-    hint: "We’ll redirect you to PayPal to connect and confirm your account.",
-  },
-  {
-    id: "venmo",
-    name: "Venmo",
-    icon: "V",
-    inputLabel: "Venmo handle",
-    placeholder: "@yourhandle",
-    helper: "Send payouts to your Venmo handle.",
-    hint: "Use the handle shown on your Venmo profile.",
-    websiteUrl: "https://venmo.com",
-    websiteLabel: "Open Venmo",
-  },
-  {
-    id: "cashapp",
-    name: "Cash App",
-    icon: "CA",
-    inputLabel: "Cash App Cashtag",
-    placeholder: "$yourname",
-    helper: "Send payouts to your Cash App Cashtag.",
-    hint: "Cashtags start with a $ symbol.",
-    websiteUrl: "https://cash.app",
-    websiteLabel: "Open Cash App",
-  },
-];
-
-const normalizeHandle = (method: PaymentMethodId, value: string) => {
-  const trimmed = value.trim();
-  if (method === "paypal") return trimmed;
-  if (!trimmed) return trimmed;
-  if (method === "venmo" && !trimmed.startsWith("@")) {
-    return `@${trimmed}`;
-  }
-  if (method === "cashapp" && !trimmed.startsWith("$")) {
-    return `$${trimmed}`;
-  }
-  return trimmed;
-};
-
-const validateHandle = (method: PaymentMethodId, value: string) => {
-  const trimmed = value.trim();
-  if (method === "paypal") {
-    return null;
-  }
-  if (!trimmed) {
-    return "Please enter your handle.";
-  }
-  if (method === "venmo" && trimmed.replace("@", "").length < 2) {
-    return "Enter a valid Venmo handle.";
-  }
-  if (method === "cashapp" && trimmed.replace("$", "").length < 2) {
-    return "Enter a valid Cash App Cashtag.";
-  }
-  return null;
-};
+const PAYMENT_METHOD = {
+  id: "paypal",
+  name: "PayPal",
+  icon: "PP",
+  helper: "Connect your PayPal business account for payouts.",
+  hint: "We'll redirect you to PayPal to connect and confirm your account.",
+} as const;
 
 export default function StorefrontPaymentMethods(): JSX.Element {
   const { getBackgroundStyle } = useUserPreferences();
   const navigate = useNavigate();
-  const [selectedMethod, setSelectedMethod] = useState<PaymentMethodId>("paypal");
-  const [details, setDetails] = useState<Record<PaymentMethodId, string>>({
-    paypal: "",
-    venmo: "",
-    cashapp: "",
-  });
   const [savedProvider, setSavedProvider] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [paypalMerchantId, setPaypalMerchantId] = useState("");
@@ -102,32 +28,13 @@ export default function StorefrontPaymentMethods(): JSX.Element {
   const [paypalNotice, setPaypalNotice] = useState<string | null>(null);
   const [paypalError, setPaypalError] = useState<string | null>(null);
   const [confirmingPaypal, setConfirmingPaypal] = useState(false);
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">(
-    "idle"
-  );
-  const [saveError, setSaveError] = useState<string | null>(null);
 
   usePageMeta({
     title: "Payment Methods | Your Social Place",
-    description: "Choose how you want to receive StoreFront payouts.",
+    description: "Connect your PayPal payout account for StoreFront earnings.",
     type: "website",
     robots: "noindex, nofollow",
   });
-
-  const methodMap = useMemo(
-    () =>
-      PAYMENT_METHODS.reduce<Record<PaymentMethodId, PaymentMethodOption>>(
-        (acc, method) => {
-          acc[method.id] = method;
-          return acc;
-        },
-        {} as Record<PaymentMethodId, PaymentMethodOption>
-      ),
-    []
-  );
-
-  const activeMethod = methodMap[selectedMethod];
-  const activeValue = details[selectedMethod];
 
   useEffect(() => {
     let mounted = true;
@@ -137,35 +44,26 @@ export default function StorefrontPaymentMethods(): JSX.Element {
         const res = await api.get("/marketplace-verifications/me");
         const entry = res.data?.data ?? null;
         const payoutProvider = String(entry?.payoutProvider || "").toLowerCase();
-        const payoutEmail = String(entry?.payoutEmail || "");
         const merchantId = String(entry?.paypalMerchantIdInPayPal || "");
         const consentStatus = Boolean(entry?.paypalConsentStatus);
         const permissionsGranted = Boolean(entry?.paypalPermissionsGranted);
         const accountStatus = String(entry?.paypalAccountStatus || "");
         const returnMessage = String(entry?.paypalReturnMessage || "");
         if (!mounted) return;
+
+        if (payoutProvider) {
+          setSavedProvider(payoutProvider);
+        }
+
         if (merchantId) {
           setPaypalMerchantId(merchantId);
           setPaypalStatus("connected");
           setSavedProvider("paypal");
         }
+
         if (accountStatus) setPaypalAccountStatus(accountStatus);
         if (returnMessage) setPaypalReturnMessage(returnMessage);
-        if (payoutProvider) {
-          setSavedProvider((prev) => prev || payoutProvider);
-        }
-        if (
-          payoutProvider === "paypal" ||
-          payoutProvider === "venmo" ||
-          payoutProvider === "cashapp"
-        ) {
-          setSelectedMethod(payoutProvider);
-          if (payoutEmail) {
-            setDetails((prev) => ({ ...prev, [payoutProvider]: payoutEmail }));
-          }
-        } else if (payoutEmail) {
-          setDetails((prev) => ({ ...prev, paypal: payoutEmail }));
-        }
+
         if (!merchantId && (consentStatus || permissionsGranted)) {
           setPaypalStatus("idle");
         }
@@ -260,43 +158,6 @@ export default function StorefrontPaymentMethods(): JSX.Element {
       });
   }, [confirmingPaypal, navigate]);
 
-  useEffect(() => {
-    if (saveState !== "saved") return;
-    const timeout = window.setTimeout(() => {
-      setSaveState("idle");
-    }, 2200);
-    return () => window.clearTimeout(timeout);
-  }, [saveState]);
-
-  const handleSaveManual = async (event: FormEvent) => {
-    event.preventDefault();
-    if (selectedMethod === "paypal") return;
-    const normalized = normalizeHandle(selectedMethod, activeValue);
-    const validationError = validateHandle(selectedMethod, normalized);
-    if (validationError) {
-      setSaveError(validationError);
-      setSaveState("error");
-      return;
-    }
-    setSaveError(null);
-    setSaveState("saving");
-    try {
-      await api.put("/marketplace-verifications/me", {
-        data: {
-          payoutProvider: selectedMethod,
-          payoutEmail: normalized,
-          sellerPayoutStatus: "pending",
-        },
-      });
-      setDetails((prev) => ({ ...prev, [selectedMethod]: normalized }));
-      setSavedProvider(selectedMethod);
-      setSaveState("saved");
-    } catch {
-      setSaveState("error");
-      setSaveError("Unable to save payment method. Please try again.");
-    }
-  };
-
   const handleStartPaypalOnboarding = async () => {
     setPaypalError(null);
     setPaypalNotice("Redirecting to PayPal...");
@@ -310,9 +171,12 @@ export default function StorefrontPaymentMethods(): JSX.Element {
       }
       setPaypalStatus("error");
       setPaypalError("PayPal onboarding link not available.");
-    } catch {
+    } catch (err) {
       setPaypalStatus("error");
-      setPaypalError("Unable to start PayPal onboarding.");
+      const apiMessage =
+        (err as any)?.response?.data?.error?.message ||
+        (err as any)?.response?.data?.message;
+      setPaypalError(apiMessage || "Unable to start PayPal onboarding.");
     }
   };
 
@@ -320,9 +184,9 @@ export default function StorefrontPaymentMethods(): JSX.Element {
   const paypalConnected = Boolean(paypalMerchantId);
   const savedLabel = paypalConnected
     ? "PayPal"
-    : savedProvider && methodMap[savedProvider as PaymentMethodId]
-      ? methodMap[savedProvider as PaymentMethodId].name
-      : savedProvider;
+    : savedProvider
+      ? savedProvider
+      : null;
 
   return (
     <div className="dashboard-shell storefront-shell" style={pageBackground}>
@@ -335,7 +199,7 @@ export default function StorefrontPaymentMethods(): JSX.Element {
                 <p className="storefront-panel-eyebrow">Account settings</p>
                 <h2>Payment methods</h2>
                 <p className="storefront-payment-sub">
-                  Add a payout method so you can receive StoreFront earnings.
+                  StoreFront checkout is PayPal-only. Connect PayPal to receive seller payouts.
                 </p>
               </div>
               <button
@@ -348,53 +212,34 @@ export default function StorefrontPaymentMethods(): JSX.Element {
             </div>
 
             <div className="storefront-payment-banner">
-              <strong>3% platform fee</strong>
+              <strong>2% verified fee / 4% standard fee</strong>
               <p>
-                Sellers receive the listing price minus the 3% platform fee. Online
-                payments are processed through the platform&apos;s PayPal business
-                account.
+                Buyers pay through PayPal checkout. Verified sellers are charged a 2% platform fee;
+                non-verified sellers are charged 4%.
               </p>
             </div>
 
             <div className="storefront-payment-grid">
-              {PAYMENT_METHODS.map((method) => {
-                const isActive = selectedMethod === method.id;
-                return (
-                  <button
-                    key={method.id}
-                    type="button"
-                    className={`storefront-payment-card${isActive ? " is-active" : ""}`}
-                    onClick={() => {
-                      setSelectedMethod(method.id);
-                      setSaveError(null);
-                      setSaveState("idle");
-                      setPaypalError(null);
-                      setPaypalNotice(null);
-                    }}
-                  >
-                    <span
-                      className={`storefront-payment-icon ${method.id}`}
-                      aria-hidden="true"
-                    >
-                      {method.icon}
-                    </span>
-                    <div>
-                      <strong>{method.name}</strong>
-                      <p className="storefront-payment-desc">{method.helper}</p>
-                    </div>
-                    {(method.id === "paypal" ? paypalConnected : savedProvider === method.id) && (
-                      <span className="storefront-payment-tag">Saved</span>
-                    )}
-                  </button>
-                );
-              })}
+              <div className="storefront-payment-card is-active">
+                <span
+                  className={`storefront-payment-icon ${PAYMENT_METHOD.id}`}
+                  aria-hidden="true"
+                >
+                  {PAYMENT_METHOD.icon}
+                </span>
+                <div>
+                  <strong>{PAYMENT_METHOD.name}</strong>
+                  <p className="storefront-payment-desc">{PAYMENT_METHOD.helper}</p>
+                </div>
+                {paypalConnected && <span className="storefront-payment-tag">Saved</span>}
+              </div>
             </div>
 
             <div className="storefront-payment-details">
               <div className="storefront-payment-details-header">
                 <div>
-                  <h3>{activeMethod.name} details</h3>
-                  <p>{activeMethod.hint}</p>
+                  <h3>PayPal details</h3>
+                  <p>{PAYMENT_METHOD.hint}</p>
                 </div>
                 {savedLabel && (
                   <span className="storefront-payment-current">
@@ -402,94 +247,48 @@ export default function StorefrontPaymentMethods(): JSX.Element {
                   </span>
                 )}
               </div>
-              {selectedMethod === "paypal" ? (
-                <div className="storefront-payment-paypal">
+
+              <div className="storefront-payment-paypal">
+                <p className="storefront-payment-note">
+                  Connect your PayPal account to receive payouts instantly.
+                </p>
+                {paypalMerchantId && (
+                  <div className="storefront-payment-status">
+                    <strong>Connected PayPal ID</strong>
+                    <span>{paypalMerchantId}</span>
+                  </div>
+                )}
+                {paypalAccountStatus && (
                   <p className="storefront-payment-note">
-                    Connect your PayPal account to receive payouts instantly.
+                    Account status: {paypalAccountStatus}
                   </p>
-                  {paypalMerchantId && (
-                    <div className="storefront-payment-status">
-                      <strong>Connected PayPal ID</strong>
-                      <span>{paypalMerchantId}</span>
-                    </div>
-                  )}
-                  {paypalAccountStatus && (
-                    <p className="storefront-payment-note">
-                      Account status: {paypalAccountStatus}
-                    </p>
-                  )}
-                  {paypalReturnMessage && (
-                    <p className="storefront-payment-note">{paypalReturnMessage}</p>
-                  )}
-                  {paypalNotice && (
-                    <p className="storefront-payment-note is-info">{paypalNotice}</p>
-                  )}
-                  {paypalError && <p className="storefront-form-error">{paypalError}</p>}
-                  <div className="storefront-payment-actions">
-                    <button
-                      className="btn primary"
-                      type="button"
-                      onClick={handleStartPaypalOnboarding}
-                      disabled={paypalStatus === "connecting" || confirmingPaypal}
-                    >
-                      {paypalStatus === "connecting"
-                        ? "Redirecting..."
-                        : paypalConnected
+                )}
+                {paypalReturnMessage && (
+                  <p className="storefront-payment-note">{paypalReturnMessage}</p>
+                )}
+                {paypalNotice && (
+                  <p className="storefront-payment-note is-info">{paypalNotice}</p>
+                )}
+                {paypalError && <p className="storefront-form-error">{paypalError}</p>}
+                <div className="storefront-payment-actions">
+                  <button
+                    className="btn primary"
+                    type="button"
+                    onClick={handleStartPaypalOnboarding}
+                    disabled={paypalStatus === "connecting" || confirmingPaypal}
+                  >
+                    {paypalStatus === "connecting"
+                      ? "Redirecting..."
+                      : paypalConnected
                         ? "Reconnect PayPal"
                         : "Connect PayPal"}
-                    </button>
-                    {confirmingPaypal && (
-                      <span className="storefront-payment-loading">Confirming...</span>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <form onSubmit={handleSaveManual}>
-                  <label className="storefront-field">
-                    <span>{activeMethod.inputLabel}</span>
-                    <input
-                      type="text"
-                      value={activeValue}
-                      onChange={(event) => {
-                        setDetails((prev) => ({
-                          ...prev,
-                          [selectedMethod]: event.target.value,
-                        }));
-                        if (saveError) setSaveError(null);
-                        if (saveState !== "idle") setSaveState("idle");
-                      }}
-                      placeholder={activeMethod.placeholder}
-                    />
-                  </label>
-                  <p className="storefront-field-hint">{activeMethod.helper}</p>
-                  {activeMethod.websiteUrl && activeMethod.websiteLabel && (
-                    <a
-                      className="storefront-payment-link"
-                      href={activeMethod.websiteUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {activeMethod.websiteLabel}
-                    </a>
+                  </button>
+                  {confirmingPaypal && (
+                    <span className="storefront-payment-loading">Confirming...</span>
                   )}
-                  {saveError && <p className="storefront-form-error">{saveError}</p>}
-                  <div className="storefront-payment-actions">
-                    <button
-                      className="btn primary"
-                      type="submit"
-                      disabled={saveState === "saving" || loading}
-                    >
-                      {saveState === "saving" ? "Saving..." : "Save payment method"}
-                    </button>
-                    {saveState === "saved" && (
-                      <span className="storefront-payment-saved">Saved.</span>
-                    )}
-                    {loading && (
-                      <span className="storefront-payment-loading">Syncing...</span>
-                    )}
-                  </div>
-                </form>
-              )}
+                  {loading && <span className="storefront-payment-loading">Syncing...</span>}
+                </div>
+              </div>
             </div>
           </div>
         </section>

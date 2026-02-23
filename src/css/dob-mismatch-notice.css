@@ -1,0 +1,195 @@
+.dob-mismatch-overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(6, 10, 18, 0.72);
+  backdrop-filter: blur(8px);
+  z-index: 3200;
+}
+
+.dob-mismatch-modal {
+  width: min(760px, 100%);
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: linear-gradient(160deg, rgba(13, 20, 36, 0.98), rgba(8, 12, 22, 0.98));
+  color: #e7ecf5;
+  box-shadow: 0 26px 80px rgba(0, 0, 0, 0.48);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-height: 92vh;
+  overflow: hidden;
+}
+
+.dob-mismatch-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 12px;
+}
+
+.dob-mismatch-eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  font-size: 11px;
+  color: #facc15;
+  margin: 0 0 6px;
+}
+
+.dob-mismatch-header h3 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.dob-mismatch-subtitle {
+  margin: 6px 0 0;
+  font-size: 14px;
+  color: #c7cede;
+}
+
+.dob-mismatch-close {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  color: #f8fafc;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  font-size: 20px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.dob-mismatch-body {
+  display: grid;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.dob-mismatch-callout {
+  border-radius: 16px;
+  border: 1px solid rgba(251, 191, 36, 0.4);
+  background: rgba(251, 191, 36, 0.12);
+  padding: 14px 16px;
+  display: grid;
+  gap: 6px;
+}
+
+.dob-mismatch-callout strong {
+  font-size: 14px;
+  color: #fcd34d;
+}
+
+.dob-mismatch-callout p {
+  margin: 0;
+  font-size: 14px;
+  color: #f8f2d4;
+}
+
+.dob-mismatch-date {
+  font-weight: 700;
+  color: #fff1a8;
+}
+
+.dob-mismatch-note {
+  margin: 0;
+  font-size: 14px;
+  color: #c7cede;
+  line-height: 1.5;
+}
+
+.dob-mismatch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 12px;
+}
+
+.dob-mismatch-btn {
+  border-radius: 12px;
+  padding: 10px 16px;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: transform 0.15s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.dob-mismatch-btn.primary {
+  background: linear-gradient(135deg, #fbbf24, #fb7185);
+  color: #1f1b12;
+  box-shadow: 0 14px 32px rgba(251, 191, 36, 0.32);
+}
+
+.dob-mismatch-btn.ghost {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e9ecf5;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.dob-mismatch-btn:hover {
+  transform: translateY(-1px);
+}
+
+.dob-mismatch-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.dob-mismatch-link {
+  color: #8ec5ff;
+  font-weight: 600;
+  text-decoration: none;
+  padding: 6px 0;
+}
+
+.dob-mismatch-link:hover {
+  text-decoration: underline;
+}
+
+.dob-mismatch-modal .status {
+  margin: 0;
+  font-size: 13px;
+  color: #c7cede;
+}
+
+.dob-mismatch-modal .status-error {
+  color: #ff9b9b;
+}
+
+.dob-mismatch-modal .status-success {
+  color: #9fffc8;
+}
+
+@media (max-width: 600px) {
+  .dob-mismatch-modal {
+    padding: 18px;
+  }
+
+  .dob-mismatch-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .dob-mismatch-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .dob-mismatch-btn {
+    width: 100%;
+  }
+
+  .dob-mismatch-link {
+    text-align: center;
+  }
+}

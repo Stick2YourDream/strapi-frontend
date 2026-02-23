@@ -21,6 +21,8 @@ type NotificationCounts = {
   comments: number;
   likes: number;
   groupUpdates: number;
+  security: number;
+  marketplace: number;
 };
 
 export type FriendRequestPreview = {
@@ -38,6 +40,8 @@ export type MessagePreview = {
   senderName: string;
   body?: string;
   createdAt?: string;
+  listingId?: number;
+  listingTitle?: string;
 };
 
 export type FriendPostPreview = {
@@ -92,6 +96,8 @@ export type NotificationPreviews = {
   comments: CommentPreview | null;
   likes: { count: number } | null;
   groupUpdates: GroupUpdatePreview | null;
+  security: GroupUpdatePreview | null;
+  marketplace: GroupUpdatePreview | null;
 };
 
 const NOTIF_LAST_SEEN_KEY = "notifications_last_seen_v1";
@@ -125,6 +131,18 @@ const getProfileLabel = (entry: any) => {
   const fullName = `${firstName} ${lastName}`.trim();
   const userAttrs = normalize(getEntity(attrs.user));
   return fullName || attrs?.handle || userAttrs?.email || "User";
+};
+
+const normalizeNotifType = (value: unknown) => String(value || "").trim().toLowerCase();
+const isMarketplaceNotification = (type: string) =>
+  type.startsWith("marketplace");
+const isSecurityNotification = (type: string, message?: string) => {
+  if (!type && !message) return false;
+  if (type === "device-approval" || type === "report" || type.startsWith("security")) {
+    return true;
+  }
+  const hint = String(message || "").toLowerCase();
+  return hint.includes("device approval") || hint.includes("security");
 };
 
 const safeParseJson = (value: string | null) => {
@@ -284,7 +302,8 @@ const stringifyReadState = (state?: NotificationReadState | null) =>
 export const useNotifications = (
   userId?: number | null,
   settings?: NotificationSettings,
-  readState?: NotificationReadState
+  readState?: NotificationReadState,
+  registeredAt?: string | null
 ) => {
   const normalizeTime = (value?: string) => {
     if (!value) return null;
@@ -320,6 +339,8 @@ export const useNotifications = (
     comments: 0,
     likes: 0,
     groupUpdates: 0,
+    security: 0,
+    marketplace: 0,
   });
   const [previews, setPreviews] = useState<NotificationPreviews>(() => ({
     messages: null,
@@ -330,6 +351,8 @@ export const useNotifications = (
     comments: null,
     likes: null,
     groupUpdates: null,
+    security: null,
+    marketplace: null,
   }));
   const [loading, setLoading] = useState(false);
   const lastSeenRef = useRef<string | null>(null);
@@ -401,7 +424,9 @@ export const useNotifications = (
         counts.feedbackRequests > previous.feedbackRequests ||
         counts.comments > previous.comments ||
         counts.likes > previous.likes ||
-        counts.groupUpdates > previous.groupUpdates);
+        counts.groupUpdates > previous.groupUpdates ||
+        counts.security > previous.security ||
+        counts.marketplace > previous.marketplace);
     const dndActive = Boolean(settings?.dndEnabled) || isWithinQuietHours(settings);
     const soundEnabled = settings?.soundEnabled !== false;
     const vibrationEnabled = settings?.vibrationEnabled !== false;
@@ -431,6 +456,8 @@ export const useNotifications = (
         comments: 0,
         likes: 0,
         groupUpdates: 0,
+        security: 0,
+        marketplace: 0,
       });
       setPreviews({
         messages: null,
@@ -441,6 +468,8 @@ export const useNotifications = (
         comments: null,
         likes: null,
         groupUpdates: null,
+        security: null,
+        marketplace: null,
       });
       return;
     }
@@ -454,8 +483,20 @@ export const useNotifications = (
       birthdaySeenRef.current = getBirthdaySeen(currentUserId);
       const birthdaySeen = birthdaySeenRef.current;
       const lastSeenIso = lastSeenRef.current;
-      const afterFilter = lastSeenIso
-        ? `&filters[createdAt][$gt]=${encodeURIComponent(lastSeenIso)}`
+      const registrationMs = parseIsoTime(registeredAt || null);
+      const lastSeenMs = parseIsoTime(lastSeenIso);
+      const effectiveSinceMs =
+        lastSeenMs !== null && registrationMs !== null
+          ? Math.max(lastSeenMs, registrationMs)
+          : lastSeenMs !== null
+          ? lastSeenMs
+          : registrationMs !== null
+          ? registrationMs
+          : null;
+      const effectiveSinceIso =
+        effectiveSinceMs !== null ? new Date(effectiveSinceMs).toISOString() : null;
+      const afterFilter = effectiveSinceIso
+        ? `&filters[createdAt][$gt]=${encodeURIComponent(effectiveSinceIso)}`
         : "";
 
       const friendsRes = await api
@@ -628,7 +669,7 @@ export const useNotifications = (
       const messagesRes = await api
         .get(
           `/messages?filters[recipient][id][$eq]=${currentUserId}` +
-            `${afterFilter}&populate=sender&sort=createdAt:desc&pagination[pageSize]=50`
+            `${afterFilter}&populate=sender&populate=listing&sort=createdAt:desc&pagination[pageSize]=50`
         )
         .catch(() => null);
       const messages = messagesRes?.data?.data ?? [];
@@ -637,12 +678,16 @@ export const useNotifications = (
         ? (() => {
             const first = messages[0];
             const attrs = normalize(first);
+            const listingData = attrs.listing?.data ?? attrs.listing;
+            const listing = normalize(listingData);
             return {
               id: first.id ?? attrs.documentId ?? attrs.id ?? "message",
               senderId: getEntityId(attrs.sender),
               senderName: getUserLabel(attrs.sender),
               body: attrs.body,
               createdAt: attrs.createdAt,
+              listingId: getEntityId(listingData),
+              listingTitle: listing?.title ? String(listing.title) : undefined,
             };
           })()
         : null;
@@ -899,16 +944,62 @@ export const useNotifications = (
         )
         .catch(() => null);
       const groupUpdates = groupUpdatesRes?.data?.data ?? [];
-      const groupUpdateCount = groupUpdates.length ?? 0;
-      const groupUpdatePreview: GroupUpdatePreview | null = groupUpdates.length
+      const groupNotifications = groupUpdates.map((entry: any) => {
+        const attrs = normalize(entry);
+        const type = normalizeNotifType(attrs.type);
+        return {
+          id: entry.id ?? attrs.documentId ?? attrs.id ?? "group-update",
+          actorName: getUserLabel(attrs.actor),
+          message: attrs.message,
+          createdAt: attrs.createdAt,
+          type,
+        };
+      });
+      const securityNotifications = groupNotifications.filter((item: any) =>
+        isSecurityNotification(item.type, item.message)
+      );
+      const marketplaceNotifications = groupNotifications.filter((item: any) =>
+        isMarketplaceNotification(item.type)
+      );
+      const groupUpdateNotifications = groupNotifications.filter(
+        (item: any) =>
+          !isSecurityNotification(item.type, item.message) &&
+          !isMarketplaceNotification(item.type)
+      );
+
+      const groupUpdateCount = groupUpdateNotifications.length ?? 0;
+      const securityCount = securityNotifications.length ?? 0;
+      const marketplaceCount = marketplaceNotifications.length ?? 0;
+      const groupUpdatePreview: GroupUpdatePreview | null = groupUpdateNotifications.length
         ? (() => {
-            const first = groupUpdates[0];
-            const attrs = normalize(first);
+            const first = groupUpdateNotifications[0];
             return {
-              id: first.id ?? attrs.documentId ?? attrs.id ?? "group-update",
-              actorName: getUserLabel(attrs.actor),
-              message: attrs.message,
-              createdAt: attrs.createdAt,
+              id: first.id,
+              actorName: first.actorName,
+              message: first.message,
+              createdAt: first.createdAt,
+            };
+          })()
+        : null;
+      const securityPreview: GroupUpdatePreview | null = securityNotifications.length
+        ? (() => {
+            const first = securityNotifications[0];
+            return {
+              id: first.id,
+              actorName: first.actorName,
+              message: first.message,
+              createdAt: first.createdAt,
+            };
+          })()
+        : null;
+      const marketplacePreview: GroupUpdatePreview | null = marketplaceNotifications.length
+        ? (() => {
+            const first = marketplaceNotifications[0];
+            return {
+              id: first.id,
+              actorName: first.actorName,
+              message: first.message,
+              createdAt: first.createdAt,
             };
           })()
         : null;
@@ -952,6 +1043,8 @@ export const useNotifications = (
         comments: commentCount,
         likes: likeCount,
         groupUpdates: groupUpdateCount,
+        security: securityCount,
+        marketplace: marketplaceCount,
       });
       setPreviews({
         messages: messagePreview,
@@ -962,6 +1055,8 @@ export const useNotifications = (
         comments: commentPreview,
         likes: likeCount > 0 ? { count: likeCount } : null,
         groupUpdates: groupUpdatePreview,
+        security: securityPreview,
+        marketplace: marketplacePreview,
       });
     } finally {
       setLoading(false);
@@ -1061,6 +1156,8 @@ export const useNotifications = (
       comments: 0,
       likes: 0,
       groupUpdates: 0,
+      security: 0,
+      marketplace: 0,
     }));
     setPreviews((prev) => ({
       ...prev,
@@ -1071,6 +1168,8 @@ export const useNotifications = (
       comments: null,
       likes: null,
       groupUpdates: null,
+      security: null,
+      marketplace: null,
     }));
   }, [userId]);
 
@@ -1162,7 +1261,9 @@ export const useNotifications = (
       counts.feedbackRequests +
       counts.comments +
       counts.likes +
-      counts.groupUpdates,
+      counts.groupUpdates +
+      counts.security +
+      counts.marketplace,
     [
       counts.birthdays,
       counts.comments,
@@ -1170,8 +1271,10 @@ export const useNotifications = (
       counts.friendPosts,
       counts.groupUpdates,
       counts.likes,
+      counts.marketplace,
       counts.messages,
       counts.requests,
+      counts.security,
     ]
   );
 

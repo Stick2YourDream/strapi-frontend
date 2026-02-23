@@ -6,7 +6,7 @@ type PolicySection = {
   body: string[];
 };
 
-export const TERMS_UPDATED = "Feb 20, 2026";
+export const TERMS_UPDATED = "Feb 18, 2026";
 
 export const TERMS_SECTIONS: PolicySection[] = [
   {
@@ -29,6 +29,14 @@ export const TERMS_SECTIONS: PolicySection[] = [
     body: [
       "Your Social Place is a motivational support network operated by Stick2YourDreams. Harassment, hateful conduct, threats, impersonation, and discriminatory content are not allowed.",
       "You agree not to post illegal content, malicious code, spam, or anything that would disrupt the Service or harm other users.",
+    ],
+  },
+  {
+    title: "3a. StoreFront prohibited listings",
+    body: [
+      "StoreFront is for physical goods only. Service listings, jobs, or paid tasks are not permitted.",
+      "Adult content, sexual services, and explicit items (including pornography, nudity, adult toys, or sex dolls) are prohibited.",
+      "Listings that violate these rules may be removed and accounts may be suspended or terminated.",
     ],
   },
   {

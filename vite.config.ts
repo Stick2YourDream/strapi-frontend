@@ -18,14 +18,40 @@ export default defineConfig(({ mode }) => {
     : "https://newsapp_backend.rousehouse.net";
   const newsKey = env.NEWS_API_KEY || env.VITE_NEWS_API_KEY;
 
+  const devHost = String(env.VITE_DEV_HOST || "localhost").trim() || "localhost";
+
   return {
     plugins: [react()],
     server: {
-      host: "localhost",
+      host: devHost,
       // allowedHosts: ["testing.yoursocialplace.com"],
+      allowedHosts: [
+        "testing.yoursocialplace.com",
+        "testing.jasonhouse.net",
+        "jasonhouse.net",
+        "www.jasonhouse.net",
+        "strapi.jasonhouse.net",
+        "production.jasonhouse.net",
+      ],
       port: Number.isFinite(devPort) ? devPort : 5173,
       strictPort: true,
       proxy: {
+        "/api": {
+          target: "http://localhost:1337",
+          changeOrigin: true,
+          secure: false,
+        },
+        "/uploads": {
+          target: "http://localhost:1337",
+          changeOrigin: true,
+          secure: false,
+        },
+        "/socket.io": {
+          target: "http://localhost:1337",
+          changeOrigin: true,
+          secure: false,
+          ws: true,
+        },
         "/news-proxy": {
           target: newsTarget,
           changeOrigin: true,

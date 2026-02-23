@@ -10,6 +10,8 @@ import { VideoCallProvider } from "./context/VideoCallContext";
 import "./index.css";
 import "./css/4k.css";
 import "./css/link-preview.css";
+import "./css/profile-photo-modal.css";
+import "./css/popup-modal.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

@@ -84,7 +84,7 @@
 }
 
 .news-stats.is-hidden {
-  display: none;
+  display: grid;
 }
 
 .news-stat-card {

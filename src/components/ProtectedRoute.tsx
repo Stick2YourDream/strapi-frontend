@@ -1,6 +1,7 @@
 // src/components/ProtectedRoute.tsx
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import AgeVerificationPrompt from "./AgeVerificationPrompt";
 
 interface Props {
   children: JSX.Element;
@@ -18,7 +19,15 @@ export default function ProtectedRoute({ children }: Props) {
     if (sessionActive) {
       return null;
     }
-    return <Navigate to="/login" replace />;
+    const redirectTarget = `${location.pathname}${location.search}${location.hash}`;
+    const loginParams = new URLSearchParams();
+    if (redirectTarget.startsWith("/") && !redirectTarget.startsWith("//")) {
+      loginParams.set("redirect", redirectTarget);
+    }
+    const loginPath = loginParams.toString()
+      ? `/login?${loginParams.toString()}`
+      : "/login";
+    return <Navigate to={loginPath} replace />;
   }
 
   if (profileLoading && !profile) {
@@ -29,5 +38,10 @@ export default function ProtectedRoute({ children }: Props) {
     return <Navigate to="/me" replace />;
   }
 
-  return children;
+  return (
+    <>
+      <AgeVerificationPrompt />
+      {children}
+    </>
+  );
 }

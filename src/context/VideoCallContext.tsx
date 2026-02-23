@@ -58,7 +58,7 @@ type IncomingCall = {
 type VideoCallMessage = {
   id: string;
   body: string;
-  kind: "text" | "emoji" | "gif";
+  kind: "text" | "emoji" | "gif" | "image";
   gifUrl?: string;
   from: {
     userId: number;
@@ -196,6 +196,8 @@ type VideoCallEffects = {
     | "rose"
     | "noir"
     | "midnight";
+  softFocus: boolean;
+  softFocusAmount: number;
 };
 
 type SelfieSegmentationResults = {
@@ -244,6 +246,7 @@ type VideoCallContextValue = {
   isVideoEnabled: boolean;
   isAudioEnabled: boolean;
   noiseSuppressionEnabled: boolean;
+  voiceFocusEnabled: boolean;
   lowLatencyMode: boolean;
   lowLatencySuggested: boolean;
   lowLatencySuggestionReason: string | null;
@@ -255,6 +258,7 @@ type VideoCallContextValue = {
   videoEffects: VideoCallEffects;
   setVideoEffects: (effects: Partial<VideoCallEffects>) => void;
   toggleNoiseSuppression: () => void;
+  toggleVoiceFocus: () => void;
   toggleLowLatencyMode: () => void;
   onlineUserIds: Set<number>;
   openCallComposer: (invitees?: VideoCallInvitee[]) => void;
@@ -309,6 +313,7 @@ const REALTIME_URL =
   (typeof window !== "undefined" ? window.location.origin : "");
 const AUDIO_SYNC_DELAY_SEC = 0.14;
 const NOISE_SUPPRESSION_STORAGE_KEY = "call:noise-suppression";
+const VOICE_FOCUS_STORAGE_KEY = "call:voice-focus";
 const LOW_LATENCY_STORAGE_KEY = "call:low-latency";
 const SOCKET_HEARTBEAT_INTERVAL_MS = Number(
   import.meta.env.VITE_SOCKET_HEARTBEAT_INTERVAL || 20000
@@ -648,6 +653,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     avatarEyeStyle: "almond",
     avatarMouthStyle: "natural",
     filter: "none",
+    softFocus: false,
+    softFocusAmount: 0.35,
   });
   const [onlineUserIds, setOnlineUserIds] = useState<Set<number>>(new Set());
   const [realtimeStatus, setRealtimeStatus] = useState<RealtimeStatus>("disconnected");
@@ -656,6 +663,12 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     if (typeof window === "undefined") return true;
     const stored = window.localStorage.getItem(NOISE_SUPPRESSION_STORAGE_KEY);
     if (!stored) return true;
+    return stored === "1";
+  });
+  const [voiceFocusEnabled, setVoiceFocusEnabled] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const stored = window.localStorage.getItem(VOICE_FOCUS_STORAGE_KEY);
+    if (!stored) return false;
     return stored === "1";
   });
   const [lowLatencyMode, setLowLatencyMode] = useState(() => {
@@ -711,6 +724,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   const incomingCallRef = useRef<IncomingCall | null>(null);
   const videoEffectsRef = useRef(videoEffects);
   const noiseSuppressionRef = useRef(noiseSuppressionEnabled);
+  const voiceFocusRef = useRef(voiceFocusEnabled);
   const lowLatencyModeRef = useRef(lowLatencyMode);
   const holdEnabledRef = useRef(false);
   const holdRestoreRef = useRef<{ audio: boolean; video: boolean }>({
@@ -733,7 +747,8 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     cleanup: (() => void) | null;
     sourceId: string | null;
     delaySec: number;
-  }>({ track: null, cleanup: null, sourceId: null, delaySec: 0 });
+    mode: "none" | "delay" | "voice";
+  }>({ track: null, cleanup: null, sourceId: null, delaySec: 0, mode: "none" });
   const cleanupCallRef = useRef<() => void>(() => {});
   const profileRef = useRef<VideoCallInvitee | null>(null);
   const statusRef = useRef<VideoCallStatus>(status);
@@ -964,6 +979,12 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
   }, [noiseSuppressionEnabled]);
 
   useEffect(() => {
+    voiceFocusRef.current = voiceFocusEnabled;
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(VOICE_FOCUS_STORAGE_KEY, voiceFocusEnabled ? "1" : "0");
+  }, [voiceFocusEnabled]);
+
+  useEffect(() => {
     lowLatencyModeRef.current = lowLatencyMode;
     if (typeof window === "undefined") return;
     window.localStorage.setItem(LOW_LATENCY_STORAGE_KEY, lowLatencyMode ? "1" : "0");
@@ -1026,13 +1047,44 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     }
   }, []);
 
-  const buildAudioConstraints = useCallback(
+const buildAudioConstraints = useCallback(
     (deviceId: string | null, noiseSuppression: boolean) => {
+      const supported =
+        typeof navigator !== "undefined" && navigator.mediaDevices?.getSupportedConstraints
+          ? navigator.mediaDevices.getSupportedConstraints()
+          : {};
       const constraints: MediaTrackConstraints = {
         noiseSuppression,
         echoCancellation: true,
         autoGainControl: true,
       };
+      if (supported.channelCount) {
+        constraints.channelCount = 1;
+      }
+      if (supported.sampleRate) {
+        constraints.sampleRate = { ideal: 48000 };
+      }
+      if (supported.sampleSize) {
+        constraints.sampleSize = 16;
+      }
+      const supportsLatency =
+        "latency" in supported && Boolean((supported as { latency?: boolean }).latency);
+      if (supportsLatency) {
+        (
+          constraints as MediaTrackConstraints & { latency?: ConstrainDoubleRange }
+        ).latency = { ideal: 0.02, max: 0.05 };
+      }
+      if ((supported as { voiceIsolation?: boolean }).voiceIsolation) {
+        (constraints as MediaTrackConstraints & { voiceIsolation?: boolean }).voiceIsolation =
+          noiseSuppression;
+      }
+      const advancedHints: Record<string, unknown> = {
+        googEchoCancellation: true,
+        googAutoGainControl: true,
+        googNoiseSuppression: noiseSuppression,
+        googHighpassFilter: noiseSuppression,
+      };
+      constraints.advanced = [advancedHints as MediaTrackConstraintSet];
       if (deviceId && deviceId !== "default") {
         constraints.deviceId = { exact: deviceId };
       }
@@ -1318,7 +1370,11 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         try {
           const decrypted = await decryptJson<VideoCallChatEnvelope>(key, entry.encryptedMessage);
           const nextKind =
-            decrypted?.kind === "emoji" || decrypted?.kind === "gif" ? decrypted.kind : "text";
+            decrypted?.kind === "emoji" ||
+            decrypted?.kind === "gif" ||
+            decrypted?.kind === "image"
+              ? decrypted.kind
+              : "text";
           updates.set(messageId, {
             body: String(decrypted?.body || ""),
             kind: nextKind,
@@ -1620,6 +1676,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       cleanup: null,
       sourceId: null,
       delaySec: 0,
+      mode: "none",
     };
   }, []);
 
@@ -1649,6 +1706,108 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       const cleanup = () => {
         source.disconnect();
         delayNode.disconnect();
+        track?.stop();
+        ctx.close().catch(() => undefined);
+      };
+      return { track, cleanup };
+    },
+    []
+  );
+
+  const createVoiceFocusAudioTrack = useCallback(
+    (rawTrack: MediaStreamTrack, delaySec: number) => {
+      const AudioCtor =
+        typeof window !== "undefined"
+          ? window.AudioContext ||
+            (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+          : undefined;
+      if (!AudioCtor) {
+        throw new Error("AudioContext unavailable");
+      }
+      const ctx = new AudioCtor({ latencyHint: "interactive" });
+      const source = ctx.createMediaStreamSource(new MediaStream([rawTrack]));
+      const highpass = ctx.createBiquadFilter();
+      highpass.type = "highpass";
+      highpass.frequency.value = 85;
+      highpass.Q.value = 0.7;
+      const lowpass = ctx.createBiquadFilter();
+      lowpass.type = "lowpass";
+      lowpass.frequency.value = 6000;
+      lowpass.Q.value = 0.7;
+      const compressor = ctx.createDynamicsCompressor();
+      compressor.threshold.value = -45;
+      compressor.knee.value = 30;
+      compressor.ratio.value = 8;
+      compressor.attack.value = 0.003;
+      compressor.release.value = 0.25;
+      const gain = ctx.createGain();
+      gain.gain.value = 1;
+      const gate = ctx.createScriptProcessor(1024, 1, 1);
+      let envelope = 1;
+      const attackTime = 0.02;
+      const releaseTime = 0.15;
+      const attackCoeff = Math.exp(-1 / (ctx.sampleRate * attackTime));
+      const releaseCoeff = Math.exp(-1 / (ctx.sampleRate * releaseTime));
+      const threshold = 0.015;
+      const floor = 0.0;
+      gate.onaudioprocess = (event) => {
+        const input = event.inputBuffer;
+        const output = event.outputBuffer;
+        const channels = input.numberOfChannels || 1;
+        const length = input.getChannelData(0).length;
+        let sum = 0;
+        for (let ch = 0; ch < channels; ch += 1) {
+          const data = input.getChannelData(ch);
+          for (let i = 0; i < length; i += 1) {
+            sum += data[i] * data[i];
+          }
+        }
+        const rms = Math.sqrt(sum / (length * channels));
+        const target = rms >= threshold ? 1 : floor;
+        if (target > envelope) {
+          envelope = target + (envelope - target) * attackCoeff;
+        } else {
+          envelope = target + (envelope - target) * releaseCoeff;
+        }
+        for (let ch = 0; ch < channels; ch += 1) {
+          const inputData = input.getChannelData(ch);
+          const outputData = output.getChannelData(ch);
+          for (let i = 0; i < length; i += 1) {
+            outputData[i] = inputData[i] * envelope;
+          }
+        }
+      };
+      const destination = ctx.createMediaStreamDestination();
+      source.connect(highpass);
+      highpass.connect(lowpass);
+      lowpass.connect(compressor);
+      compressor.connect(gain);
+      gain.connect(gate);
+      let delayNode: DelayNode | null = null;
+      if (delaySec > 0) {
+        delayNode = ctx.createDelay(1);
+        delayNode.delayTime.value = delaySec;
+        gate.connect(delayNode);
+        delayNode.connect(destination);
+      } else {
+        gate.connect(destination);
+      }
+      if (ctx.state === "suspended") {
+        ctx.resume().catch(() => undefined);
+      }
+      const [track] = destination.stream.getAudioTracks();
+      if (track) {
+        track.enabled = rawTrack.enabled;
+      }
+      const cleanup = () => {
+        gate.onaudioprocess = null;
+        source.disconnect();
+        highpass.disconnect();
+        lowpass.disconnect();
+        compressor.disconnect();
+        gain.disconnect();
+        gate.disconnect();
+        if (delayNode) delayNode.disconnect();
         track?.stop();
         ctx.close().catch(() => undefined);
       };
@@ -2946,7 +3105,18 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         } else {
           maskSource = null;
         }
-        const cameraFilter = getCameraFilter(effects.filter);
+        let cameraFilter = getCameraFilter(effects.filter);
+        const softFocusAmount = Number.isFinite(effects.softFocusAmount)
+          ? Math.min(1, Math.max(0, effects.softFocusAmount))
+          : 0.35;
+        const softFocusPx = effects.softFocus ? softFocusAmount * 4 : 0;
+        if (effects.softFocus && softFocusPx > 0.01) {
+          const softFocusFilter = `blur(${softFocusPx.toFixed(2)}px)`;
+          cameraFilter =
+            cameraFilter && cameraFilter !== "none"
+              ? `${cameraFilter} ${softFocusFilter}`
+              : softFocusFilter;
+        }
         const mirror = effects.mirror;
         const maskBlurPx = useAvatar
           ? 0.8
@@ -3271,31 +3441,56 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       effects.background !== "none" ||
       effects.filter !== "none" ||
       hasAvatar;
-    if (!needsProcessing || AUDIO_SYNC_DELAY_SEC <= 0) {
+    const needsDelay = needsProcessing && AUDIO_SYNC_DELAY_SEC > 0;
+    const wantsVoiceFocus = voiceFocusRef.current;
+    if (!wantsVoiceFocus && !needsDelay) {
       stopAudioProcessing();
       return rawTrack;
     }
     const current = audioProcessingRef.current;
-    if (current.track && current.sourceId === rawTrack.id && current.delaySec === AUDIO_SYNC_DELAY_SEC) {
+    const targetDelay = needsDelay ? AUDIO_SYNC_DELAY_SEC : 0;
+    if (
+      current.track &&
+      current.sourceId === rawTrack.id &&
+      current.delaySec === targetDelay &&
+      ((wantsVoiceFocus && current.mode === "voice") ||
+        (!wantsVoiceFocus && current.mode === "delay"))
+    ) {
       current.track.enabled = rawTrack.enabled;
       return current.track;
     }
     stopAudioProcessing();
     try {
-      const { track, cleanup } = createDelayedAudioTrack(rawTrack, AUDIO_SYNC_DELAY_SEC);
+      if (wantsVoiceFocus) {
+        const { track, cleanup } = createVoiceFocusAudioTrack(rawTrack, targetDelay);
+        if (!track) return rawTrack;
+        audioProcessingRef.current = {
+          track,
+          cleanup,
+          sourceId: rawTrack.id,
+          delaySec: targetDelay,
+          mode: "voice",
+        };
+        return track;
+      }
+      const { track, cleanup } = createDelayedAudioTrack(rawTrack, targetDelay);
       if (!track) return rawTrack;
       audioProcessingRef.current = {
         track,
         cleanup,
         sourceId: rawTrack.id,
-        delaySec: AUDIO_SYNC_DELAY_SEC,
+        delaySec: targetDelay,
+        mode: "delay",
       };
       return track;
     } catch {
       stopAudioProcessing();
+      if (wantsVoiceFocus) {
+        setError("Unable to apply voice focus.");
+      }
       return rawTrack;
     }
-  }, [createDelayedAudioTrack, stopAudioProcessing]);
+  }, [createDelayedAudioTrack, createVoiceFocusAudioTrack, stopAudioProcessing]);
 
   const syncLocalStream = useCallback(
     (videoTrack: MediaStreamTrack | null) => {
@@ -3737,7 +3932,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
     if (!rawTrack) return;
     try {
       if (typeof rawTrack.applyConstraints === "function") {
-        await rawTrack.applyConstraints({ noiseSuppression: next });
+        await rawTrack.applyConstraints(buildAudioConstraints(null, next));
         return;
       }
     } catch {
@@ -3757,6 +3952,16 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       setError("Unable to update noise suppression.");
     }
   }, [applyTrackHints, buildAudioConstraints, replaceAudioTrack]);
+
+  const toggleVoiceFocus = useCallback(() => {
+    const next = !voiceFocusRef.current;
+    voiceFocusRef.current = next;
+    setVoiceFocusEnabled(next);
+    if (!rawStreamRef.current) return;
+    const videoTrack =
+      videoProcessingRef.current.track || rawStreamRef.current?.getVideoTracks()[0] || null;
+    syncLocalStream(videoTrack);
+  }, [syncLocalStream]);
 
   const toggleLowLatencyMode = useCallback(async () => {
     const next = !lowLatencyModeRef.current;
@@ -4593,7 +4798,11 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
         void decryptJson<VideoCallChatEnvelope>(activeKey, payload.encryptedMessage.trim())
           .then((decrypted) => {
             const nextKind =
-              decrypted?.kind === "emoji" || decrypted?.kind === "gif" ? decrypted.kind : "text";
+            decrypted?.kind === "emoji" ||
+            decrypted?.kind === "gif" ||
+            decrypted?.kind === "image"
+              ? decrypted.kind
+              : "text";
             appendMessage({
               body: String(decrypted?.body || ""),
               kind: nextKind,
@@ -4615,7 +4824,11 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       }
 
       const nextKind =
-        payload?.kind === "emoji" || payload?.kind === "gif" ? payload.kind : "text";
+        payload?.kind === "emoji" ||
+        payload?.kind === "gif" ||
+        payload?.kind === "image"
+          ? payload.kind
+          : "text";
       appendMessage({
         body: String(payload?.body || ""),
         kind: nextKind,
@@ -5536,7 +5749,10 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       const appendLocalEcho = () => {
         const identity = resolveLocalIdentity();
         const localUserId = Number(user?.id) || 0;
-        const safeKind = payload.kind === "emoji" || payload.kind === "gif" ? payload.kind : "text";
+        const safeKind =
+          payload.kind === "emoji" || payload.kind === "gif" || payload.kind === "image"
+            ? payload.kind
+            : "text";
         const safeBody = String(payload.body || "");
         const safeGifUrl = String(payload.gifUrl || "");
         if (localUserId > 0) {
@@ -5643,6 +5859,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       isVideoEnabled,
       isAudioEnabled,
       noiseSuppressionEnabled,
+      voiceFocusEnabled,
       lowLatencyMode,
       lowLatencySuggested,
       lowLatencySuggestionReason,
@@ -5654,6 +5871,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       videoEffects,
       setVideoEffects,
       toggleNoiseSuppression,
+      toggleVoiceFocus,
       toggleLowLatencyMode,
       onlineUserIds,
       openCallComposer,
@@ -5700,6 +5918,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       isCallHost,
       isAudioEnabled,
       noiseSuppressionEnabled,
+      voiceFocusEnabled,
       lowLatencyMode,
       lowLatencySuggested,
       lowLatencySuggestionReason,
@@ -5717,6 +5936,7 @@ export const VideoCallProvider = ({ children }: { children: React.ReactNode }) =
       setVideoInputDevice,
       setVideoEffects,
       toggleNoiseSuppression,
+      toggleVoiceFocus,
       toggleLowLatencyMode,
       onlineUserIds,
       leaveCall,

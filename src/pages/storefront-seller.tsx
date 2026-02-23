@@ -1,6 +1,8 @@
 import {
   type CSSProperties,
   type DragEvent,
+  type KeyboardEvent,
+  type MouseEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -11,6 +13,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import "../css/dashboard.css";
 import "../css/storefront-seller.css";
 import Sidebar from "../components/Sidebar";
+import PopupModal from "../components/PopupModal";
 import api from "../api/strapi";
 import { useAuth } from "../context/AuthContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";
@@ -23,15 +26,12 @@ const USE_DEMO_LISTINGS = import.meta.env.DEV;
 const SELLER_DASHBOARD_MOCK_ENABLED_KEY = "storefront:sellerDashboardMockEnabled";
 const SELLER_DASHBOARD_MOCK_DATA_KEY = "storefront:sellerDashboardMockData";
 const DASHBOARD_SYNC_INTERVAL = 15000;
-const SELLER_DASHBOARD_THEME_KEY = "storefront:sellerDashboardTheme:v1";
 
 const buildSellerDashboardMockEnabledKey = (userId?: number | null) =>
   userId ? `${SELLER_DASHBOARD_MOCK_ENABLED_KEY}:${userId}` : null;
 
 const buildSellerDashboardMockDataKey = (userId?: number | null) =>
   userId ? `${SELLER_DASHBOARD_MOCK_DATA_KEY}:${userId}` : null;
-const buildSellerDashboardThemeKey = (userId?: number | null, viewId?: number | null) =>
-  userId && viewId ? `${SELLER_DASHBOARD_THEME_KEY}:${userId}:${viewId}` : null;
 type StorefrontSeller = {
   id: string;
   userId?: number;
@@ -50,6 +50,11 @@ type StorefrontProduct = {
   rawId?: number;
   title: string;
   price: number;
+  status?: string;
+  auctionEnabled?: boolean;
+  auctionEndAt?: string;
+  startingBid?: number;
+  highestBid?: number;
   category: string;
   condition: string;
   location: string;
@@ -72,17 +77,34 @@ type StorefrontProduct = {
   isDemo?: boolean;
 };
 
-type OfferStatus = "pending" | "accepted" | "declined" | "withdrawn";
+type OfferStatus = "pending" | "countered" | "accepted" | "declined" | "withdrawn";
+type BidStatus = "pending" | "accepted" | "declined" | "withdrawn";
 
 type StorefrontOffer = {
   id: string;
   listingId: number;
+  listingTitle?: string;
   buyerId?: number;
   sellerId?: number;
   buyerName: string;
   offeredPrice: number;
   currency: string;
   status: OfferStatus;
+  createdAt: string;
+  note?: string;
+  lastActionBy?: "buyer" | "seller";
+};
+
+type MarketplaceBid = {
+  id: string;
+  listingId: number;
+  listingTitle?: string;
+  bidderId?: number;
+  sellerId?: number;
+  bidderName: string;
+  amount: number;
+  currency: string;
+  status: BidStatus;
   createdAt: string;
 };
 
@@ -118,14 +140,53 @@ type MarketplaceMessage = {
   id: number;
   body: string;
   createdAt: string;
+  createdAtTs?: number;
+  listingId?: number;
   listingTitle?: string;
+  senderId?: number;
   senderName: string;
+  recipientId?: number;
   recipientName: string;
+};
+
+type MarketplaceMessageThread = {
+  key: string;
+  listingId?: number;
+  listingTitle?: string;
+  counterpartId?: number;
+  counterpartName: string;
+  lastMessageAt: number;
+  lastMessageLabel: string;
+  lastMessageBody: string;
+  messages: MarketplaceMessage[];
+};
+
+type ListingFilterOption = {
+  id: string;
+  label: string;
+};
+
+const buildListingFilterOptions = (
+  items: Array<{ listingId?: number; listingTitle?: string }>
+): ListingFilterOption[] => {
+  const options = new Map<string, string>();
+  items.forEach((item) => {
+    const key = String(item.listingId ?? "unknown");
+    if (options.has(key)) return;
+    const title = String(item.listingTitle || "").trim();
+    if (title) {
+      options.set(key, title);
+      return;
+    }
+    options.set(key, key === "unknown" ? "Listing" : `Listing #${key}`);
+  });
+  return Array.from(options.entries()).map(([id, label]) => ({ id, label }));
 };
 
 type SellerDashboardMockData = {
   listings?: StorefrontProduct[];
   offers?: StorefrontOffer[];
+  bids?: MarketplaceBid[];
   orders?: MarketplaceOrder[];
   messages?: MarketplaceMessage[];
   disputes?: MarketplaceDispute[];
@@ -137,6 +198,7 @@ type DraftImage = {
   url: string;
   file?: File;
   mediaId?: number;
+  hasExif?: boolean;
 };
 
 type BulkListingDraft = DraftProduct & {
@@ -148,8 +210,12 @@ type BulkListingDraft = DraftProduct & {
 type DraftProduct = {
   title: string;
   price: string;
+  auctionEnabled: boolean;
+  auctionEndAt: string;
+  startingBid: string;
   category: string;
   condition: string;
+  status: "active" | "pending" | "archived" | "sold";
   location: string;
   locationCity: string;
   locationState: string;
@@ -242,13 +308,8 @@ type DashboardView = {
   updatedAt?: string;
 };
 
-type StoredDashboardTheme = {
-  theme: DashboardTheme;
-  savedAt: number;
-};
-
 type SetupChecklistItem = {
-  id: "listing" | "identity" | "payout";
+  id: "listing" | "payout";
   label: string;
   status: "done" | "pending" | "required";
 };
@@ -273,6 +334,19 @@ const formatLocationLabel = (city: string, state: string) => {
   return parts.join(", ");
 };
 
+const toLocalDateTimeInput = (value?: string | null) => {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (input: number) => String(input).padStart(2, "0");
+  const year = date.getFullYear();
+  const month = pad(date.getMonth() + 1);
+  const day = pad(date.getDate());
+  const hours = pad(date.getHours());
+  const minutes = pad(date.getMinutes());
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+};
+
 const readSellerDashboardMockEnabled = (userId?: number | null) => {
   if (typeof window === "undefined") return false;
   const scopedKey = buildSellerDashboardMockEnabledKey(userId);
@@ -287,51 +361,6 @@ const readSellerDashboardMockEnabled = (userId?: number | null) => {
   }
   return false;
 };
-
-const readStoredDashboardTheme = (
-  userId?: number | null,
-  viewId?: number | null
-): StoredDashboardTheme | null => {
-  if (typeof window === "undefined") return null;
-  const key = buildSellerDashboardThemeKey(userId, viewId);
-  if (!key) return null;
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as StoredDashboardTheme | null;
-    if (!parsed || typeof parsed !== "object") return null;
-    if (!parsed.theme || typeof parsed.theme !== "object") return null;
-    return {
-      theme: { ...DEFAULT_DASHBOARD_THEME, ...(parsed.theme as DashboardTheme) },
-      savedAt: Number(parsed.savedAt || 0),
-    };
-  } catch {
-    return null;
-  }
-};
-
-const writeStoredDashboardTheme = (
-  userId: number,
-  viewId: number,
-  theme: DashboardTheme
-) => {
-  if (typeof window === "undefined") return;
-  const key = buildSellerDashboardThemeKey(userId, viewId);
-  if (!key) return;
-  try {
-    const payload: StoredDashboardTheme = { theme, savedAt: Date.now() };
-    window.localStorage.setItem(key, JSON.stringify(payload));
-  } catch {
-    // ignore storage errors
-  }
-};
-
-const areThemesEqual = (left: DashboardTheme, right: DashboardTheme) =>
-  left.pageBg === right.pageBg &&
-  left.pageOpacity === right.pageOpacity &&
-  left.cardBg === right.cardBg &&
-  left.cardOpacity === right.cardOpacity &&
-  left.accent === right.accent;
 
 const readSellerDashboardMockData = (userId?: number | null): SellerDashboardMockData | null => {
   if (typeof window === "undefined") return null;
@@ -361,13 +390,23 @@ const readSellerDashboardMockData = (userId?: number | null): SellerDashboardMoc
 
 const CATEGORY_OPTIONS = [
   "All",
-  "$0.00",
+  "Free",
   "Cars & Vehicles",
+  "Motorcycles",
+  "RVs & Campers",
+  "Auto Parts & Accessories",
   "Real Estate",
+  "Apartments & Rentals",
   "Electronics",
+  "Computers",
+  "Phones & Tablets",
+  "Cameras & Drones",
+  "Gaming",
   "Home & Garden",
   "Furniture",
   "Appliances",
+  "Tools",
+  "Building Materials",
   "Fashion",
   "Shoes",
   "Accessories",
@@ -381,15 +420,74 @@ const CATEGORY_OPTIONS = [
   "Music & Instruments",
   "Art & Collectibles",
   "Jewelry",
-  "Pets",
-  "Services",
+  "Pets & Supplies",
+  "Office & Business",
+  "Industrial & Commercial",
   "Tickets",
-  "Business & Industrial",
-  "Jobs",
   "Other",
 ];
 
-const CONDITION_OPTIONS = ["Any", "New", "Like new", "Good", "Fair"];
+const CONDITION_OPTIONS = ["Any", "New", "Good", "Fair", "Poor"];
+const MAX_LISTING_PHOTOS = 10;
+const BLOCKED_CATEGORIES = new Set(["services", "jobs"]);
+const BLOCKED_KEYWORDS = [
+  "adult toy",
+  "sex toy",
+  "dildo",
+  "sex doll",
+  "escort",
+  "prostitution",
+  "hooker",
+  "stripper",
+  "porn",
+  "explicit",
+  "nudity",
+  "onlyfans",
+  "cam show",
+  "sexual service",
+  "pay for sex",
+];
+const hasBlockedKeyword = (value: string) =>
+  BLOCKED_KEYWORDS.some((keyword) => value.includes(keyword));
+
+const hasExifMetadata = async (file: File) => {
+  if (!file || !file.type.toLowerCase().includes("jpeg")) return false;
+  const slice = file.slice(0, 128 * 1024);
+  const buffer = await slice.arrayBuffer();
+  const view = new DataView(buffer);
+  if (view.byteLength < 4 || view.getUint16(0, false) !== 0xffd8) return false;
+  let offset = 2;
+  while (offset < view.byteLength) {
+    const marker = view.getUint16(offset, false);
+    offset += 2;
+    if (marker === 0xffe1) {
+      const size = view.getUint16(offset, false);
+      const exifHeader = view.getUint32(offset + 2, false);
+      return exifHeader === 0x45786966 && size > 8;
+    }
+    if ((marker & 0xff00) !== 0xff00) break;
+    const size = view.getUint16(offset, false);
+    if (!size) break;
+    offset += size;
+  }
+  return false;
+};
+
+const buildDraftImages = async (files: FileList | File[]) => {
+  const list = Array.from(files);
+  const enriched = await Promise.all(
+    list.map(async (file) => ({
+      id: `${file.name}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      url: URL.createObjectURL(file),
+      file,
+      hasExif: await hasExifMetadata(file),
+    }))
+  );
+  return enriched;
+};
+
+const countUnverifiedPhotos = (images: DraftImage[]) =>
+  images.filter((image) => image.file && image.hasExif === false).length;
 
 const currency = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -410,6 +508,22 @@ const formatCurrency = (value: number, currencyCode?: string) => {
   } catch {
     return `${currencyCode.toUpperCase()} ${value.toFixed(2)}`;
   }
+};
+
+const formatRelativeTime = (value: string) => {
+  if (!value) return "-";
+  const ts = new Date(value).getTime();
+  if (!Number.isFinite(ts)) return "-";
+  const diffMs = Date.now() - ts;
+  if (!Number.isFinite(diffMs)) return "-";
+  if (diffMs < 30_000) return "just now";
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(value).toLocaleDateString();
 };
 
 const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
@@ -460,7 +574,9 @@ const getStatusTone = (value?: string | null) => {
     return "is-success";
   }
   if (
-    ["pending", "processing", "open", "in progress", "review"].includes(normalized)
+    ["pending", "processing", "open", "in progress", "review", "countered"].includes(
+      normalized
+    )
   ) {
     return "is-warning";
   }
@@ -476,15 +592,19 @@ const getStatusTone = (value?: string | null) => {
 
 const SETUP_ACTION_LABELS: Record<SetupChecklistItem["id"], string> = {
   listing: "List a product",
-  identity: "Verify now",
   payout: "Add payout method",
 };
 
-const buildSellerVerification = (status?: VerificationStatus | null): VerificationItem[] => [
+const buildSellerVerification = (
+  status?: VerificationStatus | null,
+  ageVerified?: boolean
+): VerificationItem[] => [
   {
-    label: "Government ID",
-    status: normalizeStatus(status?.sellerIdStatus),
-    detail: "Optional identity verification",
+    label: "Age verification",
+    status: ageVerified ? "verified" : "pending",
+    detail: ageVerified
+      ? "Age verified for marketplace access."
+      : "Verify your age to keep your seller account active.",
   },
   {
     label: "Payout method",
@@ -519,7 +639,7 @@ const DASHBOARD_WIDGETS = [
   { id: "orders", title: "Orders", helper: "Latest transactions" },
   { id: "activeListings", title: "Active listings", helper: "Inventory snapshot" },
   { id: "offers", title: "Offers", helper: "Open bargains" },
-  { id: "messages", title: "Messages", helper: "Marketplace chats" },
+  { id: "bids", title: "Bids", helper: "Auction activity" },
   { id: "verification", title: "Verification", helper: "Trust & safety" },
   { id: "topProducts", title: "Top products", helper: "Best sellers" },
   { id: "buyerDisputes", title: "Buyer disputes", helper: "Open cases" },
@@ -532,11 +652,11 @@ const BASE_LAYOUT: Layout[] = [
   { i: "payouts", x: 8, y: 0, w: 4, h: 2 },
   { i: "offers", x: 0, y: 2, w: 6, h: 2 },
   { i: "orders", x: 6, y: 2, w: 6, h: 2 },
-  { i: "activeListings", x: 0, y: 4, w: 8, h: 3 },
-  { i: "messages", x: 8, y: 4, w: 4, h: 3 },
-  { i: "verification", x: 0, y: 7, w: 6, h: 2 },
-  { i: "topProducts", x: 6, y: 7, w: 6, h: 2 },
-  { i: "buyerDisputes", x: 0, y: 9, w: 6, h: 2 },
+  { i: "bids", x: 0, y: 4, w: 6, h: 2 },
+  { i: "activeListings", x: 6, y: 4, w: 6, h: 3 },
+  { i: "verification", x: 4, y: 7, w: 4, h: 2 },
+  { i: "topProducts", x: 8, y: 7, w: 4, h: 2 },
+  { i: "buyerDisputes", x: 0, y: 10, w: 6, h: 2 },
 ];
 
 const buildLayoutsForCols = (cols: number) =>
@@ -616,8 +736,12 @@ const createTempId = () => {
 const createEmptyDraft = (): DraftProduct => ({
   title: "",
   price: "",
+  auctionEnabled: false,
+  auctionEndAt: "",
+  startingBid: "",
   category: "Electronics",
   condition: "New",
+  status: "active",
   location: "",
   locationCity: "",
   locationState: "",
@@ -655,6 +779,21 @@ export default function StorefrontSeller(): JSX.Element {
   const [offers, setOffers] = useState<StorefrontOffer[]>([]);
   const [offerLoading, setOfferLoading] = useState(false);
   const [offerError, setOfferError] = useState<string | null>(null);
+  const [offerActionError, setOfferActionError] = useState<string | null>(null);
+  const [offerActionNotice, setOfferActionNotice] = useState<string | null>(null);
+  const [offerActionLoading, setOfferActionLoading] = useState<Record<string, boolean>>(
+    {}
+  );
+  const [offerCounterDrafts, setOfferCounterDrafts] = useState<Record<string, string>>({});
+  const [offerCounterNotes, setOfferCounterNotes] = useState<Record<string, string>>({});
+  const [offerListingFilter, setOfferListingFilter] = useState<string>("");
+  const [bids, setBids] = useState<MarketplaceBid[]>([]);
+  const [bidsLoading, setBidsLoading] = useState(false);
+  const [bidsError, setBidsError] = useState<string | null>(null);
+  const [bidActionError, setBidActionError] = useState<string | null>(null);
+  const [bidActionNotice, setBidActionNotice] = useState<string | null>(null);
+  const [bidActionLoading, setBidActionLoading] = useState<Record<string, boolean>>({});
+  const [bidListingFilter, setBidListingFilter] = useState<string>("");
   const [selfVerification, setSelfVerification] = useState<VerificationStatus | null>(null);
   const [verificationLoading, setVerificationLoading] = useState(false);
   const [verificationNotice, setVerificationNotice] = useState<string | null>(null);
@@ -669,6 +808,11 @@ export default function StorefrontSeller(): JSX.Element {
   const [messages, setMessages] = useState<MarketplaceMessage[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [messagesError, setMessagesError] = useState<string | null>(null);
+  const [messageDrafts, setMessageDrafts] = useState<Record<string, string>>({});
+  const [messageReplyOpen, setMessageReplyOpen] = useState<Record<string, boolean>>({});
+  const [messageSending, setMessageSending] = useState<Record<string, boolean>>({});
+  const [messageActionError, setMessageActionError] = useState<string | null>(null);
+  const [messageActionNotice, setMessageActionNotice] = useState<string | null>(null);
   const [sellerDashboardMockEnabled, setSellerDashboardMockEnabled] = useState(false);
   const [sellerDashboardMockData, setSellerDashboardMockData] =
     useState<SellerDashboardMockData | null>(null);
@@ -679,33 +823,30 @@ export default function StorefrontSeller(): JSX.Element {
   const [widgetConfig, setWidgetConfig] =
     useState<DashboardWidgetConfig>(DEFAULT_WIDGET_CONFIG);
   const [revenueRange, setRevenueRange] = useState<7 | 30 | 90>(30);
-  const [dashboardLoading, setDashboardLoading] = useState(false);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
   const [activeViewId, setActiveViewId] = useState<number | null>(null);
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [activeDashboardModule, setActiveDashboardModule] = useState<string | null>(null);
   const [dashboardDirty, setDashboardDirty] = useState(false);
   const [dashboardSaveState, setDashboardSaveState] = useState<
     "idle" | "saving" | "saved" | "error"
   >("idle");
-  const [renameModalOpen, setRenameModalOpen] = useState(false);
-  const [renameValue, setRenameValue] = useState("");
-  const [renameError, setRenameError] = useState<string | null>(null);
-  const [renameSaving, setRenameSaving] = useState(false);
-  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [deleteSaving, setDeleteSaving] = useState(false);
   const dashboardReadyRef = useRef(false);
   const dashboardSaveBlockedRef = useRef(false);
   const dashboardSyncRef = useRef(false);
   const activeViewUpdatedAtRef = useRef(0);
-  const payoutsRef = useRef<HTMLDivElement | null>(null);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
   const [stateOptions, setStateOptions] = useState<LocationOption[]>([]);
   const [cityOptions, setCityOptions] = useState<LocationOption[]>([]);
   const [locationError, setLocationError] = useState<string | null>(null);
   const [draft, setDraft] = useState<DraftProduct>(() => createEmptyDraft());
   const [draftImages, setDraftImages] = useState<DraftImage[]>([]);
+  const [photoNotice, setPhotoNotice] = useState<string | null>(null);
+  const unverifiedPhotoCount = useMemo(
+    () => countUnverifiedPhotos(draftImages),
+    [draftImages]
+  );
   const [creatingListing, setCreatingListing] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [editingListingId, setEditingListingId] = useState<string | null>(null);
@@ -750,12 +891,12 @@ export default function StorefrontSeller(): JSX.Element {
 
   useEffect(() => {
     if (!accountMenuOpen) return;
-    const handleClick = (event: MouseEvent) => {
+    const handleClick = (event: Event) => {
       if (!accountMenuRef.current) return;
       if (accountMenuRef.current.contains(event.target as Node)) return;
       setAccountMenuOpen(false);
     };
-    const handleKey = (event: KeyboardEvent) => {
+    const handleKey = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
         setAccountMenuOpen(false);
       }
@@ -902,6 +1043,11 @@ export default function StorefrontSeller(): JSX.Element {
           rawId: Number.isFinite(numericIdCandidate) ? numericIdCandidate : undefined,
           title: String(attrs.title || "Untitled listing"),
           price: Number(attrs.price || 0),
+          status: String(attrs.status || "active"),
+          auctionEnabled: Boolean(attrs.auctionEnabled),
+          auctionEndAt: attrs.auctionEndAt ? String(attrs.auctionEndAt) : undefined,
+          startingBid: Number(attrs.startingBid ?? 0) || undefined,
+          highestBid: Number(attrs.highestBid ?? 0) || undefined,
           category: String(attrs.category || "General"),
           condition: String(attrs.condition || "Good"),
           location: String(attrs.location || "Flexible pickup"),
@@ -952,6 +1098,8 @@ export default function StorefrontSeller(): JSX.Element {
     }
     setOfferLoading(true);
     setOfferError(null);
+    setOfferActionError(null);
+    setOfferActionNotice(null);
     try {
       const res = await api.get("/marketplace-offers/me");
       const mapped = (res.data?.data ?? []).map((entry: any) => {
@@ -959,9 +1107,11 @@ export default function StorefrontSeller(): JSX.Element {
         const buyerData = attrs.buyer?.data ?? attrs.buyer;
         const buyer = normalize(buyerData);
         const listingData = attrs.listing?.data ?? attrs.listing;
+        const listing = normalize(listingData);
         return {
           id: String(entry.id ?? attrs.documentId ?? `${attrs.createdAt}`),
           listingId: getEntityId(listingData) ?? 0,
+          listingTitle: String(listing.title || "Listing"),
           buyerId: getEntityId(buyerData) ?? undefined,
           sellerId: getEntityId(attrs.seller) ?? undefined,
           buyerName:
@@ -971,8 +1121,14 @@ export default function StorefrontSeller(): JSX.Element {
             "Buyer",
           offeredPrice: Number(attrs.offeredPrice || 0),
           currency: String(attrs.currency || "USD").toUpperCase(),
-          status: (String(attrs.status || "pending") as OfferStatus) || "pending",
+          status:
+            (String(attrs.status || "pending").toLowerCase() as OfferStatus) || "pending",
           createdAt: attrs.createdAt ? new Date(attrs.createdAt).toLocaleString() : "",
+          note: attrs.note ? String(attrs.note) : undefined,
+          lastActionBy:
+            attrs.lastActionBy === "buyer" || attrs.lastActionBy === "seller"
+              ? attrs.lastActionBy
+              : "buyer",
         } satisfies StorefrontOffer;
       });
       setOffers(mapped);
@@ -980,6 +1136,50 @@ export default function StorefrontSeller(): JSX.Element {
       setOfferError("Unable to load offers.");
     } finally {
       setOfferLoading(false);
+    }
+  }, [user?.id]);
+
+  const loadBids = useCallback(async () => {
+    if (!user?.id) {
+      setBids([]);
+      return;
+    }
+    setBidsLoading(true);
+    setBidsError(null);
+    setBidActionError(null);
+    setBidActionNotice(null);
+    try {
+      const res = await api.get("/marketplace-bids/me");
+      const mapped = (res.data?.data ?? []).map((entry: any) => {
+        const attrs = normalize(entry);
+        const bidderData = attrs.bidder?.data ?? attrs.bidder;
+        const bidder = normalize(bidderData);
+        const listingData = attrs.listing?.data ?? attrs.listing;
+        const listing = normalize(listingData);
+        return {
+          id: String(entry.id ?? attrs.documentId ?? `${attrs.createdAt}`),
+          listingId: getEntityId(listingData) ?? 0,
+          listingTitle: String(listing.title || "Listing"),
+          bidderId: getEntityId(bidderData) ?? undefined,
+          sellerId: getEntityId(attrs.seller) ?? undefined,
+          bidderName:
+            `${String(bidder.firstName || "").trim()} ${String(bidder.lastName || "").trim()}`.trim() ||
+            String(bidder.username || "").trim() ||
+            String(bidder.email || "").split("@")[0] ||
+            "Bidder",
+          amount: Number(attrs.amount || 0),
+          currency: String(attrs.currency || "USD").toUpperCase(),
+          status:
+            (String(attrs.status || "pending").toLowerCase() as BidStatus) ||
+            "pending",
+          createdAt: attrs.createdAt ? new Date(attrs.createdAt).toLocaleString() : "",
+        } satisfies MarketplaceBid;
+      });
+      setBids(mapped);
+    } catch {
+      setBidsError("Unable to load bids.");
+    } finally {
+      setBidsLoading(false);
     }
   }, [user?.id]);
 
@@ -1094,6 +1294,8 @@ export default function StorefrontSeller(): JSX.Element {
     }
     setMessagesLoading(true);
     setMessagesError(null);
+    setMessageActionError(null);
+    setMessageActionNotice(null);
     try {
       const res = await api.get(
         "/messages?filters[$or][0][sender][id][$eq]=" +
@@ -1110,16 +1312,21 @@ export default function StorefrontSeller(): JSX.Element {
         const sender = normalize(senderData);
         const recipientData = attrs.recipient?.data ?? attrs.recipient;
         const recipient = normalize(recipientData);
+        const createdAtTs = attrs.createdAt ? new Date(attrs.createdAt).getTime() : 0;
         return {
           id: Number(entry?.id ?? attrs.id ?? 0),
           body: String(attrs.body || ""),
           createdAt: attrs.createdAt ? new Date(attrs.createdAt).toLocaleString() : "",
+          createdAtTs: Number.isFinite(createdAtTs) ? createdAtTs : 0,
+          listingId: getEntityId(listingData) ?? undefined,
           listingTitle: listing.title ? String(listing.title) : undefined,
+          senderId: getEntityId(senderData) ?? undefined,
           senderName:
             `${String(sender.firstName || "").trim()} ${String(sender.lastName || "").trim()}`.trim() ||
             String(sender.username || "").trim() ||
             String(sender.email || "").split("@")[0] ||
             "User",
+          recipientId: getEntityId(recipientData) ?? undefined,
           recipientName:
             `${String(recipient.firstName || "").trim()} ${String(recipient.lastName || "").trim()}`.trim() ||
             String(recipient.username || "").trim() ||
@@ -1143,7 +1350,6 @@ export default function StorefrontSeller(): JSX.Element {
       dashboardSaveBlockedRef.current = false;
       return;
     }
-    setDashboardLoading(true);
     setDashboardError(null);
     dashboardReadyRef.current = false;
     try {
@@ -1164,17 +1370,8 @@ export default function StorefrontSeller(): JSX.Element {
         const createdEntry = normalizeViewEntry(created.data?.data);
         setDashboardViews([createdEntry]);
         setActiveViewId(createdEntry.id);
-        const storedTheme = readStoredDashboardTheme(user?.id ?? null, createdEntry.id);
-        const createdTheme = createdEntry.theme || DEFAULT_DASHBOARD_THEME;
-        const createdUpdatedAt = Number(
-          createdEntry.updatedAt ? new Date(createdEntry.updatedAt).getTime() : 0
-        );
-        const useStoredTheme =
-          storedTheme &&
-          storedTheme.savedAt > createdUpdatedAt &&
-          !areThemesEqual(storedTheme.theme, createdTheme);
         setDashboardLayouts(createdEntry.layout || buildDefaultLayouts());
-        setDashboardTheme(useStoredTheme ? storedTheme!.theme : createdTheme);
+        setDashboardTheme(DEFAULT_DASHBOARD_THEME);
         setWidgetConfig(createdEntry.widgets || DEFAULT_WIDGET_CONFIG);
         setDashboardDirty(false);
         setDashboardSaveState("idle");
@@ -1183,20 +1380,11 @@ export default function StorefrontSeller(): JSX.Element {
         return;
       }
       const views = entries.map(normalizeViewEntry);
-      setDashboardViews(views);
-      const defaultView = views.find((view) => view.isDefault) ?? views[0];
-      const storedTheme = readStoredDashboardTheme(user?.id ?? null, defaultView?.id ?? null);
-      const defaultTheme = defaultView?.theme || DEFAULT_DASHBOARD_THEME;
-      const defaultUpdatedAt = Number(
-        defaultView?.updatedAt ? new Date(defaultView.updatedAt).getTime() : 0
-      );
-      const useStoredTheme =
-        storedTheme &&
-        storedTheme.savedAt > defaultUpdatedAt &&
-        !areThemesEqual(storedTheme.theme, defaultTheme);
+      const defaultView = views.find((view) => view.isDefault) ?? views[0] ?? null;
+      setDashboardViews(defaultView ? [defaultView] : []);
       setActiveViewId(defaultView?.id ?? null);
       setDashboardLayouts(defaultView?.layout || buildDefaultLayouts());
-      setDashboardTheme(useStoredTheme ? storedTheme!.theme : defaultTheme);
+      setDashboardTheme(DEFAULT_DASHBOARD_THEME);
       setWidgetConfig(defaultView?.widgets || DEFAULT_WIDGET_CONFIG);
       setDashboardDirty(false);
       setDashboardSaveState("idle");
@@ -1206,30 +1394,20 @@ export default function StorefrontSeller(): JSX.Element {
       setDashboardError("Unable to load dashboard settings.");
       dashboardReadyRef.current = false;
     } finally {
-      setDashboardLoading(false);
     }
   }, [user?.id]);
 
   const applyViewState = useCallback(
     (view: DashboardView | null) => {
       if (!view) return;
-      const storedTheme = readStoredDashboardTheme(user?.id ?? null, view.id);
-      const viewTheme = view.theme || DEFAULT_DASHBOARD_THEME;
-      const viewUpdatedAt = Number(
-        view.updatedAt ? new Date(view.updatedAt).getTime() : 0
-      );
-      const useStoredTheme =
-        storedTheme &&
-        storedTheme.savedAt > viewUpdatedAt &&
-        !areThemesEqual(storedTheme.theme, viewTheme);
       setActiveViewId(view.id);
       setDashboardLayouts(ensureLayouts(view.layout));
-      setDashboardTheme(useStoredTheme ? storedTheme!.theme : viewTheme);
+      setDashboardTheme(DEFAULT_DASHBOARD_THEME);
       setWidgetConfig(view.widgets || DEFAULT_WIDGET_CONFIG);
       setDashboardDirty(false);
       setDashboardSaveState("idle");
     },
-    [user?.id]
+    []
   );
 
   const refreshDashboardViews = useCallback(
@@ -1247,23 +1425,12 @@ export default function StorefrontSeller(): JSX.Element {
           return null;
         }
         const views = entries.map(normalizeViewEntry);
-        setDashboardViews(views);
-        const activeId = activeViewId;
-        const activeRemote = views.find((view) => view.id === activeId);
-        const fallbackView = views.find((view) => view.isDefault) ?? views[0] ?? null;
-        if (!activeRemote) {
-          applyViewState(fallbackView);
-          return views;
+        const primaryView = views.find((view) => view.isDefault) ?? views[0] ?? null;
+        setDashboardViews(primaryView ? [primaryView] : []);
+        if (primaryView) {
+          applyViewState(primaryView);
         }
-        if (options?.applyActive && !dashboardDirty) {
-          const remoteUpdatedAt = Number(
-            activeRemote.updatedAt ? new Date(activeRemote.updatedAt).getTime() : 0
-          );
-          if (remoteUpdatedAt > activeViewUpdatedAtRef.current) {
-            applyViewState(activeRemote);
-          }
-        }
-        return views;
+        return primaryView ? [primaryView] : [];
       } catch {
         // Silent retry on the next interval.
         return null;
@@ -1271,7 +1438,7 @@ export default function StorefrontSeller(): JSX.Element {
         dashboardSyncRef.current = false;
       }
     },
-    [activeViewId, applyViewState, dashboardDirty, loadDashboardViews, user?.id]
+    [applyViewState, loadDashboardViews, user?.id]
   );
 
   const persistDashboardView = useCallback(async (view: DashboardView) => {
@@ -1282,119 +1449,10 @@ export default function StorefrontSeller(): JSX.Element {
         isDefault: Boolean(view.isDefault),
         layout: view.layout,
         widgets: view.widgets,
-        theme: view.theme,
+        theme: DEFAULT_DASHBOARD_THEME,
       },
     });
   }, []);
-
-  const updateDashboardView = useCallback(
-    async (viewId: number, payload: Partial<DashboardView>) => {
-      if (dashboardSaveBlockedRef.current) return false;
-    const existing = dashboardViews.find((view) => view.id === viewId);
-    if (!existing) {
-      return false;
-    }
-    const nextView: DashboardView = {
-      ...existing,
-        ...payload,
-        layout: payload.layout ? ensureLayouts(payload.layout) : existing.layout,
-        widgets: payload.widgets ?? existing.widgets,
-        theme: payload.theme ?? existing.theme,
-      };
-    try {
-      setDashboardViews((prev) =>
-        prev.map((view) => (view.id === viewId ? nextView : view))
-      );
-      await persistDashboardView(nextView);
-      return true;
-      } catch (err) {
-        if (err && typeof err === "object" && "response" in err) {
-          const anyErr = err as { response?: { status?: number } };
-          if (anyErr.response?.status === 404) {
-            dashboardSaveBlockedRef.current = true;
-            await loadDashboardViews();
-            setDashboardError("Dashboard view not found. Reloaded settings.");
-            return false;
-          }
-        }
-        setDashboardError("Unable to save dashboard settings.");
-        return false;
-      }
-    },
-    [dashboardViews, loadDashboardViews, persistDashboardView]
-  );
-
-  const handleCreateView = useCallback(async () => {
-    const name = window.prompt("Name your dashboard view", "New dashboard");
-    if (!name) return;
-    try {
-      const res = await api.post("/marketplace-dashboard-views", {
-        data: {
-          name: name.trim(),
-          isDefault: dashboardViews.length === 0,
-          layout: buildDefaultLayouts(),
-          widgets: DEFAULT_WIDGET_CONFIG,
-          theme: DEFAULT_DASHBOARD_THEME,
-        },
-      });
-      const created = normalizeViewEntry(res.data?.data);
-      setDashboardViews((prev) => [created, ...prev]);
-      applyViewState(created);
-    } catch {
-      setDashboardError("Unable to create dashboard view.");
-    }
-  }, [applyViewState, dashboardViews.length]);
-
-  const handleRenameView = useCallback(() => {
-    const view = dashboardViews.find((item) => item.id === activeViewId);
-    if (!view) return;
-    setRenameValue(view.name);
-    setRenameError(null);
-    setRenameModalOpen(true);
-  }, [activeViewId, dashboardViews]);
-
-  const handleRenameCancel = useCallback(() => {
-    if (renameSaving) return;
-    setRenameModalOpen(false);
-    setRenameError(null);
-  }, [renameSaving]);
-
-  const handleRenameSubmit = useCallback(async () => {
-    const view = dashboardViews.find((item) => item.id === activeViewId);
-    if (!view) return;
-    const trimmed = renameValue.trim();
-    if (!trimmed) {
-      setRenameError("Name is required.");
-      return;
-    }
-    if (trimmed === view.name) {
-      setRenameModalOpen(false);
-      return;
-    }
-    setRenameSaving(true);
-    setRenameError(null);
-    const saved = await updateDashboardView(view.id, { name: trimmed });
-    setRenameSaving(false);
-    if (!saved) {
-      setRenameError("Unable to rename this view right now.");
-      return;
-    }
-    const views = await refreshDashboardViews({ applyActive: true, force: true });
-    if (views) {
-      const updated = views.find((item) => item.id === view.id);
-      if (!updated || updated.name !== trimmed) {
-        setRenameError("Rename did not persist. Please try again.");
-        return;
-      }
-    }
-    setRenameModalOpen(false);
-  }, [
-    activeViewId,
-    dashboardViews,
-    refreshDashboardViews,
-    renameValue,
-    updateDashboardView,
-  ]);
 
   const handleSaveDashboardChanges = useCallback(async () => {
     if (!activeViewId) return;
@@ -1403,8 +1461,8 @@ export default function StorefrontSeller(): JSX.Element {
     const nextView: DashboardView = {
       ...view,
       layout: dashboardLayouts,
-      widgets: widgetConfig,
-      theme: dashboardTheme,
+      widgets: { ...widgetConfig, styles: {} },
+      theme: DEFAULT_DASHBOARD_THEME,
     };
     setDashboardSaveState("saving");
     setDashboardViews((prev) =>
@@ -1414,9 +1472,6 @@ export default function StorefrontSeller(): JSX.Element {
       await persistDashboardView(nextView);
       setDashboardSaveState("saved");
       setDashboardDirty(false);
-      if (user?.id) {
-        writeStoredDashboardTheme(user.id, activeViewId, dashboardTheme);
-      }
       await refreshDashboardViews({ applyActive: true });
     } catch {
       setDashboardSaveState("error");
@@ -1425,166 +1480,43 @@ export default function StorefrontSeller(): JSX.Element {
   }, [
     activeViewId,
     dashboardLayouts,
-    dashboardTheme,
     dashboardViews,
     persistDashboardView,
     refreshDashboardViews,
-    user?.id,
     widgetConfig,
   ]);
-
-  const openDeleteView = useCallback(() => {
-    const view = dashboardViews.find((item) => item.id === activeViewId);
-    if (!view) return;
-    if (dashboardViews.length <= 1) {
-      setDashboardError("You need at least one dashboard view.");
-      return;
-    }
-    setDeleteError(null);
-    setDeleteModalOpen(true);
-  }, [activeViewId, dashboardViews]);
-
-  const handleDeleteCancel = useCallback(() => {
-    if (deleteSaving) return;
-    setDeleteModalOpen(false);
-    setDeleteError(null);
-  }, [deleteSaving]);
-
-  const handleDeleteConfirm = useCallback(async () => {
-    const view = dashboardViews.find((item) => item.id === activeViewId);
-    if (!view) return;
-    if (dashboardViews.length <= 1) {
-      setDeleteError("You need at least one dashboard view.");
-      return;
-    }
-    const remainingViews = dashboardViews.filter((item) => item.id !== view.id);
-    const fallbackView =
-      remainingViews.find((item) => item.isDefault) ?? remainingViews[0] ?? null;
-    setDeleteSaving(true);
-    setDeleteError(null);
-    try {
-      const viewKey = view.documentId || view.id;
-      await api.delete(`/marketplace-dashboard-views/${viewKey}`);
-      if (view.isDefault && fallbackView) {
-        await persistDashboardView({
-          ...fallbackView,
-          isDefault: true,
-          layout: ensureLayouts(fallbackView.layout),
-          widgets: fallbackView.widgets ?? DEFAULT_WIDGET_CONFIG,
-          theme: fallbackView.theme ?? DEFAULT_DASHBOARD_THEME,
-        });
-      }
-      setDashboardViews(remainingViews);
-      if (fallbackView) {
-        applyViewState(fallbackView);
-      }
-      setDashboardDirty(false);
-      const views = await refreshDashboardViews({ applyActive: true, force: true });
-      if (views && views.some((item) => item.id === view.id)) {
-        if (view.documentId) {
-          await api.delete(`/marketplace-dashboard-views/${view.documentId}`);
-        }
-        const retryViews = await refreshDashboardViews({
-          applyActive: true,
-          force: true,
-        });
-        if (retryViews && retryViews.some((item) => item.id === view.id)) {
-          setDeleteError("Delete did not persist. Please try again.");
-          return;
-        }
-      }
-      if (views && view.isDefault && fallbackView) {
-        const persistedDefault = views.find((item) => item.isDefault);
-        if (!persistedDefault || persistedDefault.id !== fallbackView.id) {
-          setDeleteError("Default view update did not persist. Please try again.");
-          return;
-        }
-      }
-      setDeleteModalOpen(false);
-    } catch {
-      setDeleteError("Unable to delete dashboard view.");
-    } finally {
-      setDeleteSaving(false);
-    }
-  }, [
-    activeViewId,
-    applyViewState,
-    dashboardViews,
-    persistDashboardView,
-    refreshDashboardViews,
-  ]);
-
-  const handleSetDefaultView = useCallback(async () => {
-    const view = dashboardViews.find((item) => item.id === activeViewId);
-    if (!view) return;
-    if (view.isDefault) return;
-    try {
-      const saved = await updateDashboardView(view.id, { isDefault: true });
-      if (!saved) {
-        setDashboardError("Unable to set default dashboard view.");
-        return;
-      }
-      const views = await refreshDashboardViews({ applyActive: true, force: true });
-      if (views) {
-        const updated = views.find((item) => item.id === view.id);
-        if (!updated?.isDefault) {
-          setDashboardError("Default view did not persist. Please try again.");
-        }
-      }
-    } catch {
-      setDashboardError("Unable to set default dashboard view.");
-    }
-  }, [activeViewId, dashboardViews, refreshDashboardViews, updateDashboardView]);
-
-  const handleSelectView = useCallback(
-    (viewId: number) => {
-      const view = dashboardViews.find((item) => item.id === viewId);
-      if (view) {
-        applyViewState(view);
-      }
-    },
-    [applyViewState, dashboardViews]
-  );
 
   const handleRequestVerification = async () => {
     if (verificationLoading) return;
     setVerificationNotice(null);
     setVerificationError(null);
-
     setVerificationLoading(true);
     try {
-      if (selfVerification?.sellerIdStatus === "verified") {
-        setVerificationNotice("Your government ID is already verified.");
+      if (user?.ageVerified) {
+        setVerificationNotice("Your age is already verified.");
         return;
       }
-      const res = await api.post("/marketplace-verifications/identity/start");
-      const url = res.data?.data?.url as string | undefined;
-      if (url) {
-        window.open(url, "_blank", "noopener,noreferrer");
-        setVerificationNotice("Verification opened in a new tab.");
-      } else {
-        setVerificationNotice("Verification session created.");
-      }
-      await loadSelfVerification();
+      const params = new URLSearchParams(location.search);
+      params.set("ageVerify", "1");
+      setVerificationNotice("Starting age verification...");
+      navigate(
+        {
+          pathname: location.pathname,
+          search: params.toString() ? `?${params.toString()}` : "",
+          hash: location.hash,
+        },
+        { replace: false }
+      );
     } catch (err: any) {
       const message =
         err?.response?.data?.error?.message ||
         err?.message ||
-        "Unable to start identity verification.";
+        "Unable to start age verification.";
       setVerificationError(message);
     } finally {
       setVerificationLoading(false);
     }
   };
-
-  const refreshIdentityStatus = useCallback(async () => {
-    try {
-      await api.get("/marketplace-verifications/identity/status");
-      await loadSelfVerification();
-    } catch {
-      // Ignore refresh errors; user can retry.
-    }
-  }, [loadSelfVerification]);
 
   const updateDraft = (patch: Partial<DraftProduct>) => {
     setDraft((prev) => ({ ...prev, ...patch }));
@@ -1743,8 +1675,17 @@ export default function StorefrontSeller(): JSX.Element {
       ...createEmptyDraft(),
       title: listing.title,
       price: String(listing.price ?? ""),
+      auctionEnabled: Boolean(listing.auctionEnabled),
+      auctionEndAt: toLocalDateTimeInput(listing.auctionEndAt),
+      startingBid: listing.startingBid ? String(listing.startingBid) : "",
       category: listing.category || "Electronics",
       condition: listing.condition || "New",
+      status:
+        listing.status === "pending" ||
+        listing.status === "archived" ||
+        listing.status === "sold"
+          ? listing.status
+          : "active",
       location: listing.location || "",
       locationCity: locationParts.city,
       locationState,
@@ -1785,28 +1726,39 @@ export default function StorefrontSeller(): JSX.Element {
   const buildListingPayload = (
     value: DraftProduct,
     options: { feeAccepted: boolean; shippingAccepted: boolean }
-  ) => ({
-    title: value.title,
-    price: Number(value.price),
-    category: value.category,
-    condition: value.condition,
-    location: formatLocationLabel(value.locationCity, value.locationState),
-    description: value.description,
-    visibility: value.visibility,
-    shipping: buildShippingSummary(value),
-    shippingEnabled: false,
-    shippingCarriers: [],
-    shippingInternational: false,
-    localPickup: value.localPickup,
-    cashAccepted: value.cashAccepted,
-    noShippingRequired: true,
-    shippingNotes: "",
-    shippingPolicyAccepted: options.shippingAccepted,
-    shippingPolicyVersion: MARKETPLACE_POLICY_VERSION,
-    feePolicyAccepted: options.feeAccepted,
-    feePolicyVersion: MARKETPLACE_FEE_VERSION,
-    owner: user?.id,
-  });
+  ) => {
+    const auctionEndAtDate = value.auctionEndAt ? new Date(value.auctionEndAt) : null;
+    const auctionEndAt =
+      auctionEndAtDate && !Number.isNaN(auctionEndAtDate.getTime())
+        ? auctionEndAtDate.toISOString()
+        : null;
+    return {
+      title: value.title,
+      price: Number(value.price),
+      auctionEnabled: Boolean(value.auctionEnabled),
+      auctionEndAt: auctionEndAt || undefined,
+      startingBid: value.startingBid ? Number(value.startingBid) : undefined,
+      category: value.category,
+      condition: value.condition,
+      status: value.status,
+      location: formatLocationLabel(value.locationCity, value.locationState),
+      description: value.description,
+      visibility: value.visibility,
+      shipping: buildShippingSummary(value),
+      shippingEnabled: false,
+      shippingCarriers: [],
+      shippingInternational: false,
+      localPickup: value.localPickup,
+      cashAccepted: value.cashAccepted,
+      noShippingRequired: true,
+      shippingNotes: "",
+      shippingPolicyAccepted: options.shippingAccepted,
+      shippingPolicyVersion: MARKETPLACE_POLICY_VERSION,
+      feePolicyAccepted: options.feeAccepted,
+      feePolicyVersion: MARKETPLACE_FEE_VERSION,
+      owner: user?.id,
+    };
+  };
 
   const validateListing = (
     value: DraftProduct,
@@ -1824,8 +1776,34 @@ export default function StorefrontSeller(): JSX.Element {
     if (value.price === "" || !Number.isFinite(priceValue) || priceValue < 0) {
       return "Please add a valid price.";
     }
+    if (value.auctionEnabled) {
+      const startingBidValue = Number(value.startingBid);
+      if (!Number.isFinite(startingBidValue) || startingBidValue <= 0) {
+        return "Please add a valid starting bid.";
+      }
+      if (!value.auctionEndAt.trim()) {
+        return "Please set an auction end time.";
+      }
+      const endAt = new Date(value.auctionEndAt);
+      if (Number.isNaN(endAt.getTime())) {
+        return "Please set a valid auction end time.";
+      }
+      if (endAt.getTime() <= Date.now()) {
+        return "Auction end time must be in the future.";
+      }
+      if (startingBidValue > priceValue) {
+        return "Starting bid cannot exceed the buy now price.";
+      }
+    }
     if (!value.category.trim()) {
       return "Please choose a category.";
+    }
+    if (BLOCKED_CATEGORIES.has(value.category.trim().toLowerCase())) {
+      return "Service listings are not allowed on StoreFront.";
+    }
+    const contentCheck = `${value.title} ${value.description} ${value.category}`.toLowerCase();
+    if (hasBlockedKeyword(contentCheck)) {
+      return "Adult or prohibited items/services are not allowed.";
     }
     if (!value.locationCity.trim() || !value.locationState.trim()) {
       return "Please select a city and state.";
@@ -1847,6 +1825,12 @@ export default function StorefrontSeller(): JSX.Element {
     if (options.requirePhotos && (!options.photos || options.photos.length === 0)) {
       return "Add at least one photo to publish the listing.";
     }
+    if (options.photos && options.photos.some((photo) => photo.file && photo.hasExif === false)) {
+      return "Please use original camera photos with metadata (no stock images).";
+    }
+    if (options.photos && options.photos.length > MAX_LISTING_PHOTOS) {
+      return `Limit listings to ${MAX_LISTING_PHOTOS} photos.`;
+    }
     return null;
   };
 
@@ -1865,13 +1849,25 @@ export default function StorefrontSeller(): JSX.Element {
   };
 
   const addPhotos = (files: FileList | File[]) => {
-    const incoming = Array.from(files).map((file) => ({
-      id: `${file.name}-${Date.now()}`,
-      url: URL.createObjectURL(file),
-      file,
-    }));
-    if (!incoming.length) return;
-    setDraftImages((prev) => [...prev, ...incoming]);
+    void buildDraftImages(files).then((incoming) => {
+      if (!incoming.length) return;
+      setDraftImages((prev) => {
+        const remaining = Math.max(0, MAX_LISTING_PHOTOS - prev.length);
+        if (remaining <= 0) {
+          setPhotoNotice(`You can upload up to ${MAX_LISTING_PHOTOS} photos.`);
+          return prev;
+        }
+        const next = [...prev, ...incoming.slice(0, remaining)];
+        if (incoming.length > remaining) {
+          setPhotoNotice(
+            `Only ${MAX_LISTING_PHOTOS} photos are allowed. Extra photos were skipped.`
+          );
+        } else {
+          setPhotoNotice(null);
+        }
+        return next;
+      });
+    });
   };
 
   const handleAddPhotos = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1891,19 +1887,30 @@ export default function StorefrontSeller(): JSX.Element {
   };
 
   const addBulkPhotos = (listingId: string, files: FileList | File[]) => {
-    const incoming = Array.from(files).map((file) => ({
-      id: `${file.name}-${Date.now()}`,
-      url: URL.createObjectURL(file),
-      file,
-    }));
-    if (!incoming.length) return;
-    setBulkListings((prev) =>
-      prev.map((item) =>
-        item.id === listingId
-          ? { ...item, images: [...item.images, ...incoming], error: null }
-          : item
-      )
-    );
+    void buildDraftImages(files).then((incoming) => {
+      if (!incoming.length) return;
+      setBulkListings((prev) =>
+        prev.map((item) =>
+          item.id === listingId
+            ? (() => {
+                const remaining = Math.max(0, MAX_LISTING_PHOTOS - item.images.length);
+                if (remaining <= 0) {
+                  return {
+                    ...item,
+                    error: `You can upload up to ${MAX_LISTING_PHOTOS} photos per listing.`,
+                  };
+                }
+                const nextImages = [...item.images, ...incoming.slice(0, remaining)];
+                const error =
+                  incoming.length > remaining
+                    ? `Only ${MAX_LISTING_PHOTOS} photos are allowed. Extra photos were skipped.`
+                    : null;
+                return { ...item, images: nextImages, error };
+              })()
+            : item
+        )
+      );
+    });
   };
 
   const handleAddBulkPhotos = (
@@ -2329,6 +2336,7 @@ export default function StorefrontSeller(): JSX.Element {
   useEffect(() => {
     void loadListings();
     void loadOffers();
+    void loadBids();
     void loadSelfVerification();
     void loadOrders();
     void loadDisputes();
@@ -2337,6 +2345,7 @@ export default function StorefrontSeller(): JSX.Element {
   }, [
     loadListings,
     loadOffers,
+    loadBids,
     loadSelfVerification,
     loadOrders,
     loadDisputes,
@@ -2401,20 +2410,6 @@ export default function StorefrontSeller(): JSX.Element {
   }, [selfVerification]);
 
   useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    if (params.get("identity") !== "return") return;
-    void refreshIdentityStatus();
-    params.delete("identity");
-    navigate(
-      {
-        pathname: location.pathname,
-        search: params.toString() ? `?${params.toString()}` : "",
-      },
-      { replace: true }
-    );
-  }, [location.pathname, location.search, navigate, refreshIdentityStatus]);
-
-  useEffect(() => {
     if (layoutSaveRef.current) {
       window.clearTimeout(layoutSaveRef.current);
       layoutSaveRef.current = null;
@@ -2449,6 +2444,14 @@ export default function StorefrontSeller(): JSX.Element {
     [isMockMode, offers, sellerDashboardMockData?.offers]
   );
 
+  const dashboardBids = useMemo(
+    () =>
+      isMockMode && sellerDashboardMockData?.bids?.length
+        ? sellerDashboardMockData.bids
+        : bids,
+    [bids, isMockMode, sellerDashboardMockData?.bids]
+  );
+
   const dashboardOrders = useMemo(
     () =>
       isMockMode && sellerDashboardMockData?.orders?.length
@@ -2465,6 +2468,63 @@ export default function StorefrontSeller(): JSX.Element {
     [isMockMode, messages, sellerDashboardMockData?.messages]
   );
 
+  const messageThreads = useMemo<MarketplaceMessageThread[]>(() => {
+    const threadMap = new Map<string, MarketplaceMessageThread>();
+    const source = dashboardMessages;
+    source.forEach((message) => {
+      const isFromMe = message.senderId === user?.id;
+      const counterpartId = isFromMe ? message.recipientId : message.senderId;
+      const counterpartName = isFromMe ? message.recipientName : message.senderName;
+      const listingKey = message.listingId ? String(message.listingId) : "listing";
+      const threadKey = `${listingKey}:${counterpartId ?? "unknown"}`;
+      const timestamp = (() => {
+        if (typeof message.createdAtTs === "number" && Number.isFinite(message.createdAtTs)) {
+          return message.createdAtTs;
+        }
+        const parsed = Date.parse(message.createdAt || "");
+        return Number.isFinite(parsed) ? parsed : 0;
+      })();
+      let thread = threadMap.get(threadKey);
+      if (!thread) {
+        thread = {
+          key: threadKey,
+          listingId: message.listingId,
+          listingTitle: message.listingTitle,
+          counterpartId,
+          counterpartName: counterpartName || "User",
+          lastMessageAt: 0,
+          lastMessageLabel: "",
+          lastMessageBody: "",
+          messages: [],
+        };
+        threadMap.set(threadKey, thread);
+      }
+      thread.messages.push(message);
+      if (timestamp >= thread.lastMessageAt) {
+        thread.lastMessageAt = timestamp;
+        thread.lastMessageLabel = message.createdAt || "";
+        thread.lastMessageBody = message.body;
+        thread.listingTitle = message.listingTitle || thread.listingTitle;
+        thread.counterpartName = counterpartName || thread.counterpartName;
+        thread.counterpartId = counterpartId ?? thread.counterpartId;
+      }
+    });
+    const threads = Array.from(threadMap.values());
+    threads.forEach((thread) => {
+      thread.messages.sort((a, b) => {
+        const aTs =
+          Number.isFinite(a.createdAtTs) ? (a.createdAtTs as number) : Date.parse(a.createdAt || "");
+        const bTs =
+          Number.isFinite(b.createdAtTs) ? (b.createdAtTs as number) : Date.parse(b.createdAt || "");
+        const safeATs = Number.isFinite(aTs) ? aTs : 0;
+        const safeBTs = Number.isFinite(bTs) ? bTs : 0;
+        return safeATs - safeBTs;
+      });
+    });
+    threads.sort((a, b) => b.lastMessageAt - a.lastMessageAt);
+    return threads;
+  }, [dashboardMessages, user?.id]);
+
   const dashboardDisputes = useMemo(
     () =>
       isMockMode && sellerDashboardMockData?.disputes?.length
@@ -2476,9 +2536,10 @@ export default function StorefrontSeller(): JSX.Element {
   const sellerVerificationItems = useMemo(
     () =>
       buildSellerVerification(
-        isMockMode ? sellerDashboardMockData?.verification ?? null : selfVerification
+        isMockMode ? sellerDashboardMockData?.verification ?? null : selfVerification,
+        user?.ageVerified === true
       ),
-    [isMockMode, sellerDashboardMockData?.verification, selfVerification]
+    [isMockMode, sellerDashboardMockData?.verification, selfVerification, user?.ageVerified]
   );
 
 
@@ -2491,15 +2552,21 @@ export default function StorefrontSeller(): JSX.Element {
     ? sellerDashboardMockData?.verification ?? null
     : selfVerification;
 
-  const setupChecklist = useMemo<SetupChecklistItem[]>(() => {
+  const sellerIsVerified = useMemo(() => {
     const idStatus = normalizeStatus(verificationSource?.sellerIdStatus);
+    const payoutStatus = normalizeStatus(verificationSource?.sellerPayoutStatus);
+    return idStatus === "verified" && payoutStatus === "verified";
+  }, [verificationSource]);
+
+  const sellerFeePercent = sellerIsVerified ? 2 : 4;
+
+  const setupChecklist = useMemo<SetupChecklistItem[]>(() => {
     const payoutStatus = normalizeStatus(verificationSource?.sellerPayoutStatus);
     const payoutHasMethod = Boolean(
       verificationSource?.paypalMerchantIdInPayPal ||
         verificationSource?.payoutEmail ||
         payoutEmail.trim()
     );
-    const identityState = idStatus === "verified" ? "done" : "pending";
     const payoutState =
       payoutStatus === "verified"
         ? "done"
@@ -2513,11 +2580,6 @@ export default function StorefrontSeller(): JSX.Element {
         status: sellerListings.length > 0 ? "done" : "required",
       },
       {
-        id: "identity",
-        label: "Optional verification (earn badge)",
-        status: identityState,
-      },
-      {
         id: "payout",
         label: "Add payout method",
         status: payoutState,
@@ -2527,7 +2589,6 @@ export default function StorefrontSeller(): JSX.Element {
     payoutEmail,
     sellerListings.length,
     verificationSource?.payoutEmail,
-    verificationSource?.sellerIdStatus,
     verificationSource?.sellerPayoutStatus,
   ]);
 
@@ -2545,6 +2606,204 @@ export default function StorefrontSeller(): JSX.Element {
     () =>
       dashboardOffers.filter((offer) => sellerListingIds.has(Number(offer.listingId || 0))),
     [dashboardOffers, sellerListingIds]
+  );
+
+  const bidsForSeller = useMemo(
+    () => dashboardBids.filter((bid) => sellerListingIds.has(Number(bid.listingId || 0))),
+    [dashboardBids, sellerListingIds]
+  );
+
+  const openOffers = useMemo(
+    () => offersForSeller.filter((offer) => ["pending", "countered"].includes(offer.status)),
+    [offersForSeller]
+  );
+
+  const openBids = useMemo(
+    () => bidsForSeller.filter((bid) => bid.status === "pending"),
+    [bidsForSeller]
+  );
+
+  const offerListingOptions = useMemo(
+    () => buildListingFilterOptions(openOffers),
+    [openOffers]
+  );
+
+  const bidListingOptions = useMemo(
+    () => buildListingFilterOptions(openBids),
+    [openBids]
+  );
+
+  useEffect(() => {
+    if (offerListingOptions.length === 0) {
+      if (offerListingFilter) {
+        setOfferListingFilter("");
+      }
+      return;
+    }
+    if (!offerListingOptions.some((option) => option.id === offerListingFilter)) {
+      setOfferListingFilter(offerListingOptions[0].id);
+    }
+  }, [offerListingFilter, offerListingOptions]);
+
+  useEffect(() => {
+    if (bidListingOptions.length === 0) {
+      if (bidListingFilter) {
+        setBidListingFilter("");
+      }
+      return;
+    }
+    if (!bidListingOptions.some((option) => option.id === bidListingFilter)) {
+      setBidListingFilter(bidListingOptions[0].id);
+    }
+  }, [bidListingFilter, bidListingOptions]);
+
+  const filteredOffers = useMemo(() => {
+    if (!offerListingFilter) return openOffers;
+    return openOffers.filter(
+      (offer) => String(offer.listingId ?? "unknown") === offerListingFilter
+    );
+  }, [offerListingFilter, openOffers]);
+
+  const filteredBids = useMemo(() => {
+    if (!bidListingFilter) return openBids;
+    return openBids.filter(
+      (bid) => String(bid.listingId ?? "unknown") === bidListingFilter
+    );
+  }, [bidListingFilter, openBids]);
+
+  const isOfferActionable = useCallback(
+    (offer: StorefrontOffer) =>
+      ["pending", "countered"].includes(offer.status) &&
+      (offer.lastActionBy ?? "buyer") !== "seller",
+    []
+  );
+
+  const handleOfferStatusUpdate = useCallback(
+    async (offerId: string, status: OfferStatus, payload?: { offeredPrice?: number; note?: string }) => {
+      setOfferActionError(null);
+      setOfferActionNotice(null);
+      setOfferActionLoading((prev) => ({ ...prev, [offerId]: true }));
+      try {
+        await api.put(`/marketplace-offers/${offerId}`, {
+          data: {
+            status,
+            offeredPrice: payload?.offeredPrice,
+            note: payload?.note,
+          },
+        });
+        setOfferActionNotice(
+          status === "accepted"
+            ? "Offer accepted."
+            : status === "declined"
+            ? "Offer declined."
+            : "Counter offer sent."
+        );
+        await loadOffers();
+      } catch (err) {
+        const apiMessage =
+          (err as any)?.response?.data?.error?.message ||
+          (err as any)?.response?.data?.message;
+        setOfferActionError(apiMessage || "Unable to update offer.");
+      } finally {
+        setOfferActionLoading((prev) => ({ ...prev, [offerId]: false }));
+      }
+    },
+    [loadOffers]
+  );
+
+  const handleOfferCounter = useCallback(
+    async (offerId: string) => {
+      const existingOffer = offersForSeller.find((offer) => offer.id === offerId);
+      const draftValue = offerCounterDrafts[offerId];
+      const noteValue = offerCounterNotes[offerId];
+      const counterPrice = Number(draftValue ?? existingOffer?.offeredPrice);
+      if (!Number.isFinite(counterPrice) || counterPrice <= 0) {
+        setOfferActionError("Enter a valid counter offer.");
+        return;
+      }
+      await handleOfferStatusUpdate(offerId, "countered", {
+        offeredPrice: counterPrice,
+        note: noteValue?.trim() || undefined,
+      });
+      setOfferCounterDrafts((prev) => {
+        const next = { ...prev };
+        delete next[offerId];
+        return next;
+      });
+      setOfferCounterNotes((prev) => {
+        const next = { ...prev };
+        delete next[offerId];
+        return next;
+      });
+    },
+    [handleOfferStatusUpdate, offerCounterDrafts, offerCounterNotes, offersForSeller]
+  );
+
+  const handleBidStatusUpdate = useCallback(
+    async (bidId: string, status: BidStatus) => {
+      setBidActionError(null);
+      setBidActionNotice(null);
+      setBidActionLoading((prev) => ({ ...prev, [bidId]: true }));
+      try {
+        await api.put(`/marketplace-bids/${bidId}`, { data: { status } });
+        setBidActionNotice(
+          status === "accepted" ? "Bid accepted." : "Bid declined."
+        );
+        await loadBids();
+      } catch (err) {
+        const apiMessage =
+          (err as any)?.response?.data?.error?.message ||
+          (err as any)?.response?.data?.message;
+        setBidActionError(apiMessage || "Unable to update bid.");
+      } finally {
+        setBidActionLoading((prev) => ({ ...prev, [bidId]: false }));
+      }
+    },
+    [loadBids]
+  );
+
+  const handleMessageReplyToggle = useCallback((threadKey: string) => {
+    setMessageReplyOpen((prev) => ({ ...prev, [threadKey]: !prev[threadKey] }));
+  }, []);
+
+  const handleSendMarketplaceReply = useCallback(
+    async (thread: MarketplaceMessageThread) => {
+      const key = thread.key;
+      const draft = (messageDrafts[key] || "").trim();
+      if (!draft) {
+        setMessageActionError("Type a response before sending.");
+        return;
+      }
+      const counterpartId = thread.counterpartId;
+      if (!counterpartId || !Number.isFinite(Number(counterpartId))) {
+        setMessageActionError("Missing recipient for this message.");
+        return;
+      }
+      setMessageActionError(null);
+      setMessageActionNotice(null);
+      setMessageSending((prev) => ({ ...prev, [key]: true }));
+      try {
+        await api.post("/messages", {
+          data: {
+            body: draft,
+            recipient: Number(counterpartId),
+            listing: thread.listingId ?? undefined,
+          },
+        });
+        setMessageDrafts((prev) => ({ ...prev, [key]: "" }));
+        setMessageReplyOpen((prev) => ({ ...prev, [key]: false }));
+        setMessageActionNotice("Reply sent.");
+        await loadMessages();
+      } catch (err) {
+        const apiMessage =
+          (err as any)?.response?.data?.error?.message ||
+          (err as any)?.response?.data?.message;
+        setMessageActionError(apiMessage || "Unable to send message.");
+      } finally {
+        setMessageSending((prev) => ({ ...prev, [key]: false }));
+      }
+    },
+    [loadMessages, messageDrafts, user?.id]
   );
 
   const activeView = useMemo(
@@ -2572,12 +2831,61 @@ export default function StorefrontSeller(): JSX.Element {
   }, [activeViewId]);
 
   const hiddenWidgets = widgetConfig.hidden ?? [];
-  const widgetStyles = widgetConfig.styles ?? {};
+  const showRevenuePanel = !hiddenWidgets.includes("totalEarnings");
+  const showActivityPanel = !hiddenWidgets.includes("orders");
+  const visibleKpiCount = [
+    !hiddenWidgets.includes("totalEarnings"),
+    !hiddenWidgets.includes("payouts"),
+    !hiddenWidgets.includes("orders"),
+    true,
+  ].filter(Boolean).length;
 
   const sellerOrders = useMemo(
     () => dashboardOrders.filter((order) => Number(order.sellerId) === Number(user?.id || 0)),
     [dashboardOrders, user?.id]
   );
+
+  const recentOrderSummary = useMemo(() => {
+    const statusPriority: Record<string, number> = {
+      paid: 3,
+      approved: 3,
+      completed: 2,
+      delivered: 2,
+      pending: 1,
+    };
+    const getOrderTs = (order: MarketplaceOrder) => {
+      const ts = new Date(order.createdAt).getTime();
+      return Number.isNaN(ts) ? 0 : ts;
+    };
+    const grouped = new Map<
+      string,
+      { count: number; latestTs: number; displayOrder: MarketplaceOrder }
+    >();
+
+    sellerOrders.forEach((order) => {
+      const key = String(order.listingId ?? order.listingTitle ?? order.id);
+      const ts = getOrderTs(order);
+      const priority = statusPriority[String(order.status || "").toLowerCase()] ?? 0;
+      const existing = grouped.get(key);
+      if (!existing) {
+        grouped.set(key, { count: 1, latestTs: ts, displayOrder: order });
+        return;
+      }
+      existing.count += 1;
+      if (ts > existing.latestTs) {
+        existing.latestTs = ts;
+      }
+      const existingPriority =
+        statusPriority[String(existing.displayOrder.status || "").toLowerCase()] ?? 0;
+      if (priority > existingPriority || (priority === existingPriority && ts > getOrderTs(existing.displayOrder))) {
+        existing.displayOrder = order;
+      }
+    });
+
+    return Array.from(grouped.values())
+      .sort((a, b) => b.latestTs - a.latestTs)
+      .slice(0, 4);
+  }, [sellerOrders]);
 
   const buyerPayments = useMemo(
     () => sellerOrders.filter((order) => ["paid", "approved"].includes(order.status)),
@@ -2629,6 +2937,57 @@ export default function StorefrontSeller(): JSX.Element {
     [earningsSeries]
   );
 
+  const trendPreviewSeries = useMemo(
+    () => (earningsSeries.length ? earningsSeries.slice(-8) : [{ label: "Now", total: 0 }]),
+    [earningsSeries]
+  );
+
+  const featuredListingImages = useMemo(
+    () =>
+      sellerListings
+        .flatMap((listing) => (Array.isArray(listing.images) ? listing.images.slice(0, 1) : []))
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        .slice(0, 4),
+    [sellerListings]
+  );
+
+  const listingImageById = useMemo(() => {
+    const map = new Map<string, string>();
+    sellerListings.forEach((listing) => {
+      const listingKey = String(listing.rawId ?? listing.id ?? listing.documentId ?? "");
+      if (!listingKey) return;
+      const previewImage = listing.images.find(
+        (image) => typeof image === "string" && image.trim().length > 0
+      );
+      if (previewImage) {
+        map.set(listingKey, previewImage);
+      }
+    });
+    return map;
+  }, [sellerListings]);
+
+  const getOrderPreviewImage = useCallback(
+    (order: MarketplaceOrder) => {
+      if (order.listingId !== undefined && order.listingId !== null) {
+        const listingImage = listingImageById.get(String(order.listingId));
+        if (listingImage) return listingImage;
+      }
+      return featuredListingImages[0] ?? "";
+    },
+    [featuredListingImages, listingImageById]
+  );
+  const hasTrendData = trendPreviewSeries.some((point) => Number(point.total) > 0);
+  const hasHeroMedia = featuredListingImages.length > 0 || hasTrendData;
+  const overviewClassName = [
+    "storefront-dashboard seller-dashboard seller-dashboard--overview",
+    "seller-dashboard--overview-v2",
+    "seller-dashboard--neo",
+    `seller-dashboard--overview-kpis-${Math.min(4, Math.max(1, visibleKpiCount))}`,
+    showRevenuePanel ? "seller-dashboard--has-revenue" : "seller-dashboard--no-revenue",
+    showActivityPanel ? "seller-dashboard--has-activity" : "seller-dashboard--no-activity",
+    hasHeroMedia ? "seller-dashboard--has-hero" : "seller-dashboard--no-hero",
+  ].join(" ");
+
   const payoutPending = useMemo(
     () =>
       sellerOrders.filter((order) => order.payoutStatus === "pending"),
@@ -2659,6 +3018,48 @@ export default function StorefrontSeller(): JSX.Element {
     return (sellerOrders.length / base) * 100;
   }, [sellerListings.length, sellerOrders.length]);
 
+  const orderStatusMix = useMemo(() => {
+    const buckets = { paid: 0, pending: 0, issue: 0 };
+    sellerOrders.forEach((order) => {
+      const status = String(order.status || "").toLowerCase();
+      if (["paid", "approved", "completed", "delivered"].includes(status)) {
+        buckets.paid += 1;
+        return;
+      }
+      if (["pending", "processing"].includes(status)) {
+        buckets.pending += 1;
+        return;
+      }
+      if (["refunded", "cancelled", "disputed"].includes(status)) {
+        buckets.issue += 1;
+        return;
+      }
+      buckets.pending += 1;
+    });
+    const total = buckets.paid + buckets.pending + buckets.issue;
+    const safeTotal = total || 1;
+    const percent = {
+      paid: Math.round((buckets.paid / safeTotal) * 100),
+      pending: Math.round((buckets.pending / safeTotal) * 100),
+      issue: Math.round((buckets.issue / safeTotal) * 100),
+    };
+    const sum = percent.paid + percent.pending + percent.issue;
+    if (sum !== 100) {
+      const diff = 100 - sum;
+      const keys: Array<keyof typeof percent> = ["paid", "pending", "issue"];
+      const largest = keys.reduce((current, key) =>
+        percent[key] >= percent[current] ? key : current
+      );
+      percent[largest] += diff;
+    }
+    return { total, buckets, percent };
+  }, [sellerOrders]);
+
+  const setupCompletedCount = useMemo(
+    () => setupChecklist.filter((item) => item.status === "done").length,
+    [setupChecklist]
+  );
+
   const topProducts = useMemo(() => {
     const map = new Map<string, { title: string; total: number; count: number }>();
     sellerOrders.forEach((order) => {
@@ -2683,6 +3084,8 @@ export default function StorefrontSeller(): JSX.Element {
   const displayListingError = !isMockMode ? listingError : null;
   const displayOfferLoading = !isMockMode && offerLoading;
   const displayOfferError = !isMockMode ? offerError : null;
+  const displayBidsLoading = !isMockMode && bidsLoading;
+  const displayBidsError = !isMockMode ? bidsError : null;
   const displayOrdersLoading = !isMockMode && ordersLoading;
   const displayOrdersError = !isMockMode ? ordersError : null;
   const displayMessagesLoading = !isMockMode && messagesLoading;
@@ -2724,10 +3127,6 @@ export default function StorefrontSeller(): JSX.Element {
       navigate("/storefront/seller#list");
       return;
     }
-    if (id === "identity") {
-      void handleRequestVerification();
-      return;
-    }
     if (id === "payout") {
       navigate("/storefront/payment-methods");
     }
@@ -2742,19 +3141,6 @@ export default function StorefrontSeller(): JSX.Element {
     setDashboardDirty(true);
     setDashboardSaveState("idle");
   }, []);
-
-  const updateDashboardTheme = useCallback(
-    (patch: Partial<DashboardTheme>) => {
-      markDashboardDirty();
-      setDashboardTheme((prev) => ({ ...prev, ...patch }));
-    },
-    [markDashboardDirty]
-  );
-
-  const handleResetDashboardTheme = useCallback(() => {
-    markDashboardDirty();
-    setDashboardTheme(DEFAULT_DASHBOARD_THEME);
-  }, [markDashboardDirty]);
 
   const handleToggleWidget = useCallback((id: string) => {
     markDashboardDirty();
@@ -2776,38 +3162,16 @@ export default function StorefrontSeller(): JSX.Element {
     setWidgetConfig((prev) => ({ ...prev, hidden: [...DASHBOARD_WIDGET_IDS] }));
   }, [markDashboardDirty]);
 
-  const handleWidgetStyleChange = useCallback(
-    (id: string, patch: DashboardWidgetStyle) => {
-      markDashboardDirty();
-      setWidgetConfig((prev) => ({
-        ...prev,
-        styles: {
-          ...(prev.styles || {}),
-          [id]: { ...(prev.styles?.[id] || {}), ...patch },
-        },
-      }));
-    },
-    [markDashboardDirty]
-  );
-
-  const getWidgetBackground = useCallback(
-    (id: string) => {
-      const style = widgetStyles[id];
-      if (!style?.color) return baseCardBg;
-      return toRgba(style.color, style.opacity ?? dashboardTheme.cardOpacity);
-    },
-    [baseCardBg, dashboardTheme.cardOpacity, widgetStyles]
-  );
-
   const buildCardStyle = useCallback(
     (id?: string) => {
-      const background = id ? getWidgetBackground(id) : baseCardBg;
+      void id;
+      const background = baseCardBg;
       return {
         "--seller-card-bg": background,
         backgroundColor: background,
       } as CSSProperties;
     },
-    [baseCardBg, getWidgetBackground]
+    [baseCardBg]
   );
 
   const renderWidgetContent = (widgetId: string) => {
@@ -2975,13 +3339,20 @@ export default function StorefrontSeller(): JSX.Element {
                 </div>
               )}
               {!isEmpty &&
-                sellerOrders.slice(0, 4).map((order) => (
-                  <div key={order.id} className="storefront-widget-row">
-                    <span>{order.listingTitle}</span>
+                recentOrderSummary.map(({ count, displayOrder }) => (
+                  <div key={`order-summary-${displayOrder.id}`} className="storefront-widget-row">
+                    <span>
+                      {displayOrder.listingTitle}
+                      {count > 1 ? ` (x${count})` : ""}
+                    </span>
                     <div className="seller-row-meta">
-                      <strong>{formatCurrency(order.amount, order.currency)}</strong>
-                      <span className={`seller-status-chip ${getStatusTone(order.status)}`}>
-                        {order.status}
+                      <strong>
+                        {formatCurrency(displayOrder.amount, displayOrder.currency)}
+                      </strong>
+                      <span
+                        className={`seller-status-chip ${getStatusTone(displayOrder.status)}`}
+                      >
+                        {displayOrder.status}
                       </span>
                     </div>
                   </div>
@@ -3048,11 +3419,15 @@ export default function StorefrontSeller(): JSX.Element {
       case "offers":
         {
           const isEmpty =
-            !displayOfferLoading && !displayOfferError && offersForSeller.length === 0;
+            !displayOfferLoading && !displayOfferError && openOffers.length === 0;
           return (
             <div className="storefront-widget-list">
               {displayOfferLoading && <p>Loading offers…</p>}
               {displayOfferError && <p>{displayOfferError}</p>}
+              {offerActionError && <p className="storefront-form-error">{offerActionError}</p>}
+              {offerActionNotice && (
+                <p className="storefront-status success">{offerActionNotice}</p>
+              )}
               {isEmpty && (
                 <div className="seller-empty">
                   <p>No offers yet.</p>
@@ -3070,21 +3445,202 @@ export default function StorefrontSeller(): JSX.Element {
                   </button>
                 </div>
               )}
+              {!isEmpty && offerListingOptions.length > 0 && (
+                <div className="seller-listing-filter">
+                  <label htmlFor="seller-offer-listing">Listing</label>
+                  <select
+                    id="seller-offer-listing"
+                    value={
+                      offerListingFilter ||
+                      offerListingOptions[0]?.id ||
+                      ""
+                    }
+                    onChange={(event) => setOfferListingFilter(event.target.value)}
+                  >
+                    {offerListingOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
               {!isEmpty &&
-                offersForSeller.slice(0, 4).map((offer) => (
-                  <div key={offer.id} className="storefront-widget-row">
-                    <span>{offer.buyerName}</span>
-                    <div className="seller-row-meta">
-                      <strong>{formatCurrency(offer.offeredPrice, offer.currency)}</strong>
-                      <span className={`seller-status-chip ${getStatusTone(offer.status)}`}>
-                        {offer.status}
-                      </span>
+                filteredOffers.slice(0, 4).map((offer) => {
+                  const actionable = isOfferActionable(offer);
+                  const loading = offerActionLoading[offer.id];
+                  return (
+                    <div key={offer.id} className="storefront-widget-row storefront-widget-row--offer">
+                      <div className="seller-row-main">
+                        <span>{offer.listingTitle || "Listing offer"}</span>
+                        <span className="seller-row-sub">
+                          Buyer: {offer.buyerName} · {offer.createdAt}
+                        </span>
+                      </div>
+                      <div className="seller-row-meta">
+                        <strong>{formatCurrency(offer.offeredPrice, offer.currency)}</strong>
+                        <span className={`seller-status-chip ${getStatusTone(offer.status)}`}>
+                          {offer.status}
+                        </span>
+                      </div>
+                      {offer.note && <p className="seller-row-note">{offer.note}</p>}
+                      <div className="seller-row-actions">
+                        {actionable ? (
+                          <>
+                            <button
+                              className="btn primary small"
+                              type="button"
+                              disabled={loading}
+                              onClick={() => handleOfferStatusUpdate(offer.id, "accepted")}
+                            >
+                              {loading ? "Saving..." : "Accept"}
+                            </button>
+                            <button
+                              className="btn danger small"
+                              type="button"
+                              disabled={loading}
+                              onClick={() => handleOfferStatusUpdate(offer.id, "declined")}
+                            >
+                              Decline
+                            </button>
+                          </>
+                        ) : (
+                          <span className="seller-row-muted">Waiting on buyer</span>
+                        )}
+                      </div>
+                      {actionable && (
+                        <div className="seller-row-counter">
+                          <input
+                            type="number"
+                            inputMode="decimal"
+                            placeholder="Counter offer"
+                            value={
+                              offerCounterDrafts[offer.id] ??
+                              (Number.isFinite(offer.offeredPrice)
+                                ? offer.offeredPrice.toFixed(2)
+                                : "")
+                            }
+                            onChange={(event) =>
+                              setOfferCounterDrafts((prev) => ({
+                                ...prev,
+                                [offer.id]: event.target.value,
+                              }))
+                            }
+                          />
+                          <input
+                            type="text"
+                            placeholder="Note (optional)"
+                            value={offerCounterNotes[offer.id] ?? ""}
+                            onChange={(event) =>
+                              setOfferCounterNotes((prev) => ({
+                                ...prev,
+                                [offer.id]: event.target.value,
+                              }))
+                            }
+                          />
+                          <button
+                            className="btn ghost small"
+                            type="button"
+                            disabled={loading}
+                            onClick={() => handleOfferCounter(offer.id)}
+                          >
+                            Send counter
+                          </button>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
             </div>
           );
         }
+      case "bids": {
+        const isEmpty = !displayBidsLoading && !displayBidsError && openBids.length === 0;
+        return (
+          <div className="storefront-widget-list">
+            {displayBidsLoading && <p>Loading bids…</p>}
+            {displayBidsError && <p>{displayBidsError}</p>}
+            {bidActionError && <p className="storefront-form-error">{bidActionError}</p>}
+            {bidActionNotice && <p className="storefront-status success">{bidActionNotice}</p>}
+            {isEmpty && (
+              <div className="seller-empty">
+                <p>No bids yet.</p>
+                <button
+                  className="btn secondary small"
+                  type="button"
+                  disabled={!storefrontEnabled}
+                  aria-disabled={!storefrontEnabled}
+                  onClick={() => {
+                    if (!storefrontEnabled) return;
+                    navigate("/storefront");
+                  }}
+                >
+                  {storefrontEnabled ? "Share your StoreFront" : "StoreFront disabled"}
+                </button>
+              </div>
+            )}
+            {!isEmpty && bidListingOptions.length > 0 && (
+              <div className="seller-listing-filter">
+                <label htmlFor="seller-bid-listing">Listing</label>
+                <select
+                  id="seller-bid-listing"
+                  value={bidListingFilter || bidListingOptions[0]?.id || ""}
+                  onChange={(event) => setBidListingFilter(event.target.value)}
+                >
+                  {bidListingOptions.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {!isEmpty &&
+              filteredBids.slice(0, 4).map((bid) => {
+                const loading = bidActionLoading[bid.id];
+                return (
+                  <div key={bid.id} className="storefront-widget-row storefront-widget-row--offer">
+                    <div className="seller-row-main">
+                      <span>{bid.listingTitle || "Listing bid"}</span>
+                      <span className="seller-row-sub">
+                        Bidder: {bid.bidderName} · {bid.createdAt}
+                      </span>
+                    </div>
+                    <div className="seller-row-meta">
+                      <strong>{formatCurrency(bid.amount, bid.currency)}</strong>
+                      <span className={`seller-status-chip ${getStatusTone(bid.status)}`}>
+                        {bid.status}
+                      </span>
+                    </div>
+                    <div className="seller-row-actions">
+                      <button
+                        className="btn primary small"
+                        type="button"
+                        disabled={loading}
+                        onClick={() => handleBidStatusUpdate(bid.id, "accepted")}
+                      >
+                        {loading ? "Saving..." : "Accept"}
+                      </button>
+                      <button
+                        className="btn danger small"
+                        type="button"
+                        disabled={loading}
+                        onClick={() => handleBidStatusUpdate(bid.id, "declined")}
+                      >
+                        Decline
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            {!isEmpty && (
+              <p className="seller-row-muted">
+                Accept the highest bid after the auction ends.
+              </p>
+            )}
+          </div>
+        );
+      }
       case "messages":
         return (
           <div className="storefront-message-stack">
@@ -3106,34 +3662,98 @@ export default function StorefrontSeller(): JSX.Element {
                 </p>
               </div>
               <span className="storefront-message-badge">
-                {dashboardMessages.length} total
+                {messageThreads.length} total
               </span>
             </div>
-            {dashboardMessages.length > 0 && (
+            {messageActionError && (
+              <p className="storefront-form-error">{messageActionError}</p>
+            )}
+            {messageActionNotice && (
+              <p className="storefront-status success">{messageActionNotice}</p>
+            )}
+            {messageThreads.length > 0 && (
               <div className="storefront-message-list">
-                {dashboardMessages.slice(0, 3).map((message) => (
-                  <div key={message.id} className="storefront-widget-row">
-                    <span>{message.listingTitle || "Listing chat"}</span>
-                    <strong>{message.senderName}</strong>
-                  </div>
-                ))}
+                {messageThreads.map((thread) => {
+                  const key = thread.key;
+                  const threadMessages = thread.messages.slice(-2);
+                  return (
+                    <div
+                      key={thread.key}
+                      className="storefront-message-mini storefront-message-mini--rich"
+                    >
+                      <div className="storefront-message-mini-header">
+                        <div>
+                          <strong>{thread.counterpartName}</strong>
+                          <span>{thread.listingTitle || "Listing chat"}</span>
+                        </div>
+                        <span className="seller-row-sub">
+                          {thread.lastMessageLabel}
+                        </span>
+                      </div>
+                      <div className="storefront-message-thread">
+                        {threadMessages.map((entry) => {
+                          const isMine = entry.senderId === user?.id;
+                          return (
+                            <div
+                              key={entry.id}
+                              className={`storefront-thread-message${
+                                isMine ? " is-me" : ""
+                              }`}
+                            >
+                              <div className="storefront-thread-message-header">
+                                <strong>{entry.senderName}</strong>
+                                <span>{entry.createdAt}</span>
+                              </div>
+                              <p className="storefront-thread-message-body">
+                                {entry.body}
+                              </p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="seller-row-actions">
+                        <button
+                          className="btn ghost small"
+                          type="button"
+                          onClick={() => handleMessageReplyToggle(key)}
+                        >
+                          {messageReplyOpen[key] ? "Hide reply" : "Reply"}
+                        </button>
+                      </div>
+                      {messageReplyOpen[key] && (
+                        <div className="storefront-message-reply">
+                          <textarea
+                            rows={2}
+                            placeholder={`Reply to ${thread.counterpartName}`}
+                            value={messageDrafts[key] ?? ""}
+                            onChange={(event) =>
+                              setMessageDrafts((prev) => ({
+                                ...prev,
+                                [key]: event.target.value,
+                              }))
+                            }
+                          />
+                          <button
+                            className="btn primary small"
+                            type="button"
+                            disabled={messageSending[key]}
+                            onClick={() => handleSendMarketplaceReply(thread)}
+                          >
+                            {messageSending[key] ? "Sending..." : "Send"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
-            <div className="storefront-message-actions">
-              <button
-                className="btn secondary small"
-                type="button"
-                onClick={() => navigate("/storefront/seller#list")}
-              >
-                Create a listing
-              </button>
-            </div>
           </div>
         );
       case "verification":
         return (() => {
           const idItem = sellerVerificationItems.find(
-            (item) => item.label.toLowerCase() === "government id"
+            (item) => item.label.toLowerCase() === "age verification"
           );
           const payoutItem = sellerVerificationItems.find(
             (item) => item.label.toLowerCase() === "payout method"
@@ -3141,31 +3761,13 @@ export default function StorefrontSeller(): JSX.Element {
           const activityItem = sellerVerificationItems.find(
             (item) => item.label.toLowerCase() === "activity history"
           );
-          const idStatus = idItem?.status || "required";
+          const idStatus = idItem?.status || "pending";
           const isIdVerified = idStatus === "verified";
-          const stripeStatus = selfVerification?.stripeIdentityStatus;
-            const idTitle =
-              idStatus === "verified"
-                ? "Government ID verified"
-                : idStatus === "pending"
-                ? "Government ID pending"
-                : "Government ID optional";
-            const pendingCopy =
-              stripeStatus === "requires_input"
-                ? "Finish the secure Stripe verification to earn your verified badge."
-                : stripeStatus === "processing"
-                ? "Your documents are being reviewed."
-                : "Verification is in progress.";
-            const idCopy =
-              idStatus === "verified"
-                ? "Your identity is verified."
-                : idStatus === "pending"
-                ? pendingCopy
-                : "Verify your government-issued ID to earn a verified seller badge on your listings.";
-          const actionLabel =
-            idStatus === "pending" && stripeStatus === "requires_input"
-              ? "Continue verification"
-              : "Verify now";
+          const idTitle = isIdVerified ? "Age verified" : "Age verification required";
+          const idCopy = isIdVerified
+            ? "Your age is verified for marketplace access."
+            : "Verify your age to keep your seller account active and unlock buyer trust.";
+          const actionLabel = "Verify now";
           return (
             <div className="storefront-verification">
               <div
@@ -3182,6 +3784,11 @@ export default function StorefrontSeller(): JSX.Element {
                     {idTitle}
                   </span>
                   <p>{idCopy}</p>
+                  <p className="seller-fee-note">
+                    {sellerIsVerified
+                      ? "Verified sellers pay a 2% transaction fee."
+                      : "Non-verified sellers pay a 4% transaction fee until verification is complete."}
+                  </p>
                   {verificationNotice && (
                     <p className="storefront-verification-note">{verificationNotice}</p>
                   )}
@@ -3210,15 +3817,15 @@ export default function StorefrontSeller(): JSX.Element {
                 </div>
               </div>
               <div className="storefront-verification-list">
-                  {[payoutItem, activityItem].filter(Boolean).map((item) => {
-                    const statusLabel = item?.status || "optional";
-                    return (
-                      <div key={item?.label} className="storefront-widget-row">
-                        <span>{item?.label}</span>
-                        <strong>{statusLabel}</strong>
-                      </div>
-                    );
-                  })}
+                {[payoutItem, activityItem].filter(Boolean).map((item) => {
+                  const statusLabel = item?.status || "optional";
+                  return (
+                    <div key={item?.label} className="storefront-widget-row">
+                      <span>{item?.label}</span>
+                      <strong>{statusLabel}</strong>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           );
@@ -3277,6 +3884,131 @@ export default function StorefrontSeller(): JSX.Element {
     }
   };
 
+  const dashboardModuleTitles: Record<string, string> = {
+    totalEarnings: "Total Sales",
+    payouts: "Payout Balance",
+    orders: "Orders",
+    conversion: "Conversion",
+    verification: "Verification",
+    setup: "Setup checklist",
+    activeListings: "Active Listings",
+    buyerDisputes: "Buyer Disputes",
+  };
+
+  const openDashboardModule = (moduleId: string) => {
+    setActiveDashboardModule(moduleId);
+  };
+
+  const closeDashboardModule = () => {
+    setActiveDashboardModule(null);
+  };
+
+  const handleModuleClick =
+    (moduleId: string) => (event: MouseEvent<HTMLDivElement>) => {
+      const target = event.target as HTMLElement;
+      if (target.closest("button, a, input, select, textarea, label")) return;
+      openDashboardModule(moduleId);
+    };
+
+  const handleModuleKeyDown =
+    (moduleId: string) => (event: KeyboardEvent<HTMLDivElement>) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openDashboardModule(moduleId);
+      }
+    };
+
+  const activeDashboardTitle = activeDashboardModule
+    ? dashboardModuleTitles[activeDashboardModule] ?? "Details"
+    : "";
+
+  const renderDashboardModuleContent = (moduleId: string) => {
+    switch (moduleId) {
+      case "conversion":
+        return (
+          <div className="seller-module-metric">
+            <div className="seller-module-value">{conversionRate.toFixed(1)}%</div>
+            <p className="seller-module-sub">Conversion from StoreFront listings.</p>
+          </div>
+        );
+      case "setup":
+        return (
+          <div className="seller-module-stack">
+            <ul className="seller-setup-list">
+              {setupChecklist.map((item) => {
+                const statusLabel =
+                  item.status === "done"
+                    ? "Done"
+                    : item.status === "pending"
+                    ? "Pending"
+                    : "Action required";
+                const statusClass =
+                  item.status === "done"
+                    ? "is-success"
+                    : item.status === "pending"
+                    ? "is-warning"
+                    : "is-danger";
+                return (
+                  <li key={item.id} className={`seller-setup-item ${item.status}`}>
+                    <span className="seller-setup-name">{item.label}</span>
+                    <span className={`seller-status-chip ${statusClass}`}>
+                      {statusLabel}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+            {nextChecklistItem ? (
+              <button
+                className="btn primary small"
+                type="button"
+                onClick={() => handleSetupAction(nextChecklistItem.id)}
+              >
+                {SETUP_ACTION_LABELS[nextChecklistItem.id]}
+              </button>
+            ) : (
+              <p className="seller-setup-complete">All set for selling.</p>
+            )}
+          </div>
+        );
+      case "orders":
+        return (
+          <div className="seller-module-stack">
+            <div className="seller-panel-body">{renderWidgetContent("orders")}</div>
+            {!hiddenWidgets.includes("offers") && (
+              <div className="seller-panel-subsection">
+                <div className="seller-panel-subheader">
+                  <span className="seller-panel-eyebrow">Offers</span>
+                  <h4>Offers</h4>
+                </div>
+                <div className="seller-panel-body">{renderWidgetContent("offers")}</div>
+              </div>
+            )}
+            {!hiddenWidgets.includes("bids") && (
+              <div className="seller-panel-subsection">
+                <div className="seller-panel-subheader">
+                  <span className="seller-panel-eyebrow">Bids</span>
+                  <h4>Bids</h4>
+                </div>
+                <div className="seller-panel-body">{renderWidgetContent("bids")}</div>
+              </div>
+            )}
+          </div>
+        );
+      case "payouts":
+        return (
+          <div className="seller-module-stack">
+            <div className="seller-panel-body">{renderWidgetContent("payouts")}</div>
+            <p className="seller-panel-note">
+              Sales payouts appear here within 2 business days after completion.
+            </p>
+          </div>
+        );
+      default:
+        return renderWidgetContent(moduleId);
+    }
+  };
+
   const listingPanel = (
     <div
       id="list"
@@ -3287,7 +4019,9 @@ export default function StorefrontSeller(): JSX.Element {
           <p className="storefront-panel-eyebrow">Listing tools</p>
           <h3>List a product</h3>
         </div>
-        <span className="storefront-fee-note">3% platform fee</span>
+        <span className="storefront-fee-note">
+          {sellerFeePercent}% platform fee
+        </span>
       </div>
       <div className="storefront-listing-mode" role="tablist" aria-label="Listing mode">
         <button
@@ -3348,7 +4082,7 @@ export default function StorefrontSeller(): JSX.Element {
                   />
                 </div>
                 <div className="storefront-field">
-                  <label>Price</label>
+                  <label>{draft.auctionEnabled ? "Buy now price" : "Price"}</label>
                   <input
                     type="number"
                     min="0"
@@ -3358,13 +4092,57 @@ export default function StorefrontSeller(): JSX.Element {
                     placeholder="0.00"
                   />
                 </div>
+                <div className="storefront-field storefront-field--wide">
+                  <label>Auction</label>
+                  <div className="storefront-switch-grid">
+                    <label className="storefront-switch">
+                      <input
+                        type="checkbox"
+                        checked={draft.auctionEnabled}
+                        onChange={(event) =>
+                          updateDraft({
+                            auctionEnabled: event.target.checked,
+                          })
+                        }
+                      />
+                      <span className="storefront-switch-track" aria-hidden="true" />
+                      <span className="storefront-switch-label">Enable bidding</span>
+                    </label>
+                  </div>
+                  {draft.auctionEnabled && (
+                    <div className="storefront-auction-fields">
+                      <input
+                        type="number"
+                        min="0.01"
+                        step="0.01"
+                        value={draft.startingBid}
+                        onChange={(event) =>
+                          updateDraft({ startingBid: event.target.value })
+                        }
+                        placeholder="Starting bid"
+                      />
+                      <input
+                        type="datetime-local"
+                        value={draft.auctionEndAt}
+                        onChange={(event) =>
+                          updateDraft({ auctionEndAt: event.target.value })
+                        }
+                      />
+                      <p className="storefront-field-hint">
+                        Starting bid must be less than or equal to the buy now price.
+                      </p>
+                    </div>
+                  )}
+                </div>
                 <div className="storefront-field">
                   <label>Category</label>
                   <select
                     value={draft.category}
                     onChange={(event) => updateDraft({ category: event.target.value })}
                   >
-                    {CATEGORY_OPTIONS.filter((option) => option !== "All").map((option) => (
+                    {CATEGORY_OPTIONS.filter(
+                      (option) => option !== "All" && option !== "Free"
+                    ).map((option) => (
                       <option key={option} value={option}>
                         {option}
                       </option>
@@ -3396,6 +4174,23 @@ export default function StorefrontSeller(): JSX.Element {
                   >
                     <option value="public">Public</option>
                     <option value="friends">Friends only</option>
+                  </select>
+                </div>
+                <div className="storefront-field">
+                  <label>Listing status</label>
+                  <select
+                    value={draft.status}
+                    onChange={(event) =>
+                      updateDraft({
+                        status: event.target.value as DraftProduct["status"],
+                      })
+                    }
+                    disabled={draft.status === "sold"}
+                  >
+                    {draft.status === "sold" && <option value="sold">Sold (locked)</option>}
+                    <option value="active">Active (visible)</option>
+                    <option value="pending">Pending (hidden)</option>
+                    <option value="archived">Archived</option>
                   </select>
                 </div>
                 <div className="storefront-field">
@@ -3496,6 +4291,16 @@ export default function StorefrontSeller(): JSX.Element {
                     <span>Drag & drop photos here or click to upload</span>
                   </label>
                   <span className="storefront-file-helper">Add multiple images at once.</span>
+                  {photoNotice && (
+                    <span className="storefront-field-hint">{photoNotice}</span>
+                  )}
+                  {unverifiedPhotoCount > 0 && (
+                    <span className="storefront-field-hint warning">
+                      We could not verify camera metadata for {unverifiedPhotoCount} photo
+                      {unverifiedPhotoCount === 1 ? "" : "s"}. Please use original camera
+                      photos.
+                    </span>
+                  )}
                 </div>
                 {draftImages.length > 0 && (
                   <div className="storefront-upload-grid">
@@ -3573,8 +4378,10 @@ export default function StorefrontSeller(): JSX.Element {
           onSubmit={handleOpenBulkPreview}
         >
           <div className="storefront-bulk-list">
-            {bulkListings.map((item, index) => (
-              <div key={item.id} className="storefront-bulk-card">
+            {bulkListings.map((item, index) => {
+              const unverifiedCount = countUnverifiedPhotos(item.images);
+              return (
+                <div key={item.id} className="storefront-bulk-card">
                 <div className="storefront-bulk-header">
                   <div>
                     <p className="storefront-panel-eyebrow">Listing {index + 1}</p>
@@ -3602,7 +4409,7 @@ export default function StorefrontSeller(): JSX.Element {
                     />
                   </div>
                   <div className="storefront-field">
-                    <label>Price</label>
+                    <label>{item.auctionEnabled ? "Buy now price" : "Price"}</label>
                     <input
                       type="number"
                       min="0"
@@ -3614,6 +4421,52 @@ export default function StorefrontSeller(): JSX.Element {
                       placeholder="0.00"
                     />
                   </div>
+                  <div className="storefront-field storefront-field--wide">
+                    <label>Auction</label>
+                    <div className="storefront-switch-grid">
+                      <label className="storefront-switch">
+                        <input
+                          type="checkbox"
+                          checked={item.auctionEnabled}
+                          onChange={(event) =>
+                            updateBulkListing(item.id, {
+                              auctionEnabled: event.target.checked,
+                            })
+                          }
+                        />
+                        <span className="storefront-switch-track" aria-hidden="true" />
+                        <span className="storefront-switch-label">Enable bidding</span>
+                      </label>
+                    </div>
+                    {item.auctionEnabled && (
+                      <div className="storefront-auction-fields">
+                        <input
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          value={item.startingBid}
+                          onChange={(event) =>
+                            updateBulkListing(item.id, {
+                              startingBid: event.target.value,
+                            })
+                          }
+                          placeholder="Starting bid"
+                        />
+                        <input
+                          type="datetime-local"
+                          value={item.auctionEndAt}
+                          onChange={(event) =>
+                            updateBulkListing(item.id, {
+                              auctionEndAt: event.target.value,
+                            })
+                          }
+                        />
+                      <p className="storefront-field-hint">
+                          Starting bid must be less than or equal to the buy now price.
+                      </p>
+                      </div>
+                    )}
+                  </div>
                   <div className="storefront-field">
                     <label>Category</label>
                     <select
@@ -3622,7 +4475,9 @@ export default function StorefrontSeller(): JSX.Element {
                         updateBulkListing(item.id, { category: event.target.value })
                       }
                     >
-                      {CATEGORY_OPTIONS.filter((option) => option !== "All").map((option) => (
+                      {CATEGORY_OPTIONS.filter(
+                        (option) => option !== "All" && option !== "Free"
+                      ).map((option) => (
                         <option key={option} value={option}>
                           {option}
                         </option>
@@ -3656,6 +4511,25 @@ export default function StorefrontSeller(): JSX.Element {
                     >
                       <option value="public">Public</option>
                       <option value="friends">Friends only</option>
+                    </select>
+                  </div>
+                  <div className="storefront-field">
+                    <label>Listing status</label>
+                    <select
+                      value={item.status}
+                      onChange={(event) =>
+                        updateBulkListing(item.id, {
+                          status: event.target.value as DraftProduct["status"],
+                        })
+                      }
+                      disabled={item.status === "sold"}
+                    >
+                      {item.status === "sold" && (
+                        <option value="sold">Sold (locked)</option>
+                      )}
+                      <option value="active">Active (visible)</option>
+                      <option value="pending">Pending (hidden)</option>
+                      <option value="archived">Archived</option>
                     </select>
                   </div>
                   <div className="storefront-field">
@@ -3730,6 +4604,12 @@ export default function StorefrontSeller(): JSX.Element {
                       Add multiple images at once.
                     </span>
                   </div>
+                  {unverifiedCount > 0 && (
+                    <span className="storefront-field-hint warning">
+                      We could not verify camera metadata for {unverifiedCount} photo
+                      {unverifiedCount === 1 ? "" : "s"}. Please use original camera photos.
+                    </span>
+                  )}
                   {item.images.length > 0 && (
                     <div className="storefront-upload-grid">
                       {item.images.map((image) => (
@@ -3748,7 +4628,8 @@ export default function StorefrontSeller(): JSX.Element {
                 </div>
                 {item.error && <p className="storefront-form-error">{item.error}</p>}
               </div>
-            ))}
+              );
+            })}
           </div>
           <label className="storefront-switch storefront-switch--wide storefront-bulk-policy">
             <input
@@ -3850,7 +4731,12 @@ export default function StorefrontSeller(): JSX.Element {
   const previewTitleId = "storefront-preview-title";
 
   return (
-    <div className="dashboard-shell storefront-shell" style={pageBackground}>
+    <div
+      className={`dashboard-shell storefront-shell${
+        isListingView ? "" : " storefront-shell--seller-messages"
+      }`}
+      style={pageBackground}
+    >
       <Sidebar active="storefront" />
       <div className="main-content storefront-page">
         {isListingView ? (
@@ -3859,11 +4745,11 @@ export default function StorefrontSeller(): JSX.Element {
           </section>
       ) : (
         <section
-          className="storefront-dashboard seller-dashboard seller-dashboard--flow"
+          className={overviewClassName}
           style={dashboardStyle}
-          >
-            <div className="seller-dashboard-grid">
-              <div className="seller-dashboard-topbar">
+        >
+            <div className="seller-dashboard-grid seller-dashboard-grid--overview">
+              <div className="seller-dashboard-topbar seller-overview-block seller-overview-block--topbar">
                 <header className="seller-dashboard-header">
                   <div className="seller-dashboard-title">
                     <div className="seller-dashboard-icon" aria-hidden="true">
@@ -3872,6 +4758,9 @@ export default function StorefrontSeller(): JSX.Element {
                     <div>
                       <span className="seller-dashboard-kicker">Seller Workspace</span>
                       <h2>Storefront Control Center</h2>
+                      {sellerIsVerified && (
+                        <span className="seller-verified-badge">Verified seller</span>
+                      )}
                       <p>Track revenue, orders, payouts, and account health.</p>
                     </div>
                   </div>
@@ -3895,9 +4784,9 @@ export default function StorefrontSeller(): JSX.Element {
                     <button
                       className="seller-dashboard-btn seller-dashboard-btn--ghost is-compact"
                       type="button"
-                      onClick={() => setCustomizeOpen((prev) => !prev)}
+                      onClick={() => setCustomizeOpen(true)}
                     >
-                      {customizeOpen ? "Close" : "Customize"}
+                      Customize
                     </button>
                     <select
                       className="seller-dashboard-range"
@@ -3931,6 +4820,9 @@ export default function StorefrontSeller(): JSX.Element {
                             <div>
                               <span>Signed in as</span>
                               <strong>{sellerDisplayName}</strong>
+                              {sellerIsVerified && (
+                                <span className="seller-verified-badge">Verified seller</span>
+                              )}
                             </div>
                           </div>
                           <button
@@ -3945,257 +4837,62 @@ export default function StorefrontSeller(): JSX.Element {
                       )}
                     </div>
                   </div>
+                  {hasHeroMedia && (
+                    <div
+                      className={`seller-dashboard-hero-media${
+                        hasTrendData ? "" : " is-media-only"
+                      }`}
+                    >
+                      {hasTrendData && (
+                        <div
+                          className="seller-dashboard-mini-chart"
+                          role="img"
+                          aria-label="Revenue trend"
+                        >
+                          {trendPreviewSeries.map((point, index) => (
+                            <span
+                              key={`trend-preview-${index}`}
+                              style={{
+                                height: `${Math.max(
+                                  10,
+                                  (point.total / Math.max(earningsSparkMax, 1)) * 100
+                                )}%`,
+                              }}
+                            />
+                          ))}
+                        </div>
+                      )}
+                      <div className="seller-dashboard-media-grid">
+                        {featuredListingImages.map((imageUrl, index) => (
+                          <figure
+                            className="seller-dashboard-media-tile"
+                            key={`featured-listing-${index}`}
+                          >
+                            <img
+                              src={imageUrl}
+                              alt={`Listing preview ${index + 1}`}
+                              loading="lazy"
+                            />
+                          </figure>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </header>
 
-                {customizeOpen && (
-                  <div className="storefront-panel seller-dashboard-customize-panel">
-                    <div className="storefront-panel-header">
-                      <div>
-                        <p className="storefront-panel-eyebrow">Seller workspace</p>
-                        <h3>Dashboard views & customization</h3>
-                      </div>
-                      <div className="storefront-dashboard-actions">
-                        <button
-                          className="btn ghost small"
-                          type="button"
-                          onClick={handleCreateView}
-                        >
-                          New view
-                        </button>
-                        <button
-                          className="btn ghost small"
-                          type="button"
-                          onClick={handleRenameView}
-                        >
-                          Rename
-                        </button>
-                        <button
-                          className="btn ghost small"
-                          type="button"
-                          onClick={handleSetDefaultView}
-                        >
-                          Set default
-                        </button>
-                        <button
-                          className="btn ghost small"
-                          type="button"
-                          onClick={openDeleteView}
-                          disabled={dashboardViews.length <= 1}
-                        >
-                          Delete
-                        </button>
-                        <button
-                          className="btn primary small"
-                          type="button"
-                          onClick={handleSaveDashboardChanges}
-                          disabled={
-                            !activeViewId ||
-                            !dashboardDirty ||
-                            dashboardSaveState === "saving"
-                          }
-                        >
-                          {dashboardSaveState === "saving" ? "Saving..." : "Save changes"}
-                        </button>
-                        {dashboardSaveState === "saved" && (
-                          <span
-                            className="storefront-dashboard-save-status"
-                            role="status"
-                          >
-                            Saved
-                          </span>
-                        )}
-                        {dashboardSaveState === "error" && (
-                          <span
-                            className="storefront-dashboard-save-status is-error"
-                            role="status"
-                          >
-                            Save failed
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="storefront-dashboard-row">
-                      <div className="storefront-field">
-                        <label htmlFor="dashboard-view">Active view</label>
-                        <select
-                          id="dashboard-view"
-                          value={activeViewId ?? ""}
-                          onChange={(event) => handleSelectView(Number(event.target.value))}
-                        >
-                          {dashboardViews.map((view) => (
-                            <option key={view.id} value={view.id}>
-                              {view.name}
-                              {view.isDefault ? " (default)" : ""}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="storefront-dashboard-status">
-                        {dashboardLoading && <span>Loading dashboard…</span>}
-                        {!dashboardLoading && activeView?.updatedAt && (
-                          <span>
-                            Last updated {new Date(activeView.updatedAt).toLocaleString()}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    {dashboardError && <p className="storefront-form-error">{dashboardError}</p>}
-                    <div className="storefront-dashboard-customize">
-                      <div className="storefront-dashboard-theme">
-                        <div className="storefront-dashboard-theme-header">
-                          <h4>Theme & background</h4>
-                          <button
-                            className="btn ghost small"
-                            type="button"
-                            onClick={handleResetDashboardTheme}
-                          >
-                            Set to default
-                          </button>
-                        </div>
-                        <div className="storefront-dashboard-theme-grid">
-                          <label className="storefront-field">
-                            <span>Page background</span>
-                            <input
-                              type="color"
-                              value={dashboardTheme.pageBg}
-                              onChange={(event) =>
-                                updateDashboardTheme({ pageBg: event.target.value })
-                              }
-                            />
-                          </label>
-                          <label className="storefront-field">
-                            <span>Page opacity</span>
-                            <input
-                              type="range"
-                              min={0.2}
-                              max={1}
-                              step={0.05}
-                              value={dashboardTheme.pageOpacity}
-                              onChange={(event) =>
-                                updateDashboardTheme({
-                                  pageOpacity: Number(event.target.value),
-                                })
-                              }
-                            />
-                          </label>
-                          <label className="storefront-field">
-                            <span>Card background</span>
-                            <input
-                              type="color"
-                              value={dashboardTheme.cardBg}
-                              onChange={(event) =>
-                                updateDashboardTheme({ cardBg: event.target.value })
-                              }
-                            />
-                          </label>
-                          <label className="storefront-field">
-                            <span>Card opacity</span>
-                            <input
-                              type="range"
-                              min={0.4}
-                              max={1}
-                              step={0.05}
-                              value={dashboardTheme.cardOpacity}
-                              onChange={(event) =>
-                                updateDashboardTheme({
-                                  cardOpacity: Number(event.target.value),
-                                })
-                              }
-                            />
-                          </label>
-                          <label className="storefront-field">
-                            <span>Accent color</span>
-                            <input
-                              type="color"
-                              value={dashboardTheme.accent}
-                              onChange={(event) =>
-                                updateDashboardTheme({ accent: event.target.value })
-                              }
-                            />
-                          </label>
-                        </div>
-                      </div>
-                      <div className="storefront-dashboard-widgets">
-                        <h4>Widgets</h4>
-                        <div className="storefront-dashboard-widget-actions">
-                          <label className="storefront-switch storefront-switch--compact">
-                            <input
-                              type="checkbox"
-                              checked={allWidgetsSelected}
-                              onChange={(event) => {
-                                if (event.target.checked) {
-                                  handleSelectAllWidgets();
-                                }
-                              }}
-                            />
-                            <span className="storefront-switch-track" aria-hidden="true" />
-                            <span className="storefront-switch-label">Select all</span>
-                          </label>
-                          <label className="storefront-switch storefront-switch--compact">
-                            <input
-                              type="checkbox"
-                              checked={noWidgetsSelected}
-                              onChange={(event) => {
-                                if (event.target.checked) {
-                                  handleSelectNoneWidgets();
-                                }
-                              }}
-                            />
-                            <span className="storefront-switch-track" aria-hidden="true" />
-                            <span className="storefront-switch-label">Select none</span>
-                          </label>
-                        </div>
-                        <div className="storefront-dashboard-widget-grid">
-                          {DASHBOARD_WIDGETS.map((widget) => (
-                            <div key={widget.id} className="storefront-dashboard-widget-row">
-                              <label className="storefront-switch storefront-switch--compact">
-                                <input
-                                  type="checkbox"
-                                  checked={!hiddenWidgets.includes(widget.id)}
-                                  onChange={() => handleToggleWidget(widget.id)}
-                                />
-                                <span className="storefront-switch-track" aria-hidden="true" />
-                                <span className="storefront-switch-label">
-                                  <span className="storefront-widget-title">{widget.title}</span>
-                                  <span className="storefront-widget-helper">
-                                    {widget.helper}
-                                  </span>
-                                </span>
-                              </label>
-                              <input
-                                type="color"
-                                value={widgetStyles[widget.id]?.color || dashboardTheme.cardBg}
-                                onChange={(event) =>
-                                  handleWidgetStyleChange(widget.id, {
-                                    color: event.target.value,
-                                  })
-                                }
-                              />
-                              <input
-                                type="range"
-                                min={0.4}
-                                max={1}
-                                step={0.05}
-                                value={
-                                  widgetStyles[widget.id]?.opacity ?? dashboardTheme.cardOpacity
-                                }
-                                onChange={(event) =>
-                                  handleWidgetStyleChange(widget.id, {
-                                    opacity: Number(event.target.value),
-                                  })
-                                }
-                              />
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
               </div>
 
-              {!hiddenWidgets.includes("totalEarnings") && (
-                <div className="seller-kpi-card seller-kpi-card--k1" style={buildCardStyle("totalEarnings")}>
+              <div className="seller-dashboard-kpis seller-overview-block seller-overview-block--kpis">
+                {!hiddenWidgets.includes("totalEarnings") && (
+                <div
+                  className="seller-kpi-card seller-kpi-card--k1"
+                  style={buildCardStyle("totalEarnings")}
+                  role="button"
+                  tabIndex={0}
+                  onClick={handleModuleClick("totalEarnings")}
+                  onKeyDown={handleModuleKeyDown("totalEarnings")}
+                  aria-label="View total sales details"
+                >
                   <div className="seller-kpi-header">
                     <span className="seller-kpi-label">Total Sales</span>
                     <span className="seller-kpi-icon" aria-hidden="true">
@@ -4224,7 +4921,15 @@ export default function StorefrontSeller(): JSX.Element {
                 </div>
               )}
               {!hiddenWidgets.includes("payouts") && (
-                <div className="seller-kpi-card seller-kpi-card--k2" style={buildCardStyle("payouts")}>
+                <div
+                  className="seller-kpi-card seller-kpi-card--k2"
+                  style={buildCardStyle("payouts")}
+                  role="button"
+                  tabIndex={0}
+                  onClick={handleModuleClick("payouts")}
+                  onKeyDown={handleModuleKeyDown("payouts")}
+                  aria-label="View payout details"
+                >
                   <div className="seller-kpi-header">
                     <span className="seller-kpi-label">Payout Balance</span>
                     <span className="seller-kpi-icon" aria-hidden="true">
@@ -4256,7 +4961,15 @@ export default function StorefrontSeller(): JSX.Element {
                 </div>
               )}
               {!hiddenWidgets.includes("orders") && (
-                <div className="seller-kpi-card seller-kpi-card--k3" style={buildCardStyle("orders")}>
+                <div
+                  className="seller-kpi-card seller-kpi-card--k3"
+                  style={buildCardStyle("orders")}
+                  role="button"
+                  tabIndex={0}
+                  onClick={handleModuleClick("orders")}
+                  onKeyDown={handleModuleKeyDown("orders")}
+                  aria-label="View order details"
+                >
                   <div className="seller-kpi-header">
                     <span className="seller-kpi-label">Orders</span>
                     <span className="seller-kpi-icon" aria-hidden="true">
@@ -4284,7 +4997,15 @@ export default function StorefrontSeller(): JSX.Element {
                   </div>
                 </div>
               )}
-              <div className="seller-kpi-card seller-kpi-card--k4" style={buildCardStyle()}>
+              <div
+                className="seller-kpi-card seller-kpi-card--k4"
+                style={buildCardStyle()}
+                role="button"
+                tabIndex={0}
+                onClick={handleModuleClick("conversion")}
+                onKeyDown={handleModuleKeyDown("conversion")}
+                aria-label="View conversion details"
+              >
                 <div className="seller-kpi-header">
                   <span className="seller-kpi-label">Conversion</span>
                   <span className="seller-kpi-icon" aria-hidden="true">
@@ -4305,11 +5026,17 @@ export default function StorefrontSeller(): JSX.Element {
                 </div>
               </div>
 
-              <div className="seller-dashboard-masonry">
-                {!hiddenWidgets.includes("totalEarnings") && (
+              </div>
+
+                {showRevenuePanel && (
                   <div
-                    className="seller-panel seller-panel--revenue seller-panel--area-rev"
+                    className="seller-panel seller-panel--overview-revenue seller-overview-block seller-overview-block--revenue"
                     style={buildCardStyle("totalEarnings")}
+                    role="button"
+                    tabIndex={0}
+                    onClick={handleModuleClick("totalEarnings")}
+                    onKeyDown={handleModuleKeyDown("totalEarnings")}
+                    aria-label="View revenue details"
                   >
                     <div className="seller-panel-header">
                       <div>
@@ -4353,21 +5080,104 @@ export default function StorefrontSeller(): JSX.Element {
                   </div>
                 )}
 
-                {!hiddenWidgets.includes("orders") && (
+                {showActivityPanel && (
                   <div
-                    className="seller-panel seller-panel--orders seller-panel--area-ord"
+                    className="seller-panel seller-panel--overview-activity seller-overview-block seller-overview-block--activity"
                     style={buildCardStyle("orders")}
+                    role="button"
+                    tabIndex={0}
+                    onClick={handleModuleClick("orders")}
+                    onKeyDown={handleModuleKeyDown("orders")}
+                    aria-label="View recent orders"
                   >
                     <div className="seller-panel-header">
                       <div>
-                        <span className="seller-panel-eyebrow">Recent orders</span>
-                        <h3>Recent Orders</h3>
+                        <span className="seller-panel-eyebrow">Recent activity</span>
+                        <h3>Recent activity</h3>
                       </div>
                       <button className="seller-panel-action" type="button">
                         View all
                       </button>
                     </div>
-                    <div className="seller-panel-body">{renderWidgetContent("orders")}</div>
+                    <div className="seller-panel-body">
+                      {displayOrdersLoading && <p>Loading orders...</p>}
+                      {displayOrdersError && <p>{displayOrdersError}</p>}
+                      {!displayOrdersLoading &&
+                        !displayOrdersError &&
+                        sellerOrders.length === 0 && (
+                          <div className="seller-empty">
+                            <p>No orders yet.</p>
+                            <button
+                              className="btn primary small"
+                              type="button"
+                              onClick={() => navigate("/storefront/seller#list")}
+                            >
+                              Create your first listing
+                            </button>
+                          </div>
+                        )}
+                      {!displayOrdersLoading &&
+                        !displayOrdersError &&
+                        sellerOrders.length > 0 && (
+                          <div className="seller-activity-table" role="table">
+                            <div
+                              className="seller-activity-row seller-activity-row--header"
+                              role="row"
+                            >
+                              <span role="columnheader">Customer</span>
+                              <span role="columnheader">Status</span>
+                              <span role="columnheader">Amount</span>
+                              <span role="columnheader" className="seller-activity-time">
+                                When
+                              </span>
+                            </div>
+                            {recentOrderSummary.map(({ count, displayOrder }) => {
+                              const orderPreviewImage = getOrderPreviewImage(displayOrder);
+                              return (
+                                <div
+                                  key={`order-activity-${displayOrder.id}`}
+                                  className="seller-activity-row"
+                                  role="row"
+                                >
+                                  <div className="seller-activity-customer" role="cell">
+                                    <span className="seller-activity-thumb" aria-hidden="true">
+                                      {orderPreviewImage ? (
+                                        <img src={orderPreviewImage} alt="" loading="lazy" />
+                                      ) : (
+                                        <span className="seller-activity-thumb-fallback" />
+                                      )}
+                                    </span>
+                                    <div className="seller-activity-customer-meta">
+                                      <strong>{displayOrder.buyerName}</strong>
+                                      <span>
+                                        {displayOrder.listingTitle}
+                                        {count > 1 ? ` (x${count})` : ""}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <span
+                                    className={`seller-status-chip ${getStatusTone(displayOrder.status)}`}
+                                    role="cell"
+                                  >
+                                    {displayOrder.status}
+                                  </span>
+                                  <div className="seller-activity-amount" role="cell">
+                                    <strong>
+                                      {formatCurrency(displayOrder.amount, displayOrder.currency)}
+                                    </strong>
+                                    <span>
+                                      Net {formatCurrency(displayOrder.net, displayOrder.currency)}
+                                    </span>
+                                  </div>
+                                  <span className="seller-activity-time" role="cell">
+                                    {formatRelativeTime(displayOrder.createdAt)}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                    </div>
                     {!hiddenWidgets.includes("offers") && (
                       <div className="seller-panel-subsection">
                         <div className="seller-panel-subheader">
@@ -4379,246 +5189,284 @@ export default function StorefrontSeller(): JSX.Element {
                         </div>
                       </div>
                     )}
+                    {!hiddenWidgets.includes("bids") && (
+                      <div className="seller-panel-subsection">
+                        <div className="seller-panel-subheader">
+                          <span className="seller-panel-eyebrow">Bids</span>
+                          <h4>Bids</h4>
+                        </div>
+                        <div className="seller-panel-body">
+                          {renderWidgetContent("bids")}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
-                {!hiddenWidgets.includes("payouts") && (
-                  <div
-                    ref={payoutsRef}
-                    className="seller-panel seller-panel--payouts"
-                    style={buildCardStyle("payouts")}
-                  >
-                    <div className="seller-panel-header">
-                      <div>
-                        <span className="seller-panel-eyebrow">Payouts</span>
-                        <h3>Payouts</h3>
-                      </div>
-                    </div>
-                    <div className="seller-panel-body">{renderWidgetContent("payouts")}</div>
-                    <p className="seller-panel-note">
-                      Sales payouts appear here within 2 business days after completion.
-                    </p>
-                  </div>
-                )}
-                {!hiddenWidgets.includes("verification") && (
-                  <div
-                    className="seller-panel seller-panel--verification"
-                    style={buildCardStyle("verification")}
-                  >
-                    <div className="seller-panel-header">
-                      <div>
-                        <span className="seller-panel-eyebrow">Verification</span>
-                        <h3>Verification</h3>
-                      </div>
-                    </div>
-                    <div className="seller-panel-body">
-                      {renderWidgetContent("verification")}
-                    </div>
-                  </div>
-                )}
                 <div
-                  className="seller-panel seller-panel--setup"
-                  style={buildCardStyle()}
+                  className="seller-panel seller-panel--overview-traffic seller-overview-block seller-overview-block--traffic"
+                  style={buildCardStyle("status")}
                 >
                   <div className="seller-panel-header">
                     <div>
-                      <span className="seller-panel-eyebrow">Setup checklist</span>
-                      <h3>Setup checklist</h3>
+                      <span className="seller-panel-eyebrow">Order mix</span>
+                      <h3>Order status</h3>
                     </div>
+                    <button
+                      className="seller-panel-action"
+                      type="button"
+                      onClick={() => openDashboardModule("orders")}
+                    >
+                      View details
+                    </button>
                   </div>
                   <div className="seller-panel-body">
-                    <ul className="seller-setup-list">
-                      {setupChecklist.map((item) => {
-                        const statusLabel =
-                          item.status === "done"
-                            ? "Done"
-                            : item.status === "pending"
-                            ? "Pending"
-                            : "Action required";
-                        const statusClass =
-                          item.status === "done"
-                            ? "is-success"
-                            : item.status === "pending"
-                            ? "is-warning"
-                            : "is-danger";
-                        return (
-                          <li key={item.id} className={`seller-setup-item ${item.status}`}>
-                            <span className="seller-setup-name">{item.label}</span>
-                            <span className={`seller-status-chip ${statusClass}`}>
-                              {statusLabel}
-                            </span>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                    {nextChecklistItem ? (
-                      <button
-                        className="btn primary small"
-                        type="button"
-                        onClick={() => handleSetupAction(nextChecklistItem.id)}
-                      >
-                        {SETUP_ACTION_LABELS[nextChecklistItem.id]}
-                      </button>
+                    {orderStatusMix.total === 0 ? (
+                      <div className="seller-empty">
+                        <p>No orders yet.</p>
+                        <button
+                          className="btn primary small"
+                          type="button"
+                          onClick={() => navigate("/storefront/seller#list")}
+                        >
+                          Create your first listing
+                        </button>
+                      </div>
                     ) : (
-                      <p className="seller-setup-complete">All set for selling.</p>
+                      <div className="seller-traffic">
+                        <div
+                          className="seller-traffic-donut"
+                          style={
+                            {
+                              "--seg-paid": `${orderStatusMix.percent.paid}%`,
+                              "--seg-pending": `${orderStatusMix.percent.pending}%`,
+                              "--seg-issue": `${orderStatusMix.percent.issue}%`,
+                            } as CSSProperties
+                          }
+                          aria-hidden="true"
+                        />
+                        <div className="seller-traffic-legend">
+                          <div className="seller-traffic-row">
+                            <span className="seller-traffic-dot is-paid" />
+                            <span>Paid</span>
+                            <strong>{orderStatusMix.percent.paid}%</strong>
+                          </div>
+                          <div className="seller-traffic-row">
+                            <span className="seller-traffic-dot is-pending" />
+                            <span>Pending</span>
+                            <strong>{orderStatusMix.percent.pending}%</strong>
+                          </div>
+                          <div className="seller-traffic-row">
+                            <span className="seller-traffic-dot is-issue" />
+                            <span>Issue</span>
+                            <strong>{orderStatusMix.percent.issue}%</strong>
+                          </div>
+                        </div>
+                      </div>
                     )}
+                    <div className="seller-status-summary">
+                      {!hiddenWidgets.includes("verification") && (
+                        <div className="seller-status-row">
+                          <div>
+                            <span>Verification</span>
+                            <strong>{sellerIsVerified ? "Verified" : "Not verified"}</strong>
+                          </div>
+                          {!sellerIsVerified && (
+                            <button
+                              className="btn danger small"
+                              type="button"
+                              onClick={handleRequestVerification}
+                            >
+                              Verify
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      {!hiddenWidgets.includes("payouts") && (
+                        <div className="seller-status-row">
+                          <div>
+                            <span>Pending payouts</span>
+                            <strong>
+                              {pendingPayoutAmount
+                                ? formatCurrency(pendingPayoutAmount, "USD")
+                                : "None"}
+                            </strong>
+                          </div>
+                          <button
+                            className="btn ghost small"
+                            type="button"
+                            onClick={() => openDashboardModule("payouts")}
+                          >
+                            View
+                          </button>
+                        </div>
+                      )}
+                      {!hiddenWidgets.includes("activeListings") && (
+                        <div className="seller-status-row">
+                          <div>
+                            <span>Active listings</span>
+                            <strong>{sellerListings.length}</strong>
+                          </div>
+                          <button
+                            className="btn ghost small"
+                            type="button"
+                            onClick={() => openDashboardModule("activeListings")}
+                          >
+                            Open
+                          </button>
+                        </div>
+                      )}
+                      <div className="seller-status-row">
+                        <div>
+                          <span>Setup checklist</span>
+                          <strong>
+                            {setupCompletedCount}/{setupChecklist.length}
+                          </strong>
+                        </div>
+                        <button
+                          className="btn ghost small"
+                          type="button"
+                          onClick={() => openDashboardModule("setup")}
+                        >
+                          Review
+                        </button>
+                      </div>
+                      {!hiddenWidgets.includes("buyerDisputes") && (
+                        <div className="seller-status-row">
+                          <div>
+                            <span>Open disputes</span>
+                            <strong>{openDisputes.length}</strong>
+                          </div>
+                          <button
+                            className="btn ghost small"
+                            type="button"
+                            onClick={() => openDashboardModule("buyerDisputes")}
+                          >
+                            View
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
-                {!hiddenWidgets.includes("activeListings") && (
-                  <div
-                    className="seller-panel seller-panel--active"
-                    style={buildCardStyle("activeListings")}
-                  >
-                    <div className="seller-panel-header">
-                      <div>
-                        <span className="seller-panel-eyebrow">Active listings</span>
-                        <h3>Active Listings</h3>
-                      </div>
-                    </div>
-                    <div className="seller-panel-body">
-                      {renderWidgetContent("activeListings")}
-                    </div>
-                  </div>
-                )}
-                {!hiddenWidgets.includes("messages") && (
-                  <div
-                    className="seller-panel seller-panel--messages"
-                    style={buildCardStyle("messages")}
-                  >
-                    <div className="seller-panel-header">
-                      <div>
-                        <span className="seller-panel-eyebrow">Messages</span>
-                        <h3>Messages</h3>
-                      </div>
-                    </div>
-                    <div className="seller-panel-body">
-                      {renderWidgetContent("messages")}
-                    </div>
-                  </div>
-                )}
-                {!hiddenWidgets.includes("buyerDisputes") && (
-                  <div
-                    className="seller-panel seller-panel--disputes"
-                    style={buildCardStyle("buyerDisputes")}
-                  >
-                    <div className="seller-panel-header">
-                      <div>
-                        <span className="seller-panel-eyebrow">Buyer disputes</span>
-                        <h3>Buyer Disputes</h3>
-                      </div>
-                    </div>
-                    <div className="seller-panel-body">
-                      {renderWidgetContent("buyerDisputes")}
-                    </div>
-                  </div>
-                )}
               </div>
-            </div>
           </section>
         )}
       </div>
-      {renameModalOpen && (
-        <div
-          className="storefront-modal-overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="rename-dashboard-title"
-          onClick={handleRenameCancel}
+      {!isListingView && (
+        <aside
+          className="seller-messages-sidebar"
+          data-accent="storefront"
+          aria-label="Seller messages"
         >
-          <div
-            className="storefront-modal"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="storefront-modal-header">
-              <p className="storefront-modal-eyebrow">Dashboard view</p>
-              <h3 id="rename-dashboard-title">Rename view</h3>
-              <p className="storefront-modal-sub">
-                Give this view a short, memorable name.
-              </p>
-            </div>
-            <form
-              className="storefront-modal-body"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void handleRenameSubmit();
-              }}
-            >
-              <label className="storefront-modal-field">
-                <span>View name</span>
-                <input
-                  className="storefront-modal-input"
-                  type="text"
-                  value={renameValue}
-                  maxLength={48}
-                  onChange={(event) => {
-                    setRenameValue(event.target.value);
-                    if (renameError) setRenameError(null);
-                  }}
-                  placeholder="e.g. My dashboard"
-                />
-              </label>
-              {renameError && <p className="storefront-modal-error">{renameError}</p>}
-              <div className="storefront-modal-actions">
-                <button
-                  className="btn ghost"
-                  type="button"
-                  onClick={handleRenameCancel}
-                  disabled={renameSaving}
-                >
-                  Cancel
-                </button>
-                <button className="btn primary" type="submit" disabled={renameSaving}>
-                  {renameSaving ? "Saving..." : "Save name"}
-                </button>
-              </div>
-            </form>
+          <div className="seller-messages-scroll">
+            {renderWidgetContent("messages")}
           </div>
-        </div>
+        </aside>
       )}
-      {deleteModalOpen && (
-        <div
-          className="storefront-modal-overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="delete-dashboard-title"
-          onClick={handleDeleteCancel}
-        >
-          <div
-            className="storefront-modal storefront-modal--danger"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="storefront-modal-header">
-              <p className="storefront-modal-eyebrow">Dashboard view</p>
-              <h3 id="delete-dashboard-title">Delete view?</h3>
-              <p className="storefront-modal-sub">
-                Delete "{activeView?.name || "this view"}"? This removes the view and all of
-                its custom layout and styling.
-              </p>
+      <PopupModal
+        open={customizeOpen}
+        title="Customize dashboard"
+        onClose={() => setCustomizeOpen(false)}
+        className="seller-customize-modal"
+        bodyClassName="seller-customize-modal-body"
+      >
+        <div className="storefront-panel seller-dashboard-customize-panel">
+          <div className="storefront-panel-header">
+            <div>
+              <p className="storefront-panel-eyebrow">Seller workspace</p>
+              <h3>Dashboard layout</h3>
             </div>
-            <div className="storefront-modal-body">
-              {deleteError && <p className="storefront-modal-error">{deleteError}</p>}
-              <div className="storefront-modal-actions">
-                <button
-                  className="btn ghost"
-                  type="button"
-                  onClick={handleDeleteCancel}
-                  disabled={deleteSaving}
-                >
-                  Cancel
-                </button>
-                <button
-                  className="btn danger"
-                  type="button"
-                  onClick={handleDeleteConfirm}
-                  disabled={deleteSaving}
-                >
-                  {deleteSaving ? "Deleting..." : "Delete view"}
-                </button>
-              </div>
+            <div className="storefront-dashboard-actions">
+              <button
+                className="btn primary small"
+                type="button"
+                onClick={handleSaveDashboardChanges}
+                disabled={
+                  !activeViewId || !dashboardDirty || dashboardSaveState === "saving"
+                }
+              >
+                {dashboardSaveState === "saving" ? "Saving..." : "Save changes"}
+              </button>
+              {dashboardSaveState === "saved" && (
+                <span className="storefront-dashboard-save-status" role="status">
+                  Saved
+                </span>
+              )}
+              {dashboardSaveState === "error" && (
+                <span className="storefront-dashboard-save-status is-error" role="status">
+                  Save failed
+                </span>
+              )}
             </div>
           </div>
+          <p className="seller-panel-note">
+            Custom dashboard views and themes are disabled. Everyone uses the same
+            default look.
+          </p>
+          {dashboardError && <p className="storefront-form-error">{dashboardError}</p>}
+          <div className="storefront-dashboard-customize">
+            <div className="storefront-dashboard-widgets">
+              <h4>Widgets</h4>
+              <div className="storefront-dashboard-widget-actions">
+                <label className="storefront-switch storefront-switch--compact">
+                  <input
+                    type="checkbox"
+                    checked={allWidgetsSelected}
+                    onChange={(event) => {
+                      if (event.target.checked) {
+                        handleSelectAllWidgets();
+                      }
+                    }}
+                  />
+                  <span className="storefront-switch-track" aria-hidden="true" />
+                  <span className="storefront-switch-label">Select all</span>
+                </label>
+                <label className="storefront-switch storefront-switch--compact">
+                  <input
+                    type="checkbox"
+                    checked={noWidgetsSelected}
+                    onChange={(event) => {
+                      if (event.target.checked) {
+                        handleSelectNoneWidgets();
+                      }
+                    }}
+                  />
+                  <span className="storefront-switch-track" aria-hidden="true" />
+                  <span className="storefront-switch-label">Select none</span>
+                </label>
+              </div>
+              <div className="storefront-dashboard-widget-grid">
+                {DASHBOARD_WIDGETS.map((widget) => (
+                  <div key={widget.id} className="storefront-dashboard-widget-row">
+                    <label className="storefront-switch storefront-switch--compact">
+                      <input
+                        type="checkbox"
+                        checked={!hiddenWidgets.includes(widget.id)}
+                        onChange={() => handleToggleWidget(widget.id)}
+                      />
+                      <span className="storefront-switch-track" aria-hidden="true" />
+                      <span className="storefront-switch-label">
+                        <span className="storefront-widget-title">{widget.title}</span>
+                        <span className="storefront-widget-helper">{widget.helper}</span>
+                      </span>
+                    </label>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
         </div>
-      )}
+      </PopupModal>
+      <PopupModal
+        open={Boolean(activeDashboardModule)}
+        title={activeDashboardTitle}
+        onClose={closeDashboardModule}
+        className="seller-detail-modal"
+        bodyClassName="seller-detail-modal-body"
+      >
+        {activeDashboardModule && renderDashboardModuleContent(activeDashboardModule)}
+      </PopupModal>
       {listingDeleteTarget && (
         <div
           className="storefront-modal-overlay"
