@@ -96,8 +96,7 @@
   background: rgba(34, 197, 94, 0.08);
 }
 
-.id-guide-barcode span,
-.id-guide-dob span {
+.id-guide-barcode span {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
@@ -110,22 +109,6 @@
 
 .id-guide-barcode span {
   top: 56%;
-}
-
-.id-guide-dob::before {
-  content: "";
-  position: absolute;
-  left: 20%;
-  top: 46%;
-  width: 60%;
-  height: 12%;
-  border: 2px dashed rgba(248, 250, 252, 0.75);
-  border-radius: 12px;
-  box-shadow: 0 0 12px rgba(148, 163, 184, 0.35);
-}
-
-.id-guide-dob span {
-  top: 41%;
 }
 
 .id-header {

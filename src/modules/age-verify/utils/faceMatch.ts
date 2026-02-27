@@ -1,8 +1,8 @@
-import {
+import type {
   FaceLandmarker,
-  FilesetResolver,
-  type FaceLandmarkerOptions,
+  FaceLandmarkerOptions,
 } from "@mediapipe/tasks-vision";
+import { loadTasksVision } from "./tasksVisionLoader";
 
 export type FaceMatchResult = {
   score: number;
@@ -11,11 +11,28 @@ export type FaceMatchResult = {
   comparedCount: number;
 };
 
+type FaceMatchLogger = (event: string, payload?: Record<string, unknown>) => void;
+
+type ComputeFaceMatchOptions = {
+  log?: FaceMatchLogger;
+  maxSelfies?: number;
+  budgetMs?: number;
+};
+
+type WarmupFaceMatchOptions = {
+  log?: FaceMatchLogger;
+};
+
 const TASKS_VISION_VERSION = "0.10.32";
 const ENV_FACE_MODEL_URL = String(import.meta.env.VITE_FACE_MODEL_URL || "").trim();
 const ENV_VISION_WASM_URL = String(import.meta.env.VITE_VISION_WASM_URL || "").trim();
+const ENV_FACE_MATCH_DELEGATE = String(
+  import.meta.env.VITE_FACE_MATCH_DELEGATE || "cpu"
+)
+  .trim()
+  .toLowerCase();
 const DEFAULT_MAX_DISTANCE = 0.13;
-const MAX_FACE_DIMENSION = 640;
+const MAX_FACE_DIMENSION = 512;
 const LANDMARKER_TIMEOUT_MS = 3500;
 const IMAGE_DECODE_TIMEOUT_MS = 1500;
 
@@ -91,6 +108,29 @@ let landmarkerInstance: FaceLandmarker | null = null;
 
 const supportsWebGL2 = typeof WebGL2RenderingContext !== "undefined";
 
+const resolvePreferredDelegate = (): "GPU" | "CPU" => {
+  if (ENV_FACE_MATCH_DELEGATE === "gpu") return "GPU";
+  if (ENV_FACE_MATCH_DELEGATE === "cpu") return "CPU";
+  return supportsWebGL2 ? "GPU" : "CPU";
+};
+
+const nowMs = () =>
+  typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+
+const yieldToMainThread = () =>
+  new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+
+const toErrorMessage = (error: unknown) => {
+  if (error instanceof Error) return error.message;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+};
+
 const withTimeout = async <T,>(promise: Promise<T>, ms: number, label: string) =>
   new Promise<T>((resolve, reject) => {
     const timer = window.setTimeout(
@@ -113,12 +153,13 @@ const loadLandmarker = async () => {
   if (!landmarkerPromise) {
     landmarkerPromise = withTimeout(
       (async () => {
+        const vision = await loadTasksVision();
         let lastError: unknown;
-        const preferredDelegate: "GPU" | "CPU" = supportsWebGL2 ? "GPU" : "CPU";
+        const preferredDelegate: "GPU" | "CPU" = resolvePreferredDelegate();
         for (const wasmUrl of VISION_WASM_URLS) {
           for (const modelUrl of FACE_MODEL_URLS) {
             try {
-              const resolver = await FilesetResolver.forVisionTasks(wasmUrl);
+              const resolver = await vision.FilesetResolver.forVisionTasks(wasmUrl);
               const buildOptions = (delegate: "GPU" | "CPU"): FaceLandmarkerOptions => ({
                 baseOptions: { modelAssetPath: modelUrl, delegate },
                 runningMode: "IMAGE",
@@ -130,14 +171,14 @@ const loadLandmarker = async () => {
                 minTrackingConfidence: 0.1,
               });
               try {
-                return await FaceLandmarker.createFromOptions(
+                return await vision.FaceLandmarker.createFromOptions(
                   resolver,
                   buildOptions(preferredDelegate)
                 );
               } catch (err) {
                 lastError = err;
                 if (preferredDelegate === "GPU") {
-                  return await FaceLandmarker.createFromOptions(
+                  return await vision.FaceLandmarker.createFromOptions(
                     resolver,
                     buildOptions("CPU")
                   );
@@ -289,45 +330,191 @@ const scoreFromDistance = (distance: number, maxDistance = DEFAULT_MAX_DISTANCE)
   return Math.min(1, Math.max(0, score));
 };
 
-const extractSignature = async (file: File) => {
+const extractSignature = async (
+  file: File,
+  options?: { label?: string; log?: FaceMatchLogger }
+) => {
+  const label = options?.label || file.name || "image";
+  const log = options?.log;
+  const startedAt = nowMs();
+  log?.("extract-start", {
+    label,
+    bytes: file.size,
+    mime: file.type || "unknown",
+  });
+  const landmarkerStart = nowMs();
   const landmarker = await loadLandmarker();
+  log?.("landmarker-ready", {
+    label,
+    ms: Math.round(nowMs() - landmarkerStart),
+  });
+  const decodeStart = nowMs();
   const { image, cleanup } = await loadImageSource(file);
+  log?.("image-ready", {
+    label,
+    ms: Math.round(nowMs() - decodeStart),
+  });
   try {
     const source = downscaleImage(image);
+    await yieldToMainThread();
+    log?.("detect-start", { label });
+    const detectStart = nowMs();
     const result = landmarker.detect(source);
+    await yieldToMainThread();
+    log?.("detect-done", {
+      label,
+      ms: Math.round(nowMs() - detectStart),
+    });
     const landmarks = result?.faceLandmarks?.[0];
-    if (!landmarks) return null;
-    return buildSignature(landmarks);
+    if (!landmarks) {
+      log?.("extract-no-face", {
+        label,
+        elapsedMs: Math.round(nowMs() - startedAt),
+      });
+      return null;
+    }
+    const signature = buildSignature(landmarks);
+    log?.("extract-complete", {
+      label,
+      elapsedMs: Math.round(nowMs() - startedAt),
+      signaturePoints: signature ? signature.length / 3 : 0,
+    });
+    return signature;
   } finally {
     cleanup();
   }
 };
 
+export const warmupFaceMatchModel = async (
+  options?: WarmupFaceMatchOptions
+): Promise<boolean> => {
+  const log = options?.log;
+  const startedAt = nowMs();
+  try {
+    await loadLandmarker();
+    log?.("warmup-ready", {
+      elapsedMs: Math.round(nowMs() - startedAt),
+    });
+    return true;
+  } catch (error) {
+    log?.("warmup-failed", {
+      elapsedMs: Math.round(nowMs() - startedAt),
+      message: toErrorMessage(error),
+    });
+    return false;
+  }
+};
+
 export const computeFaceMatch = async (
   idFront: File,
-  selfies: File[]
+  selfies: File[],
+  options?: ComputeFaceMatchOptions
 ): Promise<FaceMatchResult | null> => {
-  if (!idFront || !selfies.length) return null;
-  const idSignature = await extractSignature(idFront);
-  if (!idSignature) return null;
+  const log = options?.log;
+  if (!idFront || !selfies.length) {
+    log?.("run-skipped", {
+      reason: "missing-input",
+      hasIdFront: Boolean(idFront),
+      selfieCount: selfies.length,
+    });
+    return null;
+  }
+  const runStartedAt = nowMs();
+  const budgetMs = Math.max(2000, Math.round(options?.budgetMs || 8000));
+  const maxSelfies = Math.max(1, Math.min(selfies.length, options?.maxSelfies || 4));
+  const selfiePool = selfies.slice(0, maxSelfies).filter(Boolean);
+  log?.("run-start", {
+    budgetMs,
+    maxSelfies,
+    selfiePool: selfiePool.length,
+    idFrontBytes: idFront.size,
+  });
+  const elapsedMs = () => nowMs() - runStartedAt;
+  const withinBudget = (stage: string) => {
+    const elapsed = elapsedMs();
+    if (elapsed <= budgetMs) return true;
+    log?.("budget-exceeded", {
+      stage,
+      elapsedMs: Math.round(elapsed),
+      budgetMs,
+    });
+    return false;
+  };
+  let idSignature: number[] | null = null;
+  try {
+    idSignature = await extractSignature(idFront, { label: "id-front", log });
+  } catch (error) {
+    log?.("id-signature-error", {
+      message: toErrorMessage(error),
+      elapsedMs: Math.round(elapsedMs()),
+    });
+    return null;
+  }
+  if (!idSignature) {
+    log?.("id-signature-missing", {
+      elapsedMs: Math.round(elapsedMs()),
+    });
+    return null;
+  }
   const candidates: { distance: number; selfieIndex: number }[] = [];
-  for (let index = 0; index < selfies.length; index += 1) {
-    const selfie = selfies[index];
+  for (let index = 0; index < selfiePool.length; index += 1) {
+    if (!withinBudget(`selfie-${index + 1}-start`)) break;
+    await yieldToMainThread();
+    const selfie = selfiePool[index];
     if (!selfie) continue;
-    const selfieSignature = await extractSignature(selfie);
-    if (!selfieSignature) continue;
+    let selfieSignature: number[] | null = null;
+    try {
+      selfieSignature = await extractSignature(selfie, {
+        label: `selfie-${index + 1}`,
+        log,
+      });
+    } catch (error) {
+      log?.("selfie-signature-error", {
+        selfieIndex: index,
+        message: toErrorMessage(error),
+      });
+      continue;
+    }
+    if (!selfieSignature) {
+      log?.("selfie-signature-missing", { selfieIndex: index });
+      continue;
+    }
     const distance = signatureDistance(idSignature, selfieSignature);
     if (Number.isFinite(distance)) {
       candidates.push({ distance, selfieIndex: index });
+      log?.("candidate-added", {
+        selfieIndex: index,
+        distance: Number(distance.toFixed(6)),
+      });
+      if (distance <= DEFAULT_MAX_DISTANCE * 0.7) {
+        log?.("early-stop-strong-match", {
+          selfieIndex: index,
+          distance: Number(distance.toFixed(6)),
+        });
+        break;
+      }
     }
   }
-  if (!candidates.length) return null;
+  if (!candidates.length) {
+    log?.("run-complete-empty", {
+      elapsedMs: Math.round(elapsedMs()),
+    });
+    return null;
+  }
   candidates.sort((a, b) => a.distance - b.distance);
   const best = candidates[0];
-  return {
+  const result = {
     distance: best.distance,
     score: scoreFromDistance(best.distance),
     selfieIndex: best.selfieIndex,
     comparedCount: candidates.length,
   };
+  log?.("run-complete", {
+    elapsedMs: Math.round(elapsedMs()),
+    bestDistance: Number(result.distance.toFixed(6)),
+    bestScore: Number(result.score.toFixed(4)),
+    bestSelfieIndex: result.selfieIndex,
+    comparedCount: result.comparedCount,
+  });
+  return result;
 };

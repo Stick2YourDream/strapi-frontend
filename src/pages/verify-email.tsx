@@ -123,7 +123,7 @@ export default function VerifyEmail(): JSX.Element {
       sessionStorage.removeItem("emailConfirmationId");
       sessionStorage.removeItem("emailConfirmationEmail");
       setInfo(
-        "Email verified! Please verify your age within 1 week of account creation. You can find it under Profile → Settings → Account & Security after login."
+        "Email verified! Please verify your age within 30 days of account creation. You can find it under Profile → Settings → Account & Security after login."
       );
       window.setTimeout(() => navigate("/login"), 900);
     } catch (err: any) {

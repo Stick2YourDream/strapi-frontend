@@ -14,6 +14,7 @@ import PopupModal from "../components/PopupModal";
 import { sanitizePostText } from "../utils/emoji";
 import { formatPostUpdateLabel } from "../utils/time";
 import { pickMediaUrl, pickMediaUrls } from "../utils/media";
+import { linkifyText } from "../utils/linkify";
 
 type GroupDetail = {
   id: number | string;
@@ -565,16 +566,40 @@ export default function GroupDetail() {
     return () => URL.revokeObjectURL(url);
   }, [settingsImageFile]);
 
-  const buildShareUrl = useCallback((postKey: string) => {
+  const buildShareUrl = useCallback((post: GroupPost, postKey: string) => {
     if (typeof window === "undefined") return "";
-    const fallbackOrigin = String(import.meta.env.VITE_PUBLIC_SITE_URL || "").trim();
-    const origin = window.location.origin;
-    const base = origin.startsWith("http") ? origin : fallbackOrigin;
+    const origin = String(window.location.origin || "").trim().replace(/\/+$/, "");
+    const configuredBase = String(import.meta.env.VITE_PUBLIC_SITE_URL || "")
+      .trim()
+      .replace(/\/+$/, "");
+    const base = origin.startsWith("http")
+      ? origin
+      : configuredBase.startsWith("http")
+      ? configuredBase
+      : "";
     if (!base) return "";
-    const path = window.location.pathname?.startsWith("/")
-      ? window.location.pathname
-      : "/dashboard";
-    return `${base}${path}#post-${postKey}`;
+    const configuredApi = String(import.meta.env.VITE_API_URL || "")
+      .trim()
+      .replace(/\/+$/, "");
+    const resolveShareApiBase = () => {
+      if (!configuredApi) return `${base}/api`;
+      if (/^https?:\/\//i.test(configuredApi)) {
+        return /\/api$/i.test(configuredApi) ? configuredApi : `${configuredApi}/api`;
+      }
+      const normalizedPath = /\/api$/i.test(configuredApi)
+        ? configuredApi
+        : `${configuredApi}/api`;
+      const path = normalizedPath.startsWith("/") ? normalizedPath : `/${normalizedPath}`;
+      return `${base}${path}`;
+    };
+    const shareApiBase = resolveShareApiBase();
+    const shareId = String(post.numericId ?? post.id ?? postKey ?? "").trim();
+    if (!shareId) return "";
+    const params = new URLSearchParams();
+    params.set("source", "group");
+    params.set("id", shareId);
+    params.set("site", base);
+    return `${shareApiBase}/share/post?${params.toString()}`;
   }, []);
 
   const updatePostMetric = useCallback((postKey: string, field: "likes" | "shares", value: number) => {
@@ -1423,10 +1448,13 @@ export default function GroupDetail() {
                     const showShareMenu = shareMenuFor === postKey;
                     const showPostMenu = postMenuFor === postKey;
                     const authorLabel = post.ownerName || "Member";
-                    const shareUrl = buildShareUrl(postKey);
+                    const shareUrl = buildShareUrl(post, postKey);
                     const shareText = post.title
                       ? `${authorLabel}: ${post.title}`
                       : `${authorLabel} posted in ${group?.name || "a group"}.`;
+                    const canShareExternally = group?.visibility === "public";
+                    const externalShareBlockMessage =
+                      "This group is private. Only public posts can be shared externally.";
                     const encodedUrl = encodeURIComponent(shareUrl);
                     const encodedText = encodeURIComponent(shareText);
                     const likesCount = Number(post.likes ?? 0);
@@ -1436,6 +1464,7 @@ export default function GroupDetail() {
                     );
                     const thumbsUpCount = reactionCounts.thumbsUp;
                     const heartCount = reactionCounts.heart;
+                    const allReactionsCount = thumbsUpCount + heartCount;
                     const myReaction = normalizeReactionValue(post.myReaction);
                     const sharesCount = Number(post.shares ?? 0);
                     const commentsCount = comments.length;
@@ -1584,23 +1613,29 @@ export default function GroupDetail() {
                           <div className="post-action-counts">
                             <span
                               className={`post-action-count${
-                                myReaction === "👍" ? " is-selected" : ""
+                                myReaction ? " is-selected" : ""
                               }`}
+                              title="All reactions"
+                              aria-label={`All reactions: ${allReactionsCount}`}
                             >
                               <span className="post-action-count-icon" aria-hidden="true">
                                 👍
                               </span>
-                              {thumbsUpCount}
+                              <span>{allReactionsCount}</span>
+                              <span className="post-action-count-label">All reactions</span>
                             </span>
                             <span
                               className={`post-action-count${
                                 myReaction === "❤️" ? " is-selected" : ""
                               }`}
+                              title="Love reactions"
+                              aria-label={`Love reactions: ${heartCount}`}
                             >
                               <span className="post-action-count-icon" aria-hidden="true">
                                 ❤️
                               </span>
-                              {heartCount}
+                              <span>{heartCount}</span>
+                              <span className="post-action-count-label">Love</span>
                             </span>
                             <span className="post-action-count">
                               <span className="post-action-count-icon" aria-hidden="true">
@@ -1707,8 +1742,15 @@ export default function GroupDetail() {
                                     )}
                                   <a
                                     className="post-share-link is-icon post-share-link--facebook"
-                                    href={`https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}&quote=${encodedText}`}
-                                    onClick={() => void trackShare(post, postKey)}
+                                    href={`https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`}
+                                    onClick={(event) => {
+                                      if (!canShareExternally) {
+                                        event.preventDefault();
+                                        pushShareNotice(postKey, externalShareBlockMessage);
+                                        return;
+                                      }
+                                      void trackShare(post, postKey);
+                                    }}
                                     target="_blank"
                                     rel="noreferrer"
                                     aria-label="Share to Facebook"
@@ -1721,7 +1763,14 @@ export default function GroupDetail() {
                                   <a
                                     className="post-share-link is-icon post-share-link--x"
                                     href={`https://twitter.com/intent/tweet?text=${encodedText}&url=${encodedUrl}`}
-                                    onClick={() => void trackShare(post, postKey)}
+                                    onClick={(event) => {
+                                      if (!canShareExternally) {
+                                        event.preventDefault();
+                                        pushShareNotice(postKey, externalShareBlockMessage);
+                                        return;
+                                      }
+                                      void trackShare(post, postKey);
+                                    }}
                                     target="_blank"
                                     rel="noreferrer"
                                     aria-label="Share to X"
@@ -1734,7 +1783,14 @@ export default function GroupDetail() {
                                   <a
                                     className="post-share-link is-icon post-share-link--linkedin"
                                     href={`https://www.linkedin.com/sharing/share-offsite/?url=${encodedUrl}`}
-                                    onClick={() => void trackShare(post, postKey)}
+                                    onClick={(event) => {
+                                      if (!canShareExternally) {
+                                        event.preventDefault();
+                                        pushShareNotice(postKey, externalShareBlockMessage);
+                                        return;
+                                      }
+                                      void trackShare(post, postKey);
+                                    }}
                                     target="_blank"
                                     rel="noreferrer"
                                     aria-label="Share to LinkedIn"
@@ -1747,7 +1803,14 @@ export default function GroupDetail() {
                                   <a
                                     className="post-share-link is-icon post-share-link--reddit"
                                     href={`https://www.reddit.com/submit?url=${encodedUrl}&title=${encodedText}`}
-                                    onClick={() => void trackShare(post, postKey)}
+                                    onClick={(event) => {
+                                      if (!canShareExternally) {
+                                        event.preventDefault();
+                                        pushShareNotice(postKey, externalShareBlockMessage);
+                                        return;
+                                      }
+                                      void trackShare(post, postKey);
+                                    }}
                                     target="_blank"
                                     rel="noreferrer"
                                     aria-label="Share to Reddit"
@@ -1760,7 +1823,14 @@ export default function GroupDetail() {
                                   <a
                                     className="post-share-link is-icon post-share-link--whatsapp"
                                     href={`https://wa.me/?text=${encodedText}%20${encodedUrl}`}
-                                    onClick={() => void trackShare(post, postKey)}
+                                    onClick={(event) => {
+                                      if (!canShareExternally) {
+                                        event.preventDefault();
+                                        pushShareNotice(postKey, externalShareBlockMessage);
+                                        return;
+                                      }
+                                      void trackShare(post, postKey);
+                                    }}
                                     target="_blank"
                                     rel="noreferrer"
                                     aria-label="Share to WhatsApp"
@@ -1870,7 +1940,7 @@ export default function GroupDetail() {
                                         </div>
                                     </div>
                                   ) : (
-                                    <div className="comment-body">{displayBody}</div>
+                                    <div className="comment-body">{linkifyText(displayBody)}</div>
                                   )}
                                   {!isEditing && imageUrls.length > 0 && (
                                     <div className="comment-images">

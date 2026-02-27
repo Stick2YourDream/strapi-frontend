@@ -313,6 +313,31 @@ export default function StorefrontListing() {
   const [verificationError, setVerificationError] = useState<string | null>(null);
   const [verificationLoading, setVerificationLoading] = useState(false);
   const captureGuardRef = useRef<string | null>(null);
+  const resolvePayPalMockCode = useCallback(
+    (stage: "create" | "capture") => {
+      if (typeof window === "undefined") return "";
+      const params = new URLSearchParams(location.search);
+      const stageParam =
+        stage === "create" ? params.get("ppMockCreate") : params.get("ppMockCapture");
+      const genericParam = params.get("ppMock");
+      const stageStorageKey =
+        stage === "create" ? "paypalMockCreateCode" : "paypalMockCaptureCode";
+      const raw = String(
+        stageParam ||
+          genericParam ||
+          window.localStorage.getItem(stageStorageKey) ||
+          window.localStorage.getItem("paypalMockCode") ||
+          ""
+      ).trim();
+      if (!raw) return "";
+      return raw
+        .split(",")
+        .map((value) => value.trim().toUpperCase())
+        .filter((value) => /^[A-Z0-9_]+$/.test(value))
+        .join(",");
+    },
+    [location.search]
+  );
   const offerPanelRef = useRef<HTMLDivElement | null>(null);
   const searchContext = useMemo(
     () => (location.state && typeof location.state === "object" ? location.state : {}) as {
@@ -867,13 +892,19 @@ export default function StorefrontListing() {
     }
     if (status !== "success") return;
     try {
-      await api.post(`/marketplace-orders/paypal/${orderId}/capture`);
+      const captureMockCode = resolvePayPalMockCode("capture");
+      const captureConfig = captureMockCode
+        ? { headers: { "X-PayPal-Mock-Code": captureMockCode } }
+        : undefined;
+      await api.post(`/marketplace-orders/paypal/${orderId}/capture`, {}, captureConfig);
       setCheckoutStatus("Payment captured. Your order is confirmed.");
       void loadListings();
-    } catch {
-      setCheckoutError("Unable to capture PayPal payment.");
+    } catch (err) {
+      setCheckoutError(
+        getApiErrorMessage(err, "Unable to capture PayPal payment.")
+      );
     }
-  }, [loadListings, location.search]);
+  }, [loadListings, location.search, resolvePayPalMockCode]);
 
   useEffect(() => {
     if (listingId) {
@@ -1032,10 +1063,16 @@ export default function StorefrontListing() {
         setCheckoutError("Listing is not ready for checkout.");
         return;
       }
+      const createMockCode = resolvePayPalMockCode("create");
+      const createConfig = createMockCode
+        ? { headers: { "X-PayPal-Mock-Code": createMockCode } }
+        : undefined;
       const res = await api.post("/marketplace-orders/paypal", {
         listingId,
         offerId: acceptedOffer?.id,
-      });
+        returnOrigin:
+          typeof window !== "undefined" ? window.location.origin : undefined,
+      }, createConfig);
       const approvalUrl = res.data?.approvalUrl;
       if (approvalUrl && typeof window !== "undefined") {
         window.open(approvalUrl, "_blank", "noopener,noreferrer");
@@ -1044,11 +1081,13 @@ export default function StorefrontListing() {
         setCheckoutError("PayPal approval link not available.");
       }
     } catch (err) {
-      setCheckoutError("Unable to start PayPal checkout.");
+      setCheckoutError(
+        getApiErrorMessage(err, "Unable to start PayPal checkout.")
+      );
     } finally {
       setCheckoutLoading(false);
     }
-  }, [acceptedOffer, isListingActive, selectedProduct]);
+  }, [acceptedOffer, isListingActive, resolvePayPalMockCode, selectedProduct]);
 
   const effectivePrice = selectedProduct
     ? acceptedOffer

@@ -2,12 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import "../css/release-notes.css";
 
-const RELEASE_NOTES_VERSION = "2026.02.16";
+const RELEASE_NOTES_VERSION = String(
+  import.meta.env.VITE_RELEASE_NOTES_VERSION || "2026.02.26"
+).trim();
 const STORAGE_KEY = "releaseNotesDismissedVersion";
 const SESSION_PREFIX = "releaseNotesClosed:";
 
 const RELEASE_NOTES = [
-  "New Dashboard UI/Tweaks",
+  "Brand New Landing Page!",
   "Update Video Calling Application for Mobile and UI Improvements",
   "Improved performance of video calls and messaging",
   "Added AI Image Generation to Video Calling",
@@ -17,8 +19,13 @@ const RELEASE_NOTES = [
   "Added Trust New Device Functionality",
   "Updated My Profile Look and Feel",
   "Updated Forums Look and Feel",
-  "Added Translation Support",
+  "Users now to verify age within 30 days of account creationg",
+  "Bulk upload of media files now supported",
+  "New Navigation Menu Designs",
+  "Time Limits Can now be set in Settings",
+  "Registration and Login Flows Updated with new Designs",
 ];
+const RELEASE_NOTES_SIGNATURE = `${RELEASE_NOTES_VERSION}:${RELEASE_NOTES.join("||")}`;
 
 export default function ReleaseNotesModal() {
   const { user } = useAuth();
@@ -26,7 +33,7 @@ export default function ReleaseNotesModal() {
   const [updateStatus, setUpdateStatus] = useState<string | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const sessionKey = useMemo(
-    () => `${SESSION_PREFIX}${RELEASE_NOTES_VERSION}`,
+    () => `${SESSION_PREFIX}${RELEASE_NOTES_SIGNATURE}`,
     []
   );
 
@@ -38,7 +45,7 @@ export default function ReleaseNotesModal() {
     }
     const dismissed = window.localStorage.getItem(STORAGE_KEY);
     const closed = window.sessionStorage.getItem(sessionKey);
-    if (dismissed !== RELEASE_NOTES_VERSION && !closed) {
+    if (dismissed !== RELEASE_NOTES_SIGNATURE && !closed) {
       setOpen(true);
     }
   }, [sessionKey, user]);
@@ -54,7 +61,7 @@ export default function ReleaseNotesModal() {
 
   const handleDontShow = () => {
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(STORAGE_KEY, RELEASE_NOTES_VERSION);
+      window.localStorage.setItem(STORAGE_KEY, RELEASE_NOTES_SIGNATURE);
     }
     setOpen(false);
   };

@@ -3,6 +3,7 @@ import {
   type DragEvent,
   type KeyboardEvent,
   type MouseEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
@@ -121,6 +122,9 @@ type MarketplaceOrder = {
   fee: number;
   currency: string;
   status: string;
+  paymentProvider?: string;
+  paypalOrderId?: string;
+  paypalCaptureId?: string;
   shippingStatus?: string;
   payoutStatus?: string;
   createdAt: string;
@@ -802,6 +806,9 @@ export default function StorefrontSeller(): JSX.Element {
   const [orders, setOrders] = useState<MarketplaceOrder[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [ordersError, setOrdersError] = useState<string | null>(null);
+  const [orderActionError, setOrderActionError] = useState<string | null>(null);
+  const [orderActionNotice, setOrderActionNotice] = useState<string | null>(null);
+  const [orderActionLoading, setOrderActionLoading] = useState<Record<number, boolean>>({});
   const [disputes, setDisputes] = useState<MarketplaceDispute[]>([]);
   const [disputesLoading, setDisputesLoading] = useState(false);
   const [disputesError, setDisputesError] = useState<string | null>(null);
@@ -1231,6 +1238,9 @@ export default function StorefrontSeller(): JSX.Element {
           fee: Number(attrs.fee || 0),
           currency: String(attrs.currency || "USD").toUpperCase(),
           status: String(attrs.status || "pending"),
+          paymentProvider: String(attrs.paymentProvider || "paypal").toLowerCase(),
+          paypalOrderId: String(attrs.paypalOrderId || ""),
+          paypalCaptureId: String(attrs.paypalCaptureId || ""),
           shippingStatus: String(attrs.shippingStatus || "pending"),
           payoutStatus: String(attrs.payoutStatus || "pending"),
           createdAt: attrs.createdAt ? new Date(attrs.createdAt).toLocaleString() : "",
@@ -2552,11 +2562,20 @@ export default function StorefrontSeller(): JSX.Element {
     ? sellerDashboardMockData?.verification ?? null
     : selfVerification;
 
+  const sellerAgeVerified = user?.ageVerified === true;
+  const sellerIdVerified =
+    sellerAgeVerified || normalizeStatus(verificationSource?.sellerIdStatus) === "verified";
+  const sellerPayoutVerified = normalizeStatus(verificationSource?.sellerPayoutStatus) === "verified";
+
   const sellerIsVerified = useMemo(() => {
-    const idStatus = normalizeStatus(verificationSource?.sellerIdStatus);
-    const payoutStatus = normalizeStatus(verificationSource?.sellerPayoutStatus);
-    return idStatus === "verified" && payoutStatus === "verified";
-  }, [verificationSource]);
+    return sellerIdVerified && sellerPayoutVerified;
+  }, [sellerIdVerified, sellerPayoutVerified]);
+
+  const sellerVerificationSummaryLabel = sellerIsVerified
+    ? "Verified"
+    : sellerAgeVerified
+    ? "Age verified"
+    : "Not verified";
 
   const sellerFeePercent = sellerIsVerified ? 2 : 4;
 
@@ -2762,6 +2781,44 @@ export default function StorefrontSeller(): JSX.Element {
     [loadBids]
   );
 
+  const canRefundOrder = useCallback((order: MarketplaceOrder) => {
+    const provider = String(order.paymentProvider || "paypal").toLowerCase();
+    const status = String(order.status || "").toLowerCase();
+    const hasCaptureId = Boolean(String(order.paypalCaptureId || "").trim());
+    return (
+      provider === "paypal" &&
+      hasCaptureId &&
+      ["paid", "approved", "completed", "delivered"].includes(status)
+    );
+  }, []);
+
+  const handleRefundOrder = useCallback(
+    async (order: MarketplaceOrder) => {
+      if (!canRefundOrder(order)) return;
+      if (orderActionLoading[order.id]) return;
+      setOrderActionError(null);
+      setOrderActionNotice(null);
+      setOrderActionLoading((prev) => ({ ...prev, [order.id]: true }));
+      try {
+        await api.post(`/marketplace-orders/paypal/${order.id}/refund`, {});
+        setOrderActionNotice(`Refund submitted for "${order.listingTitle}".`);
+        await loadOrders();
+      } catch (err) {
+        const apiMessage =
+          (err as any)?.response?.data?.error?.message ||
+          (err as any)?.response?.data?.message;
+        setOrderActionError(apiMessage || "Unable to process refund.");
+      } finally {
+        setOrderActionLoading((prev) => {
+          const next = { ...prev };
+          delete next[order.id];
+          return next;
+        });
+      }
+    },
+    [canRefundOrder, loadOrders, orderActionLoading]
+  );
+
   const handleMessageReplyToggle = useCallback((threadKey: string) => {
     setMessageReplyOpen((prev) => ({ ...prev, [threadKey]: !prev[threadKey] }));
   }, []);
@@ -2888,14 +2945,18 @@ export default function StorefrontSeller(): JSX.Element {
   }, [sellerOrders]);
 
   const buyerPayments = useMemo(
-    () => sellerOrders.filter((order) => ["paid", "approved"].includes(order.status)),
+    () =>
+      sellerOrders.filter((order) =>
+        ["paid", "approved", "completed", "delivered"].includes(
+          String(order.status || "").toLowerCase()
+        )
+      ),
     [sellerOrders]
   );
 
   const totalEarningsValue = useMemo(
-    () =>
-      sellerOrders.reduce((sum, order) => sum + (order.net || order.amount || 0), 0),
-    [sellerOrders]
+    () => buyerPayments.reduce((sum, order) => sum + (order.net || order.amount || 0), 0),
+    [buyerPayments]
   );
 
   const earningsSeries = useMemo(() => {
@@ -2919,7 +2980,7 @@ export default function StorefrontSeller(): JSX.Element {
     }
 
     const totals = new Map<string, number>();
-    sellerOrders.forEach((order) => {
+    buyerPayments.forEach((order) => {
       const date = new Date(order.createdAt);
       if (Number.isNaN(date.getTime()) || date < start) return;
       const key = `${date.getFullYear()}-${date.getMonth()}`;
@@ -2930,7 +2991,7 @@ export default function StorefrontSeller(): JSX.Element {
       label: bucket.label,
       total: totals.get(bucket.key) || 0,
     }));
-  }, [revenueRange, sellerOrders]);
+  }, [buyerPayments, revenueRange]);
 
   const earningsSparkMax = useMemo(
     () => Math.max(...earningsSeries.map((point) => point.total), 1),
@@ -2977,7 +3038,8 @@ export default function StorefrontSeller(): JSX.Element {
     [featuredListingImages, listingImageById]
   );
   const hasTrendData = trendPreviewSeries.some((point) => Number(point.total) > 0);
-  const hasHeroMedia = featuredListingImages.length > 0 || hasTrendData;
+  const hasListingMedia = featuredListingImages.length > 0;
+  const hasHeroMedia = hasListingMedia;
   const overviewClassName = [
     "storefront-dashboard seller-dashboard seller-dashboard--overview",
     "seller-dashboard--overview-v2",
@@ -2990,7 +3052,12 @@ export default function StorefrontSeller(): JSX.Element {
 
   const payoutPending = useMemo(
     () =>
-      sellerOrders.filter((order) => order.payoutStatus === "pending"),
+      sellerOrders.filter((order) => {
+        const payoutStatus = String(order.payoutStatus || "").toLowerCase();
+        const orderStatus = String(order.status || "").toLowerCase();
+        const isPaidOrder = ["paid", "approved", "completed", "delivered"].includes(orderStatus);
+        return payoutStatus === "pending" && isPaidOrder;
+      }),
     [sellerOrders]
   );
 
@@ -3326,6 +3393,8 @@ export default function StorefrontSeller(): JSX.Element {
             <div className="storefront-widget-list">
               {displayOrdersLoading && <p>Loading orders…</p>}
               {displayOrdersError && <p>{displayOrdersError}</p>}
+              {orderActionError && <p className="storefront-form-error">{orderActionError}</p>}
+              {orderActionNotice && <p className="storefront-status success">{orderActionNotice}</p>}
               {isEmpty && (
                 <div className="seller-empty">
                   <p>No orders yet.</p>
@@ -3354,6 +3423,16 @@ export default function StorefrontSeller(): JSX.Element {
                       >
                         {displayOrder.status}
                       </span>
+                      {canRefundOrder(displayOrder) && (
+                        <button
+                          className="btn ghost small"
+                          type="button"
+                          onClick={() => void handleRefundOrder(displayOrder)}
+                          disabled={Boolean(orderActionLoading[displayOrder.id])}
+                        >
+                          {orderActionLoading[displayOrder.id] ? "Refunding..." : "Refund"}
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -3972,29 +4051,60 @@ export default function StorefrontSeller(): JSX.Element {
           </div>
         );
       case "orders":
-        return (
-          <div className="seller-module-stack">
-            <div className="seller-panel-body">{renderWidgetContent("orders")}</div>
-            {!hiddenWidgets.includes("offers") && (
-              <div className="seller-panel-subsection">
-                <div className="seller-panel-subheader">
-                  <span className="seller-panel-eyebrow">Offers</span>
-                  <h4>Offers</h4>
-                </div>
-                <div className="seller-panel-body">{renderWidgetContent("offers")}</div>
-              </div>
-            )}
-            {!hiddenWidgets.includes("bids") && (
-              <div className="seller-panel-subsection">
-                <div className="seller-panel-subheader">
-                  <span className="seller-panel-eyebrow">Bids</span>
-                  <h4>Bids</h4>
-                </div>
-                <div className="seller-panel-body">{renderWidgetContent("bids")}</div>
-              </div>
-            )}
-          </div>
-        );
+        {
+          const activityCards: {
+            id: "orders" | "offers" | "bids";
+            eyebrow: string;
+            title: string;
+            count: number;
+            content: ReactNode;
+          }[] = [
+            {
+              id: "orders",
+              eyebrow: "Orders",
+              title: "Orders",
+              count: sellerOrders.length,
+              content: renderWidgetContent("orders"),
+            },
+          ];
+          if (!hiddenWidgets.includes("offers")) {
+            activityCards.push({
+              id: "offers",
+              eyebrow: "Offers",
+              title: "Offers",
+              count: openOffers.length,
+              content: renderWidgetContent("offers"),
+            });
+          }
+          if (!hiddenWidgets.includes("bids")) {
+            activityCards.push({
+              id: "bids",
+              eyebrow: "Bids",
+              title: "Bids",
+              count: openBids.length,
+              content: renderWidgetContent("bids"),
+            });
+          }
+          return (
+            <div className="seller-module-activity-grid">
+              {activityCards.map((card) => (
+                <section
+                  key={card.id}
+                  className={`seller-module-activity-card seller-module-activity-card--${card.id}`}
+                >
+                  <div className="seller-module-activity-header">
+                    <div className="seller-module-activity-heading">
+                      <span className="seller-panel-eyebrow">{card.eyebrow}</span>
+                      <h4>{card.title}</h4>
+                    </div>
+                    <span className="seller-module-activity-count">{card.count}</span>
+                  </div>
+                  <div className="seller-module-activity-body">{card.content}</div>
+                </section>
+              ))}
+            </div>
+          );
+        }
       case "payouts":
         return (
           <div className="seller-module-stack">
@@ -4843,7 +4953,7 @@ export default function StorefrontSeller(): JSX.Element {
                         hasTrendData ? "" : " is-media-only"
                       }`}
                     >
-                      {hasTrendData && (
+                      {hasTrendData && hasListingMedia && (
                         <div
                           className="seller-dashboard-mini-chart"
                           role="img"
@@ -5102,6 +5212,8 @@ export default function StorefrontSeller(): JSX.Element {
                     <div className="seller-panel-body">
                       {displayOrdersLoading && <p>Loading orders...</p>}
                       {displayOrdersError && <p>{displayOrdersError}</p>}
+                      {orderActionError && <p className="storefront-form-error">{orderActionError}</p>}
+                      {orderActionNotice && <p className="storefront-status success">{orderActionNotice}</p>}
                       {!displayOrdersLoading &&
                         !displayOrdersError &&
                         sellerOrders.length === 0 && (
@@ -5168,6 +5280,18 @@ export default function StorefrontSeller(): JSX.Element {
                                     <span>
                                       Net {formatCurrency(displayOrder.net, displayOrder.currency)}
                                     </span>
+                                    {canRefundOrder(displayOrder) && (
+                                      <button
+                                        className="btn ghost small"
+                                        type="button"
+                                        onClick={() => void handleRefundOrder(displayOrder)}
+                                        disabled={Boolean(orderActionLoading[displayOrder.id])}
+                                      >
+                                        {orderActionLoading[displayOrder.id]
+                                          ? "Refunding..."
+                                          : "Refund"}
+                                      </button>
+                                    )}
                                   </div>
                                   <span className="seller-activity-time" role="cell">
                                     {formatRelativeTime(displayOrder.createdAt)}
@@ -5269,15 +5393,24 @@ export default function StorefrontSeller(): JSX.Element {
                         <div className="seller-status-row">
                           <div>
                             <span>Verification</span>
-                            <strong>{sellerIsVerified ? "Verified" : "Not verified"}</strong>
+                            <strong>{sellerVerificationSummaryLabel}</strong>
                           </div>
-                          {!sellerIsVerified && (
+                          {!sellerAgeVerified && (
                             <button
                               className="btn danger small"
                               type="button"
                               onClick={handleRequestVerification}
                             >
                               Verify
+                            </button>
+                          )}
+                          {sellerAgeVerified && !sellerPayoutVerified && (
+                            <button
+                              className="btn ghost small"
+                              type="button"
+                              onClick={() => openDashboardModule("payouts")}
+                            >
+                              Add payout
                             </button>
                           )}
                         </div>

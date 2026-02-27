@@ -1,0 +1,505 @@
+.post-manager-content {
+  display: grid;
+  gap: 18px;
+}
+
+.post-manager-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.post-manager-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.post-manager-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.post-manager-meta-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.post-manager-meta {
+  font-size: 12px;
+  color: #9fb2d8;
+}
+
+.post-manager-folders {
+  display: grid;
+  gap: 12px;
+}
+
+.post-manager-folder-create {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.post-manager-folder-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.post-manager-folder-chip-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 2px;
+}
+
+.post-manager-folder-chip-wrap.is-drop-target {
+  outline: 2px solid rgba(56, 189, 248, 0.62);
+}
+
+.post-manager-folder-chip {
+  border: 1px solid rgba(96, 165, 250, 0.35);
+  background: rgba(8, 16, 34, 0.88);
+  color: #d9e7ff;
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: transform 0.16s ease, border-color 0.16s ease, background-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.post-manager-folder-chip:hover,
+.post-manager-folder-chip:focus-visible {
+  border-color: rgba(125, 211, 252, 0.8);
+  background: rgba(20, 40, 78, 0.95);
+  box-shadow: 0 8px 20px rgba(6, 12, 26, 0.45);
+  transform: translateY(-1px);
+}
+
+.post-manager-folder-chip span {
+  color: #8fc8ff;
+}
+
+.post-manager-folder-chip.is-active {
+  background: linear-gradient(135deg, rgba(28, 114, 255, 0.35), rgba(34, 211, 238, 0.24));
+  border-color: rgba(96, 165, 250, 0.72);
+}
+
+.post-manager-folder-remove {
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  background: rgba(9, 13, 24, 0.85);
+  color: #f1f5f9;
+  border-radius: 999px;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 0.16s ease, border-color 0.16s ease, background-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.post-manager-folder-remove:hover,
+.post-manager-folder-remove:focus-visible {
+  border-color: rgba(125, 211, 252, 0.78);
+  background: rgba(16, 28, 52, 0.95);
+  box-shadow: 0 8px 18px rgba(6, 12, 26, 0.45);
+  transform: translateY(-1px);
+}
+
+.post-manager-bulk-toolbar {
+  border: 1px solid rgba(96, 165, 250, 0.3);
+  background: linear-gradient(135deg, rgba(8, 16, 34, 0.9), rgba(7, 10, 20, 0.95));
+  border-radius: 16px;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.post-manager-bulk-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #dbeafe;
+}
+
+.post-manager-bulk-controls {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 150px) auto auto auto auto;
+}
+
+.post-manager-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.post-manager-card {
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 16px;
+  overflow: hidden;
+  background: linear-gradient(155deg, rgba(9, 18, 34, 0.94), rgba(7, 10, 22, 0.98));
+  box-shadow: 0 16px 28px rgba(4, 8, 20, 0.38);
+  display: grid;
+  grid-template-rows: 120px minmax(0, 1fr);
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  position: relative;
+}
+
+.post-manager-card.is-selected {
+  border-color: rgba(56, 189, 248, 0.8);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.28), 0 16px 28px rgba(4, 8, 20, 0.38);
+}
+
+.post-manager-thumb {
+  background: rgba(3, 8, 18, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.post-manager-card-menu-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  border: 1px solid rgba(125, 211, 252, 0.45);
+  background: rgba(3, 8, 18, 0.86);
+  color: #e5efff;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.post-manager-card-menu-btn:hover,
+.post-manager-card-menu-btn:focus-visible {
+  border-color: rgba(56, 189, 248, 0.85);
+  background: rgba(8, 16, 34, 0.95);
+}
+
+.post-manager-selected-indicator {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #e0f2fe;
+  background: linear-gradient(120deg, rgba(2, 132, 199, 0.72), rgba(14, 116, 144, 0.72));
+  border: 1px solid rgba(125, 211, 252, 0.58);
+}
+
+.post-manager-thumb img,
+.post-manager-thumb video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.post-manager-thumb-fallback {
+  font-size: 12px;
+  color: #9fb2d8;
+}
+
+.post-manager-card-body {
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.post-manager-card-date {
+  margin: 0;
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.post-manager-card-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.35;
+  color: #e5efff;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.post-manager-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.post-manager-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: rgba(37, 99, 235, 0.22);
+  border: 1px solid rgba(96, 165, 250, 0.38);
+  color: #dbeafe;
+}
+
+.post-manager-pill-action {
+  border: 1px solid rgba(96, 165, 250, 0.44);
+  cursor: pointer;
+  font: inherit;
+  transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.15s ease;
+}
+
+.post-manager-pill-action:hover,
+.post-manager-pill-action:focus-visible {
+  border-color: rgba(125, 211, 252, 0.8);
+  background: rgba(37, 99, 235, 0.3);
+  transform: translateY(-1px);
+}
+
+.post-manager-modal {
+  width: min(760px, 92vw);
+}
+
+.post-manager-context-menu {
+  position: fixed;
+  z-index: 24000;
+  width: min(280px, calc(100vw - 24px));
+  border-radius: 14px;
+  border: 1px solid rgba(96, 165, 250, 0.42);
+  background: linear-gradient(155deg, rgba(8, 16, 34, 0.98), rgba(5, 10, 24, 0.98));
+  box-shadow: 0 18px 36px rgba(2, 6, 23, 0.65);
+  display: grid;
+  overflow: hidden;
+}
+
+.post-manager-context-item {
+  border: none;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+  background: transparent;
+  color: #e2e8f0;
+  text-align: left;
+  padding: 12px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.post-manager-context-item:last-child {
+  border-bottom: none;
+}
+
+.post-manager-context-item:hover,
+.post-manager-context-item:focus-visible {
+  background: rgba(37, 99, 235, 0.22);
+  color: #f8fafc;
+}
+
+.post-manager-context-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.post-manager-preview {
+  display: grid;
+  gap: 12px;
+}
+
+.post-manager-preview-media {
+  width: 100%;
+  max-height: 62vh;
+  object-fit: contain;
+  border-radius: 12px;
+  background: #020617;
+}
+
+.post-manager-preview-empty {
+  min-height: 180px;
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+}
+
+.post-manager-preview-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #dbeafe;
+  white-space: pre-wrap;
+}
+
+.post-manager-preview-date {
+  margin: 0;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.post-manager-preview-link {
+  color: #dbeafe;
+  font-size: 13px;
+  text-decoration: underline;
+  word-break: break-all;
+}
+
+.post-manager-edit-form {
+  display: grid;
+  gap: 12px;
+}
+
+.post-manager-edit-textarea {
+  width: 100%;
+  min-height: 160px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.post-manager-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.post-manager-modal-note {
+  margin: 0;
+  color: #c7d9ff;
+  font-size: 14px;
+}
+
+.post-manager-action-sheet {
+  display: grid;
+  gap: 10px;
+}
+
+.post-manager-action-sheet .btn {
+  justify-content: center;
+}
+
+.post-manager-share-sheet {
+  display: grid;
+  gap: 12px;
+}
+
+.post-manager-share-sheet a.btn {
+  text-decoration: none;
+}
+
+.post-manager-delete-confirm p {
+  margin: 0 0 12px;
+  color: #dbeafe;
+}
+
+.post-manager-delete-mode {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.post-manager-delete-mode-option {
+  border: 1px solid rgba(96, 165, 250, 0.35);
+  border-radius: 12px;
+  background: rgba(8, 16, 34, 0.82);
+  padding: 10px 12px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: #dbeafe;
+  font-size: 14px;
+}
+
+.post-manager-delete-mode-option input[type="radio"] {
+  margin-top: 2px;
+  accent-color: #38bdf8;
+}
+
+.post-manager-delete-mode-option span {
+  display: grid;
+  gap: 4px;
+}
+
+.post-manager-delete-mode-option small {
+  color: #9fb2d8;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+@media (max-width: 1400px) {
+  .post-manager-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1200px) {
+  .post-manager-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .post-manager-bulk-controls {
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 130px) auto;
+  }
+}
+
+@media (max-width: 900px) {
+  .post-manager-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .post-manager-folder-create {
+    grid-template-columns: 1fr;
+  }
+
+  .post-manager-bulk-controls {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .post-manager-card {
+    grid-template-rows: 104px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .post-manager-modal {
+    width: min(440px, calc(100vw - 24px));
+    max-height: min(86dvh, 700px);
+  }
+
+  .post-manager-action-sheet .btn {
+    min-height: 44px;
+    font-size: 15px;
+  }
+
+  .post-manager-header-actions {
+    width: 100%;
+  }
+
+  .post-manager-header-actions .btn {
+    flex: 1;
+  }
+
+}

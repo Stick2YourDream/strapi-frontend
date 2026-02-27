@@ -19,6 +19,28 @@ export default defineConfig(({ mode }) => {
   const newsKey = env.NEWS_API_KEY || env.VITE_NEWS_API_KEY;
 
   const devHost = String(env.VITE_DEV_HOST || "localhost").trim() || "localhost";
+  const manualChunks = (id: string) => {
+    if (!id.includes("node_modules")) return undefined;
+    if (
+      id.includes("@mediapipe/tasks-vision") ||
+      id.includes("@mediapipe/selfie_segmentation")
+    ) {
+      return "vendor-mediapipe";
+    }
+    if (id.includes("react-router-dom") || id.includes("react-router")) {
+      return "vendor-router";
+    }
+    if (id.includes("socket.io-client")) {
+      return "vendor-realtime";
+    }
+    if (id.includes("@giphy/")) {
+      return "vendor-giphy";
+    }
+    if (id.includes("jspdf")) {
+      return "vendor-export";
+    }
+    return "vendor";
+  };
 
   return {
     plugins: [react()],
@@ -65,6 +87,9 @@ export default defineConfig(({ mode }) => {
       outDir: isVideoApp ? "dist-video" : "dist",
       rollupOptions: {
         input: resolve(process.cwd(), entryHtml),
+        output: {
+          manualChunks,
+        },
       },
     },
   };

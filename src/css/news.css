@@ -135,6 +135,43 @@
   letter-spacing: 0.2em;
 }
 
+.news-filters .auth-input {
+  width: 100%;
+  min-height: 42px;
+  border-radius: 12px;
+  border: 1px solid var(--ysp-input-border, rgba(255, 255, 255, 0.14));
+  background: var(--ysp-input-bg, rgba(255, 255, 255, 0.04));
+  color: var(--ysp-input-fg, #e9ecf5);
+  padding: 10px 12px;
+  font-size: 14px;
+  line-height: 1.2;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.news-filters .auth-input::placeholder {
+  color: var(--ysp-input-placeholder, #9aa5bb);
+}
+
+.news-filters .auth-input:focus,
+.news-filters .auth-input:focus-visible {
+  outline: none;
+  border-color: rgba(96, 165, 250, 0.65);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.22);
+  background: rgba(12, 18, 30, 0.9);
+}
+
+.news-filters input[type="date"].auth-input {
+  color-scheme: dark;
+  padding-right: 10px;
+}
+
+.news-filters input[type="date"].auth-input::-webkit-calendar-picker-indicator {
+  filter: invert(90%) sepia(9%) saturate(500%) hue-rotate(178deg) brightness(102%)
+    contrast(93%);
+  cursor: pointer;
+}
+
 .news-selects {
   display: grid;
   grid-template-columns: repeat(3, minmax(140px, 1fr));

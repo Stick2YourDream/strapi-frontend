@@ -1,27 +1,42 @@
 // src/App.tsx
+import { lazy, Suspense } from "react";
 import { BrowserRouter } from "react-router-dom";
 import AppRoutes from "./routes/AppRoutes";
-import ChatDock from "./components/ChatDock";
-import ConsentBanner from "./components/ConsentBanner";
-import KeyBackupModal from "./components/KeyBackupModal";
-import ReleaseNotesModal from "./components/ReleaseNotesModal";
-import UpdateNotice from "./components/UpdateNotice";
-import AuthDebugOverlay from "./components/AuthDebugOverlay";
-import TimeLimitManager from "./components/TimeLimitManager";
-import DobMismatchNotice from "./components/DobMismatchNotice";
+import { useAuth } from "./context/AuthContext";
+
+const ChatDock = lazy(() => import("./components/ChatDock"));
+const ConsentBanner = lazy(() => import("./components/ConsentBanner"));
+const KeyBackupModal = lazy(() => import("./components/KeyBackupModal"));
+const ReleaseNotesModal = lazy(() => import("./components/ReleaseNotesModal"));
+const UpdateNotice = lazy(() => import("./components/UpdateNotice"));
+const AuthDebugOverlay = lazy(() => import("./components/AuthDebugOverlay"));
+const TimeLimitManager = lazy(() => import("./components/TimeLimitManager"));
+const DobMismatchNotice = lazy(() => import("./components/DobMismatchNotice"));
+
+function AppChrome(): JSX.Element {
+  const { user, sessionActive } = useAuth();
+  const isAuthed = Boolean(user) || sessionActive;
+  return (
+    <>
+      <AppRoutes />
+      <Suspense fallback={null}>
+        <ConsentBanner />
+        {isAuthed && <ChatDock />}
+        {isAuthed && <KeyBackupModal />}
+        {isAuthed && <ReleaseNotesModal />}
+        <UpdateNotice />
+        {import.meta.env.DEV && <AuthDebugOverlay />}
+        {isAuthed && <TimeLimitManager />}
+        {isAuthed && <DobMismatchNotice />}
+      </Suspense>
+    </>
+  );
+}
 
 export default function App() {
   return (
     <BrowserRouter>
-      <AppRoutes />
-      <ChatDock />
-      <ConsentBanner />
-      <KeyBackupModal />
-      <ReleaseNotesModal />
-      <UpdateNotice />
-      <AuthDebugOverlay />
-      <TimeLimitManager />
-      <DobMismatchNotice />
+      <AppChrome />
     </BrowserRouter>
   );
 }

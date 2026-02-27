@@ -2,8 +2,11 @@
   position: fixed;
   inset: 0;
   z-index: 20000;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100dvh;
+  overflow-y: auto;
   padding: 24px 16px;
 }
 
@@ -28,6 +31,7 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  margin: auto;
 }
 
 .popup-modal-header {
@@ -96,6 +100,17 @@
   min-height: 0;
 }
 
+.popup-modal.comment-modal .comment-body a,
+.popup-modal.comment-modal .comment-body a:visited {
+  color: #ffffff;
+}
+
+.popup-modal.comment-modal .comment-body a:hover,
+.popup-modal.comment-modal .comment-body a:focus-visible {
+  color: #ffffff;
+  text-decoration: underline;
+}
+
 .popup-modal-body::-webkit-scrollbar {
   width: 8px;
 }
@@ -124,9 +139,17 @@
 }
 
 @media (max-width: 640px) {
+  .popup-modal-overlay {
+    min-height: 100dvh;
+    padding-top: max(12px, env(safe-area-inset-top));
+    padding-right: 12px;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    padding-left: 12px;
+  }
+
   .popup-modal {
-    width: min(520px, 94vw);
-    max-height: 88vh;
+    width: min(520px, calc(100vw - 24px));
+    max-height: min(88dvh, 760px);
   }
   .popup-modal-header {
     padding: 16px 16px 10px;

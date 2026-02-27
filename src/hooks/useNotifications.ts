@@ -21,6 +21,7 @@ type NotificationCounts = {
   comments: number;
   likes: number;
   groupUpdates: number;
+  forums: number;
   security: number;
   marketplace: number;
 };
@@ -79,6 +80,15 @@ export type GroupUpdatePreview = {
   createdAt?: string;
 };
 
+export type ForumUpdatePreview = {
+  id: string | number;
+  ownerName?: string;
+  message?: string;
+  createdAt?: string;
+  postId?: number;
+  postTitle?: string;
+};
+
 export type BirthdayPreview = {
   id: string;
   userId: number;
@@ -96,6 +106,7 @@ export type NotificationPreviews = {
   comments: CommentPreview | null;
   likes: { count: number } | null;
   groupUpdates: GroupUpdatePreview | null;
+  forums: ForumUpdatePreview | null;
   security: GroupUpdatePreview | null;
   marketplace: GroupUpdatePreview | null;
 };
@@ -339,6 +350,7 @@ export const useNotifications = (
     comments: 0,
     likes: 0,
     groupUpdates: 0,
+    forums: 0,
     security: 0,
     marketplace: 0,
   });
@@ -351,6 +363,7 @@ export const useNotifications = (
     comments: null,
     likes: null,
     groupUpdates: null,
+    forums: null,
     security: null,
     marketplace: null,
   }));
@@ -425,6 +438,7 @@ export const useNotifications = (
         counts.comments > previous.comments ||
         counts.likes > previous.likes ||
         counts.groupUpdates > previous.groupUpdates ||
+        counts.forums > previous.forums ||
         counts.security > previous.security ||
         counts.marketplace > previous.marketplace);
     const dndActive = Boolean(settings?.dndEnabled) || isWithinQuietHours(settings);
@@ -455,10 +469,11 @@ export const useNotifications = (
         feedbackRequests: 0,
         comments: 0,
         likes: 0,
-        groupUpdates: 0,
-        security: 0,
-        marketplace: 0,
-      });
+          groupUpdates: 0,
+          forums: 0,
+          security: 0,
+          marketplace: 0,
+        });
       setPreviews({
         messages: null,
         requests: [],
@@ -467,10 +482,11 @@ export const useNotifications = (
         feedbackRequests: [],
         comments: null,
         likes: null,
-        groupUpdates: null,
-        security: null,
-        marketplace: null,
-      });
+          groupUpdates: null,
+          forums: null,
+          security: null,
+          marketplace: null,
+        });
       return;
     }
 
@@ -1004,6 +1020,70 @@ export const useNotifications = (
           })()
         : null;
 
+      const [forumPostCommentsRes, forumReplyCommentsRes] = await Promise.all([
+        api
+          .get(
+            `/forum-post-comments?` +
+              `filters[post][owner][id][$eq]=${currentUserId}` +
+              `&filters[owner][id][$ne]=${currentUserId}` +
+              `${afterFilter}&populate=owner&populate=post&sort=createdAt:desc&pagination[pageSize]=50`
+          )
+          .catch(() => null),
+        api
+          .get(
+            `/forum-post-comments?` +
+              `filters[parent][owner][id][$eq]=${currentUserId}` +
+              `&filters[owner][id][$ne]=${currentUserId}` +
+              `${afterFilter}&populate=owner&populate=post&populate=parent&sort=createdAt:desc&pagination[pageSize]=50`
+          )
+          .catch(() => null),
+      ]);
+
+      const forumEntriesById = new Map<string, any>();
+      const indexForumEntries = (entries: any[]) => {
+        entries.forEach((entry) => {
+          const attrs = normalize(entry);
+          const rawKey = entry?.id ?? attrs?.documentId ?? attrs?.id;
+          if (rawKey === undefined || rawKey === null) return;
+          const key = String(rawKey);
+          const existing = forumEntriesById.get(key);
+          if (!existing) {
+            forumEntriesById.set(key, entry);
+            return;
+          }
+          const existingAttrs = normalize(existing);
+          const existingTime = parseIsoTime(existingAttrs.createdAt) ?? 0;
+          const nextTime = parseIsoTime(attrs.createdAt) ?? 0;
+          if (nextTime > existingTime) {
+            forumEntriesById.set(key, entry);
+          }
+        });
+      };
+      indexForumEntries(forumPostCommentsRes?.data?.data ?? []);
+      indexForumEntries(forumReplyCommentsRes?.data?.data ?? []);
+
+      const forumUpdates = Array.from(forumEntriesById.values())
+        .map((entry: any) => {
+          const attrs = normalize(entry);
+          const postData = attrs?.post?.data ?? attrs?.post;
+          const postAttrs = normalize(postData);
+          return {
+            id: entry?.id ?? attrs?.documentId ?? attrs?.id ?? "forum-update",
+            ownerName: getUserLabel(attrs.owner),
+            message: attrs.body || attrs.text || attrs.message,
+            createdAt: attrs.createdAt,
+            postId: getEntityId(postData),
+            postTitle: String(postAttrs?.title || "").trim() || undefined,
+          } as ForumUpdatePreview;
+        })
+        .sort((a, b) => {
+          const aTime = parseIsoTime(a.createdAt) ?? 0;
+          const bTime = parseIsoTime(b.createdAt) ?? 0;
+          return bTime - aTime;
+        });
+      const forumCount = forumUpdates.length;
+      const forumPreview: ForumUpdatePreview | null = forumCount > 0 ? forumUpdates[0] : null;
+
       const prevSnapshot = likeSnapshotRef.current || {};
       let likeCount = 0;
       const nextSnapshot: Record<string, number> = {};
@@ -1043,6 +1123,7 @@ export const useNotifications = (
         comments: commentCount,
         likes: likeCount,
         groupUpdates: groupUpdateCount,
+        forums: forumCount,
         security: securityCount,
         marketplace: marketplaceCount,
       });
@@ -1055,6 +1136,7 @@ export const useNotifications = (
         comments: commentPreview,
         likes: likeCount > 0 ? { count: likeCount } : null,
         groupUpdates: groupUpdatePreview,
+        forums: forumPreview,
         security: securityPreview,
         marketplace: marketplacePreview,
       });
@@ -1156,6 +1238,7 @@ export const useNotifications = (
       comments: 0,
       likes: 0,
       groupUpdates: 0,
+      forums: 0,
       security: 0,
       marketplace: 0,
     }));
@@ -1168,6 +1251,7 @@ export const useNotifications = (
       comments: null,
       likes: null,
       groupUpdates: null,
+      forums: null,
       security: null,
       marketplace: null,
     }));
@@ -1262,6 +1346,7 @@ export const useNotifications = (
       counts.comments +
       counts.likes +
       counts.groupUpdates +
+      counts.forums +
       counts.security +
       counts.marketplace,
     [
@@ -1271,6 +1356,7 @@ export const useNotifications = (
       counts.friendPosts,
       counts.groupUpdates,
       counts.likes,
+      counts.forums,
       counts.marketplace,
       counts.messages,
       counts.requests,

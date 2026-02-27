@@ -11,22 +11,25 @@ import "./CameraShared.css";
 import "./IdCaptureModule.css";
 
 const ENV_OPENCV_URL = String(import.meta.env.VITE_OPENCV_URL || "").trim();
+const MANUAL_ID_CAPTURE_ONLY = true;
+const ENABLE_PERSPECTIVE_CAPTURE = false;
 const OPENCV_URLS = [
   ENV_OPENCV_URL,
   "https://docs.opencv.org/4.8.0/opencv.js",
   "https://docs.opencv.org/4.x/opencv.js",
   "https://cdn.jsdelivr.net/npm/opencv.js@1.2.1/opencv.js",
 ].filter(Boolean);
+const OPENCV_READY_TIMEOUT_MS = 3500;
+const OPENCV_CAPTURE_WAIT_TIMEOUT_MS = 1600;
 const ID_COUNTDOWN_SECONDS = 0;
 const ID_HIGH_RES_CONSTRAINTS = {
-  width: { ideal: 1920, max: 3840 },
-  height: { ideal: 1080, max: 2160 },
-  frameRate: { ideal: 30, max: 60 },
+  width: { ideal: 1280, max: 1920 },
+  height: { ideal: 720, max: 1080 },
+  frameRate: { ideal: 24, max: 30 },
 } as const;
 const ID_CAPTURE_QUALITY = {
   front: 0.98,
   back: 0.98,
-  dob: 0.97,
 } as const;
 const ID_AUTOCAPTURE_STABLE_FRAMES = {
   front: 7,
@@ -39,30 +42,28 @@ const ID_ADVANCED_CONSTRAINTS: any[] = [
   { whiteBalanceMode: "continuous" },
 ];
 const BACK_BARCODE_GUIDE_RECT = {
-  x: 0.09,
-  y: 0.6,
-  width: 0.82,
-  height: 0.24,
+  x: 0.05,
+  y: 0.52,
+  width: 0.9,
+  height: 0.34,
 } as const;
 
 type IdCaptureModuleProps = {
   idFront: File | null;
   idBack: File | null;
-  dobFront1: File | null;
+  idType?: string;
   onFrontChange: (file: File | null) => void;
   onBackChange: (file: File | null) => void;
-  onDobFront1Change: (file: File | null) => void;
   className?: string;
 };
 
-type CaptureTarget = "front" | "back" | "dob1";
+type CaptureTarget = "front" | "back";
 type QualityFailCode =
   | "dark"
   | "overexposed"
   | "low_contrast"
   | "back_blurry"
   | "barcode_unreadable"
-  | "dob_unclear"
   | "front_unclear"
   | "processing";
 type QualityCheckResult = {
@@ -102,13 +103,21 @@ const clamp = (value: number, min: number, max: number) =>
 const distance = (a: { x: number; y: number }, b: { x: number; y: number }) =>
   Math.hypot(a.x - b.x, a.y - b.y);
 
+const isTapCaptureBlockedTarget = (target: EventTarget | null) => {
+  if (!(target instanceof Element)) return false;
+  return Boolean(
+    target.closest(
+      "button, a, input, select, textarea, label, .camera-actions, .camera-permission"
+    )
+  );
+};
+
 export default function IdCaptureModule({
   idFront,
   idBack,
-  dobFront1,
+  idType,
   onFrontChange,
   onBackChange,
-  onDobFront1Change,
   className,
 }: IdCaptureModuleProps) {
   const [activeTarget, setActiveTarget] = useState<CaptureTarget | null>(null);
@@ -120,11 +129,11 @@ export default function IdCaptureModule({
     "granted" | "denied" | "prompt" | "unknown"
   >("unknown");
   const [idDetectError, setIdDetectError] = useState<string | null>(null);
-  const [autoCaptureReady, setAutoCaptureReady] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [countdownProgress, setCountdownProgress] = useState(1);
   const [countdownTarget, setCountdownTarget] = useState<"front" | "back" | null>(null);
   const [captureFlash, setCaptureFlash] = useState(false);
+  const [captureBusy, setCaptureBusy] = useState(false);
   const [useFrontCamera, setUseFrontCamera] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -147,13 +156,13 @@ export default function IdCaptureModule({
   const qualityRejectCountsRef = useRef<Record<CaptureTarget, number>>({
     front: 0,
     back: 0,
-    dob1: 0,
   });
+  const captureInFlightRef = useRef(false);
 
   const frontPreviewUrl = usePreviewUrl(idFront);
   const backPreviewUrl = usePreviewUrl(idBack);
-  const dobPreviewUrl1 = usePreviewUrl(dobFront1);
-  const autoCaptureEnabled = activeTarget === "front" || activeTarget === "back";
+  const autoCaptureEnabled = !MANUAL_ID_CAPTURE_ONLY && (activeTarget === "front" || activeTarget === "back");
+  const requiresBackCapture = idType !== "passport";
 
   const showCameraEnable = !cameraReady && !cameraStarting;
   const cameraCtaLabel = cameraPermission === "granted" ? "Start camera" : "Enable camera";
@@ -179,9 +188,7 @@ export default function IdCaptureModule({
         title: "Front of ID",
         body:
           countdownText ||
-          (autoCaptureReady
-            ? "Aligned. Capturing now…"
-            : "Fill the frame with the entire front. Keep it sharp and centered."),
+          "Fill the frame with the entire front. Keep it sharp and centered, then tap anywhere on screen to capture.",
         tips: baseTips,
       };
     }
@@ -194,20 +201,11 @@ export default function IdCaptureModule({
         title: "Back of ID (Barcode)",
         body:
           countdownText ||
-          (autoCaptureReady
-            ? "Aligned. Capturing now…"
-            : "Align only the barcode inside the guide box."),
+          "Align only the barcode inside the guide box, then tap anywhere on screen to capture.",
         tips: baseTips,
       };
     }
-    return {
-      title: "DOB Close‑up",
-      body: "Zoom in so the DOB line is large and readable. Keep the text straight.",
-      tips: [
-        "Keep the DOB line centered and sharp.",
-        "Tilt slightly to remove glare over the DOB text.",
-      ],
-    };
+    return null;
   };
 
   const withTouchAction = useCallback(
@@ -385,7 +383,6 @@ export default function IdCaptureModule({
     (target: CaptureTarget) => {
       setCameraError(null);
       setIdDetectError(null);
-      setAutoCaptureReady(false);
       cancelCountdown();
       activeTargetStartedAtRef.current = Date.now();
       setActiveTarget(target);
@@ -416,15 +413,33 @@ export default function IdCaptureModule({
 
     const waitForCv = (src: string) =>
       new Promise<void>((resolve, reject) => {
-        if (isReady()) {
+        let settled = false;
+        const timeout = window.setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          reject(new Error(`OpenCV load timed out (${src})`));
+        }, OPENCV_READY_TIMEOUT_MS);
+        const resolveOnce = () => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timeout);
           resolve();
+        };
+        const rejectOnce = (error: Error) => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timeout);
+          reject(error);
+        };
+        if (isReady()) {
+          resolveOnce();
           return;
         }
         const existing = document.querySelector(`script[data-opencv="${src}"]`);
         if (existing) {
           const poll = () => {
-            if (isReady()) resolve();
-            else window.setTimeout(poll, 50);
+            if (isReady()) resolveOnce();
+            else if (!settled) window.setTimeout(poll, 50);
           };
           poll();
           return;
@@ -436,16 +451,16 @@ export default function IdCaptureModule({
         script.onload = () => {
           const cv = (window as any).cv;
           if (cv && cv.imread) {
-            resolve();
+            resolveOnce();
             return;
           }
           if (cv) {
-            cv.onRuntimeInitialized = () => resolve();
+            cv.onRuntimeInitialized = () => resolveOnce();
             return;
           }
-          reject(new Error("OpenCV failed to initialize."));
+          rejectOnce(new Error("OpenCV failed to initialize."));
         };
-        script.onerror = () => reject(new Error(`Failed to load ${src}`));
+        script.onerror = () => rejectOnce(new Error(`Failed to load ${src}`));
         document.body.appendChild(script);
       });
 
@@ -608,11 +623,17 @@ export default function IdCaptureModule({
         const image = await new Promise<HTMLImageElement>((resolve, reject) => {
           const url = URL.createObjectURL(blob);
           const img = new Image();
+          const timeout = window.setTimeout(() => {
+            URL.revokeObjectURL(url);
+            reject(new Error("Image decode timed out"));
+          }, 2500);
           img.onload = () => {
+            window.clearTimeout(timeout);
             URL.revokeObjectURL(url);
             resolve(img);
           };
           img.onerror = () => {
+            window.clearTimeout(timeout);
             URL.revokeObjectURL(url);
             reject(new Error("Unable to load image"));
           };
@@ -700,17 +721,17 @@ export default function IdCaptureModule({
         const edgeStrength = edgeCount > 0 ? edgeSum / edgeCount : 0;
         const barcodeStrength = barcodeEdgeCount > 0 ? barcodeEdgeSum / barcodeEdgeCount : 0;
 
-        if (mean < 38) {
+        if (mean < 30) {
           return { ok: false, code: "dark", message: "Image is too dark. Move to better light." };
         }
-        if (mean > 236) {
+        if (mean > 245) {
           return {
             ok: false,
             code: "overexposed",
             message: "Image is overexposed. Reduce glare and retry.",
           };
         }
-        if (contrast < 10.5) {
+        if (contrast < 8.2) {
           return {
             ok: false,
             code: "low_contrast",
@@ -719,9 +740,9 @@ export default function IdCaptureModule({
         }
 
         if (target === "back") {
-          const backEdgeMin = 6.4;
-          const backBarcodeMin = 6.7;
-          const backBarcodeStrongPass = 7.6;
+          const backEdgeMin = 4.8;
+          const backBarcodeMin = 4.9;
+          const backBarcodeStrongPass = 5.6;
           const barcodeSharpEnough = barcodeStrength >= backBarcodeStrongPass;
           if (barcodeSharpEnough && edgeStrength >= backEdgeMin * 0.9) {
             return { ok: true };
@@ -740,15 +761,7 @@ export default function IdCaptureModule({
               message: "Back of ID is blurry. Keep the barcode sharp.",
             };
           }
-        } else if (target === "dob1") {
-          if (edgeStrength < 9.5 || contrast < 12.5) {
-            return {
-              ok: false,
-              code: "dob_unclear",
-              message: "DOB close-up is not clear. Zoom in and keep the DOB line sharp.",
-            };
-          }
-        } else if (edgeStrength < 6.2 || contrast < 9.5) {
+        } else if (edgeStrength < 4.4 || contrast < 7) {
           return {
             ok: false,
             code: "front_unclear",
@@ -769,103 +782,153 @@ export default function IdCaptureModule({
   );
 
   const captureFrame = useCallback(async () => {
+    if (captureInFlightRef.current) return;
+    captureInFlightRef.current = true;
+    setCaptureBusy(true);
     const video = videoRef.current;
-    if (!video || !activeTarget) return;
+    if (!video || !activeTarget) {
+      captureInFlightRef.current = false;
+      setCaptureBusy(false);
+      return;
+    }
     const quality =
       activeTarget === "back"
         ? ID_CAPTURE_QUALITY.back
-        : activeTarget === "front"
-        ? ID_CAPTURE_QUALITY.front
-        : ID_CAPTURE_QUALITY.dob;
+        : ID_CAPTURE_QUALITY.front;
     let blob: Blob | null = null;
     const enhanceCapture = activeTarget !== "back";
-    if (activeTarget === "back") {
-      blob = await captureRegion(video, BACK_BARCODE_GUIDE_RECT, quality, true);
-    }
-    if (activeTarget === "dob1") {
-      blob = await captureRegion(
-        video,
-        { x: 0.19, y: 0.48, width: 0.62, height: 0.12 },
-        quality,
-        true
-      );
-    }
     try {
-      if (!blob && activeTarget !== "back") {
-        await ensureOpenCv();
-        blob = await tryPerspectiveCapture(
-          video,
-          idQuadRef.current,
-          quality,
-          enhanceCapture
+      if (activeTarget === "back") {
+        blob = await captureRegion(video, BACK_BARCODE_GUIDE_RECT, quality, true);
+      }
+      try {
+        if (!blob && activeTarget !== "back" && ENABLE_PERSPECTIVE_CAPTURE) {
+          await Promise.race([
+            ensureOpenCv(),
+            new Promise<never>((_, reject) =>
+              window.setTimeout(
+                () => reject(new Error("OpenCV warmup timed out")),
+                OPENCV_CAPTURE_WAIT_TIMEOUT_MS
+              )
+            ),
+          ]);
+          blob = await tryPerspectiveCapture(
+            video,
+            idQuadRef.current,
+            quality,
+            enhanceCapture
+          );
+        }
+      } catch {
+        blob = null;
+      }
+      if (!blob) {
+        const width = video.videoWidth || 1280;
+        const height = video.videoHeight || 720;
+        const frontMaxWidth = 1600;
+        const scale =
+          activeTarget === "front" && width > frontMaxWidth ? frontMaxWidth / width : 1;
+        const outW = Math.max(2, Math.round(width * scale));
+        const outH = Math.max(2, Math.round(height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = outW;
+        canvas.height = outH;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        if (enhanceCapture || activeTarget === "back") {
+          ctx.filter =
+            activeTarget === "back"
+              ? "brightness(1.06) contrast(1.34) saturate(1.02)"
+              : "brightness(1.12) contrast(1.22) saturate(1.03)";
+        }
+        ctx.drawImage(video, 0, 0, outW, outH);
+        ctx.filter = "none";
+        blob = await new Promise<Blob | null>((resolve) =>
+          canvas.toBlob(resolve, "image/jpeg", quality)
         );
       }
-    } catch {
-      blob = null;
-    }
-    if (!blob) {
-      const canvas = document.createElement("canvas");
-      const width = video.videoWidth || 1280;
-      const height = video.videoHeight || 720;
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      if (enhanceCapture || activeTarget === "back") {
-        ctx.filter =
-          activeTarget === "back"
-            ? "brightness(1.06) contrast(1.34) saturate(1.02)"
-            : "brightness(1.12) contrast(1.22) saturate(1.03)";
+      if (!blob) return;
+      const qualityResult = await analyzeCaptureQuality(blob, activeTarget);
+      if (!qualityResult.ok) {
+        const nextRejectCount = (qualityRejectCountsRef.current[activeTarget] || 0) + 1;
+        qualityRejectCountsRef.current[activeTarget] = nextRejectCount;
+        const softFail =
+          qualityResult.code !== "dark" && qualityResult.code !== "overexposed";
+        const allowFrontFallback =
+          activeTarget === "front" &&
+          softFail &&
+          nextRejectCount >= 1;
+        const allowBackFallback =
+          activeTarget === "back" &&
+          softFail &&
+          nextRejectCount >= 2;
+        const allowAnyFallback = nextRejectCount >= 2;
+        if (allowFrontFallback || allowBackFallback || allowAnyFallback) {
+          qualityRejectCountsRef.current[activeTarget] = 0;
+          setIdDetectError(
+            "Photo accepted with fallback quality checks. Continue if details are readable."
+          );
+        } else {
+          setIdDetectError(
+            qualityResult.message || "Capture is not readable. Please retake your photo."
+          );
+          lastAutoCaptureAtRef.current = Date.now();
+          return;
+        }
       }
-      ctx.drawImage(video, 0, 0, width, height);
-      ctx.filter = "none";
-      blob = await new Promise<Blob | null>((resolve) =>
-        canvas.toBlob(resolve, "image/jpeg", quality)
-      );
+      qualityRejectCountsRef.current[activeTarget] = 0;
+      setIdDetectError(null);
+      const targetName =
+        activeTarget === "back"
+          ? "idBack.jpg"
+          : "idFront.jpg";
+      const file = new File([blob], targetName, { type: "image/jpeg" });
+      if (activeTarget === "back") onBackChange(file);
+      else onFrontChange(file);
+      setActiveTarget(null);
+    } finally {
+      captureInFlightRef.current = false;
+      setCaptureBusy(false);
     }
-    if (!blob) return;
-    const qualityResult = await analyzeCaptureQuality(blob, activeTarget);
-    if (!qualityResult.ok) {
-      const nextRejectCount = (qualityRejectCountsRef.current[activeTarget] || 0) + 1;
-      qualityRejectCountsRef.current[activeTarget] = nextRejectCount;
-      const softFail =
-        qualityResult.code !== "dark" && qualityResult.code !== "overexposed";
-      const allowFrontFallback =
-        activeTarget === "front" &&
-        softFail &&
-        nextRejectCount >= 2;
-      if (allowFrontFallback) {
-        qualityRejectCountsRef.current[activeTarget] = 0;
-      } else {
-      setIdDetectError(
-        qualityResult.message || "Capture is not readable. Please retake your photo."
-      );
-      lastAutoCaptureAtRef.current = Date.now();
-      return;
-      }
-    }
-    qualityRejectCountsRef.current[activeTarget] = 0;
-    setIdDetectError(null);
-    const targetName =
-      activeTarget === "back"
-        ? "idBack.jpg"
-        : activeTarget === "dob1"
-        ? "idDob1.jpg"
-        : "idFront.jpg";
-    const file = new File([blob], targetName, { type: "image/jpeg" });
-    if (activeTarget === "back") onBackChange(file);
-    else if (activeTarget === "dob1") onDobFront1Change(file);
-    else onFrontChange(file);
-    setActiveTarget(null);
   }, [
     activeTarget,
     ensureOpenCv,
     onBackChange,
-    onDobFront1Change,
     onFrontChange,
     analyzeCaptureQuality,
     tryPerspectiveCapture,
   ]);
+
+  const triggerMobileTapCapture = useCallback(() => {
+    if (!active || !cameraReady || captureBusy || !activeTarget) return;
+    if (activeTarget !== "front" && activeTarget !== "back") return;
+    lastAutoCaptureAtRef.current = Date.now();
+    triggerCaptureFlash();
+    void captureFrame();
+  }, [active, activeTarget, cameraReady, captureBusy, captureFrame, triggerCaptureFlash]);
+
+  const handleOverlayPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (event.pointerType !== "touch") return;
+      if (Date.now() - lastTouchActionRef.current < 500) return;
+      if (isTapCaptureBlockedTarget(event.target)) return;
+      event.preventDefault();
+      lastTouchActionRef.current = Date.now();
+      triggerMobileTapCapture();
+    },
+    [triggerMobileTapCapture]
+  );
+
+  const handleOverlayTouchStart = useCallback(
+    (event: ReactTouchEvent<HTMLDivElement>) => {
+      if (Date.now() - lastTouchActionRef.current < 500) return;
+      if (isTapCaptureBlockedTarget(event.target)) return;
+      event.preventDefault();
+      lastTouchActionRef.current = Date.now();
+      triggerMobileTapCapture();
+    },
+    [triggerMobileTapCapture]
+  );
 
   const startCountdown = useCallback(() => {
     if (activeTarget !== "front" && activeTarget !== "back") return;
@@ -915,6 +978,13 @@ export default function IdCaptureModule({
     void startStream();
     return () => stopStream();
   }, [active, startStream, stopStream]);
+
+  useEffect(() => {
+    if (requiresBackCapture) return;
+    if (activeTarget === "back") {
+      setActiveTarget(null);
+    }
+  }, [requiresBackCapture, activeTarget]);
 
   useEffect(() => {
     if (!active) return;
@@ -967,16 +1037,15 @@ export default function IdCaptureModule({
 
   useEffect(() => {
     if (!active) {
-      setAutoCaptureReady(false);
       setIdDetectError(null);
       if (countdownTargetRef.current) {
         cancelCountdown();
       }
+      setCaptureBusy(false);
       return;
     }
     let raf = 0;
     let cancelled = false;
-    let lastReady = false;
     let stableOkFrames = 0;
     let stableLossAt = 0;
     let lastDetectAt = 0;
@@ -1296,16 +1365,6 @@ export default function IdCaptureModule({
             octx.textBaseline = "bottom";
             octx.fillText("Align barcode inside box", boxX + boxW / 2, boxY - 8);
             octx.restore();
-          } else if (activeTarget === "dob1") {
-            const boxW = ow * 0.62;
-            const boxH = oh * 0.12;
-            const boxX = (ow - boxW) / 2;
-            const boxY = oh * 0.48;
-            octx.save();
-            octx.setLineDash([10, 8]);
-            octx.strokeRect(boxX, boxY, boxW, boxH);
-            octx.setLineDash([]);
-            octx.restore();
           } else {
             const guideX = ow * 0.1;
             const guideY = oh * 0.2;
@@ -1331,16 +1390,6 @@ export default function IdCaptureModule({
             drawCorner(guideX + guideW, guideY + guideH, -1, -1);
           }
         }
-      }
-
-      if (!detectionEnabled) {
-        if (lastReady) {
-          lastReady = false;
-          setAutoCaptureReady(false);
-        }
-      } else if (stableEnough !== lastReady) {
-        lastReady = stableEnough;
-        setAutoCaptureReady(stableEnough);
       }
 
       if (detectionEnabled) {
@@ -1422,70 +1471,44 @@ export default function IdCaptureModule({
           </div>
         </div>
 
-        <div className="capture-card">
-          <div>
-            <strong>ID Back (Barcode)</strong>
-            <p>Capture the barcode side for backup verification.</p>
-          </div>
-          {backPreviewUrl ? (
-            <img className="capture-preview" src={backPreviewUrl} alt="ID back" />
-          ) : (
-            <div className="capture-placeholder">No photo yet</div>
-          )}
-          <div className="capture-actions">
-            <button
-              className="btn ghost"
-              type="button"
-              onClick={() => {
-                openCapture("back");
-              }}
-            >
-              {idBack ? "Retake" : "Take photo"}
-            </button>
-            {idBack && (
-              <button className="btn ghost" type="button" onClick={() => onBackChange(null)}>
-                Clear
-              </button>
+        {requiresBackCapture && (
+          <div className="capture-card">
+            <div>
+              <strong>ID Back (Barcode)</strong>
+              <p>Capture the barcode side for backup verification.</p>
+            </div>
+            {backPreviewUrl ? (
+              <img className="capture-preview" src={backPreviewUrl} alt="ID back" />
+            ) : (
+              <div className="capture-placeholder">No photo yet</div>
             )}
-          </div>
-        </div>
-
-        <div className="capture-card">
-          <div>
-            <strong>DOB Close-up 1</strong>
-            <p>Zoom into the DOB line for OCR.</p>
-          </div>
-          {dobPreviewUrl1 ? (
-            <img className="capture-preview" src={dobPreviewUrl1} alt="DOB close-up 1" />
-          ) : (
-            <div className="capture-placeholder">No photo yet</div>
-          )}
-          <div className="capture-actions">
-            <button
-              className="btn ghost"
-              type="button"
-              onClick={() => {
-                openCapture("dob1");
-              }}
-            >
-              {dobFront1 ? "Retake" : "Take photo"}
-            </button>
-            {dobFront1 && (
+            <div className="capture-actions">
               <button
                 className="btn ghost"
                 type="button"
-                onClick={() => onDobFront1Change(null)}
+                onClick={() => {
+                  openCapture("back");
+                }}
               >
-                Clear
+                {idBack ? "Retake" : "Take photo"}
               </button>
-            )}
+              {idBack && (
+                <button className="btn ghost" type="button" onClick={() => onBackChange(null)}>
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {active && (
         <div className="camera-overlay fullscreen id-capture-overlay" role="dialog" aria-modal="true">
-          <div className="camera-panel camera-modal">
+          <div
+            className="camera-panel camera-modal"
+            onPointerDown={handleOverlayPointerDown}
+            onTouchStart={handleOverlayTouchStart}
+          >
             {captureFlash && <div className="capture-flash" aria-hidden="true" />}
             {(() => {
               const prompt = getPromptContent();
@@ -1511,11 +1534,6 @@ export default function IdCaptureModule({
               {activeTarget === "back" && (
                 <div className="id-guide id-guide-barcode" aria-hidden="true">
                   <span>Align barcode inside box</span>
-                </div>
-              )}
-              {activeTarget === "dob1" && (
-                <div className="id-guide id-guide-dob" aria-hidden="true">
-                  <span>Align DOB line</span>
                 </div>
               )}
               {countdown !== null && countdownTarget !== null && (
@@ -1554,6 +1572,7 @@ export default function IdCaptureModule({
             )}
             {cameraError && <p className="error">{cameraError}</p>}
             {idDetectError && <p className="error">{idDetectError}</p>}
+            {captureBusy && <p className="sub">Processing capture...</p>}
             <div className="camera-actions floating id-action-bar">
               <button
                 className="icon-button icon-switch"
@@ -1566,6 +1585,7 @@ export default function IdCaptureModule({
               <button
                 className="icon-button icon-capture"
                 type="button"
+                disabled={captureBusy}
                 {...withTouchAction(() => captureFrame())}
               >
                 <span className="icon">◎</span>

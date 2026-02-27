@@ -103,6 +103,21 @@ type UserActionEntry = {
   recordId: number | string;
 };
 
+type FriendRequestItem = {
+  id: string | number;
+  idNumber?: number;
+  docId?: string;
+  requesterId?: number;
+  requesterName: string;
+  requesterHandle?: string;
+  requesterAvatarUrl?: string;
+  targetId?: number;
+  targetName: string;
+  targetHandle?: string;
+  targetAvatarUrl?: string;
+  createdAt?: string;
+};
+
 const extractFirstUrl = (text: string) => {
   const match = String(text || "").match(/(https?:\/\/[^\s]+|www\.[^\s]+)/i);
   if (!match) return "";
@@ -270,6 +285,13 @@ export default function Friends() {
   const [activePost, setActivePost] = useState<FriendPost | null>(null);
   const [copyToast, setCopyToast] = useState<string | null>(null);
   const [friendPage, setFriendPage] = useState(1);
+  const [incomingRequests, setIncomingRequests] = useState<FriendRequestItem[]>([]);
+  const [outgoingRequests, setOutgoingRequests] = useState<FriendRequestItem[]>([]);
+  const [requestsLoading, setRequestsLoading] = useState(false);
+  const [requestsError, setRequestsError] = useState<string | null>(null);
+  const [requestNotice, setRequestNotice] = useState<string | null>(null);
+  const [requestActionBusy, setRequestActionBusy] = useState<Record<string, boolean>>({});
+  const [refreshToken, setRefreshToken] = useState(0);
 
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
   const getEntity = (entry: any) => entry?.data ?? entry ?? null;
@@ -285,6 +307,28 @@ export default function Friends() {
   };
   const getEntryId = (entry: any, attrs: any) =>
     entry?.id ?? attrs?.documentId ?? entry?.documentId;
+  const getUserDisplayName = (entry: any) => {
+    const attrs = getEntityAttrs(entry);
+    const firstName = String(attrs?.firstName || attrs?.firstname || "").trim();
+    const lastName = String(attrs?.lastName || attrs?.lastname || "").trim();
+    const fullName = `${firstName} ${lastName}`.trim();
+    if (fullName) return fullName;
+    const handle = String(attrs?.handle || "").trim();
+    if (handle) return handle;
+    const username = String(attrs?.username || "").trim();
+    if (username) return username;
+    const email = String(attrs?.email || "").trim();
+    if (email) return email.split("@")[0];
+    return "User";
+  };
+  const getUserHandle = (entry: any) => {
+    const attrs = getEntityAttrs(entry);
+    const handle = String(attrs?.handle || "").trim();
+    if (handle) return handle;
+    const username = String(attrs?.username || "").trim();
+    if (username) return username;
+    return "";
+  };
   const normalizeFriendMedia = (entry: any): FriendMediaItem => {
     const record = getEntity(entry);
     const attrs = record?.attributes ?? record ?? {};
@@ -415,12 +459,18 @@ export default function Friends() {
   useEffect(() => {
     const load = async () => {
       if (!user) {
+        setIncomingRequests([]);
+        setOutgoingRequests([]);
+        setRequestsLoading(false);
+        setRequestsError(null);
         setLoading(false);
         return;
       }
       setLoading(true);
+      setRequestsLoading(true);
       setError(null);
       setActionError(null);
+      setRequestsError(null);
       setActionNotice(null);
       try {
         const [blockResult, muteResult] = await Promise.allSettled([
@@ -444,7 +494,8 @@ export default function Friends() {
         const friendsRes = await api.get(
           `/friends?filters[$or][0][requester][id][$eq]=${user.id}&filters[$or][1][target][id][$eq]=${user.id}&populate=requester&populate=target`
         );
-        const mappedFriends: FriendRelation[] = (friendsRes.data?.data ?? []).map((f: any) => {
+        const friendRows = friendsRes.data?.data ?? [];
+        const mappedFriends: FriendRelation[] = friendRows.map((f: any) => {
           const attrs = normalize(f);
           return {
             id: f.id ?? attrs.documentId,
@@ -457,6 +508,39 @@ export default function Friends() {
             targetFavorite: Boolean(attrs.targetFavorite),
           };
         });
+        const mappedRequests: FriendRequestItem[] = friendRows
+          .map((f: any) => {
+            const attrs = normalize(f);
+            const status = String(attrs.status || "pending");
+            if (status !== "pending") return null;
+            const requesterId = getEntityId(attrs.requester);
+            const targetId = getEntityId(attrs.target);
+            const rowId = f.id ?? attrs.documentId;
+            if (!rowId) return null;
+            const requesterAttrs = getEntityAttrs(attrs.requester);
+            const targetAttrs = getEntityAttrs(attrs.target);
+            return {
+              id: rowId,
+              idNumber: typeof f.id === "number" ? f.id : undefined,
+              docId: typeof attrs.documentId === "string" ? attrs.documentId : undefined,
+              requesterId,
+              requesterName: getUserDisplayName(attrs.requester),
+              requesterHandle: getUserHandle(attrs.requester),
+              requesterAvatarUrl: pickMediaUrl(requesterAttrs?.avatar, { kind: "avatar" }),
+              targetId,
+              targetName: getUserDisplayName(attrs.target),
+              targetHandle: getUserHandle(attrs.target),
+              targetAvatarUrl: pickMediaUrl(targetAttrs?.avatar, { kind: "avatar" }),
+              createdAt: String(attrs.createdAt || ""),
+            } satisfies FriendRequestItem;
+          })
+          .filter(Boolean) as FriendRequestItem[];
+        setIncomingRequests(
+          mappedRequests.filter((request) => request.targetId === user.id)
+        );
+        setOutgoingRequests(
+          mappedRequests.filter((request) => request.requesterId === user.id)
+        );
 
         const acceptedIds = new Set<number>();
         const relationByUserId = new Map<number, FriendRelation>();
@@ -605,10 +689,11 @@ export default function Friends() {
         setError("Failed to load friends.");
       } finally {
         setLoading(false);
+        setRequestsLoading(false);
       }
     };
     load();
-  }, [fetchLinkPreview, user]);
+  }, [fetchLinkPreview, refreshToken, user]);
 
   const presenceIds = useMemo(
     () =>
@@ -955,6 +1040,122 @@ export default function Friends() {
     }
   };
 
+  const friendRequestActionKey = (prefix: string, request: FriendRequestItem) =>
+    `${prefix}-${String(request.id)}`;
+
+  const getFriendRequestUpdateTargets = (request: FriendRequestItem) => {
+    const attempts: string[] = [];
+    if (request.idNumber) attempts.push(`/friends/${request.idNumber}`);
+    if (request.docId) attempts.push(`/friends/${request.docId}?locale=en`);
+    if (!attempts.length && request.id) attempts.push(`/friends/${request.id}`);
+    return attempts;
+  };
+
+  const clearFriendRequestBusy = (key: string) => {
+    setRequestActionBusy((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+
+  const handleAcceptRequest = async (request: FriendRequestItem) => {
+    if (!user) return;
+    const key = friendRequestActionKey("accept", request);
+    if (requestActionBusy[key]) return;
+    setRequestActionBusy((prev) => ({ ...prev, [key]: true }));
+    setRequestsError(null);
+    setRequestNotice(null);
+    try {
+      const payload = { data: { status: "accepted", locale: "en" } };
+      const attempts = getFriendRequestUpdateTargets(request);
+      if (!attempts.length) throw new Error("Missing request target");
+      let updated = false;
+      for (const path of attempts) {
+        try {
+          await api.put(path, payload);
+          updated = true;
+          break;
+        } catch (err: any) {
+          if (err?.response?.status !== 404) throw err;
+        }
+      }
+      if (!updated) throw new Error("Update failed");
+      if (request.requesterId) {
+        try {
+          await ensureProfileKeyShares(user.id, [request.requesterId]);
+        } catch {
+          // ignore key-share errors here
+        }
+      }
+      setRequestNotice(`${request.requesterName} is now your friend.`);
+      setRefreshToken((prev) => prev + 1);
+    } catch {
+      setRequestsError("Unable to accept friend request.");
+    } finally {
+      clearFriendRequestBusy(key);
+    }
+  };
+
+  const handleRemoveRequest = async (
+    request: FriendRequestItem,
+    direction: "incoming" | "outgoing"
+  ) => {
+    const key = friendRequestActionKey(`remove-${direction}`, request);
+    if (requestActionBusy[key]) return;
+    setRequestActionBusy((prev) => ({ ...prev, [key]: true }));
+    setRequestsError(null);
+    setRequestNotice(null);
+    try {
+      const attempts = getFriendRequestUpdateTargets(request);
+      if (!attempts.length) throw new Error("Missing request target");
+      let removed = false;
+      for (const path of attempts) {
+        try {
+          await api.delete(path);
+          removed = true;
+          break;
+        } catch (err: any) {
+          if (err?.response?.status !== 404) throw err;
+        }
+      }
+      if (!removed) throw new Error("Delete failed");
+      setRequestNotice(
+        direction === "incoming" ? "Friend request declined." : "Friend request canceled."
+      );
+      setRefreshToken((prev) => prev + 1);
+    } catch {
+      setRequestsError(
+        direction === "incoming"
+          ? "Unable to decline friend request."
+          : "Unable to cancel friend request."
+      );
+    } finally {
+      clearFriendRequestBusy(key);
+    }
+  };
+
+  const renderRequestAvatar = (name: string, avatarUrl?: string) => {
+    if (avatarUrl) {
+      return (
+        <img
+          src={avatarUrl}
+          alt={name}
+          className="friend-request-avatar"
+          loading="lazy"
+          decoding="async"
+        />
+      );
+    }
+    const initial = (name || "U").trim().charAt(0).toUpperCase() || "U";
+    return (
+      <div className="friend-request-avatar fallback" aria-hidden="true">
+        {initial}
+      </div>
+    );
+  };
+
   const handleShowProfile = () => {
     if (!selectedFriend?.userId) return;
     navigate(`/friends/${selectedFriend.userId}`);
@@ -1203,6 +1404,109 @@ export default function Friends() {
         <TopbarSearch value={query} onChange={setQuery} />
 
         {error && <p className="status status-error">{error}</p>}
+        <section className="panel friend-requests-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Connections</p>
+              <h3>Friend Requests</h3>
+            </div>
+          </div>
+          {requestsError && <p className="status status-error">{requestsError}</p>}
+          {requestNotice && <p className="status">{requestNotice}</p>}
+          {requestsLoading ? (
+            <p className="status">Loading friend requests...</p>
+          ) : incomingRequests.length === 0 && outgoingRequests.length === 0 ? (
+            <p className="status">No pending friend requests.</p>
+          ) : (
+            <div className="friend-requests-sections">
+              {incomingRequests.length > 0 && (
+                <section className="friend-requests-group">
+                  <h4>Incoming</h4>
+                  <ul className="friend-requests-list">
+                    {incomingRequests.map((request) => {
+                      const acceptKey = friendRequestActionKey("accept", request);
+                      const removeKey = friendRequestActionKey("remove-incoming", request);
+                      const accepting = Boolean(requestActionBusy[acceptKey]);
+                      const removing = Boolean(requestActionBusy[removeKey]);
+                      const busy = accepting || removing;
+                      return (
+                        <li key={`incoming-${String(request.id)}`} className="friend-request-item">
+                          <div className="friend-request-main">
+                            {renderRequestAvatar(
+                              request.requesterName,
+                              request.requesterAvatarUrl
+                            )}
+                            <div className="friend-request-meta">
+                              <strong>{request.requesterName}</strong>
+                              {request.requesterHandle ? (
+                                <span>@{request.requesterHandle}</span>
+                              ) : null}
+                            </div>
+                          </div>
+                          <div className="friend-request-actions">
+                            <button
+                              type="button"
+                              className="btn primary tiny"
+                              onClick={() => void handleAcceptRequest(request)}
+                              disabled={busy}
+                            >
+                              {accepting ? "Accepting..." : "Accept"}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn ghost tiny"
+                              onClick={() => void handleRemoveRequest(request, "incoming")}
+                              disabled={busy}
+                            >
+                              {removing ? "Declining..." : "Decline"}
+                            </button>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              )}
+              {outgoingRequests.length > 0 && (
+                <section className="friend-requests-group">
+                  <h4>Outgoing</h4>
+                  <ul className="friend-requests-list">
+                    {outgoingRequests.map((request) => {
+                      const removeKey = friendRequestActionKey("remove-outgoing", request);
+                      const removing = Boolean(requestActionBusy[removeKey]);
+                      return (
+                        <li key={`outgoing-${String(request.id)}`} className="friend-request-item">
+                          <div className="friend-request-main">
+                            {renderRequestAvatar(
+                              request.targetName,
+                              request.targetAvatarUrl
+                            )}
+                            <div className="friend-request-meta">
+                              <strong>{request.targetName}</strong>
+                              {request.targetHandle ? (
+                                <span>@{request.targetHandle}</span>
+                              ) : null}
+                            </div>
+                          </div>
+                          <div className="friend-request-actions">
+                            <button
+                              type="button"
+                              className="btn ghost tiny"
+                              onClick={() => void handleRemoveRequest(request, "outgoing")}
+                              disabled={removing}
+                            >
+                              {removing ? "Canceling..." : "Cancel"}
+                            </button>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              )}
+            </div>
+          )}
+        </section>
 
         <div className="friends-spotlight-grid">
           <section className="panel">

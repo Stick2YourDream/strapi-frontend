@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
 import api from "../api/strapi";
+import PopupModal from "../components/PopupModal";
 import Sidebar from "../components/Sidebar";
 import { useAuth } from "../context/AuthContext";
 import "../css/dashboard.css";
@@ -33,9 +34,14 @@ type ModerationState = {
 type ModerationUser = {
   id: number;
   displayName: string;
+  username?: string;
   email?: string;
   appRole?: string;
   blocked?: boolean;
+  deactivationReason?: string | null;
+  ageVerified?: boolean;
+  ageVerificationRequiredAt?: string | null;
+  ageVerificationDueAt?: string | null;
   profile?: {
     firstName?: string;
     lastName?: string;
@@ -45,6 +51,9 @@ type ModerationUser = {
 };
 
 type ReportFilter = "all" | "open" | "reviewed" | "dismissed";
+type PageToken =
+  | { kind: "page"; value: number }
+  | { kind: "ellipsis"; key: string };
 
 const STOREFRONT_DEMO_ENABLED_KEY = "storefront:demoListingsEnabled";
 const STOREFRONT_DEMO_COUNT_KEY = "storefront:demoListingsCount";
@@ -281,14 +290,96 @@ const formatDateTime = (value?: string | null) => {
   return date.toLocaleString();
 };
 
-const statusLabel = (moderation?: ModerationState | null) => {
-  if (!moderation) return "Active";
-  if (Number(moderation.strikeLevel) >= 3) return "Banned";
-  if (moderation.blockedUntil) {
-    const formatted = formatDateTime(moderation.blockedUntil);
+const AGE_LOCK_REASON = "age_verification_required";
+const MODERATION_BAN_REASON = "moderation_ban";
+const MODERATION_BLOCK_REASON = "moderation_block";
+
+const deactivationReasonLower = (entry?: ModerationUser | null) =>
+  String(entry?.deactivationReason || "").toLowerCase();
+
+const isAgeLocked = (entry?: ModerationUser | null) =>
+  Boolean(
+    entry?.blocked && deactivationReasonLower(entry) === AGE_LOCK_REASON
+  );
+
+const isModerationBanned = (entry?: ModerationUser | null) =>
+  Boolean(
+    Number(entry?.moderation?.strikeLevel || 0) >= 3 ||
+      (entry?.blocked && deactivationReasonLower(entry) === MODERATION_BAN_REASON)
+  );
+
+const isModerationBlocked = (entry?: ModerationUser | null) => {
+  if (!entry || isAgeLocked(entry) || isModerationBanned(entry)) return false;
+  return Boolean(
+    entry?.moderation?.blockedUntil ||
+      (entry?.blocked && deactivationReasonLower(entry) === MODERATION_BLOCK_REASON)
+  );
+};
+
+const statusLabel = (entry?: ModerationUser | null) => {
+  if (isAgeLocked(entry)) return "Locked (Age verification overdue)";
+  if (isModerationBanned(entry)) return "Banned";
+  const blockedUntil = entry?.moderation?.blockedUntil;
+  if (isModerationBlocked(entry)) {
+    const formatted = formatDateTime(blockedUntil);
     return formatted ? `Blocked until ${formatted}` : "Blocked";
   }
   return "Active";
+};
+
+const usernameLabel = (entry: ModerationUser) => {
+  const username = String(entry.username || "").trim();
+  if (username) return username;
+  const handle = String(entry.profile?.handle || "").trim().replace(/^@+/, "");
+  if (handle) return handle;
+  const displayName = String(entry.displayName || "").trim();
+  if (displayName) return displayName;
+  return `user-${entry.id}`;
+};
+
+const buildPageTokens = (current: number, total: number): PageToken[] => {
+  if (total <= 0) return [];
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, idx) => ({
+      kind: "page" as const,
+      value: idx + 1,
+    }));
+  }
+
+  const pages = new Set<number>([1, total, current, current - 1, current + 1]);
+
+  if (current <= 3) {
+    pages.add(2);
+    pages.add(3);
+    pages.add(4);
+  }
+
+  if (current >= total - 2) {
+    pages.add(total - 1);
+    pages.add(total - 2);
+    pages.add(total - 3);
+  }
+
+  const sortedPages = Array.from(pages)
+    .filter((value) => value >= 1 && value <= total)
+    .sort((a, b) => a - b);
+
+  const tokens: PageToken[] = [];
+  let previous: number | null = null;
+
+  for (const value of sortedPages) {
+    if (previous !== null && value - previous > 1) {
+      if (value - previous === 2) {
+        tokens.push({ kind: "page", value: previous + 1 });
+      } else {
+        tokens.push({ kind: "ellipsis", key: `gap-${previous}-${value}` });
+      }
+    }
+    tokens.push({ kind: "page", value });
+    previous = value;
+  }
+
+  return tokens;
 };
 
 export default function Moderation() {
@@ -306,10 +397,12 @@ export default function Moderation() {
   const [userLoading, setUserLoading] = useState(false);
   const [userError, setUserError] = useState<string | null>(null);
   const [userAction, setUserAction] = useState<Record<number, boolean>>({});
+  const [userActionNotice, setUserActionNotice] = useState<Record<number, string>>({});
   const [page, setPage] = useState(1);
   const [pageCount, setPageCount] = useState(0);
   const [totalUsers, setTotalUsers] = useState(0);
-  const pageSize = 10;
+  const [selectedUser, setSelectedUser] = useState<ModerationUser | null>(null);
+  const pageSize = 5;
   const [demoBusy, setDemoBusy] = useState(false);
   const [demoStatus, setDemoStatus] = useState<string | null>(null);
   const [storefrontDemoEnabled, setStorefrontDemoEnabled] = useState(
@@ -455,6 +548,8 @@ export default function Moderation() {
     return reports.filter((report) => report.status === reportFilter);
   }, [reportFilter, reports]);
 
+  const userPageTokens = useMemo(() => buildPageTokens(page, pageCount), [page, pageCount]);
+
   const updateReportStatus = async (reportId: number, status: ReportItem["status"]) => {
     if (reportUpdating[reportId]) return;
     setReportUpdating((prev) => ({ ...prev, [reportId]: true }));
@@ -486,24 +581,82 @@ export default function Moderation() {
   const handleRestrictUser = async (targetId: number, action: string) => {
     if (userAction[targetId]) return;
     setUserAction((prev) => ({ ...prev, [targetId]: true }));
+    setUserError(null);
     try {
       const res = await api.post(`/moderation/users/${targetId}/restrict`, { action });
       const updated = res.data?.data;
+      const nextModeration = {
+        warningCount: updated.warningCount,
+        strikeLevel: updated.strikeLevel,
+        blockedUntil: updated.blockedUntil,
+        lastWarningAt: updated.lastWarningAt,
+      };
       setUserResults((prev) =>
         prev.map((entry) =>
           entry.id === targetId
             ? {
                 ...entry,
-                moderation: {
-                  warningCount: updated.warningCount,
-                  strikeLevel: updated.strikeLevel,
-                  blockedUntil: updated.blockedUntil,
-                  lastWarningAt: updated.lastWarningAt,
-                },
+                moderation: nextModeration,
+                blocked:
+                  typeof updated?.blocked === "boolean" ? updated.blocked : entry.blocked,
+                deactivationReason:
+                  updated?.deactivationReason !== undefined
+                    ? updated.deactivationReason
+                    : entry.deactivationReason,
+                ageVerified:
+                  typeof updated?.ageVerified === "boolean"
+                    ? updated.ageVerified
+                    : entry.ageVerified,
+                ageVerificationRequiredAt:
+                  updated?.ageVerificationRequiredAt ?? entry.ageVerificationRequiredAt ?? null,
+                ageVerificationDueAt:
+                  updated?.ageVerificationDueAt ?? entry.ageVerificationDueAt ?? null,
               }
             : entry
         )
       );
+      setSelectedUser((prev) =>
+        prev && prev.id === targetId
+          ? {
+              ...prev,
+              moderation: nextModeration,
+              blocked:
+                typeof updated?.blocked === "boolean" ? updated.blocked : prev.blocked,
+              deactivationReason:
+                updated?.deactivationReason !== undefined
+                  ? updated.deactivationReason
+                  : prev.deactivationReason,
+              ageVerified:
+                typeof updated?.ageVerified === "boolean"
+                  ? updated.ageVerified
+                  : prev.ageVerified,
+              ageVerificationRequiredAt:
+                updated?.ageVerificationRequiredAt ?? prev.ageVerificationRequiredAt ?? null,
+              ageVerificationDueAt:
+                updated?.ageVerificationDueAt ?? prev.ageVerificationDueAt ?? null,
+            }
+          : prev
+      );
+      const status = String(updated?.status || "").toLowerCase();
+      const notice =
+        status === "age-unlocked"
+          ? `Age lock removed. User has another ${
+              Number(updated?.ageVerificationGraceDays || 30) || 30
+            } days to verify.`
+          : status === "banned"
+          ? "User has been banned."
+          : status === "blocked"
+          ? `User has been blocked${updated?.blockedUntil ? ` until ${formatDateTime(updated.blockedUntil)}.` : "."}`
+          : "User is now active.";
+      setUserActionNotice((prev) => ({ ...prev, [targetId]: notice }));
+      window.setTimeout(() => {
+        setUserActionNotice((prev) => {
+          if (!prev[targetId]) return prev;
+          const next = { ...prev };
+          delete next[targetId];
+          return next;
+        });
+      }, 3200);
     } catch {
       setUserError("Unable to update restriction.");
     } finally {
@@ -865,20 +1018,43 @@ export default function Moderation() {
                     )} of ${totalUsers}`
                   : "Showing 0 users"}
               </span>
-              <div className="moderation-action-row">
+              <div className="moderation-user-pagination-controls">
                 <button
-                  className="btn ghost"
+                  className="btn ghost moderation-page-nav"
                   type="button"
                   disabled={page <= 1 || userLoading}
                   onClick={() => setPage((prev) => Math.max(1, prev - 1))}
                 >
                   Previous
                 </button>
-                <span className="moderation-report-meta">
-                  Page {pageCount ? page : 0} of {pageCount || 0}
-                </span>
+                <div className="moderation-page-list" aria-label="User pages">
+                  {userPageTokens.map((token) =>
+                    token.kind === "ellipsis" ? (
+                      <span
+                        key={token.key}
+                        className="moderation-page-ellipsis"
+                        aria-hidden="true"
+                      >
+                        ...
+                      </span>
+                    ) : (
+                      <button
+                        key={`page-${token.value}`}
+                        className={`moderation-page-btn${
+                          token.value === page ? " is-active" : ""
+                        }`}
+                        type="button"
+                        disabled={userLoading}
+                        onClick={() => setPage(token.value)}
+                        aria-current={token.value === page ? "page" : undefined}
+                      >
+                        {token.value}
+                      </button>
+                    )
+                  )}
+                </div>
                 <button
-                  className="btn ghost"
+                  className="btn ghost moderation-page-nav"
                   type="button"
                   disabled={pageCount === 0 || page >= pageCount || userLoading}
                   onClick={() => setPage((prev) => Math.min(pageCount || 1, prev + 1))}
@@ -891,19 +1067,19 @@ export default function Moderation() {
               {userResults.map((entry) => (
                 <div key={entry.id} className="moderation-user-card">
                   <div>
-                    <strong>{entry.displayName}</strong>
-                    <div className="moderation-report-meta">
-                      {entry.email || entry.profile?.handle || "No email on file"}
-                    </div>
-                    <div className="moderation-report-meta">
-                      Role: {entry.appRole || "user"} - {statusLabel(entry.moderation)}
-                    </div>
+                    <button
+                      type="button"
+                      className="moderation-user-trigger"
+                      onClick={() => setSelectedUser(entry)}
+                    >
+                      {usernameLabel(entry)}
+                    </button>
                   </div>
                   <div className="moderation-action-row">
                     <button
                       className="btn ghost"
                       type="button"
-                      disabled={userAction[entry.id]}
+                      disabled={userAction[entry.id] || isModerationBanned(entry)}
                       onClick={() => handleRestrictUser(entry.id, "block-7")}
                     >
                       Block 7 days
@@ -911,7 +1087,7 @@ export default function Moderation() {
                     <button
                       className="btn ghost"
                       type="button"
-                      disabled={userAction[entry.id]}
+                      disabled={userAction[entry.id] || isModerationBanned(entry)}
                       onClick={() => handleRestrictUser(entry.id, "block-30")}
                     >
                       Block 30 days
@@ -920,19 +1096,35 @@ export default function Moderation() {
                       className="btn ghost"
                       type="button"
                       disabled={userAction[entry.id]}
-                      onClick={() => handleRestrictUser(entry.id, "ban")}
+                      onClick={() => {
+                        const isBanned = isModerationBanned(entry);
+                        const isBlocked = isModerationBlocked(entry);
+                        const nextAction = isBanned ? "unban" : isBlocked ? "unblock" : "ban";
+                        handleRestrictUser(entry.id, nextAction);
+                      }}
                     >
-                      Ban
+                      {isModerationBanned(entry)
+                        ? "Unban"
+                        : isModerationBlocked(entry)
+                        ? "Unblock"
+                        : "Ban"}
                     </button>
-                    <button
-                      className="btn ghost"
-                      type="button"
-                      disabled={userAction[entry.id]}
-                      onClick={() => handleRestrictUser(entry.id, "unblock")}
-                    >
-                      Unblock
-                    </button>
+                    {isAgeLocked(entry) && (
+                      <button
+                        className="btn ghost"
+                        type="button"
+                        disabled={userAction[entry.id]}
+                        onClick={() => handleRestrictUser(entry.id, "age-unlock")}
+                      >
+                        Unlock age lock
+                      </button>
+                    )}
                   </div>
+                  {userActionNotice[entry.id] && (
+                    <div className="moderation-user-action-notice">
+                      {userActionNotice[entry.id]}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -1134,6 +1326,80 @@ export default function Moderation() {
           </section>
         </div>
       </div>
+      <PopupModal
+        open={Boolean(selectedUser)}
+        title={selectedUser ? usernameLabel(selectedUser) : "User details"}
+        onClose={() => setSelectedUser(null)}
+        className="moderation-user-modal"
+      >
+        {selectedUser && (
+          <>
+            <div className="moderation-user-modal-grid">
+              <div className="moderation-user-detail">
+                <span className="moderation-user-detail-label">Username</span>
+                <strong>{usernameLabel(selectedUser)}</strong>
+              </div>
+              <div className="moderation-user-detail">
+                <span className="moderation-user-detail-label">Display name</span>
+                <strong>{selectedUser.displayName || "-"}</strong>
+              </div>
+              <div className="moderation-user-detail">
+                <span className="moderation-user-detail-label">Email</span>
+                <strong>{selectedUser.email || "-"}</strong>
+              </div>
+              <div className="moderation-user-detail">
+                <span className="moderation-user-detail-label">Handle</span>
+                <strong>{selectedUser.profile?.handle || "-"}</strong>
+              </div>
+              <div className="moderation-user-detail">
+                <span className="moderation-user-detail-label">Role</span>
+                <strong>{selectedUser.appRole || "user"}</strong>
+              </div>
+              <div className="moderation-user-detail">
+                <span className="moderation-user-detail-label">Status</span>
+                <strong>{statusLabel(selectedUser)}</strong>
+              </div>
+              <div className="moderation-user-detail">
+                <span className="moderation-user-detail-label">Warnings</span>
+                <strong>{Number(selectedUser.moderation?.warningCount || 0)}</strong>
+              </div>
+              <div className="moderation-user-detail">
+                <span className="moderation-user-detail-label">Strike level</span>
+                <strong>{Number(selectedUser.moderation?.strikeLevel || 0)}</strong>
+              </div>
+              <div className="moderation-user-detail">
+                <span className="moderation-user-detail-label">Last warning</span>
+                <strong>{formatDateTime(selectedUser.moderation?.lastWarningAt) || "-"}</strong>
+              </div>
+              <div className="moderation-user-detail">
+                <span className="moderation-user-detail-label">Blocked until</span>
+                <strong>{formatDateTime(selectedUser.moderation?.blockedUntil) || "-"}</strong>
+              </div>
+              <div className="moderation-user-detail">
+                <span className="moderation-user-detail-label">Deactivation reason</span>
+                <strong>{selectedUser.deactivationReason || "-"}</strong>
+              </div>
+              <div className="moderation-user-detail">
+                <span className="moderation-user-detail-label">Age verification due</span>
+                <strong>{formatDateTime(selectedUser.ageVerificationDueAt) || "-"}</strong>
+              </div>
+              <div className="moderation-user-detail">
+                <span className="moderation-user-detail-label">User ID</span>
+                <strong>{selectedUser.id}</strong>
+              </div>
+            </div>
+            <div className="moderation-action-row">
+              <button
+                className="btn ghost"
+                type="button"
+                onClick={() => setSelectedUser(null)}
+              >
+                Close
+              </button>
+            </div>
+          </>
+        )}
+      </PopupModal>
     </div>
   );
 }

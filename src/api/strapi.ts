@@ -1,6 +1,7 @@
 // src/api/strapi.ts
 import axios, {
   type AxiosRequestHeaders,
+  type AxiosResponse,
   type InternalAxiosRequestConfig,
 } from "axios";
 
@@ -19,6 +20,30 @@ const resolveApiBase = () => {
 };
 const apiBaseRaw = resolveApiBase();
 const apiBaseNormalized = apiBaseRaw.replace(/\/+$/, "");
+const asNumberOr = (value: unknown, fallback: number) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+const API_TIMEOUT_MS = Math.max(5000, asNumberOr(import.meta.env.VITE_API_TIMEOUT_MS, 20000));
+const API_RETRY_MAX = Math.max(0, asNumberOr(import.meta.env.VITE_API_RETRY_MAX, 2));
+const API_RETRY_BASE_DELAY_MS = Math.max(
+  100,
+  asNumberOr(import.meta.env.VITE_API_RETRY_BASE_DELAY_MS, 350)
+);
+const API_CACHE_ENABLED = String(import.meta.env.VITE_API_CACHE_ENABLED ?? "true")
+  .trim()
+  .toLowerCase() !== "false";
+const API_CACHE_TTL_MS = Math.max(
+  1000,
+  asNumberOr(import.meta.env.VITE_API_CACHE_TTL_MS, 10000)
+);
+const API_CACHE_MAX_ENTRIES = Math.max(
+  20,
+  asNumberOr(import.meta.env.VITE_API_CACHE_MAX_ENTRIES, 250)
+);
+const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
+const RETRYABLE_ERROR_CODES = new Set(["ECONNABORTED", "ERR_NETWORK", "ETIMEDOUT"]);
+const READ_HEAVY_ENDPOINT_RE = /^(?:api\/)?(?:users-posts|posts|group-posts|profiles)(?:\/|$)/i;
 const publicAuthEndpoints = new Set([
   "auth/local",
   "auth/login",
@@ -131,8 +156,75 @@ const shouldAttachAuth = (config: InternalAxiosRequestConfig) => {
   return url.startsWith("/api") || url.startsWith("api/");
 };
 
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => globalThis.setTimeout(resolve, ms));
+
+const isIdempotentMethod = (method?: string) => {
+  const normalized = String(method || "get").trim().toUpperCase();
+  return normalized === "GET" || normalized === "HEAD" || normalized === "OPTIONS";
+};
+
+const getRetryDelayMs = (attempt: number) => {
+  const jitter = Math.floor(Math.random() * 120);
+  const exponential = API_RETRY_BASE_DELAY_MS * Math.pow(2, Math.max(0, attempt - 1));
+  return Math.min(3000, exponential + jitter);
+};
+
+type RetriableRequestConfig = InternalAxiosRequestConfig & {
+  __retryAttempt?: number;
+  __cacheKey?: string;
+  __cacheHit?: boolean;
+};
+
+type CachedEntry = {
+  expiresAt: number;
+  status: number;
+  statusText: string;
+  headers: Record<string, unknown>;
+  data: unknown;
+};
+
+const responseCache = new Map<string, CachedEntry>();
+
+const clearResponseCache = () => {
+  responseCache.clear();
+};
+
+const isReadHeavyEndpoint = (path: string, url: string) => {
+  const normalizedPath = String(path || "").replace(/^\/+/, "");
+  if (READ_HEAVY_ENDPOINT_RE.test(normalizedPath)) return true;
+  const loweredUrl = String(url || "").toLowerCase();
+  if (
+    loweredUrl.includes("search=") ||
+    loweredUrl.includes("?q=") ||
+    loweredUrl.includes("&q=")
+  ) {
+    return true;
+  }
+  return false;
+};
+
+const makeTokenScope = (token: string | null) =>
+  token ? `user:${token.slice(-16)}` : "anon";
+
+const pruneResponseCache = () => {
+  if (responseCache.size === 0) return;
+  const now = Date.now();
+  for (const [key, entry] of responseCache.entries()) {
+    if (entry.expiresAt <= now) {
+      responseCache.delete(key);
+    }
+  }
+  while (responseCache.size > API_CACHE_MAX_ENTRIES) {
+    const oldest = responseCache.keys().next();
+    if (oldest.done) break;
+    responseCache.delete(oldest.value);
+  }
+};
+
 export const setAuthToken = (token: string | null) => {
   cachedToken = normalizeToken(token);
+  clearResponseCache();
   if (cachedToken) {
     api.defaults.headers.common.Authorization = `Bearer ${cachedToken}`;
   } else {
@@ -142,6 +234,7 @@ export const setAuthToken = (token: string | null) => {
 
 const api = axios.create({
   baseURL: apiBaseRaw,
+  timeout: API_TIMEOUT_MS,
 });
 
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
@@ -173,6 +266,33 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
     logAuthDebug(config, false);
   }
 
+  const cacheConfig = config as RetriableRequestConfig;
+  cacheConfig.__cacheHit = false;
+  cacheConfig.__cacheKey = undefined;
+  if (API_CACHE_ENABLED && isIdempotentMethod(cacheConfig.method)) {
+    const requestPath = extractPath(cacheConfig);
+    const requestUri = api.getUri(cacheConfig);
+    if (isReadHeavyEndpoint(requestPath, requestUri)) {
+      pruneResponseCache();
+      const tokenScope = makeTokenScope(token);
+      const cacheKey = `${tokenScope}|${requestUri}`;
+      cacheConfig.__cacheKey = cacheKey;
+      const cached = responseCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        cacheConfig.__cacheHit = true;
+        cacheConfig.adapter = async () =>
+          ({
+            data: cached.data,
+            status: cached.status,
+            statusText: cached.statusText,
+            headers: cached.headers,
+            config: cacheConfig,
+            request: undefined,
+          }) as AxiosResponse;
+      }
+    }
+  }
+
   return config;
 });
 
@@ -191,6 +311,57 @@ axios.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   }
   return config;
 });
+
+api.interceptors.response.use(
+  (response) => {
+    const config = (response?.config || null) as RetriableRequestConfig | null;
+    if (!config) return response;
+
+    if (isIdempotentMethod(config.method)) {
+      if (API_CACHE_ENABLED && config.__cacheKey && !config.__cacheHit) {
+        responseCache.set(config.__cacheKey, {
+          expiresAt: Date.now() + API_CACHE_TTL_MS,
+          status: response.status,
+          statusText: response.statusText,
+          headers: (response.headers || {}) as Record<string, unknown>,
+          data: response.data,
+        });
+        pruneResponseCache();
+      }
+    } else {
+      clearResponseCache();
+    }
+
+    return response;
+  },
+  async (error) => {
+    const config = (error?.config || null) as RetriableRequestConfig | null;
+    if (!config || API_RETRY_MAX <= 0 || !isIdempotentMethod(config.method)) {
+      return Promise.reject(error);
+    }
+
+    const status = Number(error?.response?.status || 0);
+    const code = String(error?.code || "");
+    const retryable =
+      RETRYABLE_STATUS_CODES.has(status) ||
+      RETRYABLE_ERROR_CODES.has(code) ||
+      !error?.response;
+
+    if (!retryable) {
+      return Promise.reject(error);
+    }
+
+    const attempt = Number(config.__retryAttempt || 0) + 1;
+    if (attempt > API_RETRY_MAX) {
+      return Promise.reject(error);
+    }
+
+    config.__retryAttempt = attempt;
+    const delay = getRetryDelayMs(attempt);
+    await sleep(delay);
+    return api.request(config);
+  }
+);
 
 const initialToken = resolveToken();
 if (initialToken) {

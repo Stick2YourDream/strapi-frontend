@@ -1,45 +1,53 @@
 // src/routes/AppRoutes.tsx
-// import React from "react";
+import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import VerifyEmail from "../pages/verify-email";
-import ForgotPassword from "../pages/forgot-password";
-import ResetPassword from "../pages/reset-password";
-import Dashboard from "../pages/dashboard";
 import ProtectedRoute from "../components/ProtectedRoute";
-import Friends from "../pages/friends";
-import FriendProfile from "../pages/friend-profile";
-import Me from "../pages/me";
-import MyPosts from "../pages/my-posts";
-import MyGallery from "../pages/my-gallery";
-import Groups from "../pages/groups";
-import GroupDetail from "../pages/group";
-import Landing from "../pages/landing";
-import Terms from "../pages/terms";
-import Privacy from "../pages/privacy";
-import Guidelines from "../pages/guidelines";
-import Cookies from "../pages/cookies";
-import MarketplacePolicy from "../pages/marketplace-policy";
-import MarketplaceFeeDisclosure from "../pages/marketplace-fee-disclosure";
-import Safety from "../pages/safety";
-import Report from "../pages/report";
-import DeleteAccount from "../pages/delete-account";
-import DeleteData from "../pages/delete-data";
-import ShareTarget from "../pages/share";
-import ProtocolHandler from "../pages/protocol";
-import NewNote from "../pages/notes-new";
-import WhatMakesUsDifferent from "../pages/what-makes-us-different";
-import Moderation from "../pages/moderation";
-import News from "../pages/news";
-import Apps from "../pages/apps";
-import Downloads from "../pages/downloads";
-import Forums from "../pages/forums";
-import Storefront from "../pages/storefront";
-import StorefrontListing from "../pages/storefront-listing";
-import StorefrontSeller from "../pages/storefront-seller";
-import StorefrontPaymentMethods from "../pages/storefront-payment-methods";
-import AgeVerifyApp from "../modules/age-verify/AgeVerifyApp";
-import Support from "../pages/support";
+
+const VerifyEmail = lazy(() => import("../pages/verify-email"));
+const ForgotPassword = lazy(() => import("../pages/forgot-password"));
+const ResetPassword = lazy(() => import("../pages/reset-password"));
+const Dashboard = lazy(() => import("../pages/dashboard"));
+const Friends = lazy(() => import("../pages/friends"));
+const FriendProfile = lazy(() => import("../pages/friend-profile"));
+const Me = lazy(() => import("../pages/me"));
+const MyPosts = lazy(() => import("../pages/my-posts"));
+const MyGallery = lazy(() => import("../pages/my-gallery"));
+const PostManager = lazy(() => import("../pages/post-manager"));
+const Groups = lazy(() => import("../pages/groups"));
+const GroupDetail = lazy(() => import("../pages/group"));
+const Landing = lazy(() => import("../pages/landing"));
+const Terms = lazy(() => import("../pages/terms"));
+const Privacy = lazy(() => import("../pages/privacy"));
+const Guidelines = lazy(() => import("../pages/guidelines"));
+const Cookies = lazy(() => import("../pages/cookies"));
+const MarketplacePolicy = lazy(() => import("../pages/marketplace-policy"));
+const MarketplaceFeeDisclosure = lazy(() => import("../pages/marketplace-fee-disclosure"));
+const Safety = lazy(() => import("../pages/safety"));
+const Report = lazy(() => import("../pages/report"));
+const DeleteAccount = lazy(() => import("../pages/delete-account"));
+const DeleteData = lazy(() => import("../pages/delete-data"));
+const ShareTarget = lazy(() => import("../pages/share"));
+const ProtocolHandler = lazy(() => import("../pages/protocol"));
+const NewNote = lazy(() => import("../pages/notes-new"));
+const WhatMakesUsDifferent = lazy(() => import("../pages/what-makes-us-different"));
+const Moderation = lazy(() => import("../pages/moderation"));
+const News = lazy(() => import("../pages/news"));
+const Apps = lazy(() => import("../pages/apps"));
+const Downloads = lazy(() => import("../pages/downloads"));
+const Forums = lazy(() => import("../pages/forums"));
+const Storefront = lazy(() => import("../pages/storefront"));
+const StorefrontListing = lazy(() => import("../pages/storefront-listing"));
+const StorefrontSeller = lazy(() => import("../pages/storefront-seller"));
+const StorefrontPaymentMethods = lazy(() => import("../pages/storefront-payment-methods"));
+const AgeVerifyApp = lazy(() => import("../modules/age-verify/AgeVerifyApp"));
+const Support = lazy(() => import("../pages/support"));
+
+const RouteFallback = () => <div className="status">Loading...</div>;
+
+const withRouteSuspense = (content: ReactNode) => (
+  <Suspense fallback={<RouteFallback />}>{content}</Suspense>
+);
 
 function AuthAliasRedirect({ mode }: { mode: "login" | "register" }): JSX.Element {
   const location = useLocation();
@@ -72,10 +80,15 @@ export default function AppRoutes(): JSX.Element {
   const landingElement = isAuthed ? (
     <Navigate to={redirectTarget || "/dashboard"} replace />
   ) : (
-    <Landing />
+    withRouteSuspense(<Landing />)
   );
   const newsroomEnabled = appSettings?.newsroomEnabled !== false;
   const storefrontEnabled = appSettings?.storefrontEnabled !== false;
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [location.pathname, location.search]);
 
   return (
     <Routes>
@@ -85,34 +98,42 @@ export default function AppRoutes(): JSX.Element {
 
       {/* Auth entry routes now resolve to inline landing auth */}
       <Route path="/login" element={<AuthAliasRedirect mode="login" />} />
-      <Route path="/forgot-password" element={<ForgotPassword />} />
-      <Route path="/reset-password" element={<ResetPassword />} />
+      <Route path="/forgot-password" element={withRouteSuspense(<ForgotPassword />)} />
+      <Route path="/reset-password" element={withRouteSuspense(<ResetPassword />)} />
       <Route path="/register" element={<AuthAliasRedirect mode="register" />} />
-      <Route path="/verify-email" element={<VerifyEmail />} />
-      <Route path="/age-verify/*" element={<AgeVerifyApp />} />
-      <Route path="/terms" element={<Terms />} />
-      <Route path="/marketplace-policy" element={<MarketplacePolicy />} />
-      <Route path="/marketplace-fee-disclosure" element={<MarketplaceFeeDisclosure />} />
-      <Route path="/privacy" element={<Privacy />} />
+      <Route path="/verify-email" element={withRouteSuspense(<VerifyEmail />)} />
+      <Route path="/age-verify/*" element={withRouteSuspense(<AgeVerifyApp />)} />
+      <Route path="/terms" element={withRouteSuspense(<Terms />)} />
+      <Route path="/marketplace-policy" element={withRouteSuspense(<MarketplacePolicy />)} />
+      <Route
+        path="/marketplace-fee-disclosure"
+        element={withRouteSuspense(<MarketplaceFeeDisclosure />)}
+      />
+      <Route path="/privacy" element={withRouteSuspense(<Privacy />)} />
       <Route path="/privacy-policy" element={<Navigate to="/privacy" replace />} />
-      <Route path="/delete-account" element={<DeleteAccount />} />
-      <Route path="/delete-data" element={<DeleteData />} />
-      <Route path="/guidelines" element={<Guidelines />} />
-      <Route path="/cookies" element={<Cookies />} />
+      <Route path="/delete-account" element={withRouteSuspense(<DeleteAccount />)} />
+      <Route path="/delete-data" element={withRouteSuspense(<DeleteData />)} />
+      <Route path="/guidelines" element={withRouteSuspense(<Guidelines />)} />
+      <Route path="/cookies" element={withRouteSuspense(<Cookies />)} />
       <Route path="/cookie-policy" element={<Navigate to="/cookies" replace />} />
-      <Route path="/safety" element={<Safety />} />
-      <Route path="/report" element={<Report />} />
-      <Route path="/support" element={<Support />} />
-      <Route path="/what-makes-us-different" element={<WhatMakesUsDifferent />} />
-      <Route path="/apps" element={<Apps />} />
-      <Route path="/downloads" element={<Downloads />} />
-      <Route path="/forums" element={<Forums />} />
-      <Route path="/forums/:postId" element={<Forums />} />
+      <Route path="/safety" element={withRouteSuspense(<Safety />)} />
+      <Route path="/report" element={withRouteSuspense(<Report />)} />
+      <Route path="/support" element={withRouteSuspense(<Support />)} />
+      <Route
+        path="/what-makes-us-different"
+        element={withRouteSuspense(<WhatMakesUsDifferent />)}
+      />
+      <Route path="/apps" element={withRouteSuspense(<Apps />)} />
+      <Route path="/downloads" element={withRouteSuspense(<Downloads />)} />
+      <Route path="/forums" element={withRouteSuspense(<Forums />)} />
+      <Route path="/forums/:postId" element={withRouteSuspense(<Forums />)} />
       <Route
         path="/storefront"
         element={
           <ProtectedRoute>
-            {storefrontEnabled ? <Storefront /> : <Navigate to="/dashboard" replace />}
+            {storefrontEnabled
+              ? withRouteSuspense(<Storefront />)
+              : <Navigate to="/dashboard" replace />}
           </ProtectedRoute>
         }
       />
@@ -120,7 +141,9 @@ export default function AppRoutes(): JSX.Element {
         path="/storefront/listing/:listingId"
         element={
           <ProtectedRoute>
-            {storefrontEnabled ? <StorefrontListing /> : <Navigate to="/dashboard" replace />}
+            {storefrontEnabled
+              ? withRouteSuspense(<StorefrontListing />)
+              : <Navigate to="/dashboard" replace />}
           </ProtectedRoute>
         }
       />
@@ -128,7 +151,7 @@ export default function AppRoutes(): JSX.Element {
         path="/storefront/seller"
         element={
           <ProtectedRoute>
-            <StorefrontSeller />
+            {withRouteSuspense(<StorefrontSeller />)}
           </ProtectedRoute>
         }
       />
@@ -136,18 +159,18 @@ export default function AppRoutes(): JSX.Element {
         path="/storefront/payment-methods"
         element={
           <ProtectedRoute>
-            <StorefrontPaymentMethods />
+            {withRouteSuspense(<StorefrontPaymentMethods />)}
           </ProtectedRoute>
         }
       />
-      <Route path="/share" element={<ShareTarget />} />
-      <Route path="/protocol" element={<ProtocolHandler />} />
-      <Route path="/notes/new" element={<NewNote />} />
+      <Route path="/share" element={withRouteSuspense(<ShareTarget />)} />
+      <Route path="/protocol" element={withRouteSuspense(<ProtocolHandler />)} />
+      <Route path="/notes/new" element={withRouteSuspense(<NewNote />)} />
       <Route
         path="/dashboard"
         element={
           <ProtectedRoute>
-            <Dashboard />
+            {withRouteSuspense(<Dashboard />)}
           </ProtectedRoute>
         }
       />
@@ -155,7 +178,7 @@ export default function AppRoutes(): JSX.Element {
         path="/news"
         element={
           <ProtectedRoute>
-            {newsroomEnabled ? <News /> : <Navigate to="/dashboard" replace />}
+            {newsroomEnabled ? withRouteSuspense(<News />) : <Navigate to="/dashboard" replace />}
           </ProtectedRoute>
         }
       />
@@ -163,7 +186,7 @@ export default function AppRoutes(): JSX.Element {
         path="/friends"
         element={
           <ProtectedRoute>
-            <Friends />
+            {withRouteSuspense(<Friends />)}
           </ProtectedRoute>
         }
       />
@@ -171,7 +194,7 @@ export default function AppRoutes(): JSX.Element {
         path="/friends/:friendId"
         element={
           <ProtectedRoute>
-            <FriendProfile />
+            {withRouteSuspense(<FriendProfile />)}
           </ProtectedRoute>
         }
       />
@@ -179,7 +202,7 @@ export default function AppRoutes(): JSX.Element {
         path="/me"
         element={
           <ProtectedRoute>
-            <Me />
+            {withRouteSuspense(<Me />)}
           </ProtectedRoute>
         }
       />
@@ -187,7 +210,7 @@ export default function AppRoutes(): JSX.Element {
         path="/my-posts"
         element={
           <ProtectedRoute>
-            <MyPosts />
+            {withRouteSuspense(<MyPosts />)}
           </ProtectedRoute>
         }
       />
@@ -195,7 +218,15 @@ export default function AppRoutes(): JSX.Element {
         path="/my-gallery"
         element={
           <ProtectedRoute>
-            <MyGallery />
+            {withRouteSuspense(<MyGallery />)}
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/post-manager"
+        element={
+          <ProtectedRoute>
+            {withRouteSuspense(<PostManager />)}
           </ProtectedRoute>
         }
       />
@@ -203,7 +234,7 @@ export default function AppRoutes(): JSX.Element {
         path="/groups"
         element={
           <ProtectedRoute>
-            <Groups />
+            {withRouteSuspense(<Groups />)}
           </ProtectedRoute>
         }
       />
@@ -211,7 +242,7 @@ export default function AppRoutes(): JSX.Element {
         path="/groups/:groupId"
         element={
           <ProtectedRoute>
-            <GroupDetail />
+            {withRouteSuspense(<GroupDetail />)}
           </ProtectedRoute>
         }
       />
@@ -219,13 +250,13 @@ export default function AppRoutes(): JSX.Element {
         path="/moderation"
         element={
           <ProtectedRoute>
-            <Moderation />
+            {withRouteSuspense(<Moderation />)}
           </ProtectedRoute>
         }
       />
 
       {/* Optional additional routes */}
-      <Route path="/landing" element={<Landing />} />
+      <Route path="/landing" element={withRouteSuspense(<Landing />)} />
     </Routes>
   );
 }

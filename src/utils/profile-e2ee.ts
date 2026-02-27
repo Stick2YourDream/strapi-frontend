@@ -77,6 +77,9 @@ export type NotificationSettings = {
   vibrationEnabled?: boolean;
   pushEnabled?: boolean;
   newsEnabled?: boolean;
+  friendsNotificationsEnabled?: boolean;
+  groupsNotificationsEnabled?: boolean;
+  forumsNotificationsEnabled?: boolean;
 };
 
 export type NotificationReadState = {
@@ -86,7 +89,6 @@ export type NotificationReadState = {
 };
 
 export const PROFILE_PII_CLEAR_FIELDS = {
-  backgrounds: null,
   intent: null,
   onboardingComplete: null,
 } as const;

@@ -4,6 +4,8 @@ export type AuthUser = {
   email: string;
   confirmed: boolean;
   appRole?: "user" | "moderator" | "admin";
+  blocked?: boolean;
+  deactivationReason?: string | null;
   ageVerified?: boolean;
   ageVerifiedAt?: string | null;
   ageVerificationRequired?: boolean;

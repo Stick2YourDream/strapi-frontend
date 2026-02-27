@@ -35,6 +35,8 @@ interface User {
   email: string;
   username?: string;
   appRole?: "user" | "moderator" | "admin";
+  blocked?: boolean;
+  deactivationReason?: string | null;
   createdAt?: string | null;
   ageVerified?: boolean;
   ageVerifiedAt?: string | null;
@@ -89,6 +91,7 @@ interface ProfileSummary {
   activityVisibility?: VisibilityLevel;
   notificationSettings?: NotificationSettings;
   notificationReadState?: NotificationReadState;
+  mediaFolders?: string[];
   timeLimitSettings?: TimeLimitSettings;
   storefrontDefaultLocation?: string;
   storefrontDefaultRadiusMiles?: number;
@@ -242,6 +245,21 @@ const normalizeRadiusValue = (value?: string | number | null) => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return null;
   return Math.max(0, Math.round(parsed));
+};
+
+const normalizeMediaFolders = (value: unknown) => {
+  if (!Array.isArray(value)) return [] as string[];
+  const seen = new Set<string>();
+  const folders: string[] = [];
+  value.forEach((entry) => {
+    const name = String(entry || "").trim();
+    if (!name) return;
+    const key = name.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    folders.push(name);
+  });
+  return folders;
 };
 
 const LOGOUT_MESSAGE_KEY = "auth:logout-message";
@@ -495,6 +513,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                 email: String(payload.email || ""),
                 username: payload.username || undefined,
                 appRole: payload.appRole || undefined,
+                blocked: payload.blocked === true,
+                deactivationReason: payload.deactivationReason || null,
                 ageVerified: payload.ageVerified ?? undefined,
                 ageVerifiedAt: payload.ageVerifiedAt ?? null,
                 ageVerificationRequired: payload.ageVerificationRequired ?? undefined,
@@ -747,6 +767,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         avatarUrl,
         handle,
         notificationReadState,
+        mediaFolders: normalizeMediaFolders(attrs?.mediaFolders),
         timeLimitSettings,
         storefrontDefaultLocation: payload?.storefrontDefaultLocation || "",
         storefrontDefaultRadiusMiles:

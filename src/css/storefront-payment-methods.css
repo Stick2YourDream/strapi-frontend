@@ -280,6 +280,64 @@
   color: #9db7ff;
 }
 
+.storefront-payment-manual {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(120, 170, 255, 0.16);
+  display: grid;
+  gap: 10px;
+}
+
+.storefront-payment-manual h4 {
+  margin: 0;
+}
+
+.storefront-payment-tools {
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(120, 170, 255, 0.16);
+  display: grid;
+  gap: 10px;
+}
+
+.storefront-payment-tools h4 {
+  margin: 0;
+}
+
+.storefront-payment-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.storefront-payment-tool-card {
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(120, 170, 255, 0.2);
+  background: rgba(12, 18, 32, 0.7);
+  display: grid;
+  gap: 8px;
+}
+
+.storefront-payment-tool-card strong {
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #bcd5ff;
+}
+
+.storefront-payment-tool-card p {
+  margin: 0;
+  font-size: 12px;
+  color: #9ab0d4;
+}
+
+.storefront-payment-manual-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
 .storefront-payment-link {
   display: inline-flex;
   align-items: center;
@@ -355,6 +413,14 @@
   .storefront-payment-actions {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .storefront-payment-manual-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .storefront-payment-tool-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

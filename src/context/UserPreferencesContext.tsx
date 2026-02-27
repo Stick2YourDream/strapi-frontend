@@ -187,8 +187,26 @@ const normalizeImage = (value?: string) => {
   return value;
 };
 
+const toRelativeUploadPath = (value?: string) => {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return trimmed;
+  if (trimmed.startsWith("/uploads/")) return trimmed;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.pathname.startsWith("/uploads/")) {
+      return `${parsed.pathname}${parsed.search || ""}`;
+    }
+  } catch {
+    // Keep non-URL values unchanged.
+  }
+  return trimmed;
+};
+
 const stripApiBase = (value?: string) => {
-  if (!value || !apiBase) return value;
+  if (!value) return value;
+  const relativeUploadPath = toRelativeUploadPath(value);
+  if (relativeUploadPath.startsWith("/uploads/")) return relativeUploadPath;
+  if (!apiBase) return value;
   return value.startsWith(apiBase) ? value.slice(apiBase.length) || "/" : value;
 };
 
@@ -294,7 +312,14 @@ export const UserPreferencesProvider = ({ children }: { children: React.ReactNod
               }));
             }
           } catch {
-            // ignore decrypt failures
+            // Fallback to plain backgrounds so preferences still sync across devices
+            // when this device doesn't have the profile key yet.
+            if (attrs?.backgrounds && typeof attrs.backgrounds === "object") {
+              setPreferences((prev) => ({
+                ...prev,
+                backgrounds: mergeBackgrounds(prev.backgrounds, attrs.backgrounds),
+              }));
+            }
           }
         } else if (attrs?.backgrounds && typeof attrs.backgrounds === "object") {
           setPreferences((prev) => ({
@@ -337,9 +362,16 @@ export const UserPreferencesProvider = ({ children }: { children: React.ReactNod
         const res = await api.get("/profiles/me");
         const data = res.data?.data;
         const attrs = data?.attributes ?? data ?? {};
-        const existingPayload = attrs?.encryptedProfile
-          ? await decryptOwnProfilePayload(user.id, attrs.encryptedProfile)
-          : buildProfilePayloadFromAttrs(attrs);
+        let existingPayload = buildProfilePayloadFromAttrs(attrs);
+        if (attrs?.encryptedProfile) {
+          try {
+            existingPayload = await decryptOwnProfilePayload(user.id, attrs.encryptedProfile);
+          } catch {
+            // Keep plain payload fallback so background sync still works
+            // on devices that do not have profile key material yet.
+            existingPayload = buildProfilePayloadFromAttrs(attrs);
+          }
+        }
         const nextPayload = {
           ...existingPayload,
           backgrounds: payload,
@@ -349,11 +381,12 @@ export const UserPreferencesProvider = ({ children }: { children: React.ReactNod
           data: {
             encryptedProfile,
             profileKeyVersion: 1,
+            backgrounds: payload,
             ...PROFILE_PII_CLEAR_FIELDS,
           },
         });
-      } catch {
-        // ignore save errors
+      } catch (error) {
+        console.warn("Background preference sync failed:", error);
       }
     },
     [user?.id]

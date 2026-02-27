@@ -9,11 +9,11 @@ import {
   type TouchEvent as ReactTouchEvent,
 } from "react";
 import {
-  FaceLandmarker,
-  FilesetResolver,
+  type FaceLandmarker,
   type FaceLandmarkerOptions,
   type FaceLandmarkerResult,
 } from "@mediapipe/tasks-vision";
+import { loadTasksVision } from "../utils/tasksVisionLoader";
 import "./CameraShared.css";
 import "./LivenessModule.css";
 
@@ -1109,6 +1109,7 @@ export default function LivenessModule({
         return;
       }
       try {
+        const vision = await loadTasksVision();
         setVisionStatus("loading");
         setVisionError(null);
         setVisionAttemptIndex(0);
@@ -1125,7 +1126,7 @@ export default function LivenessModule({
               setVisionAttempt({ wasmUrl, modelUrl });
               setVisionAttemptIndex(attempt);
               const resolver = await withTimeout(
-                FilesetResolver.forVisionTasks(wasmUrl),
+                vision.FilesetResolver.forVisionTasks(wasmUrl),
                 `WASM init (${wasmUrl})`
               );
               const buildOptions = (
@@ -1142,7 +1143,7 @@ export default function LivenessModule({
               });
               try {
                 landmarker = await withTimeout(
-                  FaceLandmarker.createFromOptions(
+                  vision.FaceLandmarker.createFromOptions(
                     resolver,
                     buildOptions(preferredDelegate)
                   ),
@@ -1153,7 +1154,10 @@ export default function LivenessModule({
                 lastError = err;
                 if (preferredDelegate === "GPU") {
                   landmarker = await withTimeout(
-                    FaceLandmarker.createFromOptions(resolver, buildOptions("CPU")),
+                    vision.FaceLandmarker.createFromOptions(
+                      resolver,
+                      buildOptions("CPU")
+                    ),
                     `Model load (${modelUrl}) [CPU]`
                   );
                   setVisionDelegate("CPU");

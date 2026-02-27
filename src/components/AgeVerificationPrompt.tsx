@@ -11,6 +11,11 @@ const AUTO_OPEN_PARAM = "ageVerify";
 const AGE_VERIFY_CLIENT_KEY = String(import.meta.env.VITE_AGE_VERIFY_CLIENT_KEY || "").trim();
 const AGE_VERIFY_LOG_LABEL = "%c[age-verify]";
 const AGE_VERIFY_LOG_STYLE = "color:#3ea8ff;font-weight:700;";
+const AGE_LOCK_REASON = "age_verification_required";
+const SUPPORT_EMAIL = String(
+  import.meta.env.VITE_SUPPORT_EMAIL || "support@yoursocialplace.com"
+).trim();
+const LOCK_STATUS_POLL_MS = 15_000;
 
 const ageVerifyError = (...args: any[]) => {
   // eslint-disable-next-line no-console
@@ -45,8 +50,12 @@ export default function AgeVerificationPrompt() {
   const overdue =
     user?.ageVerificationOverdue ??
     (dueAt ? new Date(dueAt).getTime() < Date.now() : false);
+  const ageLocked =
+    user?.blocked === true &&
+    String(user?.deactivationReason || "").toLowerCase() === AGE_LOCK_REASON;
   const [promptOpen, setPromptOpen] = useState(false);
   const [ageModalOpen, setAgeModalOpen] = useState(false);
+  const [lockForcedModal, setLockForcedModal] = useState(false);
   const [ageSessionId, setAgeSessionId] = useState<string | null>(null);
   const [ageQrUrl, setAgeQrUrl] = useState<string | null>(null);
   const [ageMobileUrl, setAgeMobileUrl] = useState<string | null>(null);
@@ -64,8 +73,39 @@ export default function AgeVerificationPrompt() {
     return `${PROMPT_KEY_PREFIX}:${user.id}`;
   }, [user?.id]);
 
+  const syncUserFromAccountStatus = (payload: any) => {
+    if (!user?.id) return;
+    updateUser({
+      id: Number(payload.id || user.id),
+      email: String(payload.email || user.email || ""),
+      username: typeof payload.username === "string" ? payload.username : user.username,
+      appRole: typeof payload.appRole === "string" ? payload.appRole : user.appRole,
+      blocked: payload.blocked === true,
+      deactivationReason: payload.deactivationReason || null,
+      ageVerified: payload.ageVerified ?? user.ageVerified,
+      ageVerifiedAt: payload.ageVerifiedAt ?? user.ageVerifiedAt ?? null,
+      ageVerificationRequired: payload.ageVerificationRequired ?? user.ageVerificationRequired,
+      ageVerificationDueAt: payload.ageVerificationDueAt ?? user.ageVerificationDueAt ?? null,
+      ageVerificationOverdue: payload.ageVerificationOverdue ?? user.ageVerificationOverdue,
+      ageVerificationDaysRemaining:
+        payload.ageVerificationDaysRemaining ?? user.ageVerificationDaysRemaining ?? null,
+      ageVerificationDobMismatchAt:
+        payload.ageVerificationDobMismatchAt ?? user.ageVerificationDobMismatchAt ?? null,
+      ageVerificationDobMismatchDueAt:
+        payload.ageVerificationDobMismatchDueAt ??
+        user.ageVerificationDobMismatchDueAt ??
+        null,
+      ageVerificationDobMismatchOverdue:
+        payload.ageVerificationDobMismatchOverdue ?? user.ageVerificationDobMismatchOverdue,
+      ageVerificationDobMismatchDaysRemaining:
+        payload.ageVerificationDobMismatchDaysRemaining ??
+        user.ageVerificationDobMismatchDaysRemaining ??
+        null,
+    });
+  };
+
   useEffect(() => {
-    if (!needsVerification || !promptKey || typeof window === "undefined") {
+    if (!needsVerification || !promptKey || ageLocked || typeof window === "undefined") {
       setPromptOpen(false);
       return;
     }
@@ -74,7 +114,23 @@ export default function AgeVerificationPrompt() {
     if (last !== today) {
       setPromptOpen(true);
     }
-  }, [needsVerification, promptKey]);
+  }, [needsVerification, promptKey, ageLocked]);
+
+  useEffect(() => {
+    if (!ageLocked) {
+      if (lockForcedModal) {
+        setAgeModalOpen(false);
+        setLockForcedModal(false);
+      }
+      return;
+    }
+    setPromptOpen(false);
+    setAgeModalOpen(true);
+    setLockForcedModal(true);
+    if (!ageSessionId && !ageSessionLoading) {
+      void createAgeSession();
+    }
+  }, [ageLocked, lockForcedModal, ageSessionId, ageSessionLoading]);
 
   useEffect(() => {
     if (!needsVerification) return;
@@ -111,18 +167,64 @@ export default function AgeVerificationPrompt() {
     );
   }, [location.pathname, location.search, navigate]);
 
+  useEffect(() => {
+    if (!needsVerification || !overdue || ageLocked || !user?.id) return;
+    let active = true;
+    const enforceLockState = async () => {
+      try {
+        const res = await api.get("/auth/account/status");
+        if (!active) return;
+        const payload = res.data?.user || res.data || {};
+        syncUserFromAccountStatus(payload);
+      } catch {
+        // Keep the current state; lock check will retry next render/poll cycle.
+      }
+    };
+    void enforceLockState();
+    return () => {
+      active = false;
+    };
+  }, [ageLocked, needsVerification, overdue, user?.id]);
+
+  useEffect(() => {
+    if (!ageLocked || !user?.id) return;
+    let active = true;
+    const syncLockState = async () => {
+      try {
+        const res = await api.get("/auth/account/status");
+        if (!active) return;
+        const payload = res.data?.user || res.data || {};
+        syncUserFromAccountStatus(payload);
+      } catch {
+        // Keep the lock modal visible until status refresh succeeds.
+      }
+    };
+    void syncLockState();
+    const timer = window.setInterval(syncLockState, LOCK_STATUS_POLL_MS);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [
+    ageLocked,
+    user?.id,
+  ]);
+
   const markPromptSeen = () => {
     if (!promptKey || typeof window === "undefined") return;
     window.localStorage.setItem(promptKey, getTodayKey());
   };
 
   const handleLater = () => {
+    if (ageLocked) return;
     markPromptSeen();
     setPromptOpen(false);
   };
 
   const handleVerifyNow = () => {
-    markPromptSeen();
+    if (!ageLocked) {
+      markPromptSeen();
+    }
     setPromptOpen(false);
     setAgeModalOpen(true);
     if (!ageSessionId && !ageSessionLoading) {
@@ -249,6 +351,8 @@ export default function AgeVerificationPrompt() {
         if (user) {
           updateUser({
             ...user,
+            blocked: false,
+            deactivationReason: null,
             ageVerified: true,
             ageVerifiedAt: res.data?.verifiedAt || new Date().toISOString(),
             ageVerificationRequired: false,
@@ -256,6 +360,7 @@ export default function AgeVerificationPrompt() {
             ageVerificationDaysRemaining: null,
           });
         }
+        setLockForcedModal(false);
         setAgeModalOpen(false);
         setPromptOpen(false);
       } catch (err: any) {
@@ -334,18 +439,32 @@ export default function AgeVerificationPrompt() {
           <div className="age-verify-modal">
             <div className="age-verify-header">
               <div>
-                <h3>Verify your age</h3>
-                <p className="muted">Live ID scan + liveness selfie required.</p>
+                <h3>
+                  {ageLocked ? "Account locked: age verification overdue" : "Verify your age"}
+                </h3>
+                <p className="muted">
+                  {ageLocked
+                    ? "This modal will stay until your account is unlocked by age verification or staff."
+                    : "Live ID scan + liveness selfie required."}
+                </p>
               </div>
-              <button
-                type="button"
-                className="age-verify-close"
-                onClick={() => setAgeModalOpen(false)}
-              >
-                X
-              </button>
+              {!ageLocked && (
+                <button
+                  type="button"
+                  className="age-verify-close"
+                  onClick={() => setAgeModalOpen(false)}
+                >
+                  X
+                </button>
+              )}
             </div>
             <div className="age-verify-body">
+              {ageLocked && (
+                <p className="age-prompt-warning">
+                  Need help unlocking? Contact support at{" "}
+                  <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>.
+                </p>
+              )}
               <div className="age-verify-card">
                 <div className="age-verify-info">
                   <p className="age-verify-copy">
@@ -431,11 +550,17 @@ export default function AgeVerificationPrompt() {
                 )}
               </div>
             </div>
-            <div className="age-verify-footer">
-              <button type="button" className="btn ghost" onClick={() => setAgeModalOpen(false)}>
-                Close
-              </button>
-            </div>
+            {!ageLocked && (
+              <div className="age-verify-footer">
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={() => setAgeModalOpen(false)}
+                >
+                  Close
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -138,6 +138,21 @@
   letter-spacing: 0.01em;
 }
 
+.landing-left-brand-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.2em;
+  white-space: nowrap;
+}
+
+.landing-beta-tag {
+  display: inline;
+  color: goldenrod;
+  font-weight: bold;
+  text-decoration: goldenrod wavy 2px;
+  letter-spacing: 5px;
+}
+
 .landing-left-logo-wrapper {
   display: inline-flex;
   align-items: center;
@@ -820,6 +835,10 @@
   width: min(560px, 100%);
 }
 
+.landing-modal--trust {
+  width: min(560px, 100%);
+}
+
 .landing-modal-header {
   display: flex;
   align-items: center;
@@ -910,6 +929,18 @@
 
 .landing-policy-url:hover {
   text-decoration: underline;
+}
+
+.landing-trust-device-label {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(132, 176, 255, 0.34);
+  background: rgba(9, 20, 40, 0.78);
+  color: #cfe2ff;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .landing-age-card {
@@ -1131,16 +1162,25 @@
   .landing-left-brand {
     width: auto;
     height: auto;
-    gap: 10px;
+    gap: 8px;
   }
 
   .landing-logo-coin {
-    width: 96px;
-    height: 96px;
+    width: 68px;
+    height: 68px;
   }
 
   .landing-left-brand p {
-    font-size: 28px;
+    font-size: clamp(18px, 5.4vw, 24px);
+    line-height: 1.05;
+  }
+
+  .landing-left-brand-title {
+    gap: 0.14em;
+  }
+
+  .landing-beta-tag {
+    letter-spacing: 2px;
   }
 
   .landing-artboard {

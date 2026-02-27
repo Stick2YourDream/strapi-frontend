@@ -1,6 +1,5 @@
 // src/pages/Me.tsx
 import {
-  type CSSProperties,
   type DragEvent,
   useCallback,
   useEffect,
@@ -20,7 +19,6 @@ import api from "../api/strapi";
 import axios from "axios";
 import Sidebar from "../components/Sidebar";
 import TopbarSearch from "../components/TopbarSearch";
-import LanguageMenu from "../components/LanguageMenu";
 import LinkPreviewCard from "../components/LinkPreviewCard";
 import ProfilePhotoModal from "../components/ProfilePhotoModal";
 import PopupModal from "../components/PopupModal";
@@ -70,6 +68,7 @@ import {
   formatPhoneInput,
   normalizeDialCode,
 } from "../utils/phone";
+import { linkifyText } from "../utils/linkify";
 
 type VerificationMethod = "email" | "sms";
 type TwoFactorMethod = "email" | "sms" | "totp";
@@ -80,7 +79,6 @@ const SETTINGS_SECTION_IDS = [
   "notifications",
   "storefront",
   "time-limits",
-  "language",
   "changes",
 ] as const;
 
@@ -142,6 +140,17 @@ type LocationOption = {
 type ReactionCounts = {
   thumbsUp: number;
   heart: number;
+  care: number;
+  haha: number;
+  wow: number;
+  sad: number;
+  angry: number;
+};
+
+type ReactionOption = {
+  key: keyof ReactionCounts;
+  emoji: string;
+  label: string;
 };
 
 type MediaPost = {
@@ -279,6 +288,13 @@ type LinkPreview = {
   type?: string;
 };
 
+type ProfileIdentityCache = {
+  name?: string;
+  handle?: string;
+  avatarUrl?: string;
+  updatedAt?: number;
+};
+
 const slug = (s: string) =>
   (s || "")
     .toString()
@@ -288,6 +304,78 @@ const slug = (s: string) =>
     .replace(/[^a-z0-9_-]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
+
+const PHONE_PLACEHOLDER_EMAIL_SUFFIX = "@phone.yoursocialplace.local";
+const PROFILE_IDENTITY_CACHE_PREFIX = "ysp-profile-identity";
+const isPhonePlaceholderEmail = (value?: string | null) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .endsWith(PHONE_PLACEHOLDER_EMAIL_SUFFIX);
+const sanitizeEmailForInput = (value?: string | null) =>
+  isPhonePlaceholderEmail(value) ? "" : String(value || "").trim();
+
+const profileIdentityCacheKeyFor = (userId?: number | null) =>
+  userId ? `${PROFILE_IDENTITY_CACHE_PREFIX}-${userId}` : null;
+
+const sanitizeIdentityName = (value?: string | null) => {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  const lower = trimmed.toLowerCase();
+  if (trimmed.includes("@")) return "";
+  if (lower.startsWith("phone-")) return "";
+  if (lower === "user") return "";
+  return trimmed;
+};
+
+const composeIdentityName = (firstName?: string | null, lastName?: string | null) =>
+  sanitizeIdentityName(`${String(firstName || "").trim()} ${String(lastName || "").trim()}`);
+
+const sanitizeIdentityHandle = (value?: string | null) => {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  const lower = trimmed.toLowerCase();
+  if (trimmed.includes("@")) return "";
+  if (lower === "user") return "";
+  if (lower.startsWith("phone-")) return "";
+  if (lower.includes("phone-yoursocialplace-local")) return "";
+  return trimmed;
+};
+
+const readProfileIdentityCache = (userId?: number | null): ProfileIdentityCache | null => {
+  if (typeof window === "undefined" || !userId) return null;
+  const key = profileIdentityCacheKeyFor(userId);
+  if (!key) return null;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ProfileIdentityCache | null;
+    if (!parsed || typeof parsed !== "object") return null;
+    const name = sanitizeIdentityName(parsed.name);
+    const handle = sanitizeIdentityHandle(parsed.handle);
+    const avatarUrl = String(parsed.avatarUrl || "").trim();
+    if (!name && !handle && !avatarUrl) return null;
+    return {
+      name,
+      handle,
+      avatarUrl,
+      updatedAt: Number(parsed.updatedAt || Date.now()),
+    };
+  } catch {
+    return null;
+  }
+};
+
+const writeProfileIdentityCache = (userId: number, cache: ProfileIdentityCache) => {
+  if (typeof window === "undefined") return;
+  const key = profileIdentityCacheKeyFor(userId);
+  if (!key) return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(cache));
+  } catch {
+    // Ignore localStorage write errors.
+  }
+};
 
 const AGE_OPTIONS = Array.from({ length: 103 }, (_, index) => String(18 + index));
 const TIME_OPTIONS = Array.from({ length: 48 }, (_, index) => {
@@ -347,13 +435,41 @@ const STOREFRONT_RADIUS_OPTIONS = [
   { value: "150", label: ">100 miles" },
 ];
 
+const REACTION_OPTIONS: ReactionOption[] = [
+  { key: "thumbsUp", emoji: "👍", label: "Like" },
+  { key: "heart", emoji: "❤️", label: "Love" },
+  { key: "care", emoji: "🥰", label: "Care" },
+  { key: "haha", emoji: "😆", label: "Haha" },
+  { key: "wow", emoji: "😮", label: "Wow" },
+  { key: "sad", emoji: "😢", label: "Sad" },
+  { key: "angry", emoji: "😡", label: "Angry" },
+];
+const REACTION_VALUES = new Set(REACTION_OPTIONS.map((option) => option.emoji));
+
 const normalizeReactionCounts = (value: unknown, fallbackLikes?: number): ReactionCounts => {
   const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
   const thumbsRaw = record.thumbsUp ?? record.thumbs_up;
   const heartRaw = record.heart;
+  const careRaw = record.care;
+  const hahaRaw = record.haha;
+  const wowRaw = record.wow;
+  const sadRaw = record.sad;
+  const angryRaw = record.angry;
   const thumbsUp = Number(thumbsRaw);
   const heart = Number(heartRaw);
-  const hasCounts = Number.isFinite(thumbsUp) || Number.isFinite(heart);
+  const care = Number(careRaw);
+  const haha = Number(hahaRaw);
+  const wow = Number(wowRaw);
+  const sad = Number(sadRaw);
+  const angry = Number(angryRaw);
+  const hasCounts =
+    Number.isFinite(thumbsUp) ||
+    Number.isFinite(heart) ||
+    Number.isFinite(care) ||
+    Number.isFinite(haha) ||
+    Number.isFinite(wow) ||
+    Number.isFinite(sad) ||
+    Number.isFinite(angry);
   return {
     thumbsUp: Number.isFinite(thumbsUp)
       ? thumbsUp
@@ -361,14 +477,32 @@ const normalizeReactionCounts = (value: unknown, fallbackLikes?: number): Reacti
       ? 0
       : Number(fallbackLikes ?? 0),
     heart: Number.isFinite(heart) ? heart : 0,
+    care: Number.isFinite(care) ? care : 0,
+    haha: Number.isFinite(haha) ? haha : 0,
+    wow: Number.isFinite(wow) ? wow : 0,
+    sad: Number.isFinite(sad) ? sad : 0,
+    angry: Number.isFinite(angry) ? angry : 0,
   };
 };
 
 const normalizeReactionValue = (value: unknown): string | null => {
   const trimmed = String(value || "").trim();
-  if (trimmed === "👍" || trimmed === "❤️") return trimmed;
+  if (REACTION_VALUES.has(trimmed)) return trimmed;
   return null;
 };
+const getTopReactionOptions = (
+  counts: ReactionCounts,
+  limit = 3
+): ReactionOption[] =>
+  REACTION_OPTIONS.map((option, index) => ({
+    option,
+    index,
+    count: Number(counts[option.key] || 0),
+  }))
+    .filter((entry) => entry.count > 0)
+    .sort((a, b) => b.count - a.count || a.index - b.index)
+    .slice(0, Math.max(1, limit))
+    .map((entry) => entry.option);
 
 const resolveDialCodeForCountry = (
   countryCode: string,
@@ -528,6 +662,7 @@ const mediaDescriptor = (mediaUrl?: string, hasLink?: boolean) => {
   return "";
 };
 const MEDIA_PAGE_SIZE = 8;
+const MAX_MEDIA_UPLOAD_CONCURRENCY = 4;
 const MEDIA_FOLDER_ALL = "all";
 const MEDIA_FOLDER_UNSORTED = "__unsorted__";
 const normalizeFolderName = (value?: string | null) => String(value || "").trim();
@@ -570,6 +705,15 @@ const feedbackLabelFor = (post: MediaPost) => {
     return `Feedback: ${post.feedbackTargetName || "A friend"}`;
   }
   return "";
+};
+const isPubliclyShareablePost = (post: Pick<MediaPost, "visibility" | "feedbackAudience">) => {
+  const visibility = String(post.visibility || "")
+    .trim()
+    .toLowerCase();
+  const audience = String(post.feedbackAudience || "")
+    .trim()
+    .toLowerCase();
+  return visibility === "public" || audience === "public";
 };
 
 const normalizeProfileMedia = (entry: any): ProfileMediaItem => {
@@ -626,6 +770,9 @@ const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   vibrationEnabled: true,
   pushEnabled: false,
   newsEnabled: true,
+  friendsNotificationsEnabled: true,
+  groupsNotificationsEnabled: true,
+  forumsNotificationsEnabled: true,
 };
 
 const DEFAULT_TIME_LIMIT_SETTINGS: TimeLimitSettings = {
@@ -746,6 +893,9 @@ const normalizeNotificationSettings = (settings?: NotificationSettings | null) =
   vibrationEnabled: settings?.vibrationEnabled !== false,
   pushEnabled: Boolean(settings?.pushEnabled),
   newsEnabled: settings?.newsEnabled !== false,
+  friendsNotificationsEnabled: settings?.friendsNotificationsEnabled !== false,
+  groupsNotificationsEnabled: settings?.groupsNotificationsEnabled !== false,
+  forumsNotificationsEnabled: settings?.forumsNotificationsEnabled !== false,
 });
 
 const resolveFieldVisibility = (
@@ -774,6 +924,7 @@ export default function Me() {
   const location = useLocation();
   const {
     user,
+    profile: authProfile,
     keyBackupStatus,
     refreshProfile,
     refreshKeyBackup,
@@ -833,6 +984,8 @@ export default function Me() {
     storefrontDefaultRadiusMiles: "",
     handle: "",
   });
+  const [profileIdentityCache, setProfileIdentityCache] =
+    useState<ProfileIdentityCache | null>(null);
 
   const profileSnapshotRef = useRef<Profile | null>(null);
   const profilePayloadRef = useRef<ProfilePayload | null>(null);
@@ -842,6 +995,8 @@ export default function Me() {
   const handleFixAttemptedRef = useRef(false);
   const phoneRepairAttemptedRef = useRef(false);
   const mediaFoldersLoadedRef = useRef(false);
+  const mediaFoldersSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mediaFoldersLastSyncedRef = useRef("[]");
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | null>(null);
   const [photoModalOpen, setPhotoModalOpen] = useState(false);
@@ -883,7 +1038,7 @@ export default function Me() {
   const [mediaEditFolder, setMediaEditFolder] = useState("");
   const [mediaEditSaving, setMediaEditSaving] = useState(false);
   const [mediaDragActive, setMediaDragActive] = useState(false);
-  const [mediaFile, setMediaFile] = useState<File | null>(null);
+  const [mediaFiles, setMediaFiles] = useState<File[]>([]);
   const [mediaFilePreview, setMediaFilePreview] = useState<string | null>(null);
   const [mediaTitle, setMediaTitle] = useState("");
   const [mediaCaption, setMediaCaption] = useState("");
@@ -940,6 +1095,9 @@ export default function Me() {
   const [openCommentsFor, setOpenCommentsFor] = useState<Record<string, boolean>>({});
   const [shareMenuFor, setShareMenuFor] = useState<string | null>(null);
   const [postMenuFor, setPostMenuFor] = useState<string | null>(null);
+  const [reactionPickerFor, setReactionPickerFor] = useState<string | null>(null);
+  const [reactionBreakdownFor, setReactionBreakdownFor] = useState<string | null>(null);
+  const menuOpenIgnoreUntilRef = useRef(0);
   const [visibilityModalPost, setVisibilityModalPost] = useState<MediaPost | null>(
     null
   );
@@ -957,9 +1115,6 @@ export default function Me() {
   const [settingsView, setSettingsView] = useState<"profile" | "settings">("profile");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
-  const settingsMenuRef = useRef<HTMLDivElement | null>(null);
-  const settingsTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const [settingsTriggerWidth, setSettingsTriggerWidth] = useState<number | null>(null);
   const [privacyEdits, setPrivacyEdits] = useState<PrivacyEditState>({
     profile: false,
     fields: false,
@@ -1216,63 +1371,129 @@ export default function Me() {
     setMediaMoveFolderName("");
     setMediaMoveFolderError(null);
   }, [mediaMoveModalItem]);
-  const mediaFileIsVideo = mediaFile ? isVideoFile(mediaFile) : false;
+  const mediaPrimaryFile = mediaFiles[0] || null;
+  const mediaFileIsVideo = mediaPrimaryFile ? isVideoFile(mediaPrimaryFile) : false;
 
-  const handleMediaFileSelection = (file: File | null) => {
-    if (!file) {
-      setMediaFile(null);
+  const handleMediaFileSelection = (files: FileList | File[] | null) => {
+    const incoming = !files
+      ? []
+      : Array.isArray(files)
+      ? files
+      : Array.from(files);
+    if (incoming.length === 0) {
+      setMediaFiles([]);
       return;
     }
-    const isVideo = isVideoFile(file);
-    const isImage = isImageFile(file);
-    if (!isVideo && !isImage) {
-      setProfileMediaError("Upload an image or video file.");
-      setMediaFile(null);
+
+    const accepted: File[] = [];
+    let rejectedTypeCount = 0;
+    let rejectedSizeCount = 0;
+    incoming.forEach((file) => {
+      const isVideo = isVideoFile(file);
+      const isImage = isImageFile(file);
+      if (!isVideo && !isImage) {
+        rejectedTypeCount += 1;
+        return;
+      }
+      const maxBytes = isVideo ? MAX_VIDEO_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
+      if (file.size > maxBytes) {
+        rejectedSizeCount += 1;
+        return;
+      }
+      accepted.push(file);
+    });
+
+    if (accepted.length === 0) {
+      setMediaFiles([]);
+      if (rejectedTypeCount > 0) {
+        setProfileMediaError("Upload image or video files only.");
+      } else {
+        setProfileMediaError(
+          `Files exceed upload limits (${MAX_VIDEO_UPLOAD_LABEL} for video, ${MAX_UPLOAD_LABEL} for images).`
+        );
+      }
       return;
     }
-    const maxBytes = isVideo ? MAX_VIDEO_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
-    const maxLabel = isVideo ? MAX_VIDEO_UPLOAD_LABEL : MAX_UPLOAD_LABEL;
-    if (file.size > maxBytes) {
-      setProfileMediaError(`Media files must be under ${maxLabel}.`);
-      setMediaFile(null);
-      return;
+
+    setMediaFiles(accepted);
+    if (rejectedTypeCount > 0 || rejectedSizeCount > 0) {
+      setProfileMediaError(
+        `Added ${accepted.length} file${accepted.length === 1 ? "" : "s"}. Skipped ${
+          rejectedTypeCount + rejectedSizeCount
+        } invalid file${rejectedTypeCount + rejectedSizeCount === 1 ? "" : "s"}.`
+      );
+    } else {
+      setProfileMediaError(null);
     }
-    setMediaFile(file);
-    setProfileMediaError(null);
   };
 
   useEffect(() => {
     mediaFoldersLoadedRef.current = false;
+    const profileFolders = sanitizeFolderList(
+      Array.isArray(authProfile?.mediaFolders)
+        ? authProfile.mediaFolders.map((entry) => String(entry))
+        : []
+    );
+    mediaFoldersLastSyncedRef.current = JSON.stringify(profileFolders);
     if (!mediaFolderStorageKey || typeof window === "undefined") {
-      setMediaFolders([]);
+      setMediaFolders(profileFolders);
       mediaFoldersLoadedRef.current = true;
       return;
     }
+    let localFolders: string[] = [];
     const raw = window.localStorage.getItem(mediaFolderStorageKey);
-    if (!raw) {
-      setMediaFolders([]);
-      mediaFoldersLoadedRef.current = true;
-      return;
-    }
-    try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        setMediaFolders(sanitizeFolderList(parsed.map(String)));
-      } else {
-        setMediaFolders([]);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          localFolders = sanitizeFolderList(parsed.map(String));
+        }
+      } catch {
+        localFolders = [];
       }
-    } catch {
-      setMediaFolders([]);
-    } finally {
-      mediaFoldersLoadedRef.current = true;
     }
-  }, [mediaFolderStorageKey]);
+    setMediaFolders(mergeFolderLists(profileFolders, localFolders));
+    mediaFoldersLoadedRef.current = true;
+  }, [authProfile?.mediaFolders, mediaFolderStorageKey]);
 
   useEffect(() => {
     if (!mediaFolderStorageKey || typeof window === "undefined") return;
     if (!mediaFoldersLoadedRef.current) return;
     window.localStorage.setItem(mediaFolderStorageKey, JSON.stringify(mediaFolders));
   }, [mediaFolderStorageKey, mediaFolders]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    if (!mediaFoldersLoadedRef.current) return;
+    const nextFolders = sanitizeFolderList(mediaFolders);
+    const nextSerialized = JSON.stringify(nextFolders);
+    if (nextSerialized === mediaFoldersLastSyncedRef.current) return;
+    if (mediaFoldersSyncTimerRef.current) {
+      clearTimeout(mediaFoldersSyncTimerRef.current);
+    }
+    mediaFoldersSyncTimerRef.current = setTimeout(() => {
+      void (async () => {
+        try {
+          await api.put("/profiles/me", { data: { mediaFolders: nextFolders } });
+          mediaFoldersLastSyncedRef.current = nextSerialized;
+        } catch (err) {
+          console.error("Failed to sync media folders", err);
+        } finally {
+          mediaFoldersSyncTimerRef.current = null;
+        }
+      })();
+    }, 400);
+  }, [mediaFolders, user?.id]);
+
+  useEffect(
+    () => () => {
+      if (mediaFoldersSyncTimerRef.current) {
+        clearTimeout(mediaFoldersSyncTimerRef.current);
+        mediaFoldersSyncTimerRef.current = null;
+      }
+    },
+    []
+  );
 
   const mediaFolderOptions = useMemo(() => {
     const values = new Set<string>();
@@ -1610,14 +1831,14 @@ export default function Me() {
   }, [mediaLightboxOpen]);
 
   useEffect(() => {
-    if (!mediaFile) {
+    if (!mediaPrimaryFile) {
       setMediaFilePreview(null);
       return;
     }
-    const objectUrl = URL.createObjectURL(mediaFile);
+    const objectUrl = URL.createObjectURL(mediaPrimaryFile);
     setMediaFilePreview(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
-  }, [mediaFile]);
+  }, [mediaPrimaryFile]);
 
   useEffect(() => {
     if (mediaVisibility !== "trusted") {
@@ -1902,16 +2123,40 @@ export default function Me() {
     }
     setError("Failed to update post visibility.");
   };
-  const buildShareUrl = (postKey: string) => {
+  const buildShareUrl = (post: MediaPost, postKey: string) => {
     if (typeof window === "undefined") return "";
-    const fallbackOrigin = String(import.meta.env.VITE_PUBLIC_SITE_URL || "").trim();
-    const origin = window.location.origin;
-    const base = origin.startsWith("http") ? origin : fallbackOrigin;
+    const origin = String(window.location.origin || "").trim().replace(/\/+$/, "");
+    const configuredBase = String(import.meta.env.VITE_PUBLIC_SITE_URL || "")
+      .trim()
+      .replace(/\/+$/, "");
+    const base = origin.startsWith("http")
+      ? origin
+      : configuredBase.startsWith("http")
+      ? configuredBase
+      : "";
     if (!base) return "";
-    const path = window.location.pathname?.startsWith("/")
-      ? window.location.pathname
-      : "/dashboard";
-    return `${base}${path}#post-${postKey}`;
+    const configuredApi = String(import.meta.env.VITE_API_URL || "")
+      .trim()
+      .replace(/\/+$/, "");
+    const resolveShareApiBase = () => {
+      if (!configuredApi) return `${base}/api`;
+      if (/^https?:\/\//i.test(configuredApi)) {
+        return /\/api$/i.test(configuredApi) ? configuredApi : `${configuredApi}/api`;
+      }
+      const normalizedPath = /\/api$/i.test(configuredApi)
+        ? configuredApi
+        : `${configuredApi}/api`;
+      const path = normalizedPath.startsWith("/") ? normalizedPath : `/${normalizedPath}`;
+      return `${base}${path}`;
+    };
+    const shareApiBase = resolveShareApiBase();
+    const shareId = String(post.documentId ?? post.numericId ?? post.id ?? postKey ?? "").trim();
+    if (!shareId) return "";
+    const params = new URLSearchParams();
+    params.set("source", "user");
+    params.set("id", shareId);
+    params.set("site", base);
+    return `${shareApiBase}/share/post?${params.toString()}`;
   };
   const pushShareNotice = (postKey: string, message: string) => {
     setShareNotice((prev) => ({ ...prev, [postKey]: message }));
@@ -2036,6 +2281,10 @@ export default function Me() {
     return true;
   };
   const handleReaction = async (post: MediaPost, postKey: string, emoji: string) => {
+    if (!REACTION_VALUES.has(emoji)) {
+      pushShareNotice(postKey, "Unsupported reaction.");
+      return;
+    }
     try {
       const res = await api.post(`/users-posts/${post.id}/react`, { emoji });
       const payload = res.data?.data;
@@ -2049,6 +2298,7 @@ export default function Me() {
       const counts = normalizeReactionCounts(payload?.reactionCounts, nextLikes);
       const reactionValue = normalizeReactionValue(payload?.myReaction ?? emoji);
       updatePostReactions(postKey, counts, reactionValue);
+      setReactionPickerFor(null);
       if (payload?.alreadyReacted) {
         pushShareNotice(
           postKey,
@@ -2074,6 +2324,8 @@ export default function Me() {
     setOpenCommentsFor((prev) => ({ ...prev, [postKey]: !prev[postKey] }));
     setShareMenuFor(null);
     setPostMenuFor(null);
+    setReactionPickerFor(null);
+    setReactionBreakdownFor(null);
     setVisibilityModalPost(null);
     setEditPostModalPost(null);
   };
@@ -2156,19 +2408,41 @@ export default function Me() {
     });
   };
   const toggleShareMenu = (postKey: string) => {
-    setShareMenuFor((prev) => (prev === postKey ? null : postKey));
+    setShareMenuFor((prev) => {
+      const next = prev === postKey ? null : postKey;
+      if (next) {
+        menuOpenIgnoreUntilRef.current = Date.now() + 450;
+      }
+      return next;
+    });
     setPostMenuFor(null);
+    setReactionPickerFor(null);
+    setReactionBreakdownFor(null);
     setVisibilityModalPost(null);
     setEditPostModalPost(null);
   };
   const togglePostMenu = (postKey: string) => {
-    setPostMenuFor((prev) => (prev === postKey ? null : postKey));
+    setPostMenuFor((prev) => {
+      const next = prev === postKey ? null : postKey;
+      if (next) {
+        menuOpenIgnoreUntilRef.current = Date.now() + 450;
+      }
+      return next;
+    });
     setShareMenuFor(null);
+    setReactionPickerFor(null);
+    setReactionBreakdownFor(null);
     setVisibilityModalPost(null);
     setEditPostModalPost(null);
   };
   const toggleMediaMenu = (mediaKey: string) => {
-    setMediaMenuFor((prev) => (prev === mediaKey ? null : mediaKey));
+    setMediaMenuFor((prev) => {
+      const next = prev === mediaKey ? null : mediaKey;
+      if (next) {
+        menuOpenIgnoreUntilRef.current = Date.now() + 450;
+      }
+      return next;
+    });
     setPostMenuFor(null);
     setShareMenuFor(null);
   };
@@ -2495,20 +2769,31 @@ export default function Me() {
   };
 
   useEffect(() => {
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (!target) return;
+    const useClickForClose =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(pointer: coarse)").matches;
+    const closeEvent: "click" | "pointerdown" = useClickForClose
+      ? "click"
+      : "pointerdown";
+    const handleGlobalClose = (event: Event) => {
+      if (Date.now() < menuOpenIgnoreUntilRef.current) return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
       if (
         target.closest(".post-action-group") ||
+        target.closest(".post-action-counts") ||
         target.closest(".post-menu-wrapper")
       )
         return;
       setShareMenuFor(null);
       setPostMenuFor(null);
+      setReactionPickerFor(null);
+      setReactionBreakdownFor(null);
       setMediaMenuFor(null);
     };
-    document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
+    document.addEventListener(closeEvent, handleGlobalClose);
+    return () => document.removeEventListener(closeEvent, handleGlobalClose);
   }, []);
   const currentBackground = preferences.backgrounds.dashboard;
   const appearanceColor = currentBackground.color || "#0b0d14";
@@ -3111,7 +3396,7 @@ export default function Me() {
       const data = res.data ?? {};
       if (data.user?.id) {
         updateUser(data.user);
-        setEmailDraft(data.user.email || nextEmail);
+        setEmailDraft(sanitizeEmailForInput(data.user.email || nextEmail));
       }
       const message = data.requiresConfirmation
         ? "Email updated. Check your inbox to confirm."
@@ -3416,10 +3701,7 @@ export default function Me() {
     setSecurityQuestionsError(null);
   };
 
-  const isPhonePlaceholderAccount = String(user?.email || "")
-    .trim()
-    .toLowerCase()
-    .endsWith("@phone.yoursocialplace.local");
+  const isPhonePlaceholderAccount = isPhonePlaceholderEmail(user?.email);
 
   const handlePasswordReset = async () => {
     setPasswordResetError(null);
@@ -3671,6 +3953,38 @@ export default function Me() {
       slug(user.email || "user");
     return `${base || "user"}-${user.id}`;
   }, [profile.firstName, profile.lastName, user]);
+
+  useEffect(() => {
+    if (!user?.id) {
+      setProfileIdentityCache(null);
+      return;
+    }
+    setProfileIdentityCache(readProfileIdentityCache(user.id));
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    const name = composeIdentityName(profile.firstName, profile.lastName);
+    const handle = sanitizeIdentityHandle(profile.handle);
+    const avatarUrl = String(profile.avatarUrl || "").trim();
+    if (!name && !handle && !avatarUrl) return;
+
+    setProfileIdentityCache((prev) => {
+      const next: ProfileIdentityCache = {
+        name: name || prev?.name || "",
+        handle: handle || prev?.handle || "",
+        avatarUrl: avatarUrl || prev?.avatarUrl || "",
+        updatedAt: Date.now(),
+      };
+      const unchanged =
+        (prev?.name || "") === (next.name || "") &&
+        (prev?.handle || "") === (next.handle || "") &&
+        (prev?.avatarUrl || "") === (next.avatarUrl || "");
+      if (unchanged) return prev;
+      writeProfileIdentityCache(user.id, next);
+      return next;
+    });
+  }, [profile.avatarUrl, profile.firstName, profile.handle, profile.lastName, user?.id]);
 
   useEffect(() => {
     if (!avatarFile) {
@@ -4695,15 +5009,8 @@ export default function Me() {
 
   const createMediaItem = async () => {
     if (!user) return;
-    if (!mediaFile) {
-      setProfileMediaError("Select a photo or video to upload.");
-      return;
-    }
-    const isVideo = isVideoFile(mediaFile);
-    const maxBytes = isVideo ? MAX_VIDEO_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
-    const maxLabel = isVideo ? MAX_VIDEO_UPLOAD_LABEL : MAX_UPLOAD_LABEL;
-    if (mediaFile.size > maxBytes) {
-      setProfileMediaError(`Media files must be under ${maxLabel}.`);
+    if (mediaFiles.length === 0) {
+      setProfileMediaError("Select one or more photos/videos to upload.");
       return;
     }
     if (mediaVisibility === "trusted" && !mediaTrustedCircleId) {
@@ -4719,36 +5026,96 @@ export default function Me() {
     setProfileMediaError(null);
     setMediaSubmitting(true);
     try {
-      const fd = new FormData();
-      fd.append("files", mediaFile);
-      const uploadRes = await api.post("/upload", fd);
-      const uploadedId = uploadRes.data?.[0]?.id;
-      if (!uploadedId) {
-        setProfileMediaError("Media upload failed.");
-        return;
-      }
-      const nextOrder =
+      const baseOrder =
         profileMedia.reduce((acc, entry) => {
           const entryFolder = normalizeFolderName(entry.folder);
           if (entryFolder !== (normalizedFolder || "")) return acc;
           const entryOrder = parseMediaOrder(entry.order);
           return entryOrder !== null && entryOrder > acc ? entryOrder : acc;
         }, 0) + 1;
-      await api.post("/profile-media-items", {
-        data: {
-          title: mediaTitle.trim() || null,
-          caption: mediaCaption.trim() || null,
-          folder: normalizedFolder || null,
-          visibility: mediaVisibility,
-          kind: isVideo ? "video" : "photo",
-          order: nextOrder,
-          media: uploadedId,
-          trustedCircle:
-            mediaVisibility === "trusted" && mediaTrustedCircleId
-              ? Number(mediaTrustedCircleId)
-              : null,
-        },
+
+      const validFiles: File[] = [];
+      let failedCount = 0;
+      mediaFiles.forEach((file) => {
+        const isVideo = isVideoFile(file);
+        const isImage = isImageFile(file);
+        if (!isVideo && !isImage) {
+          failedCount += 1;
+          return;
+        }
+        const maxBytes = isVideo ? MAX_VIDEO_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
+        if (file.size > maxBytes) {
+          failedCount += 1;
+          return;
+        }
+        validFiles.push(file);
       });
+
+      if (!validFiles.length) {
+        setProfileMediaError("Media upload failed.");
+        return;
+      }
+
+      const mediaTitleValue = mediaTitle.trim() || null;
+      const mediaCaptionValue = mediaCaption.trim() || null;
+      const mediaTrustedCircleValue =
+        mediaVisibility === "trusted" && mediaTrustedCircleId
+          ? Number(mediaTrustedCircleId)
+          : null;
+      const uploadOne = async (file: File, index: number) => {
+        const isVideo = isVideoFile(file);
+        try {
+          const fd = new FormData();
+          fd.append("files", file);
+          const uploadRes = await api.post("/upload", fd);
+          const uploadedId = uploadRes.data?.[0]?.id;
+          if (!uploadedId) {
+            return false;
+          }
+
+          await api.post("/profile-media-items", {
+            data: {
+              title: mediaTitleValue,
+              caption: mediaCaptionValue,
+              folder: normalizedFolder || null,
+              visibility: mediaVisibility,
+              kind: isVideo ? "video" : "photo",
+              order: baseOrder + index,
+              media: uploadedId,
+              trustedCircle: mediaTrustedCircleValue,
+            },
+          });
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
+      let uploadedCount = 0;
+      const concurrency = Math.max(
+        1,
+        Math.min(MAX_MEDIA_UPLOAD_CONCURRENCY, validFiles.length)
+      );
+      let cursor = 0;
+      const workers = Array.from({ length: concurrency }, async () => {
+        while (true) {
+          const index = cursor;
+          cursor += 1;
+          if (index >= validFiles.length) break;
+          const ok = await uploadOne(validFiles[index], index);
+          if (ok) {
+            uploadedCount += 1;
+          } else {
+            failedCount += 1;
+          }
+        }
+      });
+      await Promise.all(workers);
+
+      if (uploadedCount === 0) {
+        setProfileMediaError("Media upload failed.");
+        return;
+      }
       if (normalizedFolder && !isReservedMediaFolder(normalizedFolder)) {
         setMediaFolders((prev) =>
           prev.some((folder) => folder.toLowerCase() === normalizedFolder.toLowerCase())
@@ -4759,9 +5126,14 @@ export default function Me() {
       setMediaTitle("");
       setMediaCaption("");
       setMediaFolder("");
-      setMediaFile(null);
+      setMediaFiles([]);
       setMediaVisibility("friends");
       setMediaTrustedCircleId("");
+      if (failedCount > 0) {
+        setProfileMediaError(
+          `Uploaded ${uploadedCount} file${uploadedCount === 1 ? "" : "s"}. ${failedCount} failed validation or upload.`
+        );
+      }
       await fetchProfileMedia();
     } catch (err) {
       if (axios.isAxiosError(err)) {
@@ -5230,7 +5602,7 @@ export default function Me() {
 
   useEffect(() => {
     if (!user) return;
-    setEmailDraft(user.email || "");
+    setEmailDraft(sanitizeEmailForInput(user.email));
   }, [user?.id, user?.email]);
 
   useEffect(() => {
@@ -5660,15 +6032,19 @@ export default function Me() {
     }
   };
 
-  const displayName =
-    (profile.firstName || profile.lastName
-      ? `${profile.firstName || ""} ${profile.lastName || ""}`.trim()
-      : user.email) || "Member";
-  const displayHandle =
-    profile.handle && profile.handle.toLowerCase() !== "user"
-      ? profile.handle
-      : lockedUniqueHandle;
-  const avatarImg = avatarPreviewUrl || profile.avatarUrl;
+  const profileDisplayName = composeIdentityName(profile.firstName, profile.lastName);
+  const authDisplayName = composeIdentityName(authProfile?.firstName, authProfile?.lastName);
+  const cachedDisplayName = sanitizeIdentityName(profileIdentityCache?.name);
+  const displayName = profileDisplayName || authDisplayName || cachedDisplayName || "Member";
+  const profileDisplayHandle = sanitizeIdentityHandle(profile.handle);
+  const authDisplayHandle = sanitizeIdentityHandle(authProfile?.handle);
+  const cachedDisplayHandle = sanitizeIdentityHandle(profileIdentityCache?.handle);
+  const displayHandle = profileDisplayHandle || authDisplayHandle || cachedDisplayHandle || "";
+  const avatarImg =
+    avatarPreviewUrl ||
+    profile.avatarUrl ||
+    String(authProfile?.avatarUrl || "").trim() ||
+    String(profileIdentityCache?.avatarUrl || "").trim();
   const initials =
     displayName
       ?.split(" ")
@@ -5850,7 +6226,6 @@ export default function Me() {
     { id: "notifications", label: "Sound, Vibration & Quiet Hours" },
     { id: "storefront", label: "StoreFront Defaults" },
     { id: "time-limits", label: "Time Limits" },
-    { id: "language", label: "Language Options" },
     { id: "changes", label: "Changes & Deactivation" },
   ];
   const settingsSelectValue: SettingsSection | "profile" = isSettingsView
@@ -5861,9 +6236,6 @@ export default function Me() {
       ? "Profile"
       : SETTINGS_SECTIONS.find((section) => section.id === settingsSection)?.label ||
         "Settings";
-  const settingsMenuStyle: CSSProperties | undefined = settingsTriggerWidth
-    ? ({ "--settings-trigger-width": `${settingsTriggerWidth}px` } as CSSProperties)
-    : undefined;
   const handleSettingsSelectChange = (value: SettingsSection | "profile") => {
     if (value === "profile") {
       setSettingsView("profile");
@@ -5881,46 +6253,6 @@ export default function Me() {
     navigate(`/me?view=settings&section=${value}`);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
-  const toggleSettingsMenu = () => {
-    setSettingsMenuOpen((prev) => !prev);
-  };
-  const syncSettingsTriggerWidth = () => {
-    const nextWidth = settingsTriggerRef.current?.offsetWidth;
-    if (nextWidth && nextWidth !== settingsTriggerWidth) {
-      setSettingsTriggerWidth(nextWidth);
-    }
-  };
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const frame = window.requestAnimationFrame(syncSettingsTriggerWidth);
-    return () => window.cancelAnimationFrame(frame);
-  }, [settingsMenuOpen, settingsMenuLabel]);
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const handleResize = () => syncSettingsTriggerWidth();
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
-  useEffect(() => {
-    if (!settingsMenuOpen) return;
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      if (!settingsMenuRef.current) return;
-      if (target instanceof Node && settingsMenuRef.current.contains(target)) return;
-      setSettingsMenuOpen(false);
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setSettingsMenuOpen(false);
-      }
-    };
-    document.addEventListener("pointerdown", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [settingsMenuOpen]);
   const renderProfileHeader = () => (
     <div className="panel-grid" style={{ marginBottom: "16px" }}>
       {showProfileKeyWarning && (
@@ -5960,7 +6292,9 @@ export default function Me() {
         <div className="profile-header-content">
           <div className="profile-header-meta">
             <h2 className="profile-header-title">{displayName}</h2>
-            <span className="profile-header-handle-pill">@{displayHandle}</span>
+            {displayHandle && (
+              <span className="profile-header-handle-pill">@{displayHandle}</span>
+            )}
           </div>
           <p className="profile-header-bio">
             {profile.bio || "Share a quick bio to help friends recognize you."}
@@ -5981,18 +6315,17 @@ export default function Me() {
             >
               Edit Profile
             </button>
-            <div className="profile-settings-dropdown" ref={settingsMenuRef} style={settingsMenuStyle}>
+            <div className="profile-settings-dropdown">
               <button
-                ref={settingsTriggerRef}
                 className={`btn primary profile-header-action-button profile-settings-trigger${
                   settingsMenuOpen ? " is-open" : ""
                 }`}
                 type="button"
-                aria-haspopup="menu"
+                aria-haspopup="dialog"
                 aria-expanded={settingsMenuOpen}
                 aria-label={`Settings menu. Current section: ${settingsMenuLabel}.`}
                 title={`Current section: ${settingsMenuLabel}`}
-                onClick={toggleSettingsMenu}
+                onClick={() => setSettingsMenuOpen(true)}
               >
                 <span className="profile-settings-trigger-label">Settings:</span>
                 <span
@@ -6013,41 +6346,6 @@ export default function Me() {
                   </svg>
                 </span>
               </button>
-              {settingsMenuOpen && (
-                <div className="profile-settings-menu" role="menu" aria-label="Settings sections">
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className={`profile-settings-item${
-                      settingsSelectValue === "profile" ? " is-active" : ""
-                    }`}
-                    onClick={() => handleSettingsSelectChange("profile")}
-                  >
-                    <span>Profile overview</span>
-                    {settingsSelectValue === "profile" && (
-                      <span className="profile-settings-item-tag">Current</span>
-                    )}
-                  </button>
-                  <div className="profile-settings-menu-divider" />
-                  {SETTINGS_SECTIONS.map((section) => {
-                    const isActive = settingsSelectValue === section.id;
-                    return (
-                      <button
-                        key={section.id}
-                        type="button"
-                        role="menuitem"
-                        className={`profile-settings-item${isActive ? " is-active" : ""}`}
-                        onClick={() => handleSettingsSelectChange(section.id)}
-                      >
-                        <span>{section.label}</span>
-                        {isActive && (
-                          <span className="profile-settings-item-tag">Current</span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
             </div>
             <button
               className="btn ghost profile-header-action-button"
@@ -6647,6 +6945,47 @@ export default function Me() {
               Done
             </button>
           </div>
+        </div>
+      </PopupModal>
+      <PopupModal
+        open={settingsMenuOpen}
+        onClose={() => setSettingsMenuOpen(false)}
+        title="Profile settings"
+        className="profile-settings-modal"
+        bodyClassName="profile-settings-modal-body"
+      >
+        <div className="profile-settings-modal-menu" role="menu" aria-label="Settings sections">
+          <button
+            type="button"
+            role="menuitem"
+            className={`profile-settings-item${
+              settingsSelectValue === "profile" ? " is-active" : ""
+            }`}
+            onClick={() => handleSettingsSelectChange("profile")}
+          >
+            <span>Profile overview</span>
+            {settingsSelectValue === "profile" && (
+              <span className="profile-settings-item-tag">Current</span>
+            )}
+          </button>
+          <div className="profile-settings-menu-divider" />
+          {SETTINGS_SECTIONS.map((section) => {
+            const isActive = settingsSelectValue === section.id;
+            return (
+              <button
+                key={section.id}
+                type="button"
+                role="menuitem"
+                className={`profile-settings-item${isActive ? " is-active" : ""}`}
+                onClick={() => handleSettingsSelectChange(section.id)}
+              >
+                <span>{section.label}</span>
+                {isActive && (
+                  <span className="profile-settings-item-tag">Current</span>
+                )}
+              </button>
+            );
+          })}
         </div>
       </PopupModal>
 
@@ -8381,7 +8720,7 @@ export default function Me() {
                     : "We will email a reset link to your email address."}
                 </p>
                 <button
-                  className="btn ghost"
+                  className="btn ghost security-inline-btn"
                   type="button"
                   onClick={handlePasswordReset}
                   disabled={passwordResetLoading}
@@ -8456,7 +8795,7 @@ export default function Me() {
                   <div className="totp-setup">
                     {!twoFactorHasAuthenticator && !totpSetup && (
                       <button
-                        className="btn ghost"
+                        className="btn ghost security-inline-btn"
                         type="button"
                         onClick={handleTotpSetup}
                         disabled={totpSetupLoading}
@@ -8589,7 +8928,7 @@ export default function Me() {
               <div className="security-card">
                 <h4>Age verification</h4>
                 <p className="security-muted">
-                  Verify your age within 1 week of account creation to keep your account
+                  Verify your age within 30 days of account creation to keep your account
                   active.
                 </p>
                 {ageVerified ? (
@@ -9343,6 +9682,135 @@ export default function Me() {
                   <span className="security-card__icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24">
                       <path
+                        d="M12 21s7-6.4 7-12a7 7 0 1 0-14 0c0 5.6 7 12 7 12Z"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                      />
+                      <circle cx="12" cy="9" r="2.6" fill="none" stroke="currentColor" strokeWidth="1.6" />
+                    </svg>
+                  </span>
+                  <div className="security-card__header-content">
+                    <div className="security-card__title-row">
+                      <h4>StoreFront filter preferences</h4>
+                    </div>
+                    <p className="security-muted">
+                      Set a default location and radius to prefill StoreFront filters.
+                    </p>
+                  </div>
+                </div>
+                <div className="security-card__body">
+                  <div className="security-row">
+                    <label className="profile-field">
+                      <span className="profile-field-label">State</span>
+                      <select
+                        className="auth-input"
+                        value={storefrontLocationStateCode || ""}
+                        onChange={(event) => handleStorefrontStateChange(event.target.value)}
+                      >
+                        <option value="">Select a state</option>
+                        {storefrontLocationState &&
+                          !storefrontStateOptions.some(
+                            (state) =>
+                              state.code === storefrontLocationStateCode ||
+                              state.name.toLowerCase() ===
+                                storefrontLocationState.toLowerCase()
+                          ) && (
+                            <option value={storefrontLocationStateCode || storefrontLocationState}>
+                              {storefrontLocationState}
+                            </option>
+                          )}
+                        {storefrontStateOptions.map((state) => (
+                          <option key={state.code || state.name} value={state.code || state.name}>
+                            {state.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="profile-field">
+                      <span className="profile-field-label">City</span>
+                      <select
+                        className="auth-input"
+                        value={storefrontLocationCity}
+                        onChange={(event) => handleStorefrontCityChange(event.target.value)}
+                        disabled={!storefrontLocationStateCode || storefrontCityOptions.length === 0}
+                      >
+                        <option value="">Select a city</option>
+                        {storefrontLocationCity &&
+                          !storefrontCityOptions.some(
+                            (city) =>
+                              city.name.toLowerCase() === storefrontLocationCity.toLowerCase()
+                          ) && (
+                            <option value={storefrontLocationCity}>
+                              {storefrontLocationCity}
+                            </option>
+                          )}
+                        {storefrontCityOptions.map((city) => (
+                          <option key={city.code || city.name} value={city.name}>
+                            {city.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  {storefrontLocationError && (
+                    <p className="profile-location-error">{storefrontLocationError}</p>
+                  )}
+                  <div className="security-row">
+                    <label className="profile-field">
+                      <span className="profile-field-label">Radius (miles)</span>
+                      <select
+                        className="auth-input"
+                        value={
+                          STOREFRONT_RADIUS_OPTIONS.some(
+                            (option) => option.value === profile.storefrontDefaultRadiusMiles
+                          )
+                            ? profile.storefrontDefaultRadiusMiles
+                            : ""
+                        }
+                        onChange={(event) =>
+                          setProfile({
+                            ...profile,
+                            storefrontDefaultRadiusMiles: event.target.value,
+                          })
+                        }
+                      >
+                        <option value="">Select a radius</option>
+                        {STOREFRONT_RADIUS_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <p className="security-muted">
+                    This only affects your StoreFront filters, not what others see.
+                  </p>
+                  <div className="security-actions">
+                    <button
+                      className="btn ghost"
+                      type="button"
+                      onClick={handleSaveStorefrontSettings}
+                      disabled={storefrontSettingsSaving}
+                    >
+                      {storefrontSettingsSaving ? "Saving..." : "Save filter preferences"}
+                    </button>
+                  </div>
+                  {storefrontSettingsError && (
+                    <p className="status status-error">{storefrontSettingsError}</p>
+                  )}
+                  {storefrontSettingsSuccess && (
+                    <p className="status status-success">{storefrontSettingsSuccess}</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="security-card security-card-wide">
+                <div className="security-card__header">
+                  <span className="security-card__icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24">
+                      <path
                         d="M4 6h16v10H4z"
                         fill="none"
                         stroke="currentColor"
@@ -9666,127 +10134,39 @@ export default function Me() {
             <div className="panel-header">
               <div>
                 <p className="eyebrow">StoreFront</p>
-                <h3>Default Location</h3>
+                <h3>Defaults moved</h3>
                 <p className="panel-sub">
-                  Set a default location and radius to prefill StoreFront filters.
+                  StoreFront filter preferences now live under Visibility &amp;
+                  Discoverability.
                 </p>
               </div>
             </div>
 
             <div className="security-grid">
               <div className="security-card security-card-wide">
-                <h4>Search defaults</h4>
+                <h4>Manage in privacy settings</h4>
                 <p className="security-muted">
-                  This only affects your StoreFront filters, not what others see.
+                  Go to Account Settings → Visibility &amp; Discoverability to update
+                  your StoreFront location and radius defaults.
                 </p>
-                <div className="security-row">
-                  <label className="profile-field">
-                    <span className="profile-field-label">State</span>
-                    <select
-                      className="auth-input"
-                      value={storefrontLocationStateCode || ""}
-                      onChange={(event) => handleStorefrontStateChange(event.target.value)}
-                    >
-                      <option value="">Select a state</option>
-                      {storefrontLocationState &&
-                        !storefrontStateOptions.some(
-                          (state) =>
-                            state.code === storefrontLocationStateCode ||
-                            state.name.toLowerCase() ===
-                              storefrontLocationState.toLowerCase()
-                        ) && (
-                          <option value={storefrontLocationStateCode || storefrontLocationState}>
-                            {storefrontLocationState}
-                          </option>
-                        )}
-                      {storefrontStateOptions.map((state) => (
-                        <option key={state.code || state.name} value={state.code || state.name}>
-                          {state.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="profile-field">
-                    <span className="profile-field-label">City</span>
-                    <select
-                      className="auth-input"
-                      value={storefrontLocationCity}
-                      onChange={(event) => handleStorefrontCityChange(event.target.value)}
-                      disabled={!storefrontLocationStateCode || storefrontCityOptions.length === 0}
-                    >
-                      <option value="">Select a city</option>
-                      {storefrontLocationCity &&
-                        !storefrontCityOptions.some(
-                          (city) =>
-                            city.name.toLowerCase() === storefrontLocationCity.toLowerCase()
-                        ) && (
-                          <option value={storefrontLocationCity}>
-                            {storefrontLocationCity}
-                          </option>
-                        )}
-                      {storefrontCityOptions.map((city) => (
-                        <option key={city.code || city.name} value={city.name}>
-                          {city.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-                {storefrontLocationError && (
-                  <p className="profile-location-error">{storefrontLocationError}</p>
-                )}
-                <div className="security-row">
-                  <label className="profile-field">
-                    <span className="profile-field-label">Radius (miles)</span>
-                    <select
-                      className="auth-input"
-                      value={
-                        STOREFRONT_RADIUS_OPTIONS.some(
-                          (option) => option.value === profile.storefrontDefaultRadiusMiles
-                        )
-                          ? profile.storefrontDefaultRadiusMiles
-                          : ""
-                      }
-                      onChange={(event) =>
-                        setProfile({
-                          ...profile,
-                          storefrontDefaultRadiusMiles: event.target.value,
-                        })
-                      }
-                    >
-                      <option value="">Select a radius</option>
-                      {STOREFRONT_RADIUS_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                <div className="security-actions">
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={() => {
+                      setSettingsSection("privacy");
+                      navigate("/me?view=settings&section=privacy");
+                      window.scrollTo({ top: 0, behavior: "smooth" });
+                    }}
+                  >
+                    Open privacy settings
+                  </button>
                 </div>
                 <p className="security-muted">
-                  The radius is stored and prefilled but not used to actually filter listings yet
-                  because listings only have a text location string (no lat/long). If you want
-                  true radius filtering, I can add geocoding + distance checks.
+                  These defaults only affect your own StoreFront filters, not what others see.
                 </p>
               </div>
             </div>
-
-            <div className="settings-actions">
-              <button
-                className="btn ghost"
-                type="button"
-                onClick={handleSaveStorefrontSettings}
-                disabled={storefrontSettingsSaving}
-              >
-                {storefrontSettingsSaving ? "Saving..." : "Save StoreFront defaults"}
-              </button>
-            </div>
-            {storefrontSettingsError && (
-              <p className="status status-error">{storefrontSettingsError}</p>
-            )}
-            {storefrontSettingsSuccess && (
-              <p className="status status-success">{storefrontSettingsSuccess}</p>
-            )}
           </section>
         </div>
         )}
@@ -9880,25 +10260,6 @@ export default function Me() {
         </div>
         )}
 
-        {isSettingsView && settingsSection === "language" && (
-        <div className="panel-grid">
-          <section className="panel profile-settings-panel profile-settings-panel--language">
-            <div className="panel-header profile-language-header">
-              <div className="profile-language-copy">
-                <p className="eyebrow">Language</p>
-                <h3>Language Options</h3>
-                <p className="panel-sub">
-                  Choose the language you want to use across the app.
-                </p>
-              </div>
-              <div className="profile-language-control">
-                <LanguageMenu inline />
-              </div>
-            </div>
-          </section>
-        </div>
-        )}
-
         {isSettingsView && settingsSection === "changes" && (
         <div className="panel-grid">
           <section className="panel profile-settings-panel">
@@ -9930,7 +10291,7 @@ export default function Me() {
                     type="email"
                     value={emailDraft}
                     onChange={(e) => setEmailDraft(e.target.value)}
-                    placeholder="New email"
+                    placeholder={isPhonePlaceholderAccount ? "Add email address" : "New email"}
                   />
                   <button
                     className="btn ghost"
@@ -10154,8 +10515,7 @@ export default function Me() {
                   onDrop={(event) => {
                     event.preventDefault();
                     setMediaDragActive(false);
-                    const file = event.dataTransfer.files?.[0] || null;
-                    handleMediaFileSelection(file);
+                    handleMediaFileSelection(event.dataTransfer.files || null);
                   }}
                 >
                   {mediaFilePreview ? (
@@ -10169,8 +10529,8 @@ export default function Me() {
                   ) : (
                     <div className="profile-media__placeholder">
                       {mediaDragActive
-                        ? "Drop your photo or video to preview."
-                        : "Drag and drop a photo or video, or select one to preview."}
+                        ? "Drop photos/videos to preview and upload."
+                        : "Drag and drop photos/videos, or select multiple files."}
                     </div>
                   )}
                 </div>
@@ -10239,33 +10599,39 @@ export default function Me() {
                       <input
                         type="file"
                         accept="image/*,video/*"
+                        multiple
                         onChange={(e) => {
-                          const file = e.target.files?.[0] || null;
-                          handleMediaFileSelection(file);
+                          handleMediaFileSelection(e.target.files || null);
                         }}
                       />
-                      <span>{mediaFile ? "Change media" : "Choose media"}</span>
+                      <span>{mediaFiles.length > 0 ? "Change media" : "Choose media"}</span>
                     </label>
                     <span className="profile-media__file">
-                      {mediaFile ? mediaFile.name : "No media selected"}
+                      {mediaFiles.length === 0
+                        ? "No media selected"
+                        : mediaFiles.length === 1
+                        ? mediaFiles[0].name
+                        : `${mediaFiles.length} files selected`}
                     </span>
-                    {mediaFile && (
+                    {mediaFiles.length > 0 && (
                       <button
                         className="btn ghost"
                         type="button"
-                        onClick={() => setMediaFile(null)}
+                        onClick={() => setMediaFiles([])}
                       >
                         Remove
                       </button>
                     )}
-                    {mediaFile && (
+                    {mediaFiles.length > 0 && (
                       <button
                         className="btn primary"
                         type="button"
                         onClick={createMediaItem}
                         disabled={mediaSubmitting}
                       >
-                        {mediaSubmitting ? "Uploading..." : "Add to gallery"}
+                        {mediaSubmitting
+                          ? "Uploading..."
+                          : `Add ${mediaFiles.length > 1 ? `${mediaFiles.length} files` : "to gallery"}`}
                       </button>
                     )}
                   </div>
@@ -10459,7 +10825,10 @@ export default function Me() {
                         >
                           <div className="profile-media__overlay">
                             {item.media && (
-                              <div className="post-menu-wrapper post-menu-wrapper--media">
+                              <div
+                                className="post-menu-wrapper post-menu-wrapper--media"
+                                onPointerDown={(event) => event.stopPropagation()}
+                              >
                                 <button
                                   className="post-menu-trigger"
                                   type="button"
@@ -10478,7 +10847,11 @@ export default function Me() {
                                   </svg>
                                 </button>
                                 {showMediaMenu && (
-                                  <div className="post-menu" role="menu">
+                                  <div
+                                    className="post-menu"
+                                    role="menu"
+                                    onPointerDown={(event) => event.stopPropagation()}
+                                  >
                                     <button
                                       className="post-menu-item"
                                       type="button"
@@ -10693,6 +11066,13 @@ export default function Me() {
                 </svg>
               </span>
             </button>
+            <button
+              className="btn ghost profile-posts-manager-button"
+              type="button"
+              onClick={() => navigate("/post-manager")}
+            >
+              Post Manager
+            </button>
           </div>
           {contentPostsOpen && (posts.length === 0 ? (
             <p className="status">No posts yet.</p>
@@ -10717,17 +11097,32 @@ export default function Me() {
             };
             const showShareMenu = shareMenuFor === postKey;
             const showPostMenu = postMenuFor === postKey;
-            const shareUrl = buildShareUrl(postKey);
+            const shareUrl = buildShareUrl(p, postKey);
             const shareText = p.text
               ? `${displayName}: ${p.text.slice(0, 80)}`
               : `${displayName} posted an update.`;
+            const canShareExternally = isPubliclyShareablePost(p);
+            const externalShareBlockMessage = "Only public posts can be shared externally.";
             const encodedUrl = encodeURIComponent(shareUrl);
             const encodedText = encodeURIComponent(shareText);
             const likesCount = Number(p.likes ?? 0);
             const reactionCounts = normalizeReactionCounts(p.reactionCounts, likesCount);
-            const thumbsUpCount = reactionCounts.thumbsUp;
-            const heartCount = reactionCounts.heart;
             const myReaction = normalizeReactionValue(p.myReaction);
+            const reactionTotalCount = REACTION_OPTIONS.reduce(
+              (sum, option) => sum + Number(reactionCounts[option.key] || 0),
+              0
+            );
+            const topReactionOptions = getTopReactionOptions(reactionCounts);
+            const reactionBadgeOptions = topReactionOptions.length
+              ? topReactionOptions
+              : REACTION_OPTIONS.slice(0, 1);
+            const isReactionPickerOpen = reactionPickerFor === postKey;
+            const isReactionBreakdownOpen = reactionBreakdownFor === postKey;
+            const hasOpenPopover =
+              showShareMenu ||
+              showPostMenu ||
+              isReactionPickerOpen ||
+              isReactionBreakdownOpen;
             const sharesCount = Number(p.shares ?? 0);
             const commentsCount = comments.length;
             const isEditingPost = editingPostId === postKey;
@@ -10737,9 +11132,7 @@ export default function Me() {
               <article
                 key={String(p.id)}
                 id={`post-${postKey}`}
-                className={`post-card${
-                  showShareMenu || showPostMenu ? " is-popover-open" : ""
-                }`}
+                className={`post-card${hasOpenPopover ? " is-popover-open" : ""}`}
               >
                 <div className="post-meta-bar">
                   <span className="post-meta-name">{displayName}</span>
@@ -10753,7 +11146,10 @@ export default function Me() {
                 </div>
 
                 {canDelete && !isEditingPost && !p.media && !preview?.image && (
-                  <div className="post-menu-wrapper">
+                  <div
+                    className="post-menu-wrapper"
+                    onPointerDown={(event) => event.stopPropagation()}
+                  >
                     <button
                       className="post-menu-trigger"
                       type="button"
@@ -10772,7 +11168,11 @@ export default function Me() {
                       </svg>
                     </button>
                     {showPostMenu && (
-                      <div className="post-menu" role="menu">
+                      <div
+                        className="post-menu"
+                        role="menu"
+                        onPointerDown={(event) => event.stopPropagation()}
+                      >
                         <button
                           className="post-menu-item"
                           type="button"
@@ -10805,7 +11205,10 @@ export default function Me() {
                 {p.media ? (
                   <div className="post-media">
                     {canDelete && !isEditingPost && (
-                      <div className="post-menu-wrapper post-menu-wrapper--media">
+                      <div
+                        className="post-menu-wrapper post-menu-wrapper--media"
+                        onPointerDown={(event) => event.stopPropagation()}
+                      >
                         <button
                           className="post-menu-trigger"
                           type="button"
@@ -10824,7 +11227,11 @@ export default function Me() {
                           </svg>
                         </button>
                         {showPostMenu && (
-                          <div className="post-menu" role="menu">
+                          <div
+                            className="post-menu"
+                            role="menu"
+                            onPointerDown={(event) => event.stopPropagation()}
+                          >
                             <button
                               className="post-menu-item"
                               type="button"
@@ -10866,7 +11273,10 @@ export default function Me() {
                 ) : preview?.image && !isYoutubeUrl(postUrl) ? (
                   <div className="post-media link-preview-media">
                     {canDelete && !isEditingPost && (
-                      <div className="post-menu-wrapper post-menu-wrapper--media">
+                      <div
+                        className="post-menu-wrapper post-menu-wrapper--media"
+                        onPointerDown={(event) => event.stopPropagation()}
+                      >
                         <button
                           className="post-menu-trigger"
                           type="button"
@@ -10885,7 +11295,11 @@ export default function Me() {
                           </svg>
                         </button>
                         {showPostMenu && (
-                          <div className="post-menu" role="menu">
+                          <div
+                            className="post-menu"
+                            role="menu"
+                            onPointerDown={(event) => event.stopPropagation()}
+                          >
                             <button
                               className="post-menu-item"
                               type="button"
@@ -10969,26 +11383,45 @@ export default function Me() {
                     </>
                   )}
                   <div className="post-actions">
-                    <div className="post-action-counts">
+                    <div
+                      className={`post-action-counts post-action-counts--with-breakdown${
+                        isReactionBreakdownOpen ? " is-open" : ""
+                      }`}
+                      role="button"
+                      tabIndex={0}
+                      aria-label="Show reaction breakdown"
+                      aria-expanded={isReactionBreakdownOpen}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setReactionBreakdownFor((prev) =>
+                          prev === postKey ? null : postKey
+                        );
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter" && event.key !== " ") return;
+                        event.preventDefault();
+                        setReactionBreakdownFor((prev) =>
+                          prev === postKey ? null : postKey
+                        );
+                      }}
+                    >
                       <span
-                        className={`post-action-count${
-                          myReaction === "👍" ? " is-selected" : ""
+                        className={`post-action-count post-action-count--reactions${
+                          myReaction ? " is-selected" : ""
                         }`}
                       >
-                        <span className="post-action-count-icon" aria-hidden="true">
-                          👍
+                        <span className="post-action-reaction-stack" aria-hidden="true">
+                          {reactionBadgeOptions.map((option, index) => (
+                            <span
+                              key={`${postKey}-reaction-chip-${option.key}-${index}`}
+                              className="post-action-reaction-chip"
+                              title={option.label}
+                            >
+                              {option.emoji}
+                            </span>
+                          ))}
                         </span>
-                        {thumbsUpCount}
-                      </span>
-                      <span
-                        className={`post-action-count${
-                          myReaction === "❤️" ? " is-selected" : ""
-                        }`}
-                      >
-                        <span className="post-action-count-icon" aria-hidden="true">
-                          ❤️
-                        </span>
-                        {heartCount}
+                        <span className="post-action-count-total">{reactionTotalCount}</span>
                       </span>
                       <span className="post-action-count">
                         <span className="post-action-count-icon" aria-hidden="true">
@@ -11002,38 +11435,82 @@ export default function Me() {
                         </span>
                         {sharesCount}
                       </span>
-                    </div>
-                      <div className="post-action-bar">
-                      <div className="post-action-group">
-                        <button
-                        className={`post-action-btn${
-                          myReaction === "👍" ? " is-reacted" : ""
+                      <div
+                        className={`post-action-popover post-action-popover--reaction-breakdown${
+                          isReactionBreakdownOpen ? " is-open" : ""
                         }`}
-                        type="button"
-                        aria-pressed={myReaction === "👍"}
-                        onClick={() => void handleReaction(p, postKey, "👍")}
+                        role="tooltip"
                       >
-                        <span className="post-action-icon" aria-hidden="true">
-                          👍
-                        </span>
-                        <span>Like</span>
-                      </button>
+                        <div className="post-reaction-breakdown">
+                          {REACTION_OPTIONS.map((option) => (
+                            <div className="post-reaction-breakdown-row" key={option.key}>
+                              <span className="post-reaction-breakdown-meta">
+                                <span aria-hidden="true">{option.emoji}</span>
+                                <span>{option.label}</span>
+                              </span>
+                              <strong>{Number(reactionCounts[option.key] || 0)}</strong>
+                            </div>
+                          ))}
+                          <div className="post-reaction-breakdown-row is-total">
+                            <span>Total reactions</span>
+                            <strong>{reactionTotalCount}</strong>
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                      <div className="post-action-group">
+                    <div className="post-action-bar">
+                    <div
+                      className={`post-action-group post-action-group--reaction${
+                        isReactionPickerOpen ? " is-open" : ""
+                      }`}
+                    >
                         <button
-                        className={`post-action-btn${
-                          myReaction === "❤️" ? " is-reacted" : ""
-                        }`}
-                        type="button"
-                        aria-pressed={myReaction === "❤️"}
-                        onClick={() => void handleReaction(p, postKey, "❤️")}
-                      >
-                        <span className="post-action-icon" aria-hidden="true">
-                          ❤️
-                        </span>
-                        <span>Heart</span>
-                      </button>
-                    </div>
+                          className={`post-action-btn${myReaction ? " is-reacted" : ""}`}
+                          type="button"
+                          aria-pressed={Boolean(myReaction)}
+                          aria-expanded={isReactionPickerOpen}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setReactionPickerFor((prev) =>
+                              prev === postKey ? null : postKey
+                            );
+                          }}
+                        >
+                          <span className="post-action-icon" aria-hidden="true">
+                            {myReaction || "👍"}
+                          </span>
+                          <span>Like</span>
+                        </button>
+                        <div
+                          className={`post-action-popover post-action-popover--reactions${
+                            isReactionPickerOpen ? " is-open" : ""
+                          }`}
+                          role="menu"
+                          aria-label="Choose reaction"
+                        >
+                          <div className="post-reaction-picker">
+                            {REACTION_OPTIONS.map((option) => (
+                              <button
+                                key={option.key}
+                                className={`post-reaction-emoji${
+                                  myReaction === option.emoji ? " is-selected" : ""
+                                }`}
+                                type="button"
+                                role="menuitem"
+                                aria-label={option.label}
+                                title={option.label}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setReactionPickerFor(null);
+                                  void handleReaction(p, postKey, option.emoji);
+                                }}
+                              >
+                                {option.emoji}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
                     <div className="post-action-group">
                       <button
                         className="post-action-btn"
@@ -11095,8 +11572,15 @@ export default function Me() {
                               )}
                             <a
                               className="post-share-link is-icon post-share-link--facebook"
-                              href={`https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}&quote=${encodedText}`}
-                              onClick={() => void trackShare(p, postKey)}
+                              href={`https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`}
+                              onClick={(event) => {
+                                if (!canShareExternally) {
+                                  event.preventDefault();
+                                  pushShareNotice(postKey, externalShareBlockMessage);
+                                  return;
+                                }
+                                void trackShare(p, postKey);
+                              }}
                               target="_blank"
                               rel="noreferrer"
                               aria-label="Share to Facebook"
@@ -11109,7 +11593,14 @@ export default function Me() {
                             <a
                               className="post-share-link is-icon post-share-link--x"
                               href={`https://twitter.com/intent/tweet?text=${encodedText}&url=${encodedUrl}`}
-                              onClick={() => void trackShare(p, postKey)}
+                              onClick={(event) => {
+                                if (!canShareExternally) {
+                                  event.preventDefault();
+                                  pushShareNotice(postKey, externalShareBlockMessage);
+                                  return;
+                                }
+                                void trackShare(p, postKey);
+                              }}
                               target="_blank"
                               rel="noreferrer"
                               aria-label="Share to X"
@@ -11122,7 +11613,14 @@ export default function Me() {
                             <a
                               className="post-share-link is-icon post-share-link--linkedin"
                               href={`https://www.linkedin.com/sharing/share-offsite/?url=${encodedUrl}`}
-                              onClick={() => void trackShare(p, postKey)}
+                              onClick={(event) => {
+                                if (!canShareExternally) {
+                                  event.preventDefault();
+                                  pushShareNotice(postKey, externalShareBlockMessage);
+                                  return;
+                                }
+                                void trackShare(p, postKey);
+                              }}
                               target="_blank"
                               rel="noreferrer"
                               aria-label="Share to LinkedIn"
@@ -11135,7 +11633,14 @@ export default function Me() {
                             <a
                               className="post-share-link is-icon post-share-link--reddit"
                               href={`https://www.reddit.com/submit?url=${encodedUrl}&title=${encodedText}`}
-                              onClick={() => void trackShare(p, postKey)}
+                              onClick={(event) => {
+                                if (!canShareExternally) {
+                                  event.preventDefault();
+                                  pushShareNotice(postKey, externalShareBlockMessage);
+                                  return;
+                                }
+                                void trackShare(p, postKey);
+                              }}
                               target="_blank"
                               rel="noreferrer"
                               aria-label="Share to Reddit"
@@ -11148,7 +11653,14 @@ export default function Me() {
                             <a
                               className="post-share-link is-icon post-share-link--whatsapp"
                               href={`https://wa.me/?text=${encodedText}%20${encodedUrl}`}
-                              onClick={() => void trackShare(p, postKey)}
+                              onClick={(event) => {
+                                if (!canShareExternally) {
+                                  event.preventDefault();
+                                  pushShareNotice(postKey, externalShareBlockMessage);
+                                  return;
+                                }
+                                void trackShare(p, postKey);
+                              }}
                               target="_blank"
                               rel="noreferrer"
                               aria-label="Share to WhatsApp"
@@ -11256,7 +11768,7 @@ export default function Me() {
                                   </div>
                                 </div>
                               ) : (
-                                <div className="comment-body">{displayBody}</div>
+                                <div className="comment-body">{linkifyText(displayBody)}</div>
                               )}
                               {!isEditing && imageUrls.length > 0 && (
                                 <div className="comment-images">

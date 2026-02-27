@@ -1242,6 +1242,15 @@
   flex-shrink: 0;
 }
 
+.storefront-profile-static {
+  cursor: default;
+}
+
+.storefront-profile-static:hover,
+.storefront-profile-static:active {
+  transform: none;
+}
+
 .storefront-shell::before {
   content: "";
   position: absolute;

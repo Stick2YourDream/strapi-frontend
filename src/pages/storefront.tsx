@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { LayoutDashboard } from "lucide-react";
+import { Download, Home, LayoutDashboard, LogOut, Settings, User, X } from "lucide-react";
 import "../css/dashboard.css";
 import "../css/storefront.css";
 import "../css/sidebar.css";
@@ -586,59 +586,93 @@ export default function Storefront() {
               )}
             </button>
             {showProfileMenu && (
-              <div className="mobile-profile-menu">
+              <>
                 <button
-                  className="mobile-profile-item"
                   type="button"
-                  data-accent="dashboard"
-                  onClick={() => handleProfileAction("/dashboard")}
-                >
-                  <span className="sidebar-nav-icon" aria-hidden="true">
-                    <LayoutDashboard size={18} />
-                  </span>
-                  <span>Back to dashboard</span>
-                </button>
-                <button
-                  className="mobile-profile-item"
-                  type="button"
-                  onClick={() => handleProfileAction("/me")}
-                >
-                  My Profile
-                </button>
-                <button
-                  className="mobile-profile-item"
-                  type="button"
-                  data-accent="settings"
-                  onClick={() => handleProfileAction("/me?view=settings")}
-                >
-                  Account settings
-                </button>
-                <button
-                  className="mobile-profile-item"
-                  type="button"
-                  onClick={() => {
-                    setPhotoModalOpen(true);
-                    setShowProfileMenu(false);
-                    setMenuOpen(false);
-                  }}
-                >
-                  {profile?.avatarUrl ? "Edit Profile Photo" : "Add Profile Photo"}
-                </button>
-                {user && (
+                  className="mobile-profile-menu-backdrop"
+                  aria-label="Close profile navigation menu"
+                  onClick={() => setShowProfileMenu(false)}
+                />
+                <div className="mobile-profile-menu" role="dialog" aria-modal="true">
+                  <div className="mobile-profile-menu-header">
+                    <strong className="mobile-profile-menu-title">Navigation</strong>
+                    <button
+                      type="button"
+                      className="mobile-profile-menu-close"
+                      aria-label="Close menu"
+                      onClick={() => setShowProfileMenu(false)}
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
                   <button
                     className="mobile-profile-item"
                     type="button"
+                    data-accent="home"
+                    onClick={() => handleProfileAction("/landing")}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <Home size={18} />
+                    </span>
+                    <span>Return to Landing Page</span>
+                  </button>
+                  <button
+                    className="mobile-profile-item"
+                    type="button"
+                    data-accent="downloads"
+                    onClick={() => handleProfileAction("/downloads")}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <Download size={18} />
+                    </span>
+                    <span>Downloads</span>
+                  </button>
+                  <button
+                    className="mobile-profile-item"
+                    type="button"
+                    data-accent="settings"
+                    onClick={() => handleProfileAction("/me?view=settings")}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <Settings size={18} />
+                    </span>
+                    <span>Account settings</span>
+                  </button>
+                  <button
+                    className="mobile-profile-item"
+                    type="button"
+                    data-accent="profile-photo"
                     onClick={() => {
-                      logout("user-action");
-                      navigate("/login");
+                      setPhotoModalOpen(true);
                       setShowProfileMenu(false);
                       setMenuOpen(false);
                     }}
                   >
-                    Logout
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <User size={18} />
+                    </span>
+                    <span>{profile?.avatarUrl ? "Edit Profile Photo" : "Add Profile Photo"}</span>
                   </button>
-                )}
-              </div>
+                  {user && (
+                    <button
+                      className="mobile-profile-item"
+                      type="button"
+                      data-accent="logout"
+                      onClick={() => {
+                        logout("user-action");
+                        navigate("/login");
+                        setShowProfileMenu(false);
+                        setMenuOpen(false);
+                      }}
+                    >
+                      <span className="sidebar-nav-icon" aria-hidden="true">
+                        <LogOut size={18} />
+                      </span>
+                      <span>Logout</span>
+                    </button>
+                  )}
+                </div>
+              </>
             )}
           </div>
         </div>
@@ -667,7 +701,7 @@ export default function Storefront() {
                 className="sidebar-profile-button"
                 onClick={() => setShowProfileMenu((prev) => !prev)}
                 aria-expanded={showProfileMenu}
-                aria-controls="storefront-profile-menu"
+                aria-controls="storefront-sidebar-profile-menu"
               >
                 {avatarUrl ? (
                   <AvatarImage
@@ -715,58 +749,95 @@ export default function Storefront() {
               </button>
             </div>
             {showProfileMenu && (
-              <div id="storefront-profile-menu" className="sidebar-profile-menu">
+              <>
                 <button
-                  className="btn ghost nav-btn sidebar-profile-menu-button"
                   type="button"
-                  data-accent="dashboard"
-                  onClick={() => handleProfileAction("/dashboard")}
+                  className="sidebar-profile-menu-backdrop"
+                  aria-label="Close profile navigation menu"
+                  onClick={() => setShowProfileMenu(false)}
+                />
+                <div
+                  id="storefront-sidebar-profile-menu"
+                  className="sidebar-profile-menu"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="Profile navigation menu"
                 >
-                  <span className="sidebar-nav-icon" aria-hidden="true">
-                    <LayoutDashboard size={18} />
-                  </span>
-                  <span>Back to dashboard</span>
-                </button>
-              <button
-                className="btn ghost nav-btn sidebar-profile-menu-button"
-                type="button"
-                onClick={() => handleProfileAction("/me")}
-              >
-                My profile
-              </button>
-              <button
-                className="btn ghost nav-btn sidebar-profile-menu-button"
-                type="button"
-                data-accent="settings"
-                onClick={() => handleProfileAction("/me?view=settings")}
-              >
-                Account settings
-              </button>
-              <button
-                className="btn ghost nav-btn sidebar-profile-menu-button"
-                type="button"
-                onClick={() => {
-                  setPhotoModalOpen(true);
-                  setShowProfileMenu(false);
-                }}
-              >
-                {profile?.avatarUrl ? "Edit Profile Photo" : "Add Profile Photo"}
-              </button>
-                {user && (
+                  <div className="sidebar-profile-menu-header">
+                    <strong>Navigation</strong>
+                    <button
+                      type="button"
+                      className="sidebar-profile-menu-close"
+                      aria-label="Close menu"
+                      onClick={() => setShowProfileMenu(false)}
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
                   <button
                     className="btn ghost nav-btn sidebar-profile-menu-button"
                     type="button"
+                    data-accent="home"
+                    onClick={() => handleProfileAction("/landing")}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <Home size={18} />
+                    </span>
+                    <span>Return to Landing Page</span>
+                  </button>
+                  <button
+                    className="btn ghost nav-btn sidebar-profile-menu-button"
+                    type="button"
+                    data-accent="downloads"
+                    onClick={() => handleProfileAction("/downloads")}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <Download size={18} />
+                    </span>
+                    <span>Downloads</span>
+                  </button>
+                  <button
+                    className="btn ghost nav-btn sidebar-profile-menu-button"
+                    type="button"
+                    data-accent="settings"
+                    onClick={() => handleProfileAction("/me?view=settings")}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <Settings size={18} />
+                    </span>
+                    <span>Account settings</span>
+                  </button>
+                  <button
+                    className="btn ghost nav-btn sidebar-profile-menu-button"
+                    type="button"
+                    data-accent="profile-photo"
+                    onClick={() => {
+                      setPhotoModalOpen(true);
+                      setShowProfileMenu(false);
+                    }}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <User size={18} />
+                    </span>
+                    <span>{profile?.avatarUrl ? "Edit Profile Photo" : "Add Profile Photo"}</span>
+                  </button>
+                  <button
+                    className="btn ghost nav-btn sidebar-profile-menu-button"
+                    type="button"
+                    data-accent="logout"
                     onClick={() => {
                       logout("user-action");
                       navigate("/login");
                       setShowProfileMenu(false);
-                      setMenuOpen(false);
                     }}
                   >
-                    Logout
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <LogOut size={18} />
+                    </span>
+                    <span>Logout</span>
                   </button>
-                )}
-              </div>
+                </div>
+              </>
             )}
           </div>
 

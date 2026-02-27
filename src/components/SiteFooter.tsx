@@ -1,8 +1,27 @@
 import "../css/site-footer.css";
 import { useAuth } from "../context/AuthContext";
 
+const DONATION_HOSTED_BUTTON_ID = "XLE5DBUY2GZBJ";
+const DONATION_URL = `https://www.paypal.com/donate/?hosted_button_id=${DONATION_HOSTED_BUTTON_ID}`;
+
 export default function SiteFooter() {
   const { user } = useAuth();
+
+  const handleDonateClick = () => {
+    if (typeof window === "undefined") return;
+    const width = 720;
+    const height = 820;
+    const left = Math.max(0, Math.round((window.screen.width - width) / 2));
+    const top = Math.max(0, Math.round((window.screen.height - height) / 2));
+    const popup = window.open(
+      DONATION_URL,
+      "paypal_donate_popup",
+      `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`
+    );
+    if (!popup) {
+      window.location.assign(DONATION_URL);
+    }
+  };
 
   return (
     <footer className="landing-footer">
@@ -63,6 +82,30 @@ export default function SiteFooter() {
       <div className="footer-meta">
         <span>Your Social Place</span>
         <span>by Stick2YourDreams</span>
+          <div className="footer-donate-wrap">
+            <button
+              type="button"
+              className="footer-donate-btn"
+              onClick={handleDonateClick}
+              aria-label="Donate with PayPal"
+            >
+              <span className="footer-donate-badge" aria-hidden="true">
+                PayPal
+              </span>
+              <span className="footer-donate-text">
+                <strong>Support Your Social Place</strong>
+                <small>Donate securely</small>
+              </span>
+            </button>
+            <a
+              className="footer-donate-link"
+              href={DONATION_URL}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open donation page
+            </a>
+          </div>
       </div>
     </footer>
   );

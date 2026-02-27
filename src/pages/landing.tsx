@@ -19,6 +19,7 @@ import { pickMediaUrl } from "../utils/media";
 import { trackEvent } from "../utils/analytics";
 import type { AuthResponse, LoginStartResponse, RegisterResponse } from "../types/auth";
 import { getOrCreateDeviceId } from "../utils/device-id";
+import { getDefaultDeviceLabel } from "../utils/device-approval";
 import {
   extractNationalDigits,
   formatPhoneInput,
@@ -54,14 +55,30 @@ type ParsedContact =
   | { type: "email"; email: string }
   | { type: "phone"; phone: string; national: string; dialCode: string };
 
+type ParsedInlineAuthError = {
+  status: number | null;
+  message: string;
+  messageLower: string;
+  code: string | null;
+  supportEmail: string | null;
+};
+
 type IntentKey = "build-habit" | "stay-connected" | "find-accountability";
 type PolicyModalKey = "privacy" | "cookies";
 
 const RECENT_LOGINS_KEY = "auth:recent-logins";
 const MAX_RECENT_LOGINS = 4;
+const AGE_VERIFICATION_LOCK_CODE = "AGE_VERIFICATION_LOCKED";
+const AGE_VERIFICATION_LOCK_REASON = "age_verification_required";
+const DEFAULT_SUPPORT_EMAIL = String(
+  import.meta.env.VITE_SUPPORT_EMAIL || "support@yoursocialplace.com"
+).trim();
 const LANDING_CAROUSEL_MIN_SPIN_MS = 1000;
 const LANDING_CAROUSEL_MAX_SPIN_MS = 4000;
+const LANDING_CAROUSEL_MIN_SWITCH_INTERVAL_MS = 3000;
+const LANDING_CAROUSEL_MAX_SWITCH_INTERVAL_MS = 5000;
 const LANDING_CAROUSEL_TRACK_REPEAT = 12;
+const LANDING_MAX_DISPLAY_NAME_CHARS = 15;
 const SMS_CONSENT_TEXT =
   "I agree to receive SMS security and marketplace alerts (U.S. only). Reply STOP to opt out.";
 const LANDING_CAROUSEL_CAPTIONS = [
@@ -149,6 +166,14 @@ const sanitizeRedirectTarget = (value: string | null) => {
     return null;
   }
   return trimmed;
+};
+
+const truncateDisplayName = (value: string, maxChars = LANDING_MAX_DISPLAY_NAME_CHARS) => {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  const chars = Array.from(trimmed);
+  if (chars.length <= maxChars) return trimmed;
+  return `${chars.slice(0, maxChars).join("")}....`;
 };
 
 const getPasswordError = (password: string) => {
@@ -342,6 +367,50 @@ const fetchRecentProfileSnapshot = async (
   }
 };
 
+const parseInlineAuthError = (
+  err: unknown,
+  fallbackMessage: string
+): ParsedInlineAuthError => {
+  if (!axios.isAxiosError(err)) {
+    const message = String(err || fallbackMessage);
+    return {
+      status: null,
+      message,
+      messageLower: message.toLowerCase(),
+      code: null,
+      supportEmail: null,
+    };
+  }
+
+  const status = typeof err.response?.status === "number" ? err.response.status : null;
+  const payload = err.response?.data as
+    | {
+        error?: { message?: string; code?: string; supportEmail?: string } | string;
+        message?: string;
+        code?: string;
+        supportEmail?: string;
+      }
+    | undefined;
+  const nestedError =
+    payload?.error && typeof payload.error === "object" ? payload.error : null;
+  const message =
+    (typeof payload?.error === "string" && payload.error.trim()) ||
+    nestedError?.message ||
+    (typeof payload?.message === "string" && payload.message.trim()) ||
+    fallbackMessage;
+  const code = String(nestedError?.code || payload?.code || "").trim() || null;
+  const supportEmail =
+    String(nestedError?.supportEmail || payload?.supportEmail || "").trim() || null;
+
+  return {
+    status,
+    message,
+    messageLower: message.toLowerCase(),
+    code,
+    supportEmail,
+  };
+};
+
 export default function Landing() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -408,6 +477,12 @@ export default function Landing() {
   const [ageSessionError, setAgeSessionError] = useState<string | null>(null);
   const [ageSessionLoading, setAgeSessionLoading] = useState(false);
   const [ageModalOpen, setAgeModalOpen] = useState(false);
+  const [ageLockEnforced, setAgeLockEnforced] = useState(false);
+  const [ageLockSupportEmail, setAgeLockSupportEmail] = useState(DEFAULT_SUPPORT_EMAIL);
+  const [trustModalOpen, setTrustModalOpen] = useState(false);
+  const [trustModalLoading, setTrustModalLoading] = useState(false);
+  const [trustModalError, setTrustModalError] = useState<string | null>(null);
+  const [pendingInlineRedirect, setPendingInlineRedirect] = useState<string | null>(null);
   const [ageToken, setAgeToken] = useState<string | null>(null);
   const [ageVerifyContact, setAgeVerifyContact] = useState<string | null>(null);
   const [ageVerifyApplied, setAgeVerifyApplied] = useState(false);
@@ -431,6 +506,17 @@ export default function Landing() {
     () => sanitizeRedirectTarget(new URLSearchParams(location.search).get("redirect")),
     [location.search]
   );
+  const switchProfileParam = useMemo(
+    () => new URLSearchParams(location.search).get("switchProfile"),
+    [location.search]
+  );
+  const switchProfileIdentifierParam = useMemo(
+    () => String(new URLSearchParams(location.search).get("identifier") || "").trim().toLowerCase(),
+    [location.search]
+  );
+  const forceSwitchProfileMode =
+    switchProfileParam === "1" || String(switchProfileParam || "").toLowerCase() === "true";
+  const trustDeviceLabel = useMemo(() => getDefaultDeviceLabel(), []);
   const intentKey = useMemo(() => normalizeIntent(intentParam), [intentParam]);
   const signupContactDetails = useMemo(
     () => parseContact(signupForm.contact, signupPhoneDialCode),
@@ -621,7 +707,11 @@ export default function Landing() {
           token: ageToken,
           contact: ageVerifyContact,
         });
-        if (active) setAgeVerifyApplied(true);
+        if (active) {
+          setAgeVerifyApplied(true);
+          setAgeLockEnforced(false);
+          setAgeLockSupportEmail(DEFAULT_SUPPORT_EMAIL);
+        }
       } catch (err: any) {
         const message =
           err?.response?.data?.error?.message ||
@@ -693,6 +783,13 @@ export default function Landing() {
         LANDING_CAROUSEL_MIN_SPIN_MS +
           Math.random() * (LANDING_CAROUSEL_MAX_SPIN_MS - LANDING_CAROUSEL_MIN_SPIN_MS)
       );
+    const randomSwitchInterval = () =>
+      Math.floor(
+        LANDING_CAROUSEL_MIN_SWITCH_INTERVAL_MS +
+          Math.random() *
+            (LANDING_CAROUSEL_MAX_SWITCH_INTERVAL_MS -
+              LANDING_CAROUSEL_MIN_SWITCH_INTERVAL_MS)
+      );
 
     const resolveNextTargetIndex = (currentIndex: number) => {
       if (
@@ -724,7 +821,8 @@ export default function Landing() {
         setCarouselPosition(nextPosition);
         carouselPositionRef.current = nextPosition;
         setCarouselActiveIndex(targetIndex);
-        const pauseMs = 600 + Math.floor(Math.random() * 1400);
+        const nextSwitchIntervalMs = randomSwitchInterval();
+        const pauseMs = Math.max(0, nextSwitchIntervalMs - durationMs);
         scheduleSpin(durationMs + pauseMs, runSpin);
       };
 
@@ -861,6 +959,10 @@ export default function Landing() {
     if (user?.email) return user.email;
     return "Welcome back";
   }, [profileSummary?.displayName, user?.email]);
+  const nameForDisplayShort = useMemo(
+    () => truncateDisplayName(nameForDisplay),
+    [nameForDisplay]
+  );
 
   const recentLogin = recentLogins[0] ?? null;
   const profileInitial = nameForDisplay.slice(0, 1).toUpperCase() || "Y";
@@ -876,6 +978,7 @@ export default function Landing() {
     !challengeId && hasRecentLogin && (showRecentPasswordStep || showAnotherProfileForm)
   );
   const recentName = recentLogin?.label || "Welcome back";
+  const recentNameShort = useMemo(() => truncateDisplayName(recentName), [recentName]);
   const recentInitial = recentName.slice(0, 1).toUpperCase() || loginInitial;
   const selectedRecentProfile = useMemo(() => {
     const normalized = identifier.trim().toLowerCase();
@@ -894,7 +997,10 @@ export default function Landing() {
     ? "Create new account"
     : showAnotherProfileForm
     ? "Use another profile"
-    : recentName;
+    : recentNameShort;
+  const canQuickLoginFromAvatar = Boolean(
+    showRecentActionCard && recentLogin?.identifier && !loginLoading
+  );
 
   useEffect(() => {
     if (user || !useRecentLogin || !recentLogin?.identifier) return;
@@ -934,6 +1040,11 @@ export default function Landing() {
     setSignupAccessNotice(null);
     setSignupTermsOpen(false);
     setAgeModalOpen(false);
+    setAgeLockEnforced(false);
+    setAgeLockSupportEmail(DEFAULT_SUPPORT_EMAIL);
+    setTrustModalOpen(false);
+    setTrustModalError(null);
+    setPendingInlineRedirect(null);
     clearInlineMessages();
     clearSignupMessages();
     resetVerificationState();
@@ -1042,6 +1153,32 @@ export default function Landing() {
     }
   };
 
+  const closeAgeModal = () => {
+    if (ageLockEnforced) return;
+    setAgeModalOpen(false);
+    setAgeLockEnforced(false);
+    setAgeLockSupportEmail(DEFAULT_SUPPORT_EMAIL);
+  };
+
+  const openAgeModal = (options?: {
+    contactOverride?: string | null;
+    lockEnforced?: boolean;
+    supportEmail?: string | null;
+  }) => {
+    const nextSupport =
+      String(options?.supportEmail || "").trim() || DEFAULT_SUPPORT_EMAIL;
+    const nextContact = String(
+      options?.contactOverride || ageVerifyContact || identifier || ""
+    ).trim();
+    setAgeLockEnforced(Boolean(options?.lockEnforced));
+    setAgeLockSupportEmail(nextSupport);
+    setAgeVerifyContact(nextContact || null);
+    setAgeModalOpen(true);
+    if (!ageSessionId && !ageSessionLoading) {
+      void createAgeSession();
+    }
+  };
+
   const persistRecentLogin = async (
     account: AuthResponse["user"],
     identifierUsed?: string
@@ -1098,15 +1235,24 @@ export default function Landing() {
 
   const completeInlineLogin = (
     data: { jwt: string; user: AuthResponse["user"] },
-    source: "password" | "verification",
+    source: "password" | "verification" | "trusted",
     identifierUsed?: string
   ) => {
+    const redirectTarget = postAuthTarget || "/dashboard";
     void persistRecentLogin(data.user, identifierUsed);
     login(data.user, data.jwt, { rememberDevice: false });
     resetVerificationState();
     clearInlineMessages();
     trackEvent("login_completed", { source: `landing_inline_${source}` });
-    navigate(postAuthTarget || "/dashboard");
+    if (source === "trusted" || (data as AuthResponse).trustedDevice) {
+      setTrustModalOpen(false);
+      setPendingInlineRedirect(null);
+      navigate(redirectTarget);
+      return;
+    }
+    setPendingInlineRedirect(redirectTarget);
+    setTrustModalError(null);
+    setTrustModalOpen(true);
   };
 
   const applyInlineLoginResponse = (
@@ -1132,12 +1278,13 @@ export default function Landing() {
       const baseMessage = data.deliveryHint
         ? `We sent a code to ${data.deliveryHint}.`
         : "We sent a verification code.";
+      const fallbackMessage = data.totpInvalid
+        ? `${baseMessage} Authenticator app is unavailable right now; re-link it in Settings after login.`
+        : baseMessage;
       setLoginInfo(
         data.method === "totp"
           ? "Enter the code from your authenticator app."
-          : data.totpInvalid
-          ? `${baseMessage} Your authenticator setup needs to be reset after login.`
-          : baseMessage
+          : fallbackMessage
       );
       return true;
     }
@@ -1150,36 +1297,66 @@ export default function Landing() {
     return false;
   };
 
-  const readAxiosMessage = (err: unknown, fallback: string) => {
-    if (!axios.isAxiosError(err)) return fallback;
-    const data = err.response?.data as
-      | { error?: { message?: string } | string; message?: string }
-      | undefined;
-    if (typeof data?.error === "string" && data.error.trim()) return data.error;
-    if (typeof data?.error === "object" && data.error?.message) return data.error.message;
-    if (typeof data?.message === "string" && data.message.trim()) return data.message;
-    return fallback;
-  };
-
   const resolveInlineLoginError = (err: unknown) => {
-    const msg = readAxiosMessage(err, "Login failed. Please try again.");
-    const lower = msg.toLowerCase();
+    const parsed = parseInlineAuthError(err, "Login failed. Please try again.");
+    const lower = parsed.messageLower;
+    const isAgeLock =
+      parsed.code === AGE_VERIFICATION_LOCK_CODE ||
+      parsed.code === AGE_VERIFICATION_LOCK_REASON ||
+      (parsed.status === 403 &&
+        String(parsed.message || "")
+          .toLowerCase()
+          .includes("age verification"));
+    const supportEmail = parsed.supportEmail || DEFAULT_SUPPORT_EMAIL;
+
     if (lower.includes("invalid identifier") || lower.includes("invalid password")) {
-      return "Invalid email, phone number, or password.";
+      return {
+        ...parsed,
+        message: "Invalid email, phone number, or password.",
+        supportEmail,
+        isAgeLock: false,
+      };
     }
     if (lower.includes("account locked") || lower.includes("too many failed")) {
-      return "Account locked for 24 hours due to too many failed login attempts.";
+      return {
+        ...parsed,
+        message: "Account locked for 24 hours due to too many failed login attempts.",
+        supportEmail,
+        isAgeLock: false,
+      };
     }
     if (lower.includes("not confirmed") || lower.includes("confirm your email")) {
-      return "Please confirm your email before logging in.";
+      return {
+        ...parsed,
+        message: "Please confirm your email before logging in.",
+        supportEmail,
+        isAgeLock: false,
+      };
     }
     if (lower.includes("authenticator app is not configured")) {
-      return "Authenticator app is not configured. Use email/phone verification or re-enroll 2FA.";
+      return {
+        ...parsed,
+        message: "Authenticator app is not configured. Use email/phone verification or re-enroll 2FA.",
+        supportEmail,
+        isAgeLock: false,
+      };
     }
-    if (lower.includes("age verification")) {
-      return "Age verification required. Verify your age to unlock your account.";
+    if (isAgeLock) {
+      return {
+        ...parsed,
+        message:
+          parsed.code === AGE_VERIFICATION_LOCK_CODE
+            ? `Age verification overdue. Your account is locked. Contact ${supportEmail} or complete verification to continue.`
+            : "Age verification required. Verify your age to unlock your account.",
+        supportEmail,
+        isAgeLock: true,
+      };
     }
-    return msg;
+    return {
+      ...parsed,
+      supportEmail,
+      isAgeLock: false,
+    };
   };
 
   const handleInlineRegisterSubmit = async (event: React.FormEvent) => {
@@ -1363,7 +1540,17 @@ export default function Landing() {
         setLoginError("Login failed. Please try again.");
       }
     } catch (err) {
-      setLoginError(resolveInlineLoginError(err));
+      const resolved = resolveInlineLoginError(err);
+      setLoginError(resolved.message);
+      if (resolved.isAgeLock) {
+        openAgeModal({
+          contactOverride: normalizedIdentifier,
+          lockEnforced:
+            resolved.code === AGE_VERIFICATION_LOCK_CODE ||
+            resolved.code === AGE_VERIFICATION_LOCK_REASON,
+          supportEmail: resolved.supportEmail,
+        });
+      }
     } finally {
       setLoginLoading(false);
     }
@@ -1377,6 +1564,13 @@ export default function Landing() {
   const handleInlineUseAuthenticator = async () => {
     if (loginLoading || verifying) return;
     await startInlineLogin("totp");
+  };
+
+  const handleInlineUseCodeFallback = async () => {
+    if (loginLoading || verifying) return;
+    const normalized = identifier.trim().toLowerCase();
+    const fallbackMethod: VerificationMethod = normalized.includes("@") ? "email" : "sms";
+    await startInlineLogin(fallbackMethod);
   };
 
   const handleInlineVerifySubmit = async (event: React.FormEvent) => {
@@ -1408,12 +1602,25 @@ export default function Landing() {
       }
       completeInlineLogin(response.data, "verification", identifier.trim().toLowerCase());
     } catch (err) {
-      const message = readAxiosMessage(err, "Verification failed.");
-      const lower = message.toLowerCase();
+      const parsed = parseInlineAuthError(err, "Verification failed.");
+      const lower = parsed.messageLower;
       if (lower.includes("expired") || lower.includes("too many")) {
         resetVerificationState();
       }
-      setLoginError(message);
+      if (
+        parsed.code === AGE_VERIFICATION_LOCK_CODE ||
+        parsed.code === AGE_VERIFICATION_LOCK_REASON ||
+        (parsed.status === 403 && lower.includes("age verification"))
+      ) {
+        openAgeModal({
+          contactOverride: identifier.trim().toLowerCase(),
+          lockEnforced:
+            parsed.code === AGE_VERIFICATION_LOCK_CODE ||
+            parsed.code === AGE_VERIFICATION_LOCK_REASON,
+          supportEmail: parsed.supportEmail,
+        });
+      }
+      setLoginError(parsed.message);
     } finally {
       setVerifying(false);
     }
@@ -1435,10 +1642,39 @@ export default function Landing() {
           : "Code resent. Check your phone."
       );
     } catch (err) {
-      setLoginError(readAxiosMessage(err, "Unable to resend code."));
+      setLoginError(parseInlineAuthError(err, "Unable to resend code.").message);
     } finally {
       setResending(false);
     }
+  };
+
+  const handleTrustDevice = async () => {
+    if (trustModalLoading) return;
+    setTrustModalLoading(true);
+    setTrustModalError(null);
+    try {
+      await api.post("/auth/trusted-devices/trust", {
+        deviceId: getOrCreateDeviceId(),
+        deviceLabel: trustDeviceLabel,
+      });
+      setTrustModalOpen(false);
+      const next = pendingInlineRedirect || postAuthTarget || "/dashboard";
+      setPendingInlineRedirect(null);
+      navigate(next);
+    } catch (err: unknown) {
+      const parsed = parseInlineAuthError(err, "Unable to trust this device.");
+      setTrustModalError(parsed.message);
+    } finally {
+      setTrustModalLoading(false);
+    }
+  };
+
+  const handleAlwaysConfirm = () => {
+    setTrustModalOpen(false);
+    setTrustModalError(null);
+    const next = pendingInlineRedirect || postAuthTarget || "/dashboard";
+    setPendingInlineRedirect(null);
+    navigate(next);
   };
 
   useEffect(() => {
@@ -1448,11 +1684,99 @@ export default function Landing() {
       setShowAnotherProfileForm(false);
       setShowRecentPasswordStep(false);
       setShowRegisterForm(false);
+      setTrustModalOpen(false);
+      setPendingInlineRedirect(null);
       return;
     }
     setShowInlineLogin(false);
     setShowRegisterForm(false);
   }, [user]);
+
+  useEffect(() => {
+    if (user || !forceSwitchProfileMode) return;
+    setShowInlineLogin(true);
+    setShowAnotherProfileForm(true);
+    setShowRecentPasswordStep(false);
+    setShowRegisterForm(false);
+    clearInlineMessages();
+    clearSignupMessages();
+    resetVerificationState();
+    setTrustModalOpen(false);
+    setPendingInlineRedirect(null);
+    setIdentifier(switchProfileIdentifierParam);
+    setPassword("");
+  }, [switchProfileIdentifierParam, forceSwitchProfileMode, user]);
+
+  const showPasswordStepForProfile = (entry?: RecentLoginEntry | null) => {
+    setShowInlineLogin(true);
+    setShowAnotherProfileForm(true);
+    setShowRecentPasswordStep(false);
+    setShowRegisterForm(false);
+    resetVerificationState();
+    clearInlineMessages();
+    clearSignupMessages();
+    setIdentifier(String(entry?.identifier || "").trim().toLowerCase());
+    setPassword("");
+    if (entry) {
+      setLoginInfo("Enter your password for this profile.");
+    }
+  };
+
+  const handleTrustedRecentLogin = async (
+    entry?: RecentLoginEntry | null,
+    options?: { fallbackToPassword?: boolean }
+  ) => {
+    const target = entry || recentLogin;
+    if (!target?.identifier || loginLoading) {
+      if (options?.fallbackToPassword) {
+        showPasswordStepForProfile(target);
+      }
+      return;
+    }
+    clearInlineMessages();
+    resetVerificationState();
+    setLoginLoading(true);
+    try {
+      const response = await api.post<AuthResponse>("/auth/login/trusted", {
+        identifier: String(target.identifier || "").trim().toLowerCase(),
+        deviceId: getOrCreateDeviceId(),
+        rememberDevice: true,
+      });
+      if (!response.data?.jwt) {
+        throw new Error("Trusted login failed.");
+      }
+      completeInlineLogin(response.data, "trusted", String(target.identifier || "").trim());
+      return;
+    } catch (err) {
+      const resolved = resolveInlineLoginError(err);
+      const lower = String(resolved.messageLower || "");
+      const requiresPassword =
+        lower.includes("not trusted") ||
+        lower.includes("missing device") ||
+        lower.includes("profile not found");
+      if (resolved.isAgeLock) {
+        openAgeModal({
+          contactOverride: String(target.identifier || "").trim().toLowerCase(),
+          lockEnforced:
+            resolved.code === AGE_VERIFICATION_LOCK_CODE ||
+            resolved.code === AGE_VERIFICATION_LOCK_REASON,
+          supportEmail: resolved.supportEmail,
+        });
+      }
+      if (options?.fallbackToPassword || requiresPassword) {
+        showPasswordStepForProfile(target);
+        if (requiresPassword) {
+          setLoginInfo("This profile needs password confirmation on this device.");
+        } else if (resolved.message) {
+          setLoginError(resolved.message);
+        }
+        return;
+      }
+      setLoginError(resolved.message);
+    } finally {
+      setLoginLoading(false);
+    }
+  };
 
   const handleContinue = () => {
     trackEvent("login_started", {
@@ -1464,7 +1788,8 @@ export default function Landing() {
       return;
     }
     if (useRecentLogin) {
-      setShowRecentPasswordStep(true);
+      void handleTrustedRecentLogin(recentLogin, { fallbackToPassword: true });
+      return;
     }
     setShowRegisterForm(false);
     setShowInlineLogin(true);
@@ -1485,15 +1810,7 @@ export default function Landing() {
   };
 
   const handleSelectRecentProfile = (entry: RecentLoginEntry) => {
-    setShowInlineLogin(true);
-    setShowAnotherProfileForm(true);
-    setShowRecentPasswordStep(false);
-    setShowRegisterForm(false);
-    resetVerificationState();
-    clearInlineMessages();
-    clearSignupMessages();
-    setIdentifier(String(entry.identifier || "").trim().toLowerCase());
-    setPassword("");
+    void handleTrustedRecentLogin(entry, { fallbackToPassword: true });
   };
 
   const handleCreateAccount = () => {
@@ -1531,6 +1848,8 @@ export default function Landing() {
     setAgeSessionStatus(ageVerificationTokenParam ? "verified" : "idle");
     setAgeSessionError(null);
     setAgeModalOpen(false);
+    setAgeLockEnforced(false);
+    setAgeLockSupportEmail(DEFAULT_SUPPORT_EMAIL);
     setAgeToken(ageVerificationTokenParam || null);
     setAgeVerifyContact(null);
     setAgeVerifyApplied(false);
@@ -1596,6 +1915,8 @@ export default function Landing() {
       setAgeSessionStatus(ageVerificationTokenParam ? "verified" : "idle");
       setAgeSessionError(null);
       setAgeModalOpen(false);
+      setAgeLockEnforced(false);
+      setAgeLockSupportEmail(DEFAULT_SUPPORT_EMAIL);
       setAgeToken(ageVerificationTokenParam || null);
       setAgeVerifyContact(null);
       setAgeVerifyApplied(false);
@@ -1622,6 +1943,8 @@ export default function Landing() {
       setSignupDuplicateModalOpen(false);
       setSignupShowSuccessModal(false);
       setAgeModalOpen(false);
+      setAgeLockEnforced(false);
+      setAgeLockSupportEmail(DEFAULT_SUPPORT_EMAIL);
     }
   }, [ageVerificationTokenParam, location.search, user]);
 
@@ -1666,7 +1989,9 @@ export default function Landing() {
                   </span>
                 </span>
               </span>
-              <p>Your Social Place</p>
+              <p className="landing-left-brand-title">
+                Your Social Place | <span className="landing-beta-tag">BETA</span>
+              </p>
             </button>
           </div>
 
@@ -1707,7 +2032,26 @@ export default function Landing() {
           >
             {showWelcomeCard ? (
               <>
-                <div className="landing-account-avatar-wrap">
+                <div
+                  className={`landing-account-avatar-wrap${
+                    canQuickLoginFromAvatar ? " is-clickable" : ""
+                  }`}
+                  role={canQuickLoginFromAvatar ? "button" : undefined}
+                  tabIndex={canQuickLoginFromAvatar ? 0 : -1}
+                  onClick={() => {
+                    if (!canQuickLoginFromAvatar) return;
+                    void handleTrustedRecentLogin(recentLogin, { fallbackToPassword: true });
+                  }}
+                  onKeyDown={(event) => {
+                    if (!canQuickLoginFromAvatar) return;
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    void handleTrustedRecentLogin(recentLogin, { fallbackToPassword: true });
+                  }}
+                  aria-label={
+                    canQuickLoginFromAvatar ? "Continue with saved trusted profile" : undefined
+                  }
+                >
                   {profileSummary?.avatarUrl ? (
                     <img
                       className="landing-account-avatar"
@@ -1721,7 +2065,7 @@ export default function Landing() {
                   )}
                 </div>
 
-                <h2>{nameForDisplay}</h2>
+                <h2>{nameForDisplayShort}</h2>
 
                 <div className="landing-account-actions">
                   <button
@@ -1796,11 +2140,11 @@ export default function Landing() {
                       type="button"
                       className="landing-btn landing-btn--primary"
                       onClick={() => {
-                        setShowRecentPasswordStep(true);
-                        clearInlineMessages();
+                        void handleTrustedRecentLogin(recentLogin, { fallbackToPassword: true });
                       }}
+                      disabled={loginLoading}
                     >
-                      Continue
+                      {loginLoading ? "Continuing..." : "Continue"}
                     </button>
                     <button
                       type="button"
@@ -2107,6 +2451,7 @@ export default function Landing() {
                                   entry.id,
                                   entry.handle
                                 );
+                                const profileLabelShort = truncateDisplayName(profileLabel);
                                 const profileSubtitle = entry.handle
                                   ? `@${entry.handle}`
                                   : "Saved profile";
@@ -2117,7 +2462,7 @@ export default function Landing() {
                                     type="button"
                                     className={`landing-saved-profile${isActive ? " is-active" : ""}`}
                                     onClick={() => handleSelectRecentProfile(entry)}
-                                    title={profileLabel}
+                                    title={profileLabelShort}
                                   >
                                     {entry.avatarUrl ? (
                                       <img
@@ -2131,7 +2476,9 @@ export default function Landing() {
                                       </span>
                                     )}
                                     <span className="landing-saved-profile-meta">
-                                      <span className="landing-saved-profile-name">{profileLabel}</span>
+                                      <span className="landing-saved-profile-name">
+                                        {profileLabelShort}
+                                      </span>
                                       <span className="landing-saved-profile-id">{profileSubtitle}</span>
                                     </span>
                                   </button>
@@ -2253,6 +2600,19 @@ export default function Landing() {
                           >
                             Use authenticator app
                           </button>
+                          {loginError &&
+                            loginError.toLowerCase().includes("authenticator app is not configured") && (
+                              <button
+                                type="button"
+                                className="landing-btn landing-btn--ghost"
+                                onClick={() => void handleInlineUseCodeFallback()}
+                                disabled={loginLoading || verifying}
+                              >
+                                {identifier.trim().toLowerCase().includes("@")
+                                  ? "Use email code instead"
+                                  : "Use text code instead"}
+                              </button>
+                            )}
                           <button
                             type="button"
                             className="landing-btn landing-btn--ghost"
@@ -2325,23 +2685,88 @@ export default function Landing() {
         </aside>
       </main>
 
+      {trustModalOpen && (
+        <div className="landing-modal-overlay" role="dialog" aria-modal="true">
+          <div className="landing-modal landing-modal--trust">
+            <div className="landing-modal-header">
+              <div>
+                <h3>Trust this device?</h3>
+                <p className="landing-modal-muted">
+                  Trusted devices let you continue by tapping your avatar without entering a
+                  password.
+                </p>
+              </div>
+            </div>
+            <div className="landing-modal-body">
+              <p>
+                Device label:{" "}
+                <span className="landing-trust-device-label">{trustDeviceLabel}</span>
+              </p>
+              <p>
+                Use <strong>Not now</strong> on shared devices. You can trust this device later in
+                account security settings.
+              </p>
+              {trustModalError && (
+                <p className="landing-login-message is-error">{trustModalError}</p>
+              )}
+            </div>
+            <div className="landing-modal-actions">
+              <button
+                type="button"
+                className="landing-btn landing-btn--ghost"
+                onClick={handleAlwaysConfirm}
+                disabled={trustModalLoading}
+              >
+                Not now
+              </button>
+              <button
+                type="button"
+                className="landing-btn landing-btn--primary"
+                onClick={() => {
+                  void handleTrustDevice();
+                }}
+                disabled={trustModalLoading}
+              >
+                {trustModalLoading ? "Saving..." : "Trust this device"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {ageModalOpen && (
         <div className="landing-modal-overlay" role="dialog" aria-modal="true">
           <div className="landing-modal landing-modal--age">
             <div className="landing-modal-header">
               <div>
-                <h3>Verify your age</h3>
-                <p className="landing-modal-muted">Live ID scan + liveness selfie required.</p>
+                <h3>
+                  {ageLockEnforced
+                    ? "Account locked: age verification overdue"
+                    : "Verify your age"}
+                </h3>
+                <p className="landing-modal-muted">
+                  {ageLockEnforced
+                    ? "Your account stays locked until age verification is completed or a moderator/admin unlocks it."
+                    : "Live ID scan + liveness selfie required."}
+                </p>
               </div>
-              <button
-                type="button"
-                className="landing-modal-close"
-                onClick={() => setAgeModalOpen(false)}
-              >
-                X
-              </button>
+              {!ageLockEnforced && (
+                <button
+                  type="button"
+                  className="landing-modal-close"
+                  onClick={closeAgeModal}
+                >
+                  X
+                </button>
+              )}
             </div>
             <div className="landing-modal-body">
+              {ageLockEnforced && (
+                <p className="landing-login-message is-error">
+                  Need help unlocking? Contact support at{" "}
+                  <a href={`mailto:${ageLockSupportEmail}`}>{ageLockSupportEmail}</a>.
+                </p>
+              )}
               <div className="landing-age-card">
                 <div className="landing-age-info">
                   <p className="landing-age-copy">
@@ -2425,15 +2850,17 @@ export default function Landing() {
                 )}
               </div>
             </div>
-            <div className="landing-modal-actions">
-              <button
-                type="button"
-                className="landing-btn landing-btn--ghost"
-                onClick={() => setAgeModalOpen(false)}
-              >
-                Close
-              </button>
-            </div>
+            {!ageLockEnforced && (
+              <div className="landing-modal-actions">
+                <button
+                  type="button"
+                  className="landing-btn landing-btn--ghost"
+                  onClick={closeAgeModal}
+                >
+                  Close
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -2483,7 +2910,7 @@ export default function Landing() {
             <div className="landing-modal-body">
               <p>{signupSuccessMessage}</p>
               <p>
-                Next step: verify your age within 1 week to keep your account active. You can
+                Next step: verify your age within 30 days to keep your account active. You can
                 find this anytime under Profile -&gt; Settings -&gt; Account &amp; Security.
               </p>
             </div>
@@ -2500,10 +2927,7 @@ export default function Landing() {
                 className="landing-btn landing-btn--ghost"
                 onClick={() => {
                   setSignupShowSuccessModal(false);
-                  setAgeModalOpen(true);
-                  if (!ageSessionId && !ageSessionLoading) {
-                    void createAgeSession();
-                  }
+                  openAgeModal();
                 }}
               >
                 Verify age now

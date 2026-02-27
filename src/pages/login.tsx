@@ -21,6 +21,10 @@ const RECENT_LOGINS_KEY = "auth:recent-logins";
 const LOGOUT_MESSAGE_KEY = "auth:logout-message";
 const LOGIN_CHALLENGE_KEY = "auth:login-challenge";
 const MAX_RECENT_LOGINS = 4;
+const AGE_VERIFICATION_LOCK_CODE = "AGE_VERIFICATION_LOCKED";
+const DEFAULT_SUPPORT_EMAIL = String(
+  import.meta.env.VITE_SUPPORT_EMAIL || "support@yoursocialplace.com"
+).trim();
 
 type AuthDebugSnapshot = {
   at: number;
@@ -65,6 +69,14 @@ type RecentLoginEntry = {
   identifier: string;
   avatarUrl?: string | null;
   lastUsedAt: number;
+};
+
+type ParsedAxiosAuthError = {
+  status: number | null;
+  message: string;
+  messageLower: string;
+  code: string | null;
+  supportEmail: string | null;
 };
 
 const loadRecentLogins = () => {
@@ -130,6 +142,50 @@ const loadStoredChallenge = (): LoginChallengeSnapshot | null => {
   } catch {
     return null;
   }
+};
+
+const parseAxiosAuthError = (
+  err: unknown,
+  fallbackMessage: string
+): ParsedAxiosAuthError => {
+  if (!axios.isAxiosError(err)) {
+    const message = String(err || fallbackMessage);
+    return {
+      status: null,
+      message,
+      messageLower: message.toLowerCase(),
+      code: null,
+      supportEmail: null,
+    };
+  }
+
+  const status = typeof err.response?.status === "number" ? err.response.status : null;
+  const payload = err.response?.data as
+    | {
+        error?: { message?: string; code?: string; supportEmail?: string } | string;
+        message?: string;
+        code?: string;
+        supportEmail?: string;
+      }
+    | undefined;
+  const nestedError =
+    payload?.error && typeof payload.error === "object" ? payload.error : null;
+  const message =
+    (typeof payload?.error === "string" && payload.error.trim()) ||
+    nestedError?.message ||
+    (typeof payload?.message === "string" && payload.message.trim()) ||
+    fallbackMessage;
+  const code = String(nestedError?.code || payload?.code || "").trim() || null;
+  const supportEmail =
+    String(nestedError?.supportEmail || payload?.supportEmail || "").trim() || null;
+
+  return {
+    status,
+    message,
+    messageLower: message.toLowerCase(),
+    code,
+    supportEmail,
+  };
 };
 
 const persistStoredChallenge = (snapshot: LoginChallengeSnapshot | null) => {
@@ -235,6 +291,8 @@ export default function Login() {
   const [ageToken, setAgeToken] = useState<string | null>(null);
   const [ageVerifyApplying, setAgeVerifyApplying] = useState(false);
   const [ageVerifyContact, setAgeVerifyContact] = useState("");
+  const [ageLockEnforced, setAgeLockEnforced] = useState(false);
+  const [ageLockSupportEmail, setAgeLockSupportEmail] = useState(DEFAULT_SUPPORT_EMAIL);
   const passwordInputRef = useRef<HTMLInputElement | null>(null);
   const { login, keyBackupStatus, keyBackupLoading } = useAuth();
   const navigate = useNavigate();
@@ -646,10 +704,11 @@ export default function Login() {
         const baseMessage = data.deliveryHint
           ? `We sent a code to ${data.deliveryHint}.`
           : "We sent a verification code.";
+        const fallbackMessage = data.totpInvalid
+          ? `${baseMessage} Authenticator app is unavailable right now; re-link it in Settings after login.`
+          : baseMessage;
         setInfo(
-          data.totpInvalid
-            ? `${baseMessage} Your authenticator needs to be reset after login.`
-            : baseMessage
+          fallbackMessage
         );
       }
       persistStoredChallenge({
@@ -677,10 +736,12 @@ export default function Login() {
       return;
     }
 
-    const status = err.response?.status;
-    const data: any = err.response?.data;
-    const msg: string = data?.error?.message || data?.message || "Login failed";
-    const msgLower = msg.toLowerCase();
+    const parsed = parseAxiosAuthError(err, "Login failed");
+    const status = parsed.status;
+    const msg = parsed.message;
+    const msgLower = parsed.messageLower;
+    const isAgeLock = parsed.code === AGE_VERIFICATION_LOCK_CODE;
+    const supportEmail = parsed.supportEmail || DEFAULT_SUPPORT_EMAIL;
 
     if (msgLower.includes("account locked") || msgLower.includes("too many failed")) {
       setError(
@@ -734,11 +795,17 @@ export default function Login() {
     }
 
     if (status === 403) {
-      if (msgLower.includes("age verification")) {
+      if (isAgeLock || msgLower.includes("age verification")) {
         setError(
-          "Age verification required. Verify your age to unlock your account."
+          isAgeLock
+            ? `Age verification overdue. Your account is locked. Contact ${supportEmail} or complete verification to continue.`
+            : "Age verification required. Verify your age to unlock your account."
         );
-        openAgeVerifyModal(identifier.trim());
+        openAgeVerifyModal({
+          contactOverride: identifier.trim(),
+          lockEnforced: isAgeLock,
+          supportEmail,
+        });
       } else {
         setError("Access denied. Your account may be blocked.");
       }
@@ -939,9 +1006,25 @@ export default function Login() {
     setAgeVerifyApplying(false);
   };
 
-  const openAgeVerifyModal = (contactOverride?: string) => {
-    const contactValue = String((contactOverride ?? identifier) || "").trim();
+  const closeAgeVerifyModal = () => {
+    if (ageLockEnforced) return;
+    setShowAgeVerifyModal(false);
+    setAgeLockEnforced(false);
+    setAgeLockSupportEmail(DEFAULT_SUPPORT_EMAIL);
+    resetAgeVerifyState();
+  };
+
+  const openAgeVerifyModal = (options?: {
+    contactOverride?: string;
+    lockEnforced?: boolean;
+    supportEmail?: string | null;
+  }) => {
+    const contactValue = String((options?.contactOverride ?? identifier) || "").trim();
+    const normalizedSupport =
+      String(options?.supportEmail || "").trim() || DEFAULT_SUPPORT_EMAIL;
     setAgeVerifyContact(contactValue);
+    setAgeLockEnforced(Boolean(options?.lockEnforced));
+    setAgeLockSupportEmail(normalizedSupport);
     setShowAgeVerifyModal(true);
     if (!ageSessionId && !ageSessionLoading) {
       void createAgeSession();
@@ -1033,6 +1116,8 @@ export default function Login() {
         if (!active) return;
         setInfo("Age verified. You can log in now.");
         setError(null);
+        setAgeLockEnforced(false);
+        setAgeLockSupportEmail(DEFAULT_SUPPORT_EMAIL);
         setShowAgeVerifyModal(false);
         resetAgeVerifyState();
       } catch (err: any) {
@@ -1498,24 +1583,34 @@ export default function Login() {
           <div className="auth-age-modal">
             <div className="auth-age-header">
               <div>
-                <h2>Verify your age to unlock</h2>
+                <h2>
+                  {ageLockEnforced
+                    ? "Account locked: age verification overdue"
+                    : "Verify your age to unlock"}
+                </h2>
                 <p>
-                  You can verify without logging in. We’ll unlock your account after
-                  verification.
+                  {ageLockEnforced
+                    ? "Your account stays locked until age verification is completed or a moderator/admin unlocks it."
+                    : "You can verify without logging in. We’ll unlock your account after verification."}
                 </p>
               </div>
-              <button
-                type="button"
-                className="auth-age-close"
-                onClick={() => {
-                  setShowAgeVerifyModal(false);
-                  resetAgeVerifyState();
-                }}
-              >
-                X
-              </button>
+              {!ageLockEnforced && (
+                <button
+                  type="button"
+                  className="auth-age-close"
+                  onClick={closeAgeVerifyModal}
+                >
+                  X
+                </button>
+              )}
             </div>
             <div className="auth-age-body">
+              {ageLockEnforced && (
+                <p className="auth-message error">
+                  Need help unlocking? Contact support at{" "}
+                  <a href={`mailto:${ageLockSupportEmail}`}>{ageLockSupportEmail}</a>.
+                </p>
+              )}
               <label className="field">
                 <span>Email or phone number</span>
                 <input
@@ -1593,18 +1688,17 @@ export default function Login() {
                 )}
               </div>
             </div>
-            <div className="auth-age-footer">
-              <button
-                type="button"
-                className="btn ghost"
-                onClick={() => {
-                  setShowAgeVerifyModal(false);
-                  resetAgeVerifyState();
-                }}
-              >
-                Close
-              </button>
-            </div>
+            {!ageLockEnforced && (
+              <div className="auth-age-footer">
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={closeAgeVerifyModal}
+                >
+                  Close
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

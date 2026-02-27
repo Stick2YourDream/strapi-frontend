@@ -1085,7 +1085,7 @@ export default function Register() {
             <div className="register-success-body">
               <p>{successMessage}</p>
               <p>
-                Next step: verify your age within 1 week to keep your account active. You
+                Next step: verify your age within 30 days to keep your account active. You
                 can find this anytime under Profile → Settings → Account &amp; Security.
               </p>
             </div>

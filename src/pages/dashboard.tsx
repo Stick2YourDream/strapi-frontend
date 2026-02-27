@@ -69,6 +69,17 @@ type GoalsState = {
 type ReactionCounts = {
   thumbsUp: number;
   heart: number;
+  care: number;
+  haha: number;
+  wow: number;
+  sad: number;
+  angry: number;
+};
+
+type ReactionOption = {
+  key: keyof ReactionCounts;
+  emoji: string;
+  label: string;
 };
 
 type PostMediaItem = {
@@ -133,6 +144,12 @@ type PostsState = {
   group: unknown[];
   comments: unknown[];
   admin: unknown[];
+};
+
+type CommentTargetBuckets = {
+  userIds: number[];
+  groupIds: number[];
+  adminIds: number[];
 };
 
 const isPostSource = (value: string): value is PostSource =>
@@ -261,6 +278,16 @@ const isRecord = (value: unknown): value is UnknownRecord =>
 const asRecord = (value: unknown): UnknownRecord => (isRecord(value) ? value : {});
 const getString = (value: unknown): string | undefined =>
   typeof value === "string" ? value : undefined;
+const REACTION_OPTIONS: ReactionOption[] = [
+  { key: "thumbsUp", emoji: "👍", label: "Like" },
+  { key: "heart", emoji: "❤️", label: "Love" },
+  { key: "care", emoji: "🥰", label: "Care" },
+  { key: "haha", emoji: "😆", label: "Haha" },
+  { key: "wow", emoji: "😮", label: "Wow" },
+  { key: "sad", emoji: "😢", label: "Sad" },
+  { key: "angry", emoji: "😡", label: "Angry" },
+];
+const REACTION_VALUES = new Set(REACTION_OPTIONS.map((option) => option.emoji));
 const normalizeReactionCounts = (
   value: unknown,
   fallbackLikes?: number
@@ -268,9 +295,26 @@ const normalizeReactionCounts = (
   const record = isRecord(value) ? value : {};
   const thumbsRaw = record.thumbsUp ?? record.thumbs_up;
   const heartRaw = record.heart;
+  const careRaw = record.care;
+  const hahaRaw = record.haha;
+  const wowRaw = record.wow;
+  const sadRaw = record.sad;
+  const angryRaw = record.angry;
   const thumbsUp = Number(thumbsRaw);
   const heart = Number(heartRaw);
-  const hasCounts = Number.isFinite(thumbsUp) || Number.isFinite(heart);
+  const care = Number(careRaw);
+  const haha = Number(hahaRaw);
+  const wow = Number(wowRaw);
+  const sad = Number(sadRaw);
+  const angry = Number(angryRaw);
+  const hasCounts =
+    Number.isFinite(thumbsUp) ||
+    Number.isFinite(heart) ||
+    Number.isFinite(care) ||
+    Number.isFinite(haha) ||
+    Number.isFinite(wow) ||
+    Number.isFinite(sad) ||
+    Number.isFinite(angry);
   return {
     thumbsUp: Number.isFinite(thumbsUp)
       ? thumbsUp
@@ -278,13 +322,31 @@ const normalizeReactionCounts = (
       ? 0
       : Number(fallbackLikes ?? 0),
     heart: Number.isFinite(heart) ? heart : 0,
+    care: Number.isFinite(care) ? care : 0,
+    haha: Number.isFinite(haha) ? haha : 0,
+    wow: Number.isFinite(wow) ? wow : 0,
+    sad: Number.isFinite(sad) ? sad : 0,
+    angry: Number.isFinite(angry) ? angry : 0,
   };
 };
 const normalizeReactionValue = (value: unknown): string | null => {
   const trimmed = String(value || "").trim();
-  if (trimmed === "👍" || trimmed === "❤️") return trimmed;
+  if (REACTION_VALUES.has(trimmed)) return trimmed;
   return null;
 };
+const getTopReactionOptions = (
+  counts: ReactionCounts,
+  limit = 3
+): ReactionOption[] =>
+  REACTION_OPTIONS.map((option, index) => ({
+    option,
+    index,
+    count: Number(counts[option.key] || 0),
+  }))
+    .filter((entry) => entry.count > 0)
+    .sort((a, b) => b.count - a.count || a.index - b.index)
+    .slice(0, Math.max(1, limit))
+    .map((entry) => entry.option);
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -436,6 +498,8 @@ const firstNameFromLabel = (value?: string) => {
 const PREVIEW_DEBOUNCE_MS = 450;
 const PREVIEW_MAX_CONCURRENT = 3;
 const POSTS_PAGE_SIZE = 20;
+const COMMENTS_PAGE_SIZE = 500;
+const COMMENT_TARGET_CHUNK_SIZE = 40;
 const MAX_TRUSTED_CIRCLES = 5;
 const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
 const MAX_UPLOAD_LABEL = "1 GB";
@@ -625,6 +689,116 @@ const buildUserPostsQuery = (ownerIds: number[]) => {
   parts.push(`filters[$or][${groupIndex}][feedbackAudience][$eq]=public`);
   return `${parts.join("&")}&includeDemo=true`;
 };
+const uniqueNumberList = (values: Array<number | null | undefined>) => {
+  const seen = new Set<number>();
+  const output: number[] = [];
+  values.forEach((value) => {
+    if (typeof value !== "number" || !Number.isFinite(value)) return;
+    if (seen.has(value)) return;
+    seen.add(value);
+    output.push(value);
+  });
+  return output;
+};
+const getEntryNumericId = (entry: unknown) => {
+  const record = asRecord(entry);
+  const attrs = normalize(entry);
+  const direct = Number(record.id ?? attrs.id);
+  if (Number.isFinite(direct)) return direct;
+  return null;
+};
+const collectPostNumericIds = (entries: unknown[]) =>
+  uniqueNumberList(entries.map((entry) => getEntryNumericId(entry)));
+const splitIntoChunks = <T,>(items: T[], size: number) => {
+  if (size <= 0 || items.length <= size) return [items];
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+};
+const hasCommentTargets = (targets: CommentTargetBuckets) =>
+  targets.userIds.length > 0 || targets.groupIds.length > 0 || targets.adminIds.length > 0;
+const buildCommentTargetsFromLists = (
+  userPosts: unknown[],
+  groupPosts: unknown[],
+  adminPosts: unknown[]
+): CommentTargetBuckets => ({
+  userIds: collectPostNumericIds(userPosts),
+  groupIds: collectPostNumericIds(groupPosts),
+  adminIds: collectPostNumericIds(adminPosts),
+});
+const buildCommentTargetsForPost = (
+  post: Pick<NormalizedPost, "source" | "numericId" | "id">
+): CommentTargetBuckets => {
+  const numericId =
+    post.numericId ??
+    (typeof post.id === "number" ? post.id : Number.isFinite(Number(post.id)) ? Number(post.id) : null);
+  if (typeof numericId !== "number" || !Number.isFinite(numericId)) {
+    return { userIds: [], groupIds: [], adminIds: [] };
+  }
+  if (post.source === "group") {
+    return { userIds: [], groupIds: [numericId], adminIds: [] };
+  }
+  if (post.source === "admin") {
+    return { userIds: [], groupIds: [], adminIds: [numericId] };
+  }
+  return { userIds: [numericId], groupIds: [], adminIds: [] };
+};
+const commentTargetMatchesType = (
+  targetType: string,
+  targetId: number,
+  targets: CommentTargetBuckets
+) => {
+  if (targetType === "user" || targetType === "users-post") {
+    return targets.userIds.includes(targetId);
+  }
+  if (targetType === "group" || targetType === "group-post") {
+    return targets.groupIds.includes(targetId);
+  }
+  if (targetType === "admin") {
+    return targets.adminIds.includes(targetId);
+  }
+  return false;
+};
+const filterOutCommentsByTargets = (comments: unknown[], targets: CommentTargetBuckets) =>
+  comments.filter((entry) => {
+    const record = asRecord(entry);
+    const attrs = normalize(entry);
+    const targetType = String(attrs.target_type ?? record.target_type ?? "")
+      .trim()
+      .toLowerCase();
+    const targetId = Number(attrs.target_id ?? record.target_id);
+    if (!targetType || !Number.isFinite(targetId)) return true;
+    return !commentTargetMatchesType(targetType, targetId, targets);
+  });
+const getCommentKey = (entry: unknown) => {
+  const record = asRecord(entry);
+  const attrs = normalize(entry);
+  const raw = record.documentId ?? attrs.documentId ?? record.id ?? attrs.id;
+  return raw === undefined || raw === null ? "" : String(raw);
+};
+const mergeCommentLists = (prev: unknown[], next: unknown[]) => {
+  if (!next.length) return prev;
+  const seen = new Set(prev.map((entry) => getCommentKey(entry)).filter(Boolean));
+  const merged = [...prev];
+  next.forEach((entry) => {
+    const key = getCommentKey(entry);
+    if (key && seen.has(key)) return;
+    merged.push(entry);
+    if (key) seen.add(key);
+  });
+  return merged;
+};
+const commentInIdentifierSet = (entry: unknown, ids: Set<string>) => {
+  const record = asRecord(entry);
+  const attrs = normalize(entry);
+  const entryId = record.id ?? attrs.id;
+  const entryDoc = record.documentId ?? attrs.documentId;
+  if (entryId !== undefined && ids.has(String(entryId))) return true;
+  if (entryDoc !== undefined && ids.has(String(entryDoc))) return true;
+  return false;
+};
 const buildUserPostPathCandidates = (post: NormalizedPost) => {
   const attempts: string[] = [];
   if (post.documentId) {
@@ -669,6 +843,21 @@ const feedbackLabelFor = (post: NormalizedPost) => {
     return `Feedback: ${post.feedbackTargetName || "A friend"}`;
   }
   return "";
+};
+const isPubliclyShareablePost = (
+  post: Pick<NormalizedPost, "source" | "visibility" | "feedbackAudience">
+) => {
+  if (post.source === "admin") return true;
+  const visibility = String(post.visibility || "")
+    .trim()
+    .toLowerCase();
+  const audience = String(post.feedbackAudience || "")
+    .trim()
+    .toLowerCase();
+  if (post.source === "group") {
+    return visibility === "public";
+  }
+  return visibility === "public" || audience === "public";
 };
 const sortByCreatedAtDesc = (items: NormalizedPost[]) =>
   [...items].sort((a, b) => {
@@ -867,6 +1056,8 @@ export default function Dashboard() {
   );
   const [shareMenuFor, setShareMenuFor] = useState<string | number | null>(null);
   const [postMenuFor, setPostMenuFor] = useState<string | null>(null);
+  const [reactionPickerFor, setReactionPickerFor] = useState<string | null>(null);
+  const [reactionBreakdownFor, setReactionBreakdownFor] = useState<string | null>(null);
   const [shareNotice, setShareNotice] = useState<Record<string | number, string>>({});
   const [copyToast, setCopyToast] = useState<string | null>(null);
   const [impactNotice, setImpactNotice] = useState<string | null>(null);
@@ -1298,6 +1489,57 @@ export default function Dashboard() {
     };
   }, [user]);
 
+  const fetchCommentsForTargets = useCallback(async (targets: CommentTargetBuckets) => {
+    if (!hasCommentTargets(targets)) return [] as unknown[];
+
+    const requestDefs: Array<{ targetType: string; ids: number[] }> = [];
+    if (targets.userIds.length) {
+      requestDefs.push({ targetType: "user", ids: targets.userIds });
+      requestDefs.push({ targetType: "users-post", ids: targets.userIds });
+    }
+    if (targets.groupIds.length) {
+      requestDefs.push({ targetType: "group-post", ids: targets.groupIds });
+      requestDefs.push({ targetType: "group", ids: targets.groupIds });
+    }
+    if (targets.adminIds.length) {
+      requestDefs.push({ targetType: "admin", ids: targets.adminIds });
+    }
+
+    const requests = requestDefs.flatMap((def) =>
+      splitIntoChunks(def.ids, COMMENT_TARGET_CHUNK_SIZE).map((idChunk) => {
+        const idQuery = idChunk
+          .map((id, index) => `filters[target_id][$in][${index}]=${id}`)
+          .join("&");
+        const query =
+          `filters[target_type][$eq]=${encodeURIComponent(def.targetType)}` +
+          `&${idQuery}&populate=owner&sort=createdAt:desc&pagination[pageSize]=${COMMENTS_PAGE_SIZE}`;
+        return api.get(`/comments?${query}`);
+      })
+    );
+
+    if (!requests.length) return [] as unknown[];
+    const responses = await Promise.all(requests);
+    const allComments = responses.flatMap((res) => res.data?.data ?? []);
+    return mergeCommentLists([], allComments);
+  }, []);
+
+  const refreshCommentsForPost = useCallback(
+    async (post: Pick<NormalizedPost, "source" | "numericId" | "id">) => {
+      const targets = buildCommentTargetsForPost(post);
+      if (!hasCommentTargets(targets)) return [] as unknown[];
+      const nextComments = await fetchCommentsForTargets(targets);
+      setPosts((prev) => ({
+        ...prev,
+        comments: mergeCommentLists(
+          filterOutCommentsByTargets(prev.comments ?? [], targets),
+          nextComments
+        ),
+      }));
+      return nextComments;
+    },
+    [fetchCommentsForTargets]
+  );
+
 
   const reloadPosts = useCallback(
     async (options?: { silent?: boolean }) => {
@@ -1326,11 +1568,16 @@ export default function Dashboard() {
           return;
         }
 
-        const friendsRes = await api.get(
-          `/friends?filters[$or][0][requester][id][$eq]=${userId}` +
-            `&filters[$or][1][target][id][$eq]=${userId}` +
-            `&populate=requester&populate=target`
-        );
+        const [friendsRes, groupMembersRes] = await Promise.all([
+          api.get(
+            `/friends?filters[$or][0][requester][id][$eq]=${userId}` +
+              `&filters[$or][1][target][id][$eq]=${userId}` +
+              `&populate=requester&populate=target`
+          ),
+          api.get(
+            `/group-members?filters[user][id][$eq]=${userId}&populate=group&pagination[pageSize]=200`
+          ),
+        ]);
 
         if (loadId !== loadIdRef.current) return;
 
@@ -1374,9 +1621,6 @@ export default function Dashboard() {
         );
         setFriendOptions(nextFriendOptions);
 
-        const groupMembersRes = await api.get(
-          `/group-members?filters[user][id][$eq]=${userId}&populate=group&pagination[pageSize]=200`
-        );
         const groupEntries = groupMembersRes.data?.data ?? [];
         const resolvedGroups = groupEntries
           .map((entry: unknown) => {
@@ -1402,7 +1646,7 @@ export default function Dashboard() {
         const userQuery = buildUserPostsQuery(userFilterIds);
         const groupFilter = memberGroups.length ? buildIdFilter("group", memberGroups) : "";
 
-        const [adminRes, userRes, groupRes, commentsRes, circlesRes] = await Promise.all([
+        const [adminRes, userRes, groupRes, circlesRes] = await Promise.all([
           api.get(`/posts?${ADMIN_POST_POPULATE}&pagination[pageSize]=${POSTS_PAGE_SIZE}`),
           api.get(
             `/users-posts?${userQuery}&${USERS_POST_POPULATE}` +
@@ -1415,16 +1659,12 @@ export default function Dashboard() {
               )
             : Promise.resolve({ data: { data: [], meta: {} } }),
           api.get(
-            "/comments?populate=owner&sort=createdAt:desc&pagination[pageSize]=500"
-          ),
-          api.get(
             `/trusted-circles?sort=name:asc&pagination[pageSize]=${MAX_TRUSTED_CIRCLES}`
           ),
         ]);
 
         if (loadId !== loadIdRef.current) return;
 
-        const allComments = commentsRes.data?.data ?? [];
         const trustedCircleRows = circlesRes.data?.data ?? [];
         const nextTrustedCircles = (trustedCircleRows || [])
           .map((entry: any) => {
@@ -1465,12 +1705,6 @@ export default function Dashboard() {
         groupPostsData.forEach((entry: unknown) => {
           const attrs = normalize(entry) as { owner?: unknown };
           collectOwnerId(attrs.owner ?? asRecord(entry).owner);
-        });
-
-        allComments.forEach((entry: unknown) => {
-          const record = asRecord(entry);
-          const attrs = asRecord(record.attributes);
-          collectOwnerId(attrs.owner ?? record.owner);
         });
 
         let nextNameMap: Record<number, string> = {};
@@ -1530,12 +1764,30 @@ export default function Dashboard() {
         );
 
         setProfileNameMap(nextNameMap);
-        setPosts({
+        const nextAdminPosts = adminRes.data?.data ?? [];
+        const commentTargets = buildCommentTargetsFromLists(
+          userPostsData,
+          groupPostsData,
+          nextAdminPosts
+        );
+        setPosts((prev) => ({
           user: userPostsData,
           group: groupPostsData,
-          comments: allComments,
-          admin: adminRes.data?.data ?? [],
-        });
+          comments: prev.comments ?? [],
+          admin: nextAdminPosts,
+        }));
+        void (async () => {
+          try {
+            const nextComments = await fetchCommentsForTargets(commentTargets);
+            if (loadId !== loadIdRef.current) return;
+            setPosts((prev) => ({
+              ...prev,
+              comments: nextComments,
+            }));
+          } catch (err) {
+            console.warn("Targeted comment load failed", err);
+          }
+        })();
       } catch (err: unknown) {
         if (axios.isAxiosError(err)) {
           const status = err.response?.status;
@@ -1571,7 +1823,7 @@ export default function Dashboard() {
         }
       }
     },
-    [nameFromProfile, navigate, sessionActive, userId]
+    [fetchCommentsForTargets, nameFromProfile, navigate, sessionActive, userId]
   );
 
   useEffect(() => {
@@ -1641,6 +1893,25 @@ export default function Dashboard() {
           user: shouldLoadUser ? mergePostLists(prev.user, userPostsData) : prev.user,
           group: shouldLoadGroup ? mergePostLists(prev.group, groupPostsData) : prev.group,
         }));
+        const nextCommentTargets = buildCommentTargetsFromLists(
+          shouldLoadUser ? userPostsData : [],
+          shouldLoadGroup ? groupPostsData : [],
+          []
+        );
+        if (hasCommentTargets(nextCommentTargets)) {
+          void (async () => {
+            try {
+              const nextComments = await fetchCommentsForTargets(nextCommentTargets);
+              if (loadId !== loadIdRef.current) return;
+              setPosts((prev) => ({
+                ...prev,
+                comments: mergeCommentLists(prev.comments ?? [], nextComments),
+              }));
+            } catch (err) {
+              console.warn("Load-more comment fetch failed", err);
+            }
+          })();
+        }
       }
     } catch (err) {
       console.error("Load more posts failed", err);
@@ -1653,6 +1924,7 @@ export default function Dashboard() {
     hasMoreGroupPosts,
     hasMoreUserPosts,
     isLoadingMore,
+    fetchCommentsForTargets,
     userId,
     userPostsPage,
     groupPostsPage,
@@ -1969,9 +2241,10 @@ export default function Dashboard() {
       const ownerId = getEntityId(ownerData);
       const ownerName = resolveOwnerName(ownerId, getString(ownerAttrs.email) ?? "Member");
       const groupData = getEntity(attributes.group);
-      const groupAttrs = normalize(groupData) as { name?: string };
+      const groupAttrs = normalize(groupData) as { name?: string; visibility?: string };
       const groupName = getString(groupAttrs.name) ?? "Group";
       const groupId = getEntityId(groupData);
+      const groupVisibility = getString(groupAttrs.visibility);
       const postRecord = asRecord(post);
       const rawPostId = postRecord.id ?? postRecord.documentId;
       const postId =
@@ -2064,6 +2337,7 @@ export default function Dashboard() {
         comments: matchedComments,
         groupName,
         groupId,
+        visibility: groupVisibility,
         signalTag: getString(attributes.signalTag) as SignalTag | undefined,
       };
     };
@@ -2918,14 +3192,38 @@ export default function Dashboard() {
 
   const buildShareUrl = useCallback((post: NormalizedPost) => {
     if (typeof window === "undefined") return "";
-    const fallbackOrigin = String(import.meta.env.VITE_PUBLIC_SITE_URL || "").trim();
-    const origin = window.location.origin;
-    const base = /^https?:\/\//i.test(origin) ? origin : fallbackOrigin;
+    const origin = String(window.location.origin || "").trim().replace(/\/+$/, "");
+    const configuredBase = String(import.meta.env.VITE_PUBLIC_SITE_URL || "")
+      .trim()
+      .replace(/\/+$/, "");
+    const base = /^https?:\/\//i.test(origin)
+      ? origin
+      : /^https?:\/\//i.test(configuredBase)
+      ? configuredBase
+      : "";
     if (!base) return "";
+    const configuredApi = String(import.meta.env.VITE_API_URL || "")
+      .trim()
+      .replace(/\/+$/, "");
+    const resolveShareApiBase = () => {
+      if (!configuredApi) return `${base}/api`;
+      if (/^https?:\/\//i.test(configuredApi)) {
+        return /\/api$/i.test(configuredApi) ? configuredApi : `${configuredApi}/api`;
+      }
+      const normalizedPath = /\/api$/i.test(configuredApi)
+        ? configuredApi
+        : `${configuredApi}/api`;
+      const path = normalizedPath.startsWith("/") ? normalizedPath : `/${normalizedPath}`;
+      return `${base}${path}`;
+    };
+    const shareApiBase = resolveShareApiBase();
+    const shareId = String(post.documentId ?? post.numericId ?? post.id ?? "").trim();
+    if (!shareId) return "";
     const params = new URLSearchParams();
-    params.set("post", String(post.id));
     params.set("source", post.source);
-    return `${base}/dashboard?${params.toString()}#post-${post.id}`;
+    params.set("id", shareId);
+    params.set("site", base);
+    return `${shareApiBase}/share/post?${params.toString()}`;
   }, []);
 
   const updatePostMetric = useCallback(
@@ -3142,6 +3440,10 @@ export default function Dashboard() {
         pushShareNotice(postKey, "Reactions are not available here.");
         return;
       }
+      if (!REACTION_VALUES.has(emoji)) {
+        pushShareNotice(postKey, "Unsupported reaction.");
+        return;
+      }
       try {
         const endpoint =
           post.source === "group"
@@ -3161,6 +3463,7 @@ export default function Dashboard() {
         const counts = normalizeReactionCounts(payload?.reactionCounts, nextLikes);
         const reactionValue = normalizeReactionValue(payload?.myReaction ?? emoji);
         updatePostReactions(post.source, postKey, counts, reactionValue);
+        setReactionPickerFor(null);
         if (payload?.alreadyReacted) {
           pushShareNotice(
             postKey,
@@ -3185,12 +3488,16 @@ export default function Dashboard() {
     setOpenCommentsFor((prev) => ({ ...prev, [postKey]: !prev[postKey] }));
     setShareMenuFor(null);
     setPostMenuFor(null);
+    setReactionPickerFor(null);
+    setReactionBreakdownFor(null);
   }, []);
 
   const openSupportOptions = useCallback((postKey: string) => {
     setOpenCommentsFor((prev) => ({ ...prev, [postKey]: true }));
     setShareMenuFor(null);
     setPostMenuFor(null);
+    setReactionPickerFor(null);
+    setReactionBreakdownFor(null);
   }, []);
 
   const clearCommentAttachments = useCallback((commentKey: string | number) => {
@@ -3280,11 +3587,15 @@ export default function Dashboard() {
   const toggleShareMenu = useCallback((postKey: string) => {
     setShareMenuFor((prev) => (prev === postKey ? null : postKey));
     setPostMenuFor(null);
+    setReactionPickerFor(null);
+    setReactionBreakdownFor(null);
   }, []);
 
   const togglePostMenu = useCallback((postKey: string) => {
     setPostMenuFor((prev) => (prev === postKey ? null : postKey));
     setShareMenuFor(null);
+    setReactionPickerFor(null);
+    setReactionBreakdownFor(null);
   }, []);
 
   const showCopyToast = useCallback((message: string) => {
@@ -3428,10 +3739,16 @@ export default function Dashboard() {
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null;
       if (!target) return;
-      if (target.closest(".post-action-group") || target.closest(".post-menu-wrapper"))
+      if (
+        target.closest(".post-action-group") ||
+        target.closest(".post-action-counts") ||
+        target.closest(".post-menu-wrapper")
+      )
         return;
       setShareMenuFor(null);
       setPostMenuFor(null);
+      setReactionPickerFor(null);
+      setReactionBreakdownFor(null);
     };
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
@@ -4185,6 +4502,11 @@ export default function Dashboard() {
               const shareText = post.title
                 ? `${authorLabel}: ${post.title}`
                 : `${authorLabel} posted an update.`;
+              const canShareExternally = isPubliclyShareablePost(post);
+              const externalShareBlockMessage =
+                post.source === "group"
+                  ? "This group post is private. Only public posts can be shared externally."
+                  : "Only public posts can be shared externally.";
               const encodedUrl = encodeURIComponent(shareUrl);
               const encodedText = encodeURIComponent(shareText);
               const likesCount = Number(post.likes ?? 0);
@@ -4192,9 +4514,22 @@ export default function Dashboard() {
                 post.reactionCounts,
                 likesCount
               );
-              const thumbsUpCount = reactionCounts.thumbsUp;
-              const heartCount = reactionCounts.heart;
               const myReaction = normalizeReactionValue(post.myReaction);
+              const reactionTotalCount = REACTION_OPTIONS.reduce(
+                (sum, option) => sum + Number(reactionCounts[option.key] || 0),
+                0
+              );
+              const topReactionOptions = getTopReactionOptions(reactionCounts);
+              const reactionBadgeOptions = topReactionOptions.length
+                ? topReactionOptions
+                : REACTION_OPTIONS.slice(0, 1);
+              const isReactionPickerOpen = reactionPickerFor === postKey;
+              const isReactionBreakdownOpen = reactionBreakdownFor === postKey;
+              const hasOpenPopover =
+                showShareMenu ||
+                showPostMenu ||
+                isReactionPickerOpen ||
+                isReactionBreakdownOpen;
               const sharesCount = Number(post.shares ?? 0);
               const commentsCount = post.comments?.length ?? 0;
               const isDescriptorActionable =
@@ -4206,7 +4541,7 @@ export default function Dashboard() {
                 <article
                   key={post.id}
                   id={`post-${postKey}`}
-                  className={`post-card${showShareMenu ? " is-popover-open" : ""}${
+                  className={`post-card${hasOpenPopover ? " is-popover-open" : ""}${
                     post.signalTag === "support-request" ? " post-card--support" : ""
                   }${post.signalTag === "win" ? " post-card--win" : ""}`}
                   ref={registerPostNode(postKey)}
@@ -4537,26 +4872,45 @@ export default function Dashboard() {
                       </>
                     )}
                     <div className="post-actions">
-                      <div className="post-action-counts">
+                      <div
+                        className={`post-action-counts post-action-counts--with-breakdown${
+                          isReactionBreakdownOpen ? " is-open" : ""
+                        }`}
+                        role="button"
+                        tabIndex={0}
+                        aria-label="Show reaction breakdown"
+                        aria-expanded={isReactionBreakdownOpen}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setReactionBreakdownFor((prev) =>
+                            prev === postKey ? null : postKey
+                          );
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key !== "Enter" && event.key !== " ") return;
+                          event.preventDefault();
+                          setReactionBreakdownFor((prev) =>
+                            prev === postKey ? null : postKey
+                          );
+                        }}
+                      >
                         <span
-                          className={`post-action-count${
-                            myReaction === "👍" ? " is-selected" : ""
+                          className={`post-action-count post-action-count--reactions${
+                            myReaction ? " is-selected" : ""
                           }`}
                         >
-                          <span className="post-action-count-icon" aria-hidden="true">
-                            👍
+                          <span className="post-action-reaction-stack" aria-hidden="true">
+                            {reactionBadgeOptions.map((option, index) => (
+                              <span
+                                key={`${postKey}-reaction-chip-${option.key}-${index}`}
+                                className="post-action-reaction-chip"
+                                title={option.label}
+                              >
+                                {option.emoji}
+                              </span>
+                            ))}
                           </span>
-                          {thumbsUpCount}
-                        </span>
-                        <span
-                          className={`post-action-count${
-                            myReaction === "❤️" ? " is-selected" : ""
-                          }`}
-                        >
-                          <span className="post-action-count-icon" aria-hidden="true">
-                            ❤️
-                          </span>
-                          {heartCount}
+                          <span className="post-action-count-total">{reactionTotalCount}</span>
                         </span>
                         <span className="post-action-count">
                           <span className="post-action-count-icon" aria-hidden="true">
@@ -4570,38 +4924,82 @@ export default function Dashboard() {
                           </span>
                           {sharesCount}
                         </span>
+                        <div
+                          className={`post-action-popover post-action-popover--reaction-breakdown${
+                            isReactionBreakdownOpen ? " is-open" : ""
+                          }`}
+                          role="tooltip"
+                        >
+                          <div className="post-reaction-breakdown">
+                            {REACTION_OPTIONS.map((option) => (
+                              <div className="post-reaction-breakdown-row" key={option.key}>
+                                <span className="post-reaction-breakdown-meta">
+                                  <span aria-hidden="true">{option.emoji}</span>
+                                  <span>{option.label}</span>
+                                </span>
+                                <strong>{Number(reactionCounts[option.key] || 0)}</strong>
+                              </div>
+                            ))}
+                            <div className="post-reaction-breakdown-row is-total">
+                              <span>Total reactions</span>
+                              <strong>{reactionTotalCount}</strong>
+                            </div>
+                          </div>
+                        </div>
                       </div>
                       <div className="post-action-bar">
-                      <div className="post-action-group">
-                        <button
-                          className={`post-action-btn${
-                            myReaction === "👍" ? " is-reacted" : ""
-                          }`}
-                          type="button"
-                          aria-pressed={myReaction === "👍"}
-                          onClick={() => void handleReaction(post, postKey, "👍")}
-                        >
-                          <span className="post-action-icon" aria-hidden="true">
-                            👍
-                          </span>
-                          <span>Like</span>
-                        </button>
-                      </div>
-                      <div className="post-action-group">
-                        <button
-                          className={`post-action-btn${
-                            myReaction === "❤️" ? " is-reacted" : ""
-                          }`}
-                          type="button"
-                          aria-pressed={myReaction === "❤️"}
-                          onClick={() => void handleReaction(post, postKey, "❤️")}
-                        >
-                          <span className="post-action-icon" aria-hidden="true">
-                            ❤️
-                          </span>
-                          <span>Heart</span>
-                        </button>
-                      </div>
+                      <div
+                        className={`post-action-group post-action-group--reaction${
+                          isReactionPickerOpen ? " is-open" : ""
+                        }`}
+                      >
+                          <button
+                            className={`post-action-btn${myReaction ? " is-reacted" : ""}`}
+                            type="button"
+                            aria-pressed={Boolean(myReaction)}
+                            aria-expanded={isReactionPickerOpen}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setReactionPickerFor((prev) =>
+                                prev === postKey ? null : postKey
+                              );
+                            }}
+                          >
+                            <span className="post-action-icon" aria-hidden="true">
+                              {myReaction || "👍"}
+                            </span>
+                            <span>Like</span>
+                          </button>
+                          <div
+                            className={`post-action-popover post-action-popover--reactions${
+                              isReactionPickerOpen ? " is-open" : ""
+                            }`}
+                            role="menu"
+                            aria-label="Choose reaction"
+                          >
+                            <div className="post-reaction-picker">
+                              {REACTION_OPTIONS.map((option) => (
+                                <button
+                                  key={option.key}
+                                  className={`post-reaction-emoji${
+                                    myReaction === option.emoji ? " is-selected" : ""
+                                  }`}
+                                  type="button"
+                                  role="menuitem"
+                                  aria-label={option.label}
+                                  title={option.label}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setReactionPickerFor(null);
+                                    void handleReaction(post, postKey, option.emoji);
+                                  }}
+                                >
+                                  {option.emoji}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
                       <div className="post-action-group">
                         <button
                           className="post-action-btn"
@@ -4663,8 +5061,15 @@ export default function Dashboard() {
                                 )}
                               <a
                                 className="post-share-link is-icon post-share-link--facebook"
-                                href={`https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}&quote=${encodedText}`}
-                                onClick={() => void trackShare(post, postKey)}
+                                href={`https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`}
+                                onClick={(event) => {
+                                  if (!canShareExternally) {
+                                    event.preventDefault();
+                                    pushShareNotice(postKey, externalShareBlockMessage);
+                                    return;
+                                  }
+                                  void trackShare(post, postKey);
+                                }}
                                 target="_blank"
                                 rel="noreferrer"
                                 aria-label="Share to Facebook"
@@ -4677,7 +5082,14 @@ export default function Dashboard() {
                               <a
                                 className="post-share-link is-icon post-share-link--x"
                                 href={`https://twitter.com/intent/tweet?text=${encodedText}&url=${encodedUrl}`}
-                                onClick={() => void trackShare(post, postKey)}
+                                onClick={(event) => {
+                                  if (!canShareExternally) {
+                                    event.preventDefault();
+                                    pushShareNotice(postKey, externalShareBlockMessage);
+                                    return;
+                                  }
+                                  void trackShare(post, postKey);
+                                }}
                                 target="_blank"
                                 rel="noreferrer"
                                 aria-label="Share to X"
@@ -4690,7 +5102,14 @@ export default function Dashboard() {
                               <a
                                 className="post-share-link is-icon post-share-link--linkedin"
                                 href={`https://www.linkedin.com/sharing/share-offsite/?url=${encodedUrl}`}
-                                onClick={() => void trackShare(post, postKey)}
+                                onClick={(event) => {
+                                  if (!canShareExternally) {
+                                    event.preventDefault();
+                                    pushShareNotice(postKey, externalShareBlockMessage);
+                                    return;
+                                  }
+                                  void trackShare(post, postKey);
+                                }}
                                 target="_blank"
                                 rel="noreferrer"
                                 aria-label="Share to LinkedIn"
@@ -4703,7 +5122,14 @@ export default function Dashboard() {
                               <a
                                 className="post-share-link is-icon post-share-link--reddit"
                                 href={`https://www.reddit.com/submit?url=${encodedUrl}&title=${encodedText}`}
-                                onClick={() => void trackShare(post, postKey)}
+                                onClick={(event) => {
+                                  if (!canShareExternally) {
+                                    event.preventDefault();
+                                    pushShareNotice(postKey, externalShareBlockMessage);
+                                    return;
+                                  }
+                                  void trackShare(post, postKey);
+                                }}
                                 target="_blank"
                                 rel="noreferrer"
                                 aria-label="Share to Reddit"
@@ -4716,7 +5142,14 @@ export default function Dashboard() {
                               <a
                                 className="post-share-link is-icon post-share-link--whatsapp"
                                 href={`https://wa.me/?text=${encodedText}%20${encodedUrl}`}
-                                onClick={() => void trackShare(post, postKey)}
+                                onClick={(event) => {
+                                  if (!canShareExternally) {
+                                    event.preventDefault();
+                                    pushShareNotice(postKey, externalShareBlockMessage);
+                                    return;
+                                  }
+                                  void trackShare(post, postKey);
+                                }}
                                 target="_blank"
                                 rel="noreferrer"
                                 aria-label="Share to WhatsApp"
@@ -4825,7 +5258,7 @@ export default function Dashboard() {
                                     </div>
                                   </div>
                                 ) : (
-                                  <div className="comment-body">{displayBody}</div>
+                                  <div className="comment-body">{linkifyText(displayBody)}</div>
                                 )}
                                 {!isEditing && imageUrls.length > 0 && (
                                   <div className="comment-images">
@@ -4979,18 +5412,9 @@ export default function Dashboard() {
                                               }));
 
                                               try {
-                                                const res = await api.get(
-                                                  "/comments?populate=owner&sort=createdAt:desc&pagination[pageSize]=500"
-                                                );
-                                                setPosts((prev) => ({
-                                                  ...prev,
-                                                  comments: res.data?.data ?? [],
-                                                }));
+                                                await refreshCommentsForPost(post);
                                               } catch (err: unknown) {
-                                                console.warn(
-                                                  "Comment refresh failed after delete",
-                                                  err
-                                                );
+                                                console.warn("Comment refresh failed after delete", err);
                                               }
                                             } catch (err: unknown) {
                                               const status = axios.isAxiosError(err)
@@ -4998,33 +5422,11 @@ export default function Dashboard() {
                                                 : undefined;
                                               if (status && status >= 500) {
                                                 try {
-                                                  const res = await api.get(
-                                                    "/comments?populate=owner&sort=createdAt:desc&pagination[pageSize]=500"
-                                                  );
-                                                  const nextComments = res.data?.data ?? [];
-                                                  setPosts((prev) => ({
-                                                    ...prev,
-                                                    comments: nextComments,
-                                                  }));
+                                                  const nextComments =
+                                                    await refreshCommentsForPost(post);
                                                   const stillThere = nextComments.some(
-                                                    (entry: unknown) => {
-                                                      const record = asRecord(entry);
-                                                      const attrs = normalize(entry);
-                                                      const entryId = record.id ?? attrs.id;
-                                                      const entryDoc =
-                                                        record.documentId ?? attrs.documentId;
-                                                      if (entryId !== undefined) {
-                                                        if (removeIds.has(String(entryId))) {
-                                                          return true;
-                                                        }
-                                                      }
-                                                      if (entryDoc !== undefined) {
-                                                        if (removeIds.has(String(entryDoc))) {
-                                                          return true;
-                                                        }
-                                                      }
-                                                      return false;
-                                                    }
+                                                    (entry: unknown) =>
+                                                      commentInIdentifierSet(entry, removeIds)
                                                   );
                                                   if (!stillThere) {
                                                     return;
@@ -5143,13 +5545,7 @@ export default function Dashboard() {
                                     bumpStat("supportReplies", 1);
                                     pushImpactNotice("Thanks for supporting someone today.");
                                   }
-                                  const res = await api.get(
-                                    "/comments?populate=owner&sort=createdAt:desc&pagination[pageSize]=500"
-                                  );
-                                  setPosts((prev) => ({
-                                    ...prev,
-                                    comments: res.data?.data ?? [],
-                                  }));
+                                  await refreshCommentsForPost(post);
                                   setCommentInputs((prev) => ({
                                     ...prev,
                                     [commentKey]: "",
