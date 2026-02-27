@@ -3,7 +3,11 @@ import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import api from "../api/strapi";
 import { useAuth } from "../context/AuthContext";
-import { AGE_VERIFY_API_BASE, AGE_VERIFY_PUBLIC_URL } from "../utils/age-verify";
+import {
+  AGE_VERIFY_API_BASE,
+  AGE_VERIFY_PUBLIC_URL,
+  launchAgeVerifyIfMobile,
+} from "../utils/age-verify";
 import "../css/age-verification.css";
 
 const PROMPT_KEY_PREFIX = "age-verification:prompt";
@@ -232,7 +236,7 @@ export default function AgeVerificationPrompt() {
     }
   };
 
-  const createAgeSession = async () => {
+  const createAgeSession = async (options?: { launchOnMobile?: boolean }) => {
     setAgeSessionError(null);
     setAgeSessionErrorDetail(null);
     setAgeSessionLoading(true);
@@ -280,12 +284,22 @@ export default function AgeVerificationPrompt() {
       setAgeMobileUrl(nextMobileUrl);
       setAgeQrUrl(computedMobile || serverQrUrl || nextMobileUrl);
       setAgeSessionStatus("pending");
+      if (options?.launchOnMobile && launchAgeVerifyIfMobile(nextMobileUrl)) {
+        return;
+      }
     } catch (err: any) {
       setAgeSessionError(err?.message || "Unable to start age verification.");
       ageVerifyError("create session failed", err);
     } finally {
       setAgeSessionLoading(false);
     }
+  };
+
+  const startAgeVerification = () => {
+    if (launchAgeVerifyIfMobile(ageMobileUrl)) {
+      return;
+    }
+    void createAgeSession({ launchOnMobile: true });
   };
 
   useEffect(() => {
@@ -498,7 +512,7 @@ export default function AgeVerificationPrompt() {
                     <button
                       type="button"
                       className="btn ghost"
-                      onClick={() => createAgeSession()}
+                      onClick={startAgeVerification}
                       disabled={ageSessionLoading}
                     >
                       {ageSessionLoading ? "Starting…" : ageToken ? "Re-verify" : "Start verification"}

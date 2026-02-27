@@ -15,7 +15,11 @@ import {
   formatPhoneInput,
   normalizeDialCode,
 } from "../utils/phone";
-import { AGE_VERIFY_API_BASE, AGE_VERIFY_PUBLIC_URL } from "../utils/age-verify";
+import {
+  AGE_VERIFY_API_BASE,
+  AGE_VERIFY_PUBLIC_URL,
+  launchAgeVerifyIfMobile,
+} from "../utils/age-verify";
 import { trackEvent } from "../utils/analytics";
 
 const slugifyHandle = (value: string) =>
@@ -241,7 +245,7 @@ export default function Register() {
   }, [ageVerificationTokenParam]);
 
 
-  const createAgeSession = async () => {
+  const createAgeSession = async (options?: { launchOnMobile?: boolean }) => {
     setAgeSessionError(null);
     setAgeSessionLoading(true);
     try {
@@ -270,11 +274,21 @@ export default function Register() {
       setAgeMobileUrl(nextMobileUrl);
       setAgeQrUrl(computedMobile || serverQrUrl || nextMobileUrl);
       setAgeSessionStatus("pending");
+      if (options?.launchOnMobile && launchAgeVerifyIfMobile(nextMobileUrl)) {
+        return;
+      }
     } catch (err: any) {
       setAgeSessionError(err?.message || "Unable to start age verification.");
     } finally {
       setAgeSessionLoading(false);
     }
+  };
+
+  const startAgeVerification = () => {
+    if (launchAgeVerifyIfMobile(ageMobileUrl)) {
+      return;
+    }
+    void createAgeSession({ launchOnMobile: true });
   };
 
   useEffect(() => {
@@ -983,7 +997,7 @@ export default function Register() {
                     <button
                       type="button"
                       className="btn ghost"
-                      onClick={() => createAgeSession()}
+                      onClick={startAgeVerification}
                       disabled={ageSessionLoading}
                     >
                       {ageSessionLoading

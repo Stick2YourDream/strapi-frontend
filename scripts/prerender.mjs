@@ -126,7 +126,7 @@ const routes = [
       description:
         "Log in to Your Social Place to share progress updates and stay accountable with your support network.",
       url: `${BASE_URL}/login`,
-      robots: "noindex, nofollow",
+      robots: "noindex, nofollow, noarchive, nosnippet, max-image-preview:none, max-video-preview:-1",
     },
   },
   {
@@ -136,7 +136,7 @@ const routes = [
       description:
         "Create a Your Social Place account to join a motivational support network that celebrates progress and accountability.",
       url: `${BASE_URL}/register`,
-      robots: "noindex, nofollow",
+      robots: "noindex, nofollow, noarchive, nosnippet, max-image-preview:none, max-video-preview:-1",
     },
   },
   {
@@ -151,11 +151,10 @@ const routes = [
   {
     path: "/downloads",
     meta: {
-      title: "Apps & Downloads | Your Social Place",
+      title: "Downloads | Your Social Place",
       description:
         "Download YSP Live, the Windows control helper, or install the Your Social Place PWA on any device.",
       url: `${BASE_URL}/downloads`,
-      canonical: `${BASE_URL}/apps`,
     },
   },
   {
@@ -227,8 +226,8 @@ const buildJsonLd = (meta) => {
 
 const replaceJsonLd = (html, jsonLd) =>
   html.replace(
-    /<script type="application\/ld\+json">[\s\S]*?<\/script>/i,
-    `<script type="application/ld+json">\n${jsonLd}\n    </script>`
+    /<script[^>]+id="app-seo-jsonld"[^>]*>[\s\S]*?<\/script>/i,
+    `<script id="app-seo-jsonld" type="application/ld+json">\n${jsonLd}\n    </script>`
   );
 
 const applyMeta = (html, meta) => {
@@ -237,6 +236,7 @@ const applyMeta = (html, meta) => {
   next = replaceMetaContent(next, "name", "description", meta.description);
   if (meta.robots) {
     next = replaceMetaContent(next, "name", "robots", meta.robots);
+    next = replaceMetaContent(next, "name", "googlebot", meta.robots);
   }
   next = replaceMetaContent(next, "property", "og:title", meta.title);
   next = replaceMetaContent(next, "property", "og:description", meta.description);

@@ -12,7 +12,11 @@ import { getOrCreateDeviceId } from "../utils/device-id";
 import { getDefaultDeviceLabel } from "../utils/device-approval";
 import { getStoredExpiresAt, getStoredToken } from "../utils/auth-storage";
 import { pickMediaUrl } from "../utils/media";
-import { AGE_VERIFY_API_BASE, AGE_VERIFY_PUBLIC_URL } from "../utils/age-verify";
+import {
+  AGE_VERIFY_API_BASE,
+  AGE_VERIFY_PUBLIC_URL,
+  launchAgeVerifyIfMobile,
+} from "../utils/age-verify";
 import { trackEvent } from "../utils/analytics";
 
 const SETTINGS_GLOBAL_KEY = "video-call-settings:global";
@@ -1031,7 +1035,7 @@ export default function Login() {
     }
   };
 
-  const createAgeSession = async () => {
+  const createAgeSession = async (options?: { launchOnMobile?: boolean }) => {
     setAgeSessionError(null);
     setAgeSessionLoading(true);
     try {
@@ -1060,11 +1064,21 @@ export default function Login() {
       setAgeMobileUrl(nextMobileUrl);
       setAgeQrUrl(computedMobile || serverQrUrl || nextMobileUrl);
       setAgeSessionStatus("pending");
+      if (options?.launchOnMobile && launchAgeVerifyIfMobile(nextMobileUrl)) {
+        return;
+      }
     } catch (err: any) {
       setAgeSessionError(err?.message || "Unable to start age verification.");
     } finally {
       setAgeSessionLoading(false);
     }
+  };
+
+  const startAgeVerification = () => {
+    if (launchAgeVerifyIfMobile(ageMobileUrl)) {
+      return;
+    }
+    void createAgeSession({ launchOnMobile: true });
   };
 
   useEffect(() => {
@@ -1650,7 +1664,7 @@ export default function Login() {
                     <button
                       type="button"
                       className="btn ghost"
-                      onClick={() => createAgeSession()}
+                      onClick={startAgeVerification}
                       disabled={ageSessionLoading}
                     >
                       {ageSessionLoading ? "Starting..." : "Start verification"}

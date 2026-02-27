@@ -25,7 +25,11 @@ import {
   formatPhoneInput,
   normalizeDialCode,
 } from "../utils/phone";
-import { AGE_VERIFY_API_BASE, AGE_VERIFY_PUBLIC_URL } from "../utils/age-verify";
+import {
+  AGE_VERIFY_API_BASE,
+  AGE_VERIFY_PUBLIC_URL,
+  launchAgeVerifyIfMobile,
+} from "../utils/age-verify";
 import SiteFooter from "../components/SiteFooter";
 
 type ProfileSummary = {
@@ -1117,7 +1121,7 @@ export default function Landing() {
     setSignupDialCodeEditing(false);
   };
 
-  const createAgeSession = async () => {
+  const createAgeSession = async (options?: { launchOnMobile?: boolean }) => {
     setAgeSessionError(null);
     setAgeSessionLoading(true);
     try {
@@ -1146,11 +1150,21 @@ export default function Landing() {
       setAgeMobileUrl(nextMobileUrl);
       setAgeQrUrl(computedMobile || serverQrUrl || nextMobileUrl);
       setAgeSessionStatus("pending");
+      if (options?.launchOnMobile && launchAgeVerifyIfMobile(nextMobileUrl)) {
+        return;
+      }
     } catch (err: any) {
       setAgeSessionError(err?.message || "Unable to start age verification.");
     } finally {
       setAgeSessionLoading(false);
     }
+  };
+
+  const startAgeVerification = () => {
+    if (launchAgeVerifyIfMobile(ageMobileUrl)) {
+      return;
+    }
+    void createAgeSession({ launchOnMobile: true });
   };
 
   const closeAgeModal = () => {
@@ -2800,9 +2814,7 @@ export default function Landing() {
                     <button
                       type="button"
                       className="landing-btn landing-btn--ghost"
-                      onClick={() => {
-                        void createAgeSession();
-                      }}
+                      onClick={startAgeVerification}
                       disabled={ageSessionLoading}
                     >
                       {ageSessionLoading

@@ -1,6 +1,6 @@
 // src/routes/AppRoutes.tsx
 import { lazy, Suspense, useEffect, type ReactNode } from "react";
-import { Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation, useParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import ProtectedRoute from "../components/ProtectedRoute";
 
@@ -58,6 +58,31 @@ function AuthAliasRedirect({ mode }: { mode: "login" | "register" }): JSX.Elemen
   return <Navigate to={to} replace />;
 }
 
+function LegacyVerifyRedirect(): JSX.Element {
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  const sessionId = params.get("id");
+  if (sessionId) {
+    params.delete("id");
+    params.set("mode", params.get("mode") || "mobile");
+    const query = params.toString();
+    const to = `/age-verify/session/${encodeURIComponent(sessionId)}${
+      query ? `?${query}` : ""
+    }`;
+    return <Navigate to={to} replace />;
+  }
+  return <Navigate to="/age-verify" replace />;
+}
+
+function LegacyVerifySessionRedirect(): JSX.Element {
+  const location = useLocation();
+  const { sessionId } = useParams();
+  const to = `/age-verify/session/${encodeURIComponent(String(sessionId || ""))}${
+    location.search || ""
+  }`;
+  return <Navigate to={to} replace />;
+}
+
 const sanitizeRedirectTarget = (value: string | null) => {
   const trimmed = String(value || "").trim();
   if (!trimmed || !trimmed.startsWith("/") || trimmed.startsWith("//")) {
@@ -102,6 +127,8 @@ export default function AppRoutes(): JSX.Element {
       <Route path="/reset-password" element={withRouteSuspense(<ResetPassword />)} />
       <Route path="/register" element={<AuthAliasRedirect mode="register" />} />
       <Route path="/verify-email" element={withRouteSuspense(<VerifyEmail />)} />
+      <Route path="/verify" element={<LegacyVerifyRedirect />} />
+      <Route path="/session/:sessionId" element={<LegacyVerifySessionRedirect />} />
       <Route path="/age-verify/*" element={withRouteSuspense(<AgeVerifyApp />)} />
       <Route path="/terms" element={withRouteSuspense(<Terms />)} />
       <Route path="/marketplace-policy" element={withRouteSuspense(<MarketplacePolicy />)} />

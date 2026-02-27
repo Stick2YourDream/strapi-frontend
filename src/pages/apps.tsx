@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import "../css/downloads-page.css";
 import { usePageMeta } from "../hooks/usePageMeta";
 
@@ -33,6 +33,7 @@ const detectPlatform = () => {
 
 export default function Apps() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(
     null
   );
@@ -47,13 +48,16 @@ export default function Apps() {
     (import.meta.env.VITE_WINDOWS_HELPER_URL as string | undefined) ||
     "/downloads/ysphelper.exe";
   const msixUrl = (import.meta.env.VITE_DESKTOP_MSIX_URL as string | undefined) || "";
+  const isDownloadsRoute = location.pathname.toLowerCase().startsWith("/downloads");
 
   usePageMeta({
-    title: "Apps & Downloads | Your Social Place",
+    title: isDownloadsRoute
+      ? "Downloads | Your Social Place"
+      : "Apps & Downloads | Your Social Place",
     description:
       "Download YSP Live, the Windows control helper, or install the Your Social Place PWA on any device.",
     type: "website",
-    canonical: "https://yoursocialplace.com/apps",
+    canonical: isDownloadsRoute ? "/downloads" : "/apps",
     keywords:
       "Your Social Place downloads, YSP Live, Windows helper, Android APK, PWA install, iOS install, macOS install",
   });

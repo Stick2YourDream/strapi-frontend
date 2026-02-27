@@ -14,6 +14,7 @@ import IdCaptureModule from "./components/IdCaptureModule";
 import LivenessModule, { type LivenessResult } from "./components/LivenessModule";
 import SetupTutorial from "./components/SetupTutorial";
 import SetupSettings from "./components/SetupSettings";
+import { usePageMeta } from "../../hooks/usePageMeta";
 import { computeFaceMatch, warmupFaceMatchModel } from "./utils/faceMatch";
 import "./styles.css";
 import { AGE_VERIFY_BASE_PATH } from "./constants";
@@ -1420,6 +1421,13 @@ const MobileSession = () => {
 };
 
 export default function App() {
+  usePageMeta({
+    title: "Age Verification | Your Social Place",
+    description: "Secure age verification workflow for private account and compliance checks.",
+    robots: "noindex, nofollow",
+    canonical: "/age-verify",
+  });
+
   return (
     <RuntimeSettingsProvider>
       <div className="age-verify-root">

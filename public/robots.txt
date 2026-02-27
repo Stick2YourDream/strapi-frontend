@@ -1,14 +1,20 @@
 User-agent: *
 Allow: /
+
+# Private/authenticated surfaces
 Disallow: /dashboard
+Disallow: /news
 Disallow: /friends
 Disallow: /me
 Disallow: /my-posts
 Disallow: /my-gallery
+Disallow: /post-manager
 Disallow: /groups
 Disallow: /storefront
 Disallow: /moderation
-Disallow: /news
+Disallow: /age-verify
+
+# Auth and account flows
 Disallow: /login
 Disallow: /register
 Disallow: /forgot-password
@@ -16,8 +22,10 @@ Disallow: /reset-password
 Disallow: /verify-email
 Disallow: /delete-account
 Disallow: /delete-data
+
+# Private utility endpoints
 Disallow: /share
 Disallow: /protocol
-Disallow: /notes/
+Disallow: /notes
 
 Sitemap: https://yoursocialplace.com/sitemap.xml
