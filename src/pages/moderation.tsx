@@ -60,6 +60,7 @@ const STOREFRONT_DEMO_COUNT_KEY = "storefront:demoListingsCount";
 const STOREFRONT_DASHBOARD_MOCK_ENABLED_KEY = "storefront:sellerDashboardMockEnabled";
 const STOREFRONT_DASHBOARD_MOCK_DATA_KEY = "storefront:sellerDashboardMockData";
 const STOREFRONT_DEMO_MAX = 20;
+type MobileMenuVariant = "panel" | "drawer";
 const DEFAULT_STOREFRONT_DEMO_ENABLED = false;
 const DEFAULT_SELLER_DASHBOARD_MOCK = {
   listings: [
@@ -204,6 +205,9 @@ const readStorefrontDemoEnabled = () => {
   if (raw === null) return DEFAULT_STOREFRONT_DEMO_ENABLED;
   return raw === "true";
 };
+
+const normalizeMobileMenuVariant = (value: unknown): MobileMenuVariant =>
+  value === "panel" ? "panel" : "drawer";
 
 const readStorefrontDemoCount = () => {
   if (typeof window === "undefined") return 0;
@@ -427,6 +431,7 @@ export default function Moderation() {
   );
   const [newsroomEnabled, setNewsroomEnabled] = useState(true);
   const [storefrontEnabled, setStorefrontEnabled] = useState(true);
+  const [mobileMenuVariant, setMobileMenuVariant] = useState<MobileMenuVariant>("drawer");
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
@@ -523,8 +528,10 @@ export default function Moderation() {
       try {
         const res = await api.get("/moderation/settings");
         if (!active) return;
-        setNewsroomEnabled(res.data?.data?.newsroomEnabled !== false);
-        setStorefrontEnabled(res.data?.data?.storefrontEnabled !== false);
+        const data = res.data?.data;
+        setNewsroomEnabled(data?.newsroomEnabled !== false);
+        setStorefrontEnabled(data?.storefrontEnabled !== false);
+        setMobileMenuVariant(normalizeMobileMenuVariant(data?.mobileMenuVariant));
       } catch {
         if (active) {
           setSettingsError("Unable to load moderation settings.");
@@ -842,6 +849,7 @@ export default function Moderation() {
   const applyPlatformSettings = async (next: {
     storefrontEnabled?: boolean;
     newsroomEnabled?: boolean;
+    mobileMenuVariant?: MobileMenuVariant;
   }) => {
     if (settingsSaving) return;
     setSettingsSaving(true);
@@ -858,6 +866,11 @@ export default function Moderation() {
         setNewsroomEnabled(data.newsroomEnabled);
       } else if (next.newsroomEnabled !== undefined) {
         setNewsroomEnabled(next.newsroomEnabled);
+      }
+      if (data?.mobileMenuVariant === "panel" || data?.mobileMenuVariant === "drawer") {
+        setMobileMenuVariant(data.mobileMenuVariant);
+      } else if (next.mobileMenuVariant !== undefined) {
+        setMobileMenuVariant(next.mobileMenuVariant);
       }
       await refreshAppSettings();
     } catch {
@@ -881,9 +894,18 @@ export default function Moderation() {
     });
   };
 
+  const handleMobileMenuVariantToggle = async (useDrawer: boolean) => {
+    const nextVariant: MobileMenuVariant = useDrawer ? "drawer" : "panel";
+    await applyPlatformSettings({
+      mobileMenuVariant: nextVariant,
+      storefrontEnabled,
+      newsroomEnabled,
+    });
+  };
+
   return (
     <div className="dashboard-shell">
-      <Sidebar active="moderation" />
+      <Sidebar active="moderation" mobileMenuVariant={mobileMenuVariant} />
       <div className="main-content moderation-content">
         <section className="panel moderation-hero">
           <div>
@@ -1280,6 +1302,29 @@ export default function Moderation() {
             {settingsLoading && <div className="status">Loading settings...</div>}
             {!settingsLoading && (
               <>
+                <div className="moderation-settings-row">
+                  <div>
+                    <strong>Mobile sidebar style</strong>
+                    <p className="moderation-report-meta">
+                      Switch between the separate drawer component and the current menu panel.
+                      Applies across devices after save.
+                    </p>
+                  </div>
+                  <label className="moderation-toggle">
+                    <input
+                      type="checkbox"
+                      checked={mobileMenuVariant === "drawer"}
+                      disabled={settingsSaving}
+                      onChange={(event) =>
+                        void handleMobileMenuVariantToggle(event.target.checked)
+                      }
+                    />
+                    <span className="moderation-toggle-track" aria-hidden="true" />
+                    <span className="moderation-toggle-label">
+                      {mobileMenuVariant === "drawer" ? "Drawer" : "Panel"}
+                    </span>
+                  </label>
+                </div>
                 <div className="moderation-settings-row">
                   <div>
                     <strong>StoreFront availability</strong>

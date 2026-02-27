@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import axios from "axios";
 import { useAuth } from "../context/AuthContext";
 import api from "../api/strapi";
@@ -12,8 +12,10 @@ import {
   EyeOff,
   Home,
   LayoutDashboard,
+  LifeBuoy,
   Lock,
   LogOut,
+  MessageCircle,
   MessageSquare,
   Newspaper,
   Palette,
@@ -44,6 +46,7 @@ import { pickMediaUrl } from "../utils/media";
 import "../css/sidebar.css";
 import AvatarImage from "./AvatarImage";
 import ProfilePhotoModal from "./ProfilePhotoModal";
+import UserMenuDrawer from "./UserMenuDrawer";
 
 type ProfileSummary = {
   displayName: string;
@@ -103,6 +106,9 @@ const BIRTHDAY_MESSAGES = [
 const RECENT_LOGINS_KEY = "auth:recent-logins";
 const MAX_RECENT_LOGINS = 4;
 const NOTIFICATION_SOURCE_FILTERS_KEY = "notifications-source-filters-v1";
+const MOBILE_MENU_VARIANT_KEY = "sidebar:mobile-menu-variant-v1";
+
+type MobileMenuVariant = "panel" | "drawer";
 
 type NotificationSourceKey = "friends" | "groups" | "forums";
 type NotificationSourceFilters = Record<NotificationSourceKey, boolean>;
@@ -111,6 +117,14 @@ const DEFAULT_NOTIFICATION_SOURCE_FILTERS: NotificationSourceFilters = {
   friends: true,
   groups: true,
   forums: true,
+};
+
+const normalizeMobileMenuVariant = (value: unknown): MobileMenuVariant =>
+  value === "panel" ? "panel" : "drawer";
+
+const readMobileMenuVariant = (): MobileMenuVariant => {
+  if (typeof window === "undefined") return "drawer";
+  return normalizeMobileMenuVariant(window.localStorage.getItem(MOBILE_MENU_VARIANT_KEY));
 };
 
 const normalizeNotificationSourceFilters = (value: unknown): NotificationSourceFilters => {
@@ -185,6 +199,7 @@ type SidebarProps = {
   sidebarContent?: ReactNode;
   hideNavLinks?: boolean;
   hideBio?: boolean;
+  mobileMenuVariant?: MobileMenuVariant;
 };
 
 const trimPreviewText = (value?: string, max = 72) => {
@@ -300,7 +315,9 @@ export default function Sidebar({
   sidebarContent,
   hideNavLinks = false,
   hideBio = false,
+  mobileMenuVariant,
 }: SidebarProps) {
+  const location = useLocation();
   const navigate = useNavigate();
   const { user, profile, login, logout, appSettings } = useAuth();
   const [showMoreProfile, setShowMoreProfile] = useState(false);
@@ -327,6 +344,8 @@ export default function Sidebar({
   const [showNotifications, setShowNotifications] = useState(false);
   const [notificationSourceFilters, setNotificationSourceFilters] =
     useState<NotificationSourceFilters>(DEFAULT_NOTIFICATION_SOURCE_FILTERS);
+  const [storedMobileMenuVariant, setStoredMobileMenuVariant] =
+    useState<MobileMenuVariant>(readMobileMenuVariant);
   const [photoModalOpen, setPhotoModalOpen] = useState(false);
   const {
     counts,
@@ -493,6 +512,26 @@ export default function Sidebar({
     window.addEventListener("storage", handleStorage);
     return () => window.removeEventListener("storage", handleStorage);
   }, [user?.id]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const syncVariant = () => {
+      setStoredMobileMenuVariant(readMobileMenuVariant());
+    };
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key && event.key !== MOBILE_MENU_VARIANT_KEY) return;
+      syncVariant();
+    };
+    const handleVariantUpdated = () => {
+      syncVariant();
+    };
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener("sidebar:mobile-menu-variant-updated", handleVariantUpdated);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("sidebar:mobile-menu-variant-updated", handleVariantUpdated);
+    };
+  }, []);
 
   useEffect(() => {
     if (!showSwitchProfileModal) return;
@@ -863,6 +902,10 @@ export default function Sidebar({
   const hasCommunityLinks = true;
   const hasAccountLinks = true;
   const hasSwitchableProfiles = switchableProfiles.length > 0;
+  const appMobileMenuVariant: MobileMenuVariant =
+    appSettings?.mobileMenuVariant === "panel" ? "panel" : "drawer";
+  const effectiveMobileMenuVariant =
+    mobileMenuVariant || appMobileMenuVariant || storedMobileMenuVariant;
 
   useEffect(() => {
     if (!menuOpen || isFriendsMobileMenu) return;
@@ -963,6 +1006,53 @@ export default function Sidebar({
     if (postTitle) return `${owner} replied on "${postTitle}".`;
     return `${owner} replied in forums.`;
   }, [counts.forums, previews.forums]);
+
+  const mobileMessagePreviewText = useMemo(() => {
+    if (counts.messages <= 0) return "";
+    if (!previews.messages) return "Messages from friends";
+    const sender = String(previews.messages.senderName || "A friend").trim();
+    const snippet = trimPreviewText(previews.messages.body, 44);
+    if (snippet) return `${sender}: ${snippet}`;
+    const listingTitle = trimPreviewText(previews.messages.listingTitle, 32);
+    if (listingTitle) return `${sender} messaged you about "${listingTitle}"`;
+    return `${sender} sent you a message`;
+  }, [counts.messages, previews.messages]);
+
+  const drawerFriendMessages = useMemo(() => {
+    if (!previews.messages) return [];
+    const senderName = String(previews.messages.senderName || "A friend").trim() || "A friend";
+    const previewText =
+      trimPreviewText(previews.messages.body || previews.messages.listingTitle, 72) ||
+      "Sent you a message";
+    return [
+      {
+        id: String(previews.messages.id || "message-preview"),
+        friendName: senderName,
+        preview: previewText,
+        href: "/friends",
+        unreadCount: counts.messages > 0 ? counts.messages : undefined,
+      },
+    ];
+  }, [counts.messages, previews.messages]);
+
+  const handleDrawerLogout = () => {
+    logout("user-action");
+    navigate("/login");
+  };
+
+  const handleDrawerNotifications = () => {
+    setMenuOpen(false);
+    setShowProfileMenu(false);
+    setShowNotifications(true);
+    refresh();
+  };
+
+  const handleDrawerEditProfilePicture = () => {
+    setPhotoModalOpen(true);
+    setMenuOpen(false);
+    setShowProfileMenu(false);
+    setShowNotifications(false);
+  };
 
   const groupUpdatesTarget = "/groups";
   const forumsTarget = "/forums";
@@ -1444,7 +1534,24 @@ export default function Sidebar({
               </span>
             )}
           </button>
-          {menuOpen && (
+          {menuOpen && effectiveMobileMenuVariant === "drawer" && (
+            <UserMenuDrawer
+              open={menuOpen}
+              onClose={() => setMenuOpen(false)}
+              onLogout={handleDrawerLogout}
+              onNotificationsClick={handleDrawerNotifications}
+              onEditProfilePicture={handleDrawerEditProfilePicture}
+              user={{
+                name: nameForDisplay,
+                avatarUrl: profileCard?.avatarUrl,
+              }}
+              currentPath={`${location.pathname}${location.search}`}
+              notificationsCount={filteredNotificationTotal}
+              messagesCount={counts.messages}
+              friendMessages={drawerFriendMessages}
+            />
+          )}
+          {menuOpen && effectiveMobileMenuVariant !== "drawer" && (
             <>
               <button
                 type="button"
@@ -1461,7 +1568,7 @@ export default function Sidebar({
                 aria-label="Mobile navigation menu"
               >
                 <div className="mobile-profile-menu-header">
-                  <strong className="mobile-profile-menu-title">Navigation</strong>
+                  <strong className="mobile-profile-menu-title">Menu</strong>
                   <button
                     type="button"
                     className="mobile-profile-menu-close"
@@ -1471,16 +1578,57 @@ export default function Sidebar({
                     <X size={16} />
                   </button>
                 </div>
+                <div className="mobile-profile-identity" data-accent="profile">
+                  <div className="mobile-profile-identity-top">
+                    <button
+                      type="button"
+                      className="mobile-profile-identity-main"
+                      onClick={() => handleProfileAction("/me")}
+                    >
+                      <span className="mobile-profile-identity-avatar">
+                        {profileCard?.avatarUrl ? (
+                          <AvatarImage
+                            src={profileCard.avatarUrl}
+                            alt={nameForDisplay}
+                            className="mobile-avatar-image"
+                            loading="lazy"
+                            decoding="async"
+                          />
+                        ) : (
+                          <span className="mobile-avatar-fallback" aria-hidden="true">
+                            {fallbackInitial}
+                          </span>
+                        )}
+                      </span>
+                      <span className="mobile-profile-identity-copy" data-i18n-skip="true">
+                        <strong>{nameForDisplay}</strong>
+                        <span title={secondaryLine}>{secondaryLine}</span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="mobile-profile-identity-action"
+                      data-accent="dashboard"
+                      aria-label="Go to dashboard"
+                      onClick={() => handleProfileAction("/dashboard")}
+                    >
+                      <span className="sidebar-nav-icon" aria-hidden="true">
+                        <Home size={18} />
+                      </span>
+                    </button>
+                  </div>
+                </div>
                 {isFriendsMobileMenu ? (
                   <>
+                  <p className="mobile-profile-section-label">Navigation</p>
                   <button
-                    className="mobile-profile-item"
+                    className="mobile-profile-item mobile-profile-item--no-chevron"
                     type="button"
                     data-accent="dashboard"
                     onClick={() => handleProfileAction("/dashboard")}
                   >
                     <span className="sidebar-nav-icon" aria-hidden="true">
-                      <LayoutDashboard size={18} />
+                      <Home size={18} />
                     </span>
                     <span>My Dashboard</span>
                   </button>
@@ -1514,11 +1662,13 @@ export default function Sidebar({
                   </button>
                   {sidebarContent && (
                     <>
+                      <p className="mobile-profile-section-label">Community</p>
                       <div className="mobile-profile-divider" />
                       <div className="mobile-custom-content">{sidebarContent}</div>
                     </>
                   )}
                   <div className="mobile-profile-divider" />
+                  <p className="mobile-profile-section-label">Account</p>
                   {hasSwitchableProfiles && (
                     <button
                       className="mobile-profile-item"
@@ -1532,6 +1682,18 @@ export default function Sidebar({
                       <span>Switch profile</span>
                     </button>
                   )}
+                  <p className="mobile-profile-section-label">Support</p>
+                  <button
+                    className="mobile-profile-item"
+                    type="button"
+                    data-accent="dashboard"
+                    onClick={() => handleProfileAction("/support")}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <LifeBuoy size={18} />
+                    </span>
+                    <span>Help &amp; Support</span>
+                  </button>
                   <button
                     className="mobile-profile-item"
                     type="button"
@@ -1550,16 +1712,43 @@ export default function Sidebar({
                   </>
                 ) : (
                   <>
+                  <p className="mobile-profile-section-label">Navigation</p>
                   <button
-                    className="mobile-profile-item"
+                    className="mobile-profile-item mobile-profile-item--no-chevron"
                     type="button"
                     data-accent="dashboard"
                     onClick={() => handleProfileAction("/dashboard")}
                   >
                     <span className="sidebar-nav-icon" aria-hidden="true">
-                      <LayoutDashboard size={18} />
+                      <Home size={18} />
                     </span>
                     <span>My Dashboard</span>
+                  </button>
+                  <button
+                    className={`mobile-profile-item${
+                      counts.messages > 0 ? " mobile-profile-item--with-badge" : ""
+                    }`}
+                    type="button"
+                    data-accent="dashboard"
+                    onClick={() => handleProfileAction("/messages")}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <MessageCircle size={18} />
+                    </span>
+                    <span className="mobile-profile-item-copy">
+                      <span>Messages</span>
+                      <span className="mobile-profile-item-subtext">
+                        {mobileMessagePreviewText || "Messages from friends"}
+                      </span>
+                    </span>
+                    {counts.messages > 0 && (
+                      <span
+                        className="mobile-profile-item-badge"
+                        aria-label={`${counts.messages} unread messages`}
+                      >
+                        {counts.messages > 99 ? "99+" : counts.messages}
+                      </span>
+                    )}
                   </button>
                   {hasCommunityLinks && (
                     <div className="mobile-profile-section">
@@ -1568,11 +1757,17 @@ export default function Sidebar({
                           mobileCommunityOpen ? " is-open" : ""
                         }`}
                         type="button"
+                        data-accent="dashboard"
                         onClick={() => setMobileCommunityOpen((prev) => !prev)}
                         aria-expanded={mobileCommunityOpen}
                         aria-controls="mobile-community-links"
                       >
-                        <span className="mobile-profile-section-title">Community</span>
+                        <span className="mobile-profile-section-toggle-copy">
+                          <span className="sidebar-nav-icon" aria-hidden="true">
+                            <UsersRound size={18} />
+                          </span>
+                          <span className="mobile-profile-section-title">Community</span>
+                        </span>
                         <span
                           className={`mobile-profile-section-chevron${
                             mobileCommunityOpen ? " is-open" : ""
@@ -1683,11 +1878,17 @@ export default function Sidebar({
                           mobileAccountOpen ? " is-open" : ""
                         }`}
                         type="button"
+                        data-accent="dashboard"
                         onClick={() => setMobileAccountOpen((prev) => !prev)}
                         aria-expanded={mobileAccountOpen}
                         aria-controls="mobile-account-links"
                       >
-                        <span className="mobile-profile-section-title">Account</span>
+                        <span className="mobile-profile-section-toggle-copy">
+                          <span className="sidebar-nav-icon" aria-hidden="true">
+                            <Settings size={18} />
+                          </span>
+                          <span className="mobile-profile-section-title">Settings</span>
+                        </span>
                         <span
                           className={`mobile-profile-section-chevron${
                             mobileAccountOpen ? " is-open" : ""
@@ -1815,12 +2016,25 @@ export default function Sidebar({
                   )}
                   {showMobileCustomContent && (
                     <>
+                      <p className="mobile-profile-section-label">Community</p>
                       <div className="mobile-profile-divider" />
                       <div className="mobile-custom-content">{sidebarContent}</div>
                     </>
                   )}
+                  <p className="mobile-profile-section-label">Support</p>
                   <button
                     className="mobile-profile-item"
+                    type="button"
+                    data-accent="dashboard"
+                    onClick={() => handleProfileAction("/support")}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      <LifeBuoy size={18} />
+                    </span>
+                    <span>Help &amp; Support</span>
+                  </button>
+                  <button
+                    className="mobile-profile-item mobile-profile-item--no-chevron"
                     type="button"
                     data-accent="home"
                     onClick={() => handleProfileAction("/landing")}

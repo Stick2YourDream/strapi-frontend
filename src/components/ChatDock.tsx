@@ -449,9 +449,15 @@ export default function ChatDock() {
       ? popoutMinimized
         ? {}
         : {
+            top: 0,
+            right: 0,
+            bottom: 0,
+            left: 0,
             width: "100vw",
-            height: "100dvh",
+            maxWidth: "100vw",
+            height: "100vh",
             maxHeight: "100dvh",
+            borderRadius: 0,
           }
       : popoutMinimized
       ? {
@@ -608,32 +614,49 @@ export default function ChatDock() {
           )}
         </div>
         <button
-          className="chat-toggle-icon"
+          className={`chat-toggle-icon${popoutMinimized ? " is-minimized" : ""}`}
           type="button"
           onClick={() => setPopoutMinimized(!popoutMinimized)}
           aria-label={toggleLabel}
           title={toggleLabel}
         >
           {popoutMinimized ? (
-            <svg viewBox="0 0 24 24" aria-hidden="true">
+            <svg
+              className="chat-toggle-icon-svg is-minimized"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <defs>
+                <linearGradient id="chat-toggle-min-gradient" x1="2" y1="3" x2="22" y2="21" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stopColor="#22d3ee" />
+                  <stop offset="55%" stopColor="#60a5fa" />
+                  <stop offset="100%" stopColor="#a78bfa" />
+                </linearGradient>
+              </defs>
               <path
                 d="M5 7.25A2.25 2.25 0 0 1 7.25 5h9.5A2.25 2.25 0 0 1 19 7.25v5.5A2.25 2.25 0 0 1 16.75 15H11l-4 3v-3h-.75A2.25 2.25 0 0 1 4 12.75v-5.5Z"
-                stroke="currentColor"
-                strokeWidth="1.8"
+                stroke="url(#chat-toggle-min-gradient)"
+                strokeWidth="2.1"
                 strokeLinejoin="round"
                 fill="none"
               />
               <path
                 d="M9 10.1h6M9 12.9h4.5"
-                stroke="currentColor"
-                strokeWidth="1.8"
+                stroke="url(#chat-toggle-min-gradient)"
+                strokeWidth="2.1"
                 strokeLinecap="round"
               />
             </svg>
           ) : (
-            <svg viewBox="0 0 24 24" aria-hidden="true">
+            <svg className="chat-toggle-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
               <path
-                d="M5 12h14"
+                d="M7 7l10 10"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+              <path
+                d="M17 7 7 17"
                 stroke="currentColor"
                 strokeWidth="2"
                 strokeLinecap="round"

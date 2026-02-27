@@ -5,6 +5,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { X } from "lucide-react";
 import api from "../api/strapi";
 import { useAuth } from "../context/AuthContext";
 import { pickMediaUrl } from "../utils/media";
@@ -435,16 +436,26 @@ const ProfilePhotoModal: React.FC<ProfilePhotoModalProps> = ({ open, onClose }) 
   return (
     <div className="profile-photo-modal">
       <div className="profile-photo-modal__backdrop" onClick={onClose} />
-      <div className="profile-photo-modal__card" role="dialog" aria-modal="true">
+      <div
+        className="profile-photo-modal__card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="profile-photo-modal-title"
+      >
         <div className="profile-photo-modal__header">
           <div>
-            <h3>Profile Photo Studio</h3>
+            <h3 id="profile-photo-modal-title">Profile Photo Studio</h3>
             <p>
               Add a photo for each day, crop it, and tune brightness & contrast.
             </p>
           </div>
-          <button className="btn ghost" type="button" onClick={onClose}>
-            Close
+          <button
+            className="profile-photo-modal__close"
+            type="button"
+            onClick={onClose}
+            aria-label="Close profile photo studio"
+          >
+            <X size={18} />
           </button>
         </div>
 
@@ -518,12 +529,16 @@ const ProfilePhotoModal: React.FC<ProfilePhotoModalProps> = ({ open, onClose }) 
                 <div className="profile-photo-preview-actions">
                   <button
                     type="button"
-                    className="btn ghost"
+                    className="btn ghost profile-photo-btn"
                     onClick={() => inputRef.current?.click()}
                   >
                     Choose another
                   </button>
-                  <button type="button" className="btn ghost" onClick={clearDay}>
+                  <button
+                    type="button"
+                    className="btn ghost profile-photo-btn"
+                    onClick={clearDay}
+                  >
                     Clear day
                   </button>
                 </div>
@@ -545,7 +560,7 @@ const ProfilePhotoModal: React.FC<ProfilePhotoModalProps> = ({ open, onClose }) 
           </div>
 
           <div className="profile-photo-modal__controls">
-            <div className="profile-photo-control">
+            <div className="profile-photo-control profile-photo-control--toggle">
               <label>Crop square</label>
               <input
                 type="checkbox"
@@ -556,7 +571,10 @@ const ProfilePhotoModal: React.FC<ProfilePhotoModalProps> = ({ open, onClose }) 
               />
             </div>
             <div className="profile-photo-control">
-              <label>Zoom</label>
+              <label className="profile-photo-control__label">
+                <span>Zoom</span>
+                <strong>{currentAdjustments.zoom.toFixed(2)}x</strong>
+              </label>
               <input
                 type="range"
                 min={1}
@@ -570,7 +588,10 @@ const ProfilePhotoModal: React.FC<ProfilePhotoModalProps> = ({ open, onClose }) 
               />
             </div>
             <div className="profile-photo-control">
-              <label>Brightness</label>
+              <label className="profile-photo-control__label">
+                <span>Brightness</span>
+                <strong>{currentAdjustments.brightness.toFixed(2)}</strong>
+              </label>
               <input
                 type="range"
                 min={0.7}
@@ -584,7 +605,10 @@ const ProfilePhotoModal: React.FC<ProfilePhotoModalProps> = ({ open, onClose }) 
               />
             </div>
             <div className="profile-photo-control">
-              <label>Contrast</label>
+              <label className="profile-photo-control__label">
+                <span>Contrast</span>
+                <strong>{currentAdjustments.contrast.toFixed(2)}</strong>
+              </label>
               <input
                 type="range"
                 min={0.7}
@@ -601,7 +625,9 @@ const ProfilePhotoModal: React.FC<ProfilePhotoModalProps> = ({ open, onClose }) 
               <label>Enhance</label>
               <button
                 type="button"
-                className={`btn ghost${currentAdjustments.enhance ? " is-active" : ""}`}
+                className={`btn ghost profile-photo-control-btn${
+                  currentAdjustments.enhance ? " is-active" : ""
+                }`}
                 onClick={() =>
                   updateAdjustment({ enhance: !currentAdjustments.enhance })
                 }
@@ -614,7 +640,9 @@ const ProfilePhotoModal: React.FC<ProfilePhotoModalProps> = ({ open, onClose }) 
               <label>Upscale</label>
               <button
                 type="button"
-                className={`btn ghost${currentAdjustments.upscale ? " is-active" : ""}`}
+                className={`btn ghost profile-photo-control-btn${
+                  currentAdjustments.upscale ? " is-active" : ""
+                }`}
                 onClick={() =>
                   updateAdjustment({ upscale: !currentAdjustments.upscale })
                 }

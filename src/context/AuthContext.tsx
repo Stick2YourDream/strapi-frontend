@@ -109,6 +109,7 @@ interface ProfileSummary {
 interface AppSettings {
   newsroomEnabled: boolean;
   storefrontEnabled: boolean;
+  mobileMenuVariant: "panel" | "drawer";
 }
 
 interface AuthContextType {
@@ -399,6 +400,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [appSettings, setAppSettings] = useState<AppSettings>({
     newsroomEnabled: true,
     storefrontEnabled: true,
+    mobileMenuVariant: "drawer",
   });
   const [authReady, setAuthReady] = useState(false);
   const [sessionActive, setSessionActive] = useState(false);
@@ -794,7 +796,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const refreshAppSettings = async () => {
     if (!user) {
-      setAppSettings({ newsroomEnabled: true, storefrontEnabled: true });
+      setAppSettings({ newsroomEnabled: true, storefrontEnabled: true, mobileMenuVariant: "drawer" });
       return;
     }
     try {
@@ -803,6 +805,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       setAppSettings({
         newsroomEnabled: data?.newsroomEnabled !== false,
         storefrontEnabled: data?.storefrontEnabled !== false,
+        mobileMenuVariant: data?.mobileMenuVariant === "panel" ? "panel" : "drawer",
       });
     } catch {
       // keep the existing settings if the request fails
@@ -961,7 +964,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   useEffect(() => {
     if (!user) {
-      setAppSettings({ newsroomEnabled: true, storefrontEnabled: true });
+      setAppSettings({ newsroomEnabled: true, storefrontEnabled: true, mobileMenuVariant: "drawer" });
       return;
     }
     void refreshAppSettings();
@@ -1182,7 +1185,7 @@ export const StaticAuthProvider = ({ children }: { children: React.ReactNode }) 
       user: null,
       profile: null,
       profileLoading: false,
-      appSettings: { newsroomEnabled: true, storefrontEnabled: true },
+      appSettings: { newsroomEnabled: true, storefrontEnabled: true, mobileMenuVariant: "drawer" },
       authReady: true,
       sessionActive: false,
       sessionStartedAt: null,
