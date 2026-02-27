@@ -259,6 +259,159 @@ const formatElapsedDuration = (seconds: number) => {
   return `${secs}s`;
 };
 
+const MB = 1024 * 1024;
+type UploadImageRole = "id-front" | "id-back" | "selfie" | "motion";
+type UploadImagePreset = {
+  maxWidth: number;
+  maxHeight: number;
+  quality: number;
+  maxBytes: number;
+};
+
+const UPLOAD_IMAGE_PRESETS: Record<UploadImageRole, UploadImagePreset> = {
+  "id-front": {
+    maxWidth: 1400,
+    maxHeight: 1050,
+    quality: 0.88,
+    maxBytes: 3.25 * MB,
+  },
+  "id-back": {
+    maxWidth: 1200,
+    maxHeight: 900,
+    quality: 0.9,
+    maxBytes: 2.25 * MB,
+  },
+  selfie: {
+    maxWidth: 1280,
+    maxHeight: 960,
+    quality: 0.82,
+    maxBytes: 1.1 * MB,
+  },
+  motion: {
+    maxWidth: 960,
+    maxHeight: 720,
+    quality: 0.72,
+    maxBytes: 0.45 * MB,
+  },
+};
+
+type RasterSource = HTMLImageElement | ImageBitmap;
+
+const isRasterBitmap = (value: RasterSource): value is ImageBitmap =>
+  typeof ImageBitmap !== "undefined" && value instanceof ImageBitmap;
+
+const getRasterDimensions = (value: RasterSource) =>
+  isRasterBitmap(value)
+    ? { width: value.width, height: value.height }
+    : {
+        width: value.naturalWidth || value.width,
+        height: value.naturalHeight || value.height,
+      };
+
+const closeRasterSource = (value: RasterSource) => {
+  if (isRasterBitmap(value)) {
+    value.close();
+  }
+};
+
+const loadRasterSource = async (file: File): Promise<RasterSource> => {
+  if (typeof createImageBitmap === "function") {
+    try {
+      return await createImageBitmap(file);
+    } catch {
+      // Fall through to HTML image loading when ImageBitmap decoding is unavailable.
+    }
+  }
+  return await new Promise<HTMLImageElement>((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error(`Unable to decode image ${file.name || "upload"}.`));
+    };
+    image.src = objectUrl;
+  });
+};
+
+const renderRasterToBlob = async (
+  source: RasterSource,
+  width: number,
+  height: number,
+  quality: number
+) => {
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(2, width);
+  canvas.height = Math.max(2, height);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+  return await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob(resolve, "image/jpeg", quality)
+  );
+};
+
+const normalizeUploadFileName = (name: string, fallback: string) => {
+  const trimmed = String(name || "").trim();
+  const base = trimmed || fallback;
+  return /\.(jpe?g)$/i.test(base) ? base : base.replace(/\.[a-z0-9]+$/i, "") + ".jpg";
+};
+
+const optimizeUploadImage = async (
+  file: File | null | undefined,
+  role: UploadImageRole,
+  fallbackName: string
+) => {
+  if (!file) return null;
+  if (!file.type.startsWith("image/")) return file;
+  const preset = UPLOAD_IMAGE_PRESETS[role];
+  const source = await loadRasterSource(file);
+  try {
+    const { width, height } = getRasterDimensions(source);
+    if (!width || !height) return file;
+    const baseScale = Math.min(1, preset.maxWidth / width, preset.maxHeight / height);
+    const needsResize = baseScale < 0.999;
+    const needsReencode = file.type !== "image/jpeg" || file.size > preset.maxBytes;
+    if (!needsResize && !needsReencode) {
+      return file;
+    }
+
+    let bestBlob: Blob | null = null;
+    const attempts = [1, 0.92, 0.84];
+    for (const multiplier of attempts) {
+      const scale = Math.min(1, baseScale * multiplier);
+      const outWidth = Math.max(2, Math.round(width * scale));
+      const outHeight = Math.max(2, Math.round(height * scale));
+      const quality = Math.max(0.6, preset.quality - (1 - multiplier) * 0.6);
+      const blob = await renderRasterToBlob(source, outWidth, outHeight, quality);
+      if (!blob) continue;
+      if (!bestBlob || blob.size < bestBlob.size) {
+        bestBlob = blob;
+      }
+      if (blob.size <= preset.maxBytes) {
+        bestBlob = blob;
+        break;
+      }
+    }
+
+    if (!bestBlob) return file;
+    if (bestBlob.size >= file.size && file.type === "image/jpeg") {
+      return file;
+    }
+    return new File([bestBlob], normalizeUploadFileName(file.name, fallbackName), {
+      type: "image/jpeg",
+      lastModified: file.lastModified,
+    });
+  } finally {
+    closeRasterSource(source);
+  }
+};
+
 const parseSelfieLabelIndex = (label: unknown) => {
   if (typeof label !== "string") return null;
   const match = /selfie-(\d+)/i.exec(label);
@@ -806,6 +959,7 @@ const MobileSession = () => {
     startedAt: string;
     sizes: Record<string, number>;
     totalBytes: number;
+    originalTotalBytes?: number;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [errorDetail, setErrorDetail] = useState<ErrorDetail | null>(null);
@@ -929,7 +1083,6 @@ const MobileSession = () => {
     }
     const controller = new AbortController();
     uploadAbortRef.current = controller;
-    const form = new FormData();
     const {
       motionFrames,
       selfies,
@@ -947,7 +1100,7 @@ const MobileSession = () => {
       motion2: motionFrames[1]?.size || 0,
       motion3: motionFrames[2]?.size || 0,
     };
-    const totalBytes = Object.values(sizes).reduce((sum, value) => sum + value, 0);
+    const originalTotalBytes = Object.values(sizes).reduce((sum, value) => sum + value, 0);
     ageVerifyLog("submit verification clicked", {
       sessionId,
       idType,
@@ -956,14 +1109,7 @@ const MobileSession = () => {
       livenessMotionFrames: motionFrames.length,
       faceMatchTimeoutMsConfigured: faceMatchTimeoutMs,
       faceMatchTimeoutMsUsed: boundedFaceMatchTimeoutMs,
-      totalBytes,
-    });
-    setUploadDebug({
-      sessionId: sessionId || null,
-      apiBase,
-      startedAt: new Date(startedAt).toISOString(),
-      sizes,
-      totalBytes,
+      totalBytes: originalTotalBytes,
     });
     const [selfie, selfieAlt, selfieThird, selfieFourth] = selfies;
     const idFrontFile = idFront;
@@ -1100,12 +1246,67 @@ const MobileSession = () => {
         ? "Client face match deferred to server fallback."
         : null
     );
-    form.append("idFront", idFrontFile);
-    if (idBack) form.append("idBack", idBack);
-    if (selfie) form.append("selfie", selfie);
-    if (selfieAlt) form.append("selfieAlt", selfieAlt);
-    if (selfieThird) form.append("selfieThird", selfieThird);
-    if (selfieFourth) form.append("selfieFourth", selfieFourth);
+    setVerifyStage("Optimizing upload");
+    setVerifyNote("Reducing image size for network reliability...");
+    const form = new FormData();
+    const uploadIdFront = await optimizeUploadImage(idFrontFile, "id-front", "idFront.jpg");
+    const uploadIdBack = await optimizeUploadImage(idBack, "id-back", "idBack.jpg");
+    const uploadSelfie = await optimizeUploadImage(selfie, "selfie", "selfie-1.jpg");
+    const uploadSelfieAlt = await optimizeUploadImage(
+      selfieAlt,
+      "selfie",
+      "selfie-2.jpg"
+    );
+    const uploadSelfieThird = await optimizeUploadImage(
+      selfieThird,
+      "selfie",
+      "selfie-3.jpg"
+    );
+    const uploadSelfieFourth = await optimizeUploadImage(
+      selfieFourth,
+      "selfie",
+      "selfie-4.jpg"
+    );
+    const uploadMotionFrames = (
+      await Promise.all(
+        motionFrames.slice(0, 3).map((frame, index) =>
+          optimizeUploadImage(frame, "motion", `selfieMotion${index + 1}.jpg`)
+        )
+      )
+    ).filter(Boolean) as File[];
+    const uploadSizes = {
+      idFront: uploadIdFront?.size || 0,
+      idBack: uploadIdBack?.size || 0,
+      selfie1: uploadSelfie?.size || 0,
+      selfie2: uploadSelfieAlt?.size || 0,
+      selfie3: uploadSelfieThird?.size || 0,
+      selfie4: uploadSelfieFourth?.size || 0,
+      motion1: uploadMotionFrames[0]?.size || 0,
+      motion2: uploadMotionFrames[1]?.size || 0,
+      motion3: uploadMotionFrames[2]?.size || 0,
+    };
+    const uploadTotalBytes = Object.values(uploadSizes).reduce((sum, value) => sum + value, 0);
+    ageVerifyLog("upload payload optimized", {
+      sessionId,
+      originalTotalBytes,
+      uploadTotalBytes,
+      savingsBytes: Math.max(0, originalTotalBytes - uploadTotalBytes),
+    });
+    setUploadDebug({
+      sessionId: sessionId || null,
+      apiBase,
+      startedAt: new Date(startedAt).toISOString(),
+      sizes: uploadSizes,
+      totalBytes: uploadTotalBytes,
+      originalTotalBytes:
+        uploadTotalBytes < originalTotalBytes ? originalTotalBytes : undefined,
+    });
+    if (uploadIdFront) form.append("idFront", uploadIdFront);
+    if (uploadIdBack) form.append("idBack", uploadIdBack);
+    if (uploadSelfie) form.append("selfie", uploadSelfie);
+    if (uploadSelfieAlt) form.append("selfieAlt", uploadSelfieAlt);
+    if (uploadSelfieThird) form.append("selfieThird", uploadSelfieThird);
+    if (uploadSelfieFourth) form.append("selfieFourth", uploadSelfieFourth);
     form.append("faceMatchClientStatus", faceMatchClientStatus);
     if (useServerFaceMatchFallback) {
       form.append("faceMatchFallback", "1");
@@ -1116,7 +1317,7 @@ const MobileSession = () => {
       form.append("faceMatchSelfieIndex", String(resolvedFaceMatch.selfieIndex));
       form.append("faceMatchCompared", String(resolvedFaceMatch.comparedCount));
     }
-    motionFrames.slice(0, 3).forEach((frame, index) => {
+    uploadMotionFrames.forEach((frame, index) => {
       form.append(`selfieMotion${index + 1}`, frame);
     });
     form.append("idType", idType);
@@ -1146,6 +1347,8 @@ const MobileSession = () => {
       );
       if (useServerFaceMatchFallback) {
         setVerifyNote("Server is now running face match + document verification...");
+      } else {
+        setVerifyNote(null);
       }
       ageVerifyLog("upload request start", { url, sessionId });
       const res = await fetch(url, {
@@ -1426,10 +1629,13 @@ const MobileSession = () => {
                 {showDebug && uploadDebug && (
                   <>
                     <span>Session: {uploadDebug.sessionId || "unknown"}</span>
-                    <span>API: {uploadDebug.apiBase}</span>
-                    <span>Started: {uploadDebug.startedAt}</span>
-                    <span>
+                  <span>API: {uploadDebug.apiBase}</span>
+                  <span>Started: {uploadDebug.startedAt}</span>
+                  <span>
                       Upload size: {(uploadDebug.totalBytes / 1024 / 1024).toFixed(2)} MB
+                      {uploadDebug.originalTotalBytes
+                        ? ` (from ${(uploadDebug.originalTotalBytes / 1024 / 1024).toFixed(2)} MB)`
+                        : ""}
                     </span>
                     {errorDetail?.requestId && (
                       <span>Request ID: {errorDetail.requestId}</span>
