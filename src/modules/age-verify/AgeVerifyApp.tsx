@@ -364,6 +364,7 @@ type SessionResponse = {
   dobMasked?: string | null;
   reason?: string | null;
   token?: string | null;
+  returnUrl?: string | null;
 };
 
 type FaceMatchPayload = {
@@ -374,6 +375,54 @@ type FaceMatchPayload = {
 };
 
 type FaceMatchClientStatus = "pass" | "fail" | "timeout" | "error" | "skipped";
+
+const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+const fetchSession = async (
+  apiBase: string,
+  clientKey: string,
+  sessionId: string
+): Promise<SessionResponse | null> => {
+  const url = `${apiBase}/session/${sessionId}`;
+  const res = await fetch(url, { headers: buildClientHeaders(clientKey) });
+  if (!res.ok) {
+    const parsed = await parseErrorResponse(res, url);
+    throw parsed;
+  }
+  const data = await res.json();
+  return data?.data || null;
+};
+
+const recoverUploadResult = async (
+  apiBase: string,
+  clientKey: string,
+  sessionId: string,
+  attempts = 8,
+  intervalMs = 2500
+): Promise<
+  | { kind: "verified"; session: SessionResponse }
+  | { kind: "final"; session: SessionResponse }
+  | null
+> => {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (attempt > 0) {
+      await wait(intervalMs);
+    }
+    try {
+      const session = await fetchSession(apiBase, clientKey, sessionId);
+      const status = String(session?.status || "").toLowerCase();
+      if (session && status === "verified" && session.token) {
+        return { kind: "verified" as const, session };
+      }
+      if (session && (status === "failed" || status === "denied")) {
+        return { kind: "final" as const, session };
+      }
+    } catch {
+      // Keep polling briefly in case the upload response was lost while the backend is still finalizing.
+    }
+  }
+  return null;
+};
 
 const useIsMobile = () => {
   const [isMobile, setIsMobile] = useState(() => {
@@ -408,14 +457,8 @@ const useSession = (sessionId: string | null) => {
     if (!sessionId) return;
     setLoading(true);
     try {
-      const url = `${apiBase}/session/${sessionId}`;
-      const res = await fetch(url, { headers: buildClientHeaders(clientKey) });
-      if (!res.ok) {
-        const parsed = await parseErrorResponse(res, url);
-        throw parsed;
-      }
-      const data = await res.json();
-      setSession(data?.data || null);
+      const sessionData = await fetchSession(apiBase, clientKey, sessionId);
+      setSession(sessionData);
       setError(null);
       setErrorDetail(null);
     } catch (err: any) {
@@ -1153,6 +1196,53 @@ const MobileSession = () => {
         setStatus("ready");
         setVerifyStage("Verification canceled");
         return;
+      }
+      const isNetworkFailure =
+        !err?.detail &&
+        /failed to fetch|load failed|networkerror|network request failed/i.test(
+          String(err?.message || "")
+        );
+      if (isNetworkFailure) {
+        setVerifyStage("Recovering verification");
+        setVerifyNote("Upload finished. Checking the server for the final verification result...");
+        const recovered = await recoverUploadResult(apiBase, clientKey, sessionId);
+        if (recovered?.kind === "verified") {
+          setStatus("done");
+          setResultToken(recovered.session.token || null);
+          setReturnUrl(recovered.session.returnUrl || null);
+          setVerifyStage(null);
+          setVerifyNote(null);
+          uploadAbortRef.current = null;
+          setUploadDebug(null);
+          ageVerifyLog("upload recovered via session poll", {
+            sessionId,
+            status: recovered.session.status,
+          });
+          return;
+        }
+        if (recovered?.kind === "final") {
+          const recoveredStatus = String(recovered.session.status || "").toLowerCase();
+          const recoveredMessage =
+            recovered.session.reason ||
+            (recoveredStatus === "denied"
+              ? "Age verification denied."
+              : "Age verification did not complete.");
+          setStatus("error");
+          setError(recoveredMessage);
+          setErrorDetail({
+            url: `${apiBase}/session/${sessionId}`,
+            status: 200,
+            statusText: "Recovered from upload network failure",
+            payload: recovered.session,
+          });
+          setVerifyStage("Failed to verify");
+          setUploadDebug((prev) => (prev ? { ...prev } : null));
+          ageVerifyWarn("upload network error recovered to final session status", {
+            sessionId,
+            status: recovered.session.status,
+          });
+          return;
+        }
       }
       setStatus("error");
       setError(err?.message || "Verification failed");
