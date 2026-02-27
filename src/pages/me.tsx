@@ -1038,6 +1038,8 @@ export default function Me() {
   const [mediaEditFolder, setMediaEditFolder] = useState("");
   const [mediaEditSaving, setMediaEditSaving] = useState(false);
   const [mediaDragActive, setMediaDragActive] = useState(false);
+  const [selectedMediaKeys, setSelectedMediaKeys] = useState<string[]>([]);
+  const [mediaMultiSelectModifierDown, setMediaMultiSelectModifierDown] = useState(false);
   const [mediaFiles, setMediaFiles] = useState<File[]>([]);
   const [mediaFilePreview, setMediaFilePreview] = useState<string | null>(null);
   const [mediaTitle, setMediaTitle] = useState("");
@@ -1769,6 +1771,50 @@ export default function Me() {
       items: filteredMedia.slice(startIndex, startIndex + MEDIA_PAGE_SIZE),
     };
   }, [filteredMedia, mediaPage]);
+  const mediaSelectionMode = selectedMediaKeys.length > 0 || mediaMultiSelectModifierDown;
+
+  const toggleMediaSelection = useCallback((mediaKey: string) => {
+    setSelectedMediaKeys((prev) => {
+      if (prev.includes(mediaKey)) {
+        return prev.filter((entry) => entry !== mediaKey);
+      }
+      return [...prev, mediaKey];
+    });
+  }, []);
+
+  useEffect(() => {
+    const liveMediaKeys = new Set(profileMedia.map((entry) => String(entry.id)));
+    setSelectedMediaKeys((prev) => prev.filter((entry) => liveMediaKeys.has(entry)));
+  }, [profileMedia]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const setModifierState = (next: boolean) => {
+      setMediaMultiSelectModifierDown((prev) => (prev === next ? prev : next));
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Control" || event.key === "Meta") {
+        setModifierState(true);
+      }
+      if (event.key === "Escape") {
+        setSelectedMediaKeys([]);
+      }
+    };
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.key === "Control" || event.key === "Meta") {
+        setModifierState(Boolean(event.ctrlKey || event.metaKey));
+      }
+    };
+    const handleWindowBlur = () => setModifierState(false);
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", handleWindowBlur);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", handleWindowBlur);
+    };
+  }, []);
 
   useEffect(() => {
     if (mediaPage > mediaPaging.totalPages) {
@@ -2783,7 +2829,8 @@ export default function Me() {
       if (
         target.closest(".post-action-group") ||
         target.closest(".post-action-counts") ||
-        target.closest(".post-menu-wrapper")
+        target.closest(".post-menu-wrapper") ||
+        target.closest(".popup-modal")
       )
         return;
       setShareMenuFor(null);
@@ -10776,6 +10823,7 @@ export default function Me() {
                     const absoluteIndex = mediaPaging.startIndex + index;
                     const isVideo = item.kind === "video" || isVideoUrl(item.media);
                     const mediaKey = String(item.id);
+                    const isMediaSelected = selectedMediaKeys.includes(mediaKey);
                     const showMediaMenu = mediaMenuFor === mediaKey;
                     const isEditingMedia = editingMediaId === mediaKey;
                     return (
@@ -10783,6 +10831,8 @@ export default function Me() {
                         key={String(item.id)}
                         className={`profile-media__card${
                           showMediaMenu ? " is-popover-open" : ""
+                        }${isMediaSelected ? " is-selected" : ""}${
+                          mediaSelectionMode ? " is-selection-mode" : ""
                         }${mediaDraggingId === mediaKey ? " is-dragging" : ""}${
                           mediaDragOverId === mediaKey ? " is-drop-target" : ""
                         }`}
@@ -10805,6 +10855,12 @@ export default function Me() {
                             if (target.closest("button, a, input, select, textarea")) {
                               return;
                             }
+                            if (event.ctrlKey || event.metaKey) {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              toggleMediaSelection(mediaKey);
+                              return;
+                            }
                             if (
                               isVideo &&
                               target.tagName &&
@@ -10823,6 +10879,16 @@ export default function Me() {
                           }}
                           aria-label="Open media preview"
                         >
+                          {mediaSelectionMode && (
+                            <span
+                              className={`profile-media__select-indicator${
+                                isMediaSelected ? " is-selected" : ""
+                              }`}
+                              aria-hidden="true"
+                            >
+                              {isMediaSelected ? "✓" : ""}
+                            </span>
+                          )}
                           <div className="profile-media__overlay">
                             {item.media && (
                               <div
@@ -11459,58 +11525,53 @@ export default function Me() {
                       </div>
                     </div>
                     <div className="post-action-bar">
-                    <div
-                      className={`post-action-group post-action-group--reaction${
-                        isReactionPickerOpen ? " is-open" : ""
-                      }`}
-                    >
-                        <button
-                          className={`post-action-btn${myReaction ? " is-reacted" : ""}`}
-                          type="button"
-                          aria-pressed={Boolean(myReaction)}
-                          aria-expanded={isReactionPickerOpen}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setReactionPickerFor((prev) =>
-                              prev === postKey ? null : postKey
-                            );
-                          }}
-                        >
-                          <span className="post-action-icon" aria-hidden="true">
-                            {myReaction || "👍"}
-                          </span>
-                          <span>Like</span>
-                        </button>
-                        <div
-                          className={`post-action-popover post-action-popover--reactions${
-                            isReactionPickerOpen ? " is-open" : ""
-                          }`}
-                          role="menu"
-                          aria-label="Choose reaction"
-                        >
-                          <div className="post-reaction-picker">
-                            {REACTION_OPTIONS.map((option) => (
-                              <button
-                                key={option.key}
-                                className={`post-reaction-emoji${
-                                  myReaction === option.emoji ? " is-selected" : ""
-                                }`}
-                                type="button"
-                                role="menuitem"
-                                aria-label={option.label}
-                                title={option.label}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setReactionPickerFor(null);
-                                  void handleReaction(p, postKey, option.emoji);
-                                }}
-                              >
-                                {option.emoji}
-                              </button>
-                            ))}
-                          </div>
+                    <div className="post-action-group post-action-group--reaction">
+                      <button
+                        className={`post-action-btn${myReaction ? " is-reacted" : ""}`}
+                        type="button"
+                        aria-pressed={Boolean(myReaction)}
+                        aria-expanded={isReactionPickerOpen}
+                        aria-haspopup="dialog"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setReactionPickerFor((prev) =>
+                            prev === postKey ? null : postKey
+                          );
+                        }}
+                      >
+                        <span className="post-action-icon" aria-hidden="true">
+                          {myReaction || "👍"}
+                        </span>
+                        <span>Like</span>
+                      </button>
+                      <PopupModal
+                        open={isReactionPickerOpen}
+                        title="Choose reaction"
+                        onClose={() => setReactionPickerFor(null)}
+                        className="post-action-dialog"
+                        bodyClassName="post-action-dialog-body"
+                      >
+                        <div className="post-reaction-picker post-reaction-picker--modal">
+                          {REACTION_OPTIONS.map((option) => (
+                            <button
+                              key={option.key}
+                              className={`post-reaction-emoji${
+                                myReaction === option.emoji ? " is-selected" : ""
+                              }`}
+                              type="button"
+                              aria-label={option.label}
+                              title={option.label}
+                              onClick={() => {
+                                setReactionPickerFor(null);
+                                void handleReaction(p, postKey, option.emoji);
+                              }}
+                            >
+                              {option.emoji}
+                            </button>
+                          ))}
                         </div>
-                      </div>
+                      </PopupModal>
+                    </div>
                     <div className="post-action-group">
                       <button
                         className="post-action-btn"
@@ -11531,6 +11592,7 @@ export default function Me() {
                         className="post-action-btn"
                         type="button"
                         aria-pressed={showShareMenu}
+                        aria-haspopup="dialog"
                         onClick={() => toggleShareMenu(postKey)}
                       >
                         <span className="post-action-icon" aria-hidden="true">
@@ -11540,139 +11602,152 @@ export default function Me() {
                         </span>
                         <span>Share</span>
                       </button>
-                      {showShareMenu && (
-                        <div className="post-action-popover is-wide">
-                          <div className="post-share-grid">
-                            <button
-                              className="post-share-btn is-icon"
-                              type="button"
-                              onClick={() => handleCopyShare(p, postKey, shareUrl)}
-                              aria-label="Copy link"
-                            >
-                              <span className="post-share-icon" aria-hidden="true">
-                                🔗
-                              </span>
-                              <span className="post-share-label">Copy link</span>
-                            </button>
-                            {typeof navigator !== "undefined" &&
-                              typeof navigator.share === "function" && (
-                                <button
-                                  className="post-share-btn is-icon"
-                                  type="button"
-                                  onClick={() =>
-                                    handleNativeShare(p, postKey, shareUrl, shareText)
-                                  }
-                                  aria-label="Share"
-                                >
-                                  <span className="post-share-icon" aria-hidden="true">
-                                    📤
-                                  </span>
-                                  <span className="post-share-label">Share</span>
-                                </button>
-                              )}
-                            <a
-                              className="post-share-link is-icon post-share-link--facebook"
-                              href={`https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`}
-                              onClick={(event) => {
-                                if (!canShareExternally) {
-                                  event.preventDefault();
-                                  pushShareNotice(postKey, externalShareBlockMessage);
-                                  return;
-                                }
-                                void trackShare(p, postKey);
-                              }}
-                              target="_blank"
-                              rel="noreferrer"
-                              aria-label="Share to Facebook"
-                            >
-                              <span className="post-share-icon" aria-hidden="true">
-                                f
-                              </span>
-                              <span className="post-share-label">Facebook</span>
-                            </a>
-                            <a
-                              className="post-share-link is-icon post-share-link--x"
-                              href={`https://twitter.com/intent/tweet?text=${encodedText}&url=${encodedUrl}`}
-                              onClick={(event) => {
-                                if (!canShareExternally) {
-                                  event.preventDefault();
-                                  pushShareNotice(postKey, externalShareBlockMessage);
-                                  return;
-                                }
-                                void trackShare(p, postKey);
-                              }}
-                              target="_blank"
-                              rel="noreferrer"
-                              aria-label="Share to X"
-                            >
-                              <span className="post-share-icon" aria-hidden="true">
-                                X
-                              </span>
-                              <span className="post-share-label">X</span>
-                            </a>
-                            <a
-                              className="post-share-link is-icon post-share-link--linkedin"
-                              href={`https://www.linkedin.com/sharing/share-offsite/?url=${encodedUrl}`}
-                              onClick={(event) => {
-                                if (!canShareExternally) {
-                                  event.preventDefault();
-                                  pushShareNotice(postKey, externalShareBlockMessage);
-                                  return;
-                                }
-                                void trackShare(p, postKey);
-                              }}
-                              target="_blank"
-                              rel="noreferrer"
-                              aria-label="Share to LinkedIn"
-                            >
-                              <span className="post-share-icon" aria-hidden="true">
-                                in
-                              </span>
-                              <span className="post-share-label">LinkedIn</span>
-                            </a>
-                            <a
-                              className="post-share-link is-icon post-share-link--reddit"
-                              href={`https://www.reddit.com/submit?url=${encodedUrl}&title=${encodedText}`}
-                              onClick={(event) => {
-                                if (!canShareExternally) {
-                                  event.preventDefault();
-                                  pushShareNotice(postKey, externalShareBlockMessage);
-                                  return;
-                                }
-                                void trackShare(p, postKey);
-                              }}
-                              target="_blank"
-                              rel="noreferrer"
-                              aria-label="Share to Reddit"
-                            >
-                              <span className="post-share-icon" aria-hidden="true">
-                                r
-                              </span>
-                              <span className="post-share-label">Reddit</span>
-                            </a>
-                            <a
-                              className="post-share-link is-icon post-share-link--whatsapp"
-                              href={`https://wa.me/?text=${encodedText}%20${encodedUrl}`}
-                              onClick={(event) => {
-                                if (!canShareExternally) {
-                                  event.preventDefault();
-                                  pushShareNotice(postKey, externalShareBlockMessage);
-                                  return;
-                                }
-                                void trackShare(p, postKey);
-                              }}
-                              target="_blank"
-                              rel="noreferrer"
-                              aria-label="Share to WhatsApp"
-                            >
-                              <span className="post-share-icon" aria-hidden="true">
-                                🟢
-                              </span>
-                              <span className="post-share-label">WhatsApp</span>
-                            </a>
-                          </div>
+                      <PopupModal
+                        open={showShareMenu}
+                        title="Share post"
+                        onClose={() => setShareMenuFor(null)}
+                        className="post-action-dialog"
+                        bodyClassName="post-action-dialog-body"
+                      >
+                        <div className="post-share-grid post-share-grid--modal">
+                          <button
+                            className="post-share-btn is-icon"
+                            type="button"
+                            onClick={() => {
+                              void handleCopyShare(p, postKey, shareUrl);
+                              setShareMenuFor(null);
+                            }}
+                            aria-label="Copy link"
+                          >
+                            <span className="post-share-icon" aria-hidden="true">
+                              🔗
+                            </span>
+                            <span className="post-share-label">Copy link</span>
+                          </button>
+                          {typeof navigator !== "undefined" &&
+                            typeof navigator.share === "function" && (
+                              <button
+                                className="post-share-btn is-icon"
+                                type="button"
+                                onClick={() => {
+                                  void handleNativeShare(p, postKey, shareUrl, shareText);
+                                  setShareMenuFor(null);
+                                }}
+                                aria-label="Share"
+                              >
+                                <span className="post-share-icon" aria-hidden="true">
+                                  📤
+                                </span>
+                                <span className="post-share-label">Share</span>
+                              </button>
+                            )}
+                          <a
+                            className="post-share-link is-icon post-share-link--facebook"
+                            href={`https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`}
+                            onClick={(event) => {
+                              if (!canShareExternally) {
+                                event.preventDefault();
+                                pushShareNotice(postKey, externalShareBlockMessage);
+                                return;
+                              }
+                              setShareMenuFor(null);
+                              void trackShare(p, postKey);
+                            }}
+                            target="_blank"
+                            rel="noreferrer"
+                            aria-label="Share to Facebook"
+                          >
+                            <span className="post-share-icon" aria-hidden="true">
+                              f
+                            </span>
+                            <span className="post-share-label">Facebook</span>
+                          </a>
+                          <a
+                            className="post-share-link is-icon post-share-link--x"
+                            href={`https://twitter.com/intent/tweet?text=${encodedText}&url=${encodedUrl}`}
+                            onClick={(event) => {
+                              if (!canShareExternally) {
+                                event.preventDefault();
+                                pushShareNotice(postKey, externalShareBlockMessage);
+                                return;
+                              }
+                              setShareMenuFor(null);
+                              void trackShare(p, postKey);
+                            }}
+                            target="_blank"
+                            rel="noreferrer"
+                            aria-label="Share to X"
+                          >
+                            <span className="post-share-icon" aria-hidden="true">
+                              X
+                            </span>
+                            <span className="post-share-label">X</span>
+                          </a>
+                          <a
+                            className="post-share-link is-icon post-share-link--linkedin"
+                            href={`https://www.linkedin.com/sharing/share-offsite/?url=${encodedUrl}`}
+                            onClick={(event) => {
+                              if (!canShareExternally) {
+                                event.preventDefault();
+                                pushShareNotice(postKey, externalShareBlockMessage);
+                                return;
+                              }
+                              setShareMenuFor(null);
+                              void trackShare(p, postKey);
+                            }}
+                            target="_blank"
+                            rel="noreferrer"
+                            aria-label="Share to LinkedIn"
+                          >
+                            <span className="post-share-icon" aria-hidden="true">
+                              in
+                            </span>
+                            <span className="post-share-label">LinkedIn</span>
+                          </a>
+                          <a
+                            className="post-share-link is-icon post-share-link--reddit"
+                            href={`https://www.reddit.com/submit?url=${encodedUrl}&title=${encodedText}`}
+                            onClick={(event) => {
+                              if (!canShareExternally) {
+                                event.preventDefault();
+                                pushShareNotice(postKey, externalShareBlockMessage);
+                                return;
+                              }
+                              setShareMenuFor(null);
+                              void trackShare(p, postKey);
+                            }}
+                            target="_blank"
+                            rel="noreferrer"
+                            aria-label="Share to Reddit"
+                          >
+                            <span className="post-share-icon" aria-hidden="true">
+                              r
+                            </span>
+                            <span className="post-share-label">Reddit</span>
+                          </a>
+                          <a
+                            className="post-share-link is-icon post-share-link--whatsapp"
+                            href={`https://wa.me/?text=${encodedText}%20${encodedUrl}`}
+                            onClick={(event) => {
+                              if (!canShareExternally) {
+                                event.preventDefault();
+                                pushShareNotice(postKey, externalShareBlockMessage);
+                                return;
+                              }
+                              setShareMenuFor(null);
+                              void trackShare(p, postKey);
+                            }}
+                            target="_blank"
+                            rel="noreferrer"
+                            aria-label="Share to WhatsApp"
+                          >
+                            <span className="post-share-icon" aria-hidden="true">
+                              🟢
+                            </span>
+                            <span className="post-share-label">WhatsApp</span>
+                          </a>
                         </div>
-                      )}
+                      </PopupModal>
                     </div>
                   </div>
                   </div>

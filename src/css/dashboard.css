@@ -1702,6 +1702,36 @@
   border-color: rgba(37, 211, 102, 0.5);
 }
 
+.popup-modal.post-action-dialog {
+  width: min(420px, 92vw);
+  max-height: min(82vh, 680px);
+}
+
+.post-action-dialog-body {
+  display: grid;
+  place-items: center;
+  gap: 14px;
+}
+
+.post-action-dialog-body .post-reaction-picker--modal {
+  width: min(320px, 100%);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.post-action-dialog-body .post-reaction-emoji {
+  min-height: 52px;
+  font-size: clamp(1.75rem, 3.2vw, 2.1rem);
+  padding: 6px 0;
+}
+
+.post-share-grid--modal {
+  display: grid;
+  grid-template-columns: repeat(3, 42px);
+  justify-content: center;
+  gap: 10px;
+}
+
 .post-action-notice {
   margin-top: 8px;
   font-size: 12px;
@@ -3039,6 +3069,10 @@
     width: 100%;
   }
 
+  .post-action-group--reaction {
+    position: static;
+  }
+
   .post-action-btn {
     width: 100%;
     justify-content: center;
@@ -3065,7 +3099,7 @@
     left: 50%;
     right: auto;
     transform: translateX(-50%);
-    min-width: 244px;
+    min-width: min(244px, calc(100vw - 20px));
     max-width: min(94vw, 320px);
   }
 
@@ -3075,6 +3109,22 @@
     transform: translateX(-50%);
     min-width: 220px;
     max-width: min(92vw, 300px);
+  }
+
+  .post-action-popover.is-wide {
+    left: auto;
+    right: 0;
+    transform: none;
+    min-width: 0;
+    width: max-content;
+    max-width: calc(100vw - 20px);
+  }
+
+  .post-share-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 42px);
+    justify-content: end;
+    gap: 8px;
   }
 
   .post-reaction-picker {
@@ -3098,6 +3148,28 @@
     background: transparent !important;
     box-shadow: none !important;
     transform: translateY(-1px) scale(1.08);
+  }
+
+  .popup-modal.post-action-dialog {
+    width: min(360px, calc(100vw - 24px));
+    max-height: min(88dvh, 620px);
+  }
+
+  .post-action-dialog-body .post-reaction-picker--modal {
+    width: 100%;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .post-action-dialog-body .post-reaction-emoji {
+    min-height: 50px;
+    font-size: clamp(1.7rem, 7vw, 2.2rem);
+  }
+
+  .post-share-grid--modal {
+    grid-template-columns: repeat(3, 42px);
+    justify-content: center;
+    gap: 8px;
   }
 
   .post-action-count--reactions {

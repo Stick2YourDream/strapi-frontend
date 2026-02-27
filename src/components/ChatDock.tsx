@@ -16,7 +16,6 @@ import {
 import { sanitizePostText } from "../utils/emoji";
 import { pickMediaUrl } from "../utils/media";
 import VideoCallModal from "./VideoCallModal";
-import SuggestionWidget from "./SuggestionWidget";
 
 type LinkMeta = {
   title?: string;
@@ -127,7 +126,7 @@ export default function ChatDock() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const media = window.matchMedia("(max-width: 720px)");
+    const media = window.matchMedia("(max-width: 720px), (max-width: 1024px) and (pointer: coarse)");
     const handleChange = (event: MediaQueryListEvent) => {
       setIsMobile(event.matches);
     };
@@ -447,11 +446,17 @@ export default function ChatDock() {
 
   const popoutStyle = {
     ...(isMobile
-      ? {}
+      ? popoutMinimized
+        ? {}
+        : {
+            width: "100vw",
+            height: "100dvh",
+            maxHeight: "100dvh",
+          }
       : popoutMinimized
       ? {
-          width: Math.max(160, chatPrefs.minimizedWidth || 0),
-          height: Math.max(52, chatPrefs.minimizedHeight || 0),
+          width: 52,
+          height: 52,
         }
       : {
           width: Math.max(260, chatPrefs.width || 0),
@@ -470,9 +475,9 @@ export default function ChatDock() {
         style={popoutStyle}
       >
         <div className="message-popout__header">
+        {!popoutMinimized && (
         <div className="message-popout__title">
           <p className="eyebrow">Chat</p>
-          {!popoutMinimized && (
             <div className="chat-friend-picker" ref={friendMenuRef}>
               <button
                 className="chat-friend-trigger"
@@ -550,8 +555,9 @@ export default function ChatDock() {
                 </div>
               )}
             </div>
-          )}
+          
         </div>
+        )}
         <div className="message-popout__actions">
           {!popoutMinimized && (
             <>
@@ -585,7 +591,6 @@ export default function ChatDock() {
                   <span className="chat-action-help">Start face to face</span>
                 </span>
               </button>
-              <SuggestionWidget variant="inline" />
               <div className="chat-font-control">
                 <span className="chat-font-label">A</span>
                 <input
@@ -612,9 +617,16 @@ export default function ChatDock() {
           {popoutMinimized ? (
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path
-                d="M12 5v14M5 12h14"
+                d="M5 7.25A2.25 2.25 0 0 1 7.25 5h9.5A2.25 2.25 0 0 1 19 7.25v5.5A2.25 2.25 0 0 1 16.75 15H11l-4 3v-3h-.75A2.25 2.25 0 0 1 4 12.75v-5.5Z"
                 stroke="currentColor"
-                strokeWidth="2"
+                strokeWidth="1.8"
+                strokeLinejoin="round"
+                fill="none"
+              />
+              <path
+                d="M9 10.1h6M9 12.9h4.5"
+                stroke="currentColor"
+                strokeWidth="1.8"
                 strokeLinecap="round"
               />
             </svg>

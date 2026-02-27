@@ -32,6 +32,26 @@
   box-shadow: 0 10px 20px rgba(8, 12, 22, 0.35);
 }
 
+.suggestion-footer-link {
+  border: none;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  color: var(--muted);
+  text-decoration: none;
+  font-weight: 500;
+  line-height: 1.55;
+  cursor: pointer;
+  font: inherit;
+}
+
+.suggestion-footer-link:hover,
+.suggestion-footer-link:focus-visible {
+  color: var(--mist);
+  text-decoration: underline;
+  outline: none;
+}
+
 .suggestion-overlay {
   position: fixed;
   inset: 0;

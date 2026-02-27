@@ -4,10 +4,18 @@ import { useAuth } from "../context/AuthContext";
 import "../css/suggestion-widget.css";
 
 type SuggestionWidgetProps = {
-  variant?: "fab" | "inline";
+  variant?: "fab" | "inline" | "footer";
+  showTrigger?: boolean;
+  autoOpenWeekly?: boolean;
 };
 
-export default function SuggestionWidget({ variant = "fab" }: SuggestionWidgetProps) {
+const WEEKLY_PROMPT_MS = 7 * 24 * 60 * 60 * 1000;
+
+export default function SuggestionWidget({
+  variant = "fab",
+  showTrigger = true,
+  autoOpenWeekly = false,
+}: SuggestionWidgetProps) {
   const { user, profile } = useAuth();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
@@ -33,6 +41,28 @@ export default function SuggestionWidget({ variant = "fab" }: SuggestionWidgetPr
       setEmail(user.email);
     }
   }, [displayName, email, name, user]);
+
+  useEffect(() => {
+    if (!user?.id || !autoOpenWeekly || typeof window === "undefined") return;
+    const storageKey = `ysp-suggestion-weekly-v1:${user.id}`;
+    const now = Date.now();
+    let shouldOpen = false;
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      const lastPromptAt = raw ? Number(raw) : 0;
+      shouldOpen = !Number.isFinite(lastPromptAt) || now - lastPromptAt >= WEEKLY_PROMPT_MS;
+      if (shouldOpen) {
+        window.localStorage.setItem(storageKey, String(now));
+      }
+    } catch {
+      shouldOpen = true;
+    }
+    if (shouldOpen) {
+      setOpen(true);
+      setStatus(null);
+      setError(null);
+    }
+  }, [autoOpenWeekly, user?.id]);
 
   const openWidget = () => {
     setOpen(true);
@@ -72,13 +102,16 @@ export default function SuggestionWidget({ variant = "fab" }: SuggestionWidgetPr
   if (!user) return null;
 
   const isInline = variant === "inline";
+  const isFooter = variant === "footer";
   const buttonClassName = isInline
     ? "suggestion-inline chat-action chat-action--suggestion"
+    : isFooter
+    ? "suggestion-footer-link"
     : "suggestion-fab";
 
   return (
     <>
-      {!open && (
+      {showTrigger && !open && (
         <button type="button" className={buttonClassName} onClick={openWidget}>
           {isInline ? (
             <>
@@ -106,6 +139,8 @@ export default function SuggestionWidget({ variant = "fab" }: SuggestionWidgetPr
                 <span className="chat-action-help">Help shape the beta</span>
               </span>
             </>
+          ) : isFooter ? (
+            "Suggestion box"
           ) : (
             "Make a suggestion"
           )}

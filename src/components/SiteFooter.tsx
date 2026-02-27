@@ -1,5 +1,6 @@
 import "../css/site-footer.css";
 import { useAuth } from "../context/AuthContext";
+import SuggestionWidget from "./SuggestionWidget";
 
 const DONATION_HOSTED_BUTTON_ID = "XLE5DBUY2GZBJ";
 const DONATION_URL = `https://www.paypal.com/donate/?hosted_button_id=${DONATION_HOSTED_BUTTON_ID}`;
@@ -73,6 +74,7 @@ export default function SiteFooter() {
         <div className="footer-column footer-contact">
           <span className="footer-title">Connect</span>
           <a href="/support">Support</a>
+          {user && <SuggestionWidget variant="footer" />}
           <a href="mailto:support@yoursocialplace.com">Contact</a>
           <a className="footer-muted" href="mailto:support@yoursocialplace.com">
             support@yoursocialplace.com

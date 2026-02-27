@@ -24,6 +24,8 @@ const RELEASE_NOTES = [
   "New Navigation Menu Designs",
   "Time Limits Can now be set in Settings",
   "Registration and Login Flows Updated with new Designs",
+  "Updated Like and Share Buttons",
+  "Updated Chatbox look and design",
 ];
 const RELEASE_NOTES_SIGNATURE = `${RELEASE_NOTES_VERSION}:${RELEASE_NOTES.join("||")}`;
 

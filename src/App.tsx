@@ -12,6 +12,7 @@ const UpdateNotice = lazy(() => import("./components/UpdateNotice"));
 const AuthDebugOverlay = lazy(() => import("./components/AuthDebugOverlay"));
 const TimeLimitManager = lazy(() => import("./components/TimeLimitManager"));
 const DobMismatchNotice = lazy(() => import("./components/DobMismatchNotice"));
+const SuggestionWidget = lazy(() => import("./components/SuggestionWidget"));
 
 function AppChrome(): JSX.Element {
   const { user, sessionActive } = useAuth();
@@ -22,6 +23,7 @@ function AppChrome(): JSX.Element {
       <Suspense fallback={null}>
         <ConsentBanner />
         {isAuthed && <ChatDock />}
+        {isAuthed && <SuggestionWidget showTrigger={false} autoOpenWeekly />}
         {isAuthed && <KeyBackupModal />}
         {isAuthed && <ReleaseNotesModal />}
         <UpdateNotice />

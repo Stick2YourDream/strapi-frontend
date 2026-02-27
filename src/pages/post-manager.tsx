@@ -60,8 +60,8 @@ const FOLDERS_KEY_PREFIX = "ysp-post-manager-folders";
 const ASSIGNMENTS_KEY_PREFIX = "ysp-post-manager-assignments";
 const MEDIA_FOLDER_STORAGE_PREFIX = "ysp_media_folders_v1";
 const POST_MANAGER_MIGRATION_PREFIX = "ysp-post-manager-migration-v1";
-const HOLD_TO_SELECT_MS = 2000;
-const HOLD_MOVE_TOLERANCE_PX = 30;
+const HOLD_TO_SELECT_MS = 1000;
+const HOLD_MOVE_TOLERANCE_PX = 60;
 
 const normalizeFolderName = (value: unknown): string =>
   String(value ?? "")
@@ -236,6 +236,14 @@ const mergeFolderItemsByName = (localFolders: FolderItem[], profileFolderNames: 
 const toFolderNameList = (folders: FolderItem[]) =>
   sanitizeFolderNames(folders.map((folder) => folder.name));
 
+const areStringListsEqual = (left: string[], right: string[]) => {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+};
+
 const parseJwtUserIdFromToken = (token: string | null | undefined): number | null => {
   const raw = String(token || "").trim();
   if (!raw) return null;
@@ -374,12 +382,9 @@ export default function PostManagerPage(): JSX.Element {
   const [dropTargetFolderId, setDropTargetFolderId] = useState<string | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedPostKeys, setSelectedPostKeys] = useState<string[]>([]);
-  const [bulkFolderId, setBulkFolderId] = useState<string>("");
-  const [bulkVisibility, setBulkVisibility] = useState<string>("friends");
-  const [bulkBusy, setBulkBusy] = useState(false);
   const [movePostKeys, setMovePostKeys] = useState<string[]>([]);
   const [moveTargetFolderId, setMoveTargetFolderId] = useState<string>(FOLDER_ALL);
-  const [visibilityPostKey, setVisibilityPostKey] = useState<string | null>(null);
+  const [visibilityPostKeys, setVisibilityPostKeys] = useState<string[]>([]);
   const [visibilityValue, setVisibilityValue] = useState<string>("friends");
   const [savingVisibility, setSavingVisibility] = useState(false);
   const [folderPostKey, setFolderPostKey] = useState<string | null>(null);
@@ -395,13 +400,14 @@ export default function PostManagerPage(): JSX.Element {
   const [moveFolderTargetId, setMoveFolderTargetId] = useState<string>(FOLDER_ALL);
   const [previewCache, setPreviewCache] = useState<Record<string, LinkPreview | null>>({});
   const [isTouchDevice, setIsTouchDevice] = useState(false);
+  const [multiSelectModifierDown, setMultiSelectModifierDown] = useState(false);
   const [storageHydratedKey, setStorageHydratedKey] = useState("");
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const longPressTimersRef = useRef<Record<string, number>>({});
   const longPressTriggeredRef = useRef<Record<string, boolean>>({});
   const longPressTouchStartRef = useRef<Record<string, { x: number; y: number }>>({});
+  const longPressStartAtRef = useRef<Record<string, number>>({});
   const previewCacheRef = useRef<Record<string, LinkPreview | null>>({});
-  const foldersSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const foldersLastSyncedRef = useRef("[]");
 
   usePageMeta({
@@ -424,6 +430,36 @@ export default function PostManagerPage(): JSX.Element {
     () => sanitizeFolderNames(profile?.mediaFolders ?? []),
     [profile?.mediaFolders]
   );
+  const [serverFolderNames, setServerFolderNames] = useState<string[]>(profileFolderNames);
+
+  useEffect(() => {
+    setServerFolderNames((prev) => (areStringListsEqual(prev, profileFolderNames) ? prev : profileFolderNames));
+  }, [profileFolderNames]);
+
+  useEffect(() => {
+    if (!user?.id) {
+      setServerFolderNames([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await api.get("/profiles/me");
+        const attrs = normalizeEntity(response?.data?.data);
+        const nextFolders = sanitizeFolderNames((attrs as { mediaFolders?: unknown })?.mediaFolders ?? []);
+        if (!cancelled) {
+          setServerFolderNames((prev) =>
+            areStringListsEqual(prev, nextFolders) ? prev : nextFolders
+          );
+        }
+      } catch {
+        // Keep using context/local values when profile refresh fails.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -461,7 +497,7 @@ export default function PostManagerPage(): JSX.Element {
       if (!parsed.length) return;
       migratedFolders = mergeFolderItems(migratedFolders, parsed);
     });
-    migratedFolders = mergeFolderItemsByName(migratedFolders, profileFolderNames);
+    migratedFolders = mergeFolderItemsByName(migratedFolders, serverFolderNames);
 
     const rawAssignments: Record<string, string> = {};
     assignmentKeyCandidates.forEach((candidateKey) => {
@@ -502,7 +538,7 @@ export default function PostManagerPage(): JSX.Element {
     assignmentsStorageKey,
     effectiveUserId,
     foldersStorageKey,
-    profileFolderNames,
+    serverFolderNames,
   ]);
 
   const fetchPosts = useCallback(async () => {
@@ -613,7 +649,7 @@ export default function PostManagerPage(): JSX.Element {
     if (!foldersStorageKey || !assignmentsStorageKey) return;
     const storedFolders = readLocalObject<unknown>(foldersStorageKey, []);
     const safeFolders = sanitizeFolderItems(storedFolders);
-    const mergedFolders = mergeFolderItemsByName(safeFolders, profileFolderNames);
+    const mergedFolders = mergeFolderItemsByName(safeFolders, serverFolderNames);
     const storedAssignments = readLocalObject<Record<string, string>>(assignmentsStorageKey, {});
     const folderIds = new Set(mergedFolders.map((folder) => folder.id));
     const safeAssignments: Record<string, string> = {};
@@ -625,9 +661,9 @@ export default function PostManagerPage(): JSX.Element {
     });
     setFolders(mergedFolders);
     setAssignments(safeAssignments);
-    foldersLastSyncedRef.current = JSON.stringify(profileFolderNames);
+    foldersLastSyncedRef.current = JSON.stringify(serverFolderNames);
     setStorageHydratedKey(storageKeyVersion);
-  }, [foldersStorageKey, assignmentsStorageKey, profileFolderNames, storageKeyVersion]);
+  }, [foldersStorageKey, assignmentsStorageKey, serverFolderNames, storageKeyVersion]);
 
   useEffect(() => {
     if (storageHydratedKey !== storageKeyVersion) return;
@@ -647,32 +683,24 @@ export default function PostManagerPage(): JSX.Element {
     const nextFolders = toFolderNameList(folders);
     const nextSerialized = JSON.stringify(nextFolders);
     if (nextSerialized === foldersLastSyncedRef.current) return;
-    if (foldersSyncTimerRef.current) {
-      clearTimeout(foldersSyncTimerRef.current);
-    }
-    foldersSyncTimerRef.current = setTimeout(() => {
-      void (async () => {
-        try {
-          await api.put("/profiles/me", { data: { mediaFolders: nextFolders } });
-          foldersLastSyncedRef.current = nextSerialized;
-        } catch (syncError) {
-          console.error("Post Manager: failed to sync folders", syncError);
-        } finally {
-          foldersSyncTimerRef.current = null;
-        }
-      })();
-    }, 350);
-  }, [folders, storageHydratedKey, storageKeyVersion, user?.id]);
-
-  useEffect(
-    () => () => {
-      if (foldersSyncTimerRef.current) {
-        clearTimeout(foldersSyncTimerRef.current);
-        foldersSyncTimerRef.current = null;
+    let cancelled = false;
+    void (async () => {
+      try {
+        await api.put("/profiles/me", { data: { mediaFolders: nextFolders } });
+        if (cancelled) return;
+        foldersLastSyncedRef.current = nextSerialized;
+        setServerFolderNames((prev) =>
+          areStringListsEqual(prev, nextFolders) ? prev : nextFolders
+        );
+      } catch (syncError) {
+        if (cancelled) return;
+        console.error("Post Manager: failed to sync folders", syncError);
       }
-    },
-    []
-  );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [folders, storageHydratedKey, storageKeyVersion, user?.id]);
 
   useEffect(() => {
     if (!postsLoaded) return;
@@ -699,6 +727,32 @@ export default function PostManagerPage(): JSX.Element {
   }, [selectedPostKeys]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const setModifierState = (next: boolean) => {
+      setMultiSelectModifierDown((prev) => (prev === next ? prev : next));
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Control" || event.key === "Meta") {
+        setModifierState(true);
+      }
+    };
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.key === "Control" || event.key === "Meta") {
+        setModifierState(Boolean(event.ctrlKey || event.metaKey));
+      }
+    };
+    const handleWindowBlur = () => setModifierState(false);
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", handleWindowBlur);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", handleWindowBlur);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!success) return;
     const timer = window.setTimeout(() => setSuccess(null), 2200);
     return () => window.clearTimeout(timer);
@@ -720,10 +774,10 @@ export default function PostManagerPage(): JSX.Element {
     return posts.filter((post) => assignments[buildPostKey(post)] === activeFolderId);
   }, [activeFolderId, assignments, posts]);
 
-  const selectedPosts = useMemo(() => {
-    const selectedSet = new Set(selectedPostKeys);
-    return posts.filter((post) => selectedSet.has(buildPostKey(post)));
-  }, [posts, selectedPostKeys]);
+  const filteredPostKeys = useMemo(
+    () => filteredPosts.map((post) => buildPostKey(post)),
+    [filteredPosts]
+  );
 
   const postsByKey = useMemo(() => {
     const map = new Map<string, ManagedPost>();
@@ -759,15 +813,23 @@ export default function PostManagerPage(): JSX.Element {
   }, [deleteFolderId, folderActionId, foldersById, moveFolderSourceId, renameFolderId]);
 
   useEffect(() => {
-    if (visibilityPostKey && !postsByKey.has(visibilityPostKey)) {
-      setVisibilityPostKey(null);
+    if (visibilityPostKeys.length) {
+      const nextKeys = visibilityPostKeys.filter((key) => postsByKey.has(key));
+      if (nextKeys.length !== visibilityPostKeys.length) {
+        setVisibilityPostKeys(nextKeys);
+      }
+      if (!nextKeys.length) {
+        setSavingVisibility(false);
+      }
+    }
+    if (!visibilityPostKeys.length) {
       setSavingVisibility(false);
     }
     if (folderPostKey && !postsByKey.has(folderPostKey)) {
       setFolderPostKey(null);
       setFolderValue(FOLDER_ALL);
     }
-  }, [folderPostKey, postsByKey, visibilityPostKey]);
+  }, [folderPostKey, postsByKey, visibilityPostKeys]);
 
   const normalizeActionPostKeys = useCallback(
     (keys: string[]): string[] =>
@@ -861,6 +923,7 @@ export default function PostManagerPage(): JSX.Element {
       delete longPressTimersRef.current[postKey];
     }
     delete longPressTouchStartRef.current[postKey];
+    delete longPressStartAtRef.current[postKey];
   }, []);
 
   const togglePostSelection = useCallback((postKey: string) => {
@@ -878,6 +941,7 @@ export default function PostManagerPage(): JSX.Element {
       if (typeof window === "undefined") return;
       clearLongPressTimer(postKey);
       longPressTriggeredRef.current[postKey] = false;
+      longPressStartAtRef.current[postKey] = Date.now();
       const touch = event?.touches?.[0];
       if (touch) {
         longPressTouchStartRef.current[postKey] = {
@@ -894,10 +958,19 @@ export default function PostManagerPage(): JSX.Element {
   );
 
   const endLongPress = useCallback(
-    (postKey: string) => {
+    (postKey: string, event?: ReactTouchEvent<HTMLElement>) => {
+      const startedAt = longPressStartAtRef.current[postKey];
+      const elapsedMs = Number.isFinite(startedAt) ? Date.now() - Number(startedAt) : 0;
+      const alreadyTriggered = Boolean(longPressTriggeredRef.current[postKey]);
+      if (!alreadyTriggered && elapsedMs >= HOLD_TO_SELECT_MS) {
+        longPressTriggeredRef.current[postKey] = true;
+        togglePostSelection(postKey);
+        event?.preventDefault();
+        event?.stopPropagation();
+      }
       clearLongPressTimer(postKey);
     },
-    [clearLongPressTimer]
+    [clearLongPressTimer, togglePostSelection]
   );
 
   const handleLongPressMove = useCallback(
@@ -916,10 +989,17 @@ export default function PostManagerPage(): JSX.Element {
   );
 
   const handleCardPrimaryAction = useCallback(
-    (post: ManagedPost) => {
+    (post: ManagedPost, event?: ReactMouseEvent<HTMLElement>) => {
       const postKey = buildPostKey(post);
       if (longPressTriggeredRef.current[postKey]) {
         longPressTriggeredRef.current[postKey] = false;
+        return;
+      }
+      const modifierPressed = Boolean(event?.ctrlKey || event?.metaKey || multiSelectModifierDown);
+      if (modifierPressed) {
+        event?.preventDefault();
+        event?.stopPropagation();
+        togglePostSelection(postKey);
         return;
       }
       if (selectionMode) {
@@ -928,7 +1008,7 @@ export default function PostManagerPage(): JSX.Element {
       }
       setPreviewPost(post);
     },
-    [selectionMode, togglePostSelection]
+    [multiSelectModifierDown, selectionMode, togglePostSelection]
   );
 
   const assignPostToFolder = useCallback((postKey: string, folderId: string) => {
@@ -1186,19 +1266,6 @@ export default function PostManagerPage(): JSX.Element {
     [closePostActionMenus, normalizeActionPostKeys, postsByKey]
   );
 
-  const toggleSelectionForPostKeys = useCallback(
-    (keys: string[]) => {
-      const nextKeys = normalizeActionPostKeys(keys);
-      if (nextKeys.length !== 1) {
-        setError("Select exactly one post to toggle selection.");
-        return;
-      }
-      togglePostSelection(nextKeys[0]);
-      closePostActionMenus();
-    },
-    [closePostActionMenus, normalizeActionPostKeys, togglePostSelection]
-  );
-
   const openDeleteForPostKeys = useCallback(
     (keys: string[]) => {
       const nextKeys = normalizeActionPostKeys(keys);
@@ -1294,6 +1361,18 @@ export default function PostManagerPage(): JSX.Element {
     );
   }, [movePostKeys, moveTargetFolderId, normalizeActionPostKeys]);
 
+  const openVisibilityForPostKeys = useCallback(
+    (keys: string[]) => {
+      const nextKeys = normalizeActionPostKeys(keys);
+      if (!nextKeys.length) return;
+      const firstPost = postsByKey.get(nextKeys[0]);
+      setVisibilityValue(String(firstPost?.visibility || "friends"));
+      setVisibilityPostKeys(nextKeys);
+      closePostActionMenus();
+    },
+    [closePostActionMenus, normalizeActionPostKeys, postsByKey]
+  );
+
   const openVisibilityEditor = useCallback(
     (post: ManagedPost, event?: ReactMouseEvent<HTMLElement>) => {
       if (event) {
@@ -1302,47 +1381,50 @@ export default function PostManagerPage(): JSX.Element {
       }
       const postKey = buildPostKey(post);
       if (!postKey) return;
-      setVisibilityPostKey(postKey);
-      setVisibilityValue(String(post.visibility || "friends"));
+      openVisibilityForPostKeys([postKey]);
     },
-    []
+    [openVisibilityForPostKeys]
   );
 
-  const saveVisibilityForPost = useCallback(async () => {
-    const postKey = String(visibilityPostKey || "").trim();
-    if (!postKey) return;
-    const target = postsByKey.get(postKey);
-    if (!target) {
-      setError("Unable to load selected post.");
-      return;
-    }
+  const saveVisibilityForPosts = useCallback(async () => {
+    const targets = normalizeActionPostKeys(visibilityPostKeys);
+    if (!targets.length) return;
     const nextVisibility = String(visibilityValue || "friends").trim() || "friends";
-    const attempts = buildPostUpdateAttempts(target);
     setSavingVisibility(true);
     setError(null);
+    let updatedCount = 0;
     try {
-      let updated = false;
-      for (const path of attempts) {
-        try {
-          await api.put(path, { data: { visibility: nextVisibility, trustedCircle: null } });
-          updated = true;
-          break;
-        } catch (err: unknown) {
-          if (axios.isAxiosError(err) && err.response?.status === 404) continue;
-          throw err;
+      for (const postKey of targets) {
+        const target = postsByKey.get(postKey);
+        if (!target) continue;
+        const attempts = buildPostUpdateAttempts(target);
+        let updated = false;
+        for (const path of attempts) {
+          try {
+            await api.put(path, { data: { visibility: nextVisibility, trustedCircle: null } });
+            updated = true;
+            break;
+          } catch (err: unknown) {
+            if (axios.isAxiosError(err) && err.response?.status === 404) continue;
+            break;
+          }
         }
+        if (!updated) continue;
+        updatedCount += 1;
+        setPosts((prev) =>
+          prev.map((entry) =>
+            buildPostKey(entry) === postKey ? { ...entry, visibility: nextVisibility } : entry
+          )
+        );
       }
-      if (!updated) {
+      if (!updatedCount) {
         setError("Unable to update visibility.");
         return;
       }
-      setPosts((prev) =>
-        prev.map((entry) =>
-          buildPostKey(entry) === postKey ? { ...entry, visibility: nextVisibility } : entry
-        )
+      setVisibilityPostKeys([]);
+      setSuccess(
+        `Updated visibility on ${updatedCount} post${updatedCount === 1 ? "" : "s"}.`
       );
-      setVisibilityPostKey(null);
-      setSuccess("Visibility updated.");
     } catch (err: unknown) {
       const message = axios.isAxiosError(err)
         ? err.response?.data?.error?.message ||
@@ -1353,7 +1435,7 @@ export default function PostManagerPage(): JSX.Element {
     } finally {
       setSavingVisibility(false);
     }
-  }, [postsByKey, visibilityPostKey, visibilityValue]);
+  }, [normalizeActionPostKeys, postsByKey, visibilityPostKeys, visibilityValue]);
 
   const openFolderEditor = useCallback(
     (postKey: string, event?: ReactMouseEvent<HTMLElement>) => {
@@ -1542,61 +1624,12 @@ export default function PostManagerPage(): JSX.Element {
     openDeleteForPostKeys(selectedPostKeys);
   };
 
-  const runBulkMoveToFolder = () => {
-    if (!bulkFolderId || !selectedPostKeys.length) return;
-    setAssignments((prev) => {
-      const next = { ...prev };
-      selectedPostKeys.forEach((postKey) => {
-        next[postKey] = bulkFolderId;
-      });
-      return next;
-    });
-    setSuccess(`Moved ${selectedPostKeys.length} post${selectedPostKeys.length === 1 ? "" : "s"}.`);
-  };
-
-  const runBulkVisibilityUpdate = async () => {
-    if (!selectedPosts.length) return;
-    setBulkBusy(true);
-    setError(null);
-    const nextVisibility = String(bulkVisibility || "friends");
-    let updatedCount = 0;
-    try {
-      for (const post of selectedPosts) {
-        const payload = { visibility: nextVisibility, trustedCircle: null };
-        const attempts = buildPostUpdateAttempts(post);
-        let updated = false;
-        for (const path of attempts) {
-          try {
-            await api.put(path, { data: payload });
-            updated = true;
-            break;
-          } catch (err: unknown) {
-            if (axios.isAxiosError(err) && err.response?.status === 404) {
-              continue;
-            }
-            break;
-          }
-        }
-        if (updated) {
-          updatedCount += 1;
-          const postKey = buildPostKey(post);
-          setPosts((prev) =>
-            prev.map((entry) =>
-              buildPostKey(entry) === postKey ? { ...entry, visibility: nextVisibility } : entry
-            )
-          );
-        }
-      }
-      if (!updatedCount) {
-        setError("No selected posts were updated.");
-      } else {
-        setSuccess(
-          `Updated visibility on ${updatedCount} post${updatedCount === 1 ? "" : "s"}.`
-        );
-      }
-    } finally {
-      setBulkBusy(false);
-    }
+  const selectAllFilteredPosts = () => {
+    const next = normalizeActionPostKeys(filteredPostKeys);
+    if (!next.length) return;
+    setSelectionMode(true);
+    setSelectedPostKeys(next);
+    setSuccess(`${next.length} post${next.length === 1 ? "" : "s"} selected.`);
   };
 
   const resetSelection = () => {
@@ -1645,7 +1678,7 @@ export default function PostManagerPage(): JSX.Element {
             <span className="post-manager-meta">{statusText}</span>
             <span className="post-manager-meta">
               {isTouchDevice
-                ? "Mobile tip: hold a post for 2 seconds to start multi-select."
+                ? "Mobile tip: hold a post for 1.5 seconds to start multi-select."
                 : "Desktop tip: right-click a post or folder for quick actions."}
             </span>
           </div>
@@ -1726,45 +1759,8 @@ export default function PostManagerPage(): JSX.Element {
                 {selectedPostKeys.length} selected
               </div>
               <div className="post-manager-bulk-controls">
-                <select
-                  className="auth-input"
-                  value={bulkFolderId}
-                  onChange={(event) => setBulkFolderId(event.target.value)}
-                >
-                  <option value="">Move selected to folder</option>
-                  {folders.map((folder) => (
-                    <option key={folder.id} value={folder.id}>
-                      {folder.name}
-                    </option>
-                  ))}
-                </select>
                 <button
-                  className="btn ghost"
-                  type="button"
-                  disabled={!bulkFolderId || !selectedPostKeys.length}
-                  onClick={runBulkMoveToFolder}
-                >
-                  Move
-                </button>
-                <select
-                  className="auth-input"
-                  value={bulkVisibility}
-                  onChange={(event) => setBulkVisibility(event.target.value)}
-                >
-                  <option value="public">Public</option>
-                  <option value="friends">Friends</option>
-                  <option value="private">Private</option>
-                </select>
-                <button
-                  className="btn ghost"
-                  type="button"
-                  disabled={!selectedPostKeys.length || bulkBusy}
-                  onClick={() => void runBulkVisibilityUpdate()}
-                >
-                  Update
-                </button>
-                <button
-                  className="btn ghost"
+                  className="btn ghost post-manager-bulk-btn"
                   type="button"
                   disabled={!selectedPostKeys.length}
                   onClick={() => setMobileActionPostKeys(normalizeActionPostKeys(selectedPostKeys))}
@@ -1772,15 +1768,27 @@ export default function PostManagerPage(): JSX.Element {
                   Actions
                 </button>
                 <button
-                  className="btn danger"
+                  className="btn ghost post-manager-bulk-btn"
                   type="button"
-                  disabled={!selectedPostKeys.length || bulkBusy}
-                  onClick={() => void runBulkDelete()}
+                  disabled={!filteredPostKeys.length}
+                  onClick={selectAllFilteredPosts}
                 >
-                  {bulkBusy ? "Working..." : "Delete selected"}
+                  Select All
                 </button>
-                <button className="btn ghost" type="button" onClick={resetSelection}>
+                <button
+                  className="btn ghost post-manager-bulk-btn"
+                  type="button"
+                  onClick={resetSelection}
+                >
                   Clear
+                </button>
+                <button
+                  className="btn danger post-manager-bulk-btn post-manager-bulk-btn--delete"
+                  type="button"
+                  disabled={!selectedPostKeys.length || Boolean(deletingKey)}
+                  onClick={runBulkDelete}
+                >
+                  Delete
                 </button>
               </div>
             </div>
@@ -1799,6 +1807,10 @@ export default function PostManagerPage(): JSX.Element {
               {filteredPosts.map((post) => {
                 const postKey = buildPostKey(post);
                 const isSelected = selectedPostKeys.includes(postKey);
+                const showSelectionMarker =
+                  selectionMode ||
+                  selectedPostKeys.length > 0 ||
+                  (!isTouchDevice && multiSelectModifierDown);
                 const folderId = assignments[postKey];
                 const folderName = folders.find((folder) => folder.id === folderId)?.name;
                 const folderLabel = folderName || "none";
@@ -1816,9 +1828,9 @@ export default function PostManagerPage(): JSX.Element {
                       event.dataTransfer.setData("text/post-key", postKey);
                       event.dataTransfer.effectAllowed = "move";
                     }}
-                    onClick={() => handleCardPrimaryAction(post)}
+                    onClick={(event) => handleCardPrimaryAction(post, event)}
                     onTouchStart={(event) => beginLongPress(postKey, event)}
-                    onTouchEnd={() => endLongPress(postKey)}
+                    onTouchEnd={(event) => endLongPress(postKey, event)}
                     onTouchCancel={() => endLongPress(postKey)}
                     onTouchMove={(event) => handleLongPressMove(postKey, event)}
                     onContextMenu={(event) => {
@@ -1843,8 +1855,15 @@ export default function PostManagerPage(): JSX.Element {
                     >
                       ⋮
                     </button>
-                    {isSelected && (
-                      <span className="post-manager-selected-indicator">Selected</span>
+                    {showSelectionMarker && (
+                      <span
+                        className={`post-manager-select-circle${
+                          isSelected ? " is-selected" : ""
+                        }`}
+                        aria-hidden="true"
+                      >
+                        {isSelected ? "✓" : ""}
+                      </span>
                     )}
                     <div className="post-manager-thumb">
                       {post.media ? (
@@ -1868,7 +1887,7 @@ export default function PostManagerPage(): JSX.Element {
                       <div className="post-manager-card-meta">
                         <button
                           type="button"
-                          className="post-manager-pill post-manager-pill-action"
+                          className="post-manager-pill post-manager-pill-action post-manager-pill--visibility"
                           onClick={(event) => openVisibilityEditor(post, event)}
                           onTouchStart={(event) => event.stopPropagation()}
                           onTouchEnd={(event) => event.stopPropagation()}
@@ -2147,8 +2166,6 @@ export default function PostManagerPage(): JSX.Element {
         {(() => {
           const actionKeys = normalizeActionPostKeys(mobileActionPostKeys);
           const single = actionKeys.length === 1;
-          const selectedSet = new Set(selectedPostKeys);
-          const isSelected = single ? selectedSet.has(actionKeys[0]) : false;
           return (
             <div className="post-manager-action-sheet">
               <button
@@ -2170,17 +2187,16 @@ export default function PostManagerPage(): JSX.Element {
               <button
                 type="button"
                 className="btn ghost"
-                disabled={!single}
-                onClick={() => toggleSelectionForPostKeys(actionKeys)}
+                onClick={() => openVisibilityForPostKeys(actionKeys)}
               >
-                {isSelected ? "Deselect post" : "Select post"}
+                Visibility
               </button>
               <button
                 type="button"
                 className="btn ghost"
-                onClick={() => openDeleteForPostKeys(actionKeys)}
+                onClick={() => openMoveForPostKeys(actionKeys)}
               >
-                Delete
+                Move to another folder
               </button>
               <button
                 type="button"
@@ -2191,10 +2207,10 @@ export default function PostManagerPage(): JSX.Element {
               </button>
               <button
                 type="button"
-                className="btn ghost"
-                onClick={() => openMoveForPostKeys(actionKeys)}
+                className="btn danger"
+                onClick={() => openDeleteForPostKeys(actionKeys)}
               >
-                Move to another folder
+                Delete
               </button>
             </div>
           );
@@ -2202,16 +2218,24 @@ export default function PostManagerPage(): JSX.Element {
       </PopupModal>
 
       <PopupModal
-        open={Boolean(visibilityPostKey)}
+        open={Boolean(visibilityPostKeys.length)}
         onClose={() => {
-          setVisibilityPostKey(null);
+          setVisibilityPostKeys([]);
           setSavingVisibility(false);
         }}
-        title="Post visibility"
+        title={
+          visibilityPostKeys.length > 1
+            ? `Post visibility (${visibilityPostKeys.length} selected)`
+            : "Post visibility"
+        }
         className="post-manager-modal"
       >
         <div className="post-manager-edit-form">
-          <p className="post-manager-modal-note">Choose who can view this post.</p>
+          <p className="post-manager-modal-note">
+            {visibilityPostKeys.length > 1
+              ? "Choose who can view the selected posts."
+              : "Choose who can view this post."}
+          </p>
           <select
             className="auth-input"
             value={visibilityValue}
@@ -2227,7 +2251,7 @@ export default function PostManagerPage(): JSX.Element {
               className="btn ghost"
               type="button"
               onClick={() => {
-                setVisibilityPostKey(null);
+                setVisibilityPostKeys([]);
                 setSavingVisibility(false);
               }}
               disabled={savingVisibility}
@@ -2237,7 +2261,7 @@ export default function PostManagerPage(): JSX.Element {
             <button
               className="btn primary"
               type="button"
-              onClick={() => void saveVisibilityForPost()}
+              onClick={() => void saveVisibilityForPosts()}
               disabled={savingVisibility}
             >
               {savingVisibility ? "Saving..." : "Save"}
