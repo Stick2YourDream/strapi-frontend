@@ -897,8 +897,8 @@ export default function Sidebar({
   const storefrontEnabled = appSettings?.storefrontEnabled !== false;
   const showNavLinks = !hideNavLinks;
   const showBio = !hideBio;
-  const isFriendsMobileMenu = active === "friends";
-  const showMobileCustomContent = isFriendsMobileMenu && Boolean(sidebarContent);
+  const usesInlineMobileCustomContent = active === "friends" || active === "groups";
+  const showMobileCustomContent = usesInlineMobileCustomContent && Boolean(sidebarContent);
   const hasCommunityLinks = true;
   const hasAccountLinks = true;
   const hasSwitchableProfiles = switchableProfiles.length > 0;
@@ -908,11 +908,11 @@ export default function Sidebar({
     mobileMenuVariant || appMobileMenuVariant || storedMobileMenuVariant;
 
   useEffect(() => {
-    if (!menuOpen || isFriendsMobileMenu) return;
+    if (!menuOpen || usesInlineMobileCustomContent) return;
     setMobileCommunityOpen(false);
     setMobileAccountOpen(false);
   }, [
-    isFriendsMobileMenu,
+    usesInlineMobileCustomContent,
     menuOpen,
   ]);
 
@@ -1549,6 +1549,9 @@ export default function Sidebar({
               notificationsCount={filteredNotificationTotal}
               messagesCount={counts.messages}
               friendMessages={drawerFriendMessages}
+              customCommunityContent={active === "groups" ? sidebarContent : undefined}
+              storefrontEnabled={storefrontEnabled}
+              newsroomEnabled={newsroomEnabled}
             />
           )}
           {menuOpen && effectiveMobileMenuVariant !== "drawer" && (
@@ -1618,7 +1621,7 @@ export default function Sidebar({
                     </button>
                   </div>
                 </div>
-                {isFriendsMobileMenu ? (
+                {usesInlineMobileCustomContent ? (
                   <>
                   <p className="mobile-profile-section-label">Navigation</p>
                   <button

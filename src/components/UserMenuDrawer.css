@@ -362,7 +362,19 @@
   background: rgba(3, 9, 23, 0.4);
 }
 
+.user-menu-drawer__custom-community {
+  margin-top: 6px;
+  display: grid;
+  gap: 12px;
+}
+
+.user-menu-drawer .groups-sidebar-dashboard {
+  display: none;
+}
+
 .user-menu-drawer__submenu-row {
+  width: 100%;
+  appearance: none;
   min-height: 36px;
   border-radius: 10px;
   text-decoration: none;
@@ -375,6 +387,9 @@
   font-weight: 500;
   background: rgba(12, 21, 43, 0.58);
   border: 1px solid rgba(105, 132, 187, 0.2);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
 }
 
 .user-menu-drawer__submenu-row:hover {
@@ -385,6 +400,16 @@
 .user-menu-drawer__submenu-row.is-active {
   background: rgba(38, 67, 120, 0.76);
   border-color: rgba(127, 198, 241, 0.48);
+}
+
+.user-menu-drawer__submenu-row--disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.user-menu-drawer__submenu-row--disabled:hover {
+  background: rgba(12, 21, 43, 0.58);
+  border-color: rgba(105, 132, 187, 0.2);
 }
 
 .user-menu-drawer__submenu-icon {

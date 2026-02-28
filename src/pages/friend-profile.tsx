@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import axios from "axios";
 import "../css/dashboard.css";
@@ -13,7 +13,7 @@ import { useVideoCall, type VideoCallInvitee } from "../context/VideoCallContext
 import api from "../api/strapi";
 import Sidebar from "../components/Sidebar";
 import TopbarSearch from "../components/TopbarSearch";
-import LinkPreviewCard from "../components/LinkPreviewCard";
+import FriendPostsFeed, { type FriendFeedPost } from "../components/FriendPostsFeed";
 import { usePageMeta } from "../hooks/usePageMeta";
 import {
   buildProfilePayloadFromAttrs,
@@ -71,17 +71,7 @@ type UserActionEntry = {
 
 type ReportReason = "spam" | "harassment" | "hate" | "impersonation" | "other";
 
-type FriendPost = {
-  id: number | string;
-  title: string;
-  content: string;
-  imageUrl?: string;
-  createdAt?: string;
-  linkUrl?: string;
-  feedbackAudience?: string;
-  feedbackTargetId?: number;
-  feedbackTargetName?: string;
-};
+type FriendPost = FriendFeedPost;
 
 type FriendMediaItem = {
   id: number | string;
@@ -92,15 +82,6 @@ type FriendMediaItem = {
   kind?: "photo" | "video";
   media?: string;
   createdAt?: string;
-};
-
-type LinkPreview = {
-  url: string;
-  title?: string;
-  description?: string;
-  image?: string;
-  siteName?: string;
-  type?: string;
 };
 
 const DEFAULT_PRIVACY_SETTINGS: Required<PrivacySettings> = {
@@ -124,6 +105,14 @@ const getEntityId = (entry: any) => {
   const rawId = data?.id ?? (typeof data === "number" ? data : data?.attributes?.id);
   const num = Number(rawId);
   return Number.isFinite(num) ? num : null;
+};
+const getEntityLabel = (entry: any, fallback: string) => {
+  const attrs = getEntityAttrs(entry);
+  const firstName = String(attrs?.firstName || attrs?.firstname || "").trim();
+  const lastName = String(attrs?.lastName || attrs?.lastname || "").trim();
+  const fullName = `${firstName} ${lastName}`.trim();
+  const handle = String(attrs?.handle || attrs?.username || "").trim();
+  return fullName || handle || attrs?.email || fallback;
 };
 
 const getRecordId = (entry: any, attrs: any) =>
@@ -384,9 +373,6 @@ export default function FriendProfilePage() {
   const [posts, setPosts] = useState<FriendPost[]>([]);
   const [postsLoading, setPostsLoading] = useState(false);
   const [postsError, setPostsError] = useState<string | null>(null);
-  const [showAllPosts, setShowAllPosts] = useState(false);
-  const [linkPreviews, setLinkPreviews] = useState<Record<string, LinkPreview | null>>({});
-  const linkPreviewsRef = useRef(linkPreviews);
   const [friendMedia, setFriendMedia] = useState<FriendMediaItem[]>([]);
   const [mediaLoading, setMediaLoading] = useState(false);
   const [mediaError, setMediaError] = useState<string | null>(null);
@@ -395,7 +381,6 @@ export default function FriendProfilePage() {
   const [mediaLightboxOpen, setMediaLightboxOpen] = useState(false);
   const [mediaLightboxItems, setMediaLightboxItems] = useState<FriendMediaItem[]>([]);
   const [mediaLightboxIndex, setMediaLightboxIndex] = useState(0);
-  const allPostsRef = useRef<HTMLDivElement | null>(null);
 
   const displayName = useMemo(() => {
     if (!profile) return "Friend profile";
@@ -412,10 +397,6 @@ export default function FriendProfilePage() {
       ? `View ${displayName}'s profile details and shared info.`
       : "View your friend's profile details and shared info.",
   });
-
-  useEffect(() => {
-    linkPreviewsRef.current = linkPreviews;
-  }, [linkPreviews]);
 
   useEffect(() => {
     if (!user || !Number.isFinite(friendIdNumber)) {
@@ -565,28 +546,6 @@ export default function FriendProfilePage() {
     };
   }, [friendIdNumber, user]);
 
-  const fetchLinkPreview = useCallback(async (url: string) => {
-    if (!url || linkPreviewsRef.current[url] !== undefined) return;
-    setLinkPreviews((prev) => ({ ...prev, [url]: null }));
-    try {
-      const res = await api.get("/link-preview", { params: { url } });
-      const data = res.data?.data;
-      const preview: LinkPreview | null = data?.url
-        ? {
-            url: data.url,
-            title: data.title || undefined,
-            description: data.description || undefined,
-            image: data.image || undefined,
-            siteName: data.siteName || undefined,
-            type: data.type || undefined,
-          }
-        : null;
-      setLinkPreviews((prev) => ({ ...prev, [url]: preview }));
-    } catch {
-      setLinkPreviews((prev) => ({ ...prev, [url]: null }));
-    }
-  }, []);
-
   useEffect(() => {
     if (!user || !Number.isFinite(friendIdNumber)) return;
     let active = true;
@@ -599,11 +558,11 @@ export default function FriendProfilePage() {
             `&populate=Users_Pictures&populate=owner&populate=feedbackTarget` +
             `&sort=createdAt:desc&pagination[pageSize]=200&publicationState=preview`
         );
-        const linkUrls = new Set<string>();
         const mapped: FriendPost[] = [];
         (postsRes.data?.data ?? []).forEach((p: any) => {
           const attrs = normalize(p);
-          const ownerId = getEntityId(attrs.owner);
+          const ownerData = getEntity(attrs.owner);
+          const ownerId = getEntityId(ownerData);
           if (!ownerId || ownerId !== friendIdNumber) return;
           const imageUrl = pickMediaUrl(attrs.Users_Pictures, { kind: "post" });
           const content = attrs.Users_Content || "";
@@ -613,9 +572,12 @@ export default function FriendProfilePage() {
             ? feedbackTargetAttrs?.email || `User ${feedbackTargetId}`
             : undefined;
           const linkUrl = extractFirstUrl(content);
-          if (linkUrl) linkUrls.add(linkUrl);
           mapped.push({
             id: p.id ?? attrs.documentId,
+            numericId: Number.isFinite(Number(p.id)) ? Number(p.id) : undefined,
+            documentId: attrs.documentId ?? p.documentId,
+            ownerId,
+            ownerName: getEntityLabel(ownerData, `User ${ownerId}`),
             title: attrs.Title || "Untitled",
             content,
             imageUrl,
@@ -624,6 +586,11 @@ export default function FriendProfilePage() {
             feedbackAudience: attrs.feedbackAudience || undefined,
             feedbackTargetId,
             feedbackTargetName,
+            likes: Number(attrs.likes ?? 0),
+            reactionCounts: attrs.reactionCounts,
+            myReaction: attrs.myReaction ?? null,
+            shares: Number(attrs.shares ?? 0),
+            visibility: attrs.visibility || undefined,
           });
         });
         mapped.sort((a, b) => {
@@ -633,11 +600,7 @@ export default function FriendProfilePage() {
         });
         if (active) {
           setPosts(mapped);
-          setShowAllPosts(false);
         }
-        linkUrls.forEach((url) => {
-          void fetchLinkPreview(url);
-        });
       } catch {
         if (active) setPostsError("Unable to load posts.");
       } finally {
@@ -648,7 +611,7 @@ export default function FriendProfilePage() {
     return () => {
       active = false;
     };
-  }, [fetchLinkPreview, friendIdNumber, user]);
+  }, [friendIdNumber, user]);
 
   useEffect(() => {
     if (!user || !Number.isFinite(friendIdNumber)) return;
@@ -696,8 +659,6 @@ export default function FriendProfilePage() {
     canView(audience, normalizeVisibility(profile?.activityVisibility, "public"));
 
   const canViewPosts = isFriend && !isBlocked && !isMuted;
-  const visiblePosts = canViewPosts ? posts : [];
-  const recentPosts = visiblePosts.slice(0, 3);
 
   const visibleMedia = friendMedia.filter((item) => {
     const visibilityValue = item.visibility || "public";
@@ -785,44 +746,6 @@ export default function FriendProfilePage() {
       document.body.style.overflow = previousOverflow;
     };
   }, [mediaLightboxOpen]);
-
-  const handleShowAllPosts = () => {
-    if (!canViewPosts) return;
-    const shouldOpen = !showAllPosts;
-    setShowAllPosts(shouldOpen);
-    if (shouldOpen && allPostsRef.current) {
-      allPostsRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  };
-
-  const renderPostList = (postList: FriendPost[], expanded = false) => (
-    <ul className={`comment-list friend-posts-list${expanded ? " is-expanded" : ""}`}>
-      {postList.map((post) => (
-        <li key={post.id} className="comment-item friend-post-item">
-          {post.imageUrl && (
-            <img
-              src={post.imageUrl}
-              alt={post.title}
-              className="avatar"
-              loading="lazy"
-              decoding="async"
-            />
-          )}
-          <div className="comment-body">
-            <div className="friend-post-title">
-              <strong>{post.title}</strong>
-            </div>
-            <p>{post.content}</p>
-            {post.linkUrl && (
-              <div className="friend-link-preview">
-                <LinkPreviewCard preview={linkPreviews[post.linkUrl]} url={post.linkUrl} compact />
-              </div>
-            )}
-          </div>
-        </li>
-      ))}
-    </ul>
-  );
 
   const locationLabel = useMemo(() => {
     const parts = [profile?.city, profile?.state, profile?.country].filter(Boolean);
@@ -1351,15 +1274,6 @@ export default function FriendProfilePage() {
                     <p className="eyebrow">Posts</p>
                     <h3>Recent posts</h3>
                   </div>
-                  {canViewPosts && posts.length > recentPosts.length && (
-                    <button
-                      type="button"
-                      className="btn ghost friend-posts-toggle"
-                      onClick={handleShowAllPosts}
-                    >
-                      {showAllPosts ? "Hide posts" : "Show all posts"}
-                    </button>
-                  )}
                 </div>
                 {!canViewPosts && (
                   <p className="status">
@@ -1374,17 +1288,11 @@ export default function FriendProfilePage() {
                 {canViewPosts && postsError && (
                   <p className="status status-error">{postsError}</p>
                 )}
-                {canViewPosts && !postsLoading && !postsError && recentPosts.length === 0 && (
+                {canViewPosts && !postsLoading && !postsError && posts.length === 0 && (
                   <p className="status">No posts yet.</p>
                 )}
-                {canViewPosts && recentPosts.length > 0 && renderPostList(recentPosts)}
-                {canViewPosts && showAllPosts && (
-                  <div className="comments" ref={allPostsRef}>
-                    <p className="eyebrow">All posts</p>
-                    {posts.length ? renderPostList(posts, true) : (
-                      <p className="status">No posts yet.</p>
-                    )}
-                  </div>
+                {canViewPosts && posts.length > 0 && !postsLoading && !postsError && (
+                  <FriendPostsFeed posts={posts} onPostsChange={setPosts} />
                 )}
               </section>
             </div>

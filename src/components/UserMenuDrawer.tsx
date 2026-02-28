@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import {
   Camera,
@@ -9,8 +9,10 @@ import {
   Home,
   LogOut,
   MessageSquare,
+  Newspaper,
   Settings,
   ShieldCheck,
+  Store,
   User,
   Users,
   UsersRound,
@@ -38,7 +40,17 @@ export type MenuProps = {
   notificationsCount?: number;
   messagesCount?: number;
   friendMessages?: FriendMessagePreview[];
+  customCommunityContent?: ReactNode;
+  storefrontEnabled?: boolean;
+  newsroomEnabled?: boolean;
   showBilling?: boolean;
+};
+
+type CommunityRowLink = {
+  label: string;
+  href: string;
+  icon: LucideIcon;
+  disabled?: boolean;
 };
 
 type MenuRowLink = {
@@ -103,6 +115,9 @@ export default function UserMenuDrawer({
   notificationsCount = 0,
   messagesCount = 0,
   friendMessages = [],
+  customCommunityContent,
+  storefrontEnabled = true,
+  newsroomEnabled = true,
 }: MenuProps) {
   const titleId = useId();
   const avatarModalTitleId = useId();
@@ -139,6 +154,25 @@ export default function UserMenuDrawer({
     };
   }, [avatarModalOpen, open, onClose]);
 
+  const normalizedCurrentPath = normalizePath(currentPath);
+  const communityActive =
+    normalizedCurrentPath === "/community" ||
+    normalizedCurrentPath.startsWith("/friends") ||
+    normalizedCurrentPath.startsWith("/groups") ||
+    normalizedCurrentPath.startsWith("/forums") ||
+    normalizedCurrentPath.startsWith("/storefront") ||
+    normalizedCurrentPath.startsWith("/news");
+  const messagesActive = normalizedCurrentPath.startsWith("/messages");
+  const shouldAutoOpenCommunity =
+    Boolean(customCommunityContent) && normalizedCurrentPath.startsWith("/groups");
+
+  useEffect(() => {
+    if (!open) return;
+    if (shouldAutoOpenCommunity) {
+      setCommunityOpen(true);
+    }
+  }, [open, shouldAutoOpenCommunity]);
+
   if (!open) return null;
 
   const navigationRows: MenuRowLink[] = [
@@ -165,22 +199,26 @@ export default function UserMenuDrawer({
     },
   ];
 
-  const communityRows = useMemo(
+  const communityRows = useMemo<CommunityRowLink[]>(
     () => [
       { label: "Friends", href: "/friends", icon: Users },
       { label: "Groups", href: "/groups", icon: UsersRound },
       { label: "Forums", href: "/forums", icon: MessageSquare },
+      {
+        label: storefrontEnabled ? "StoreFront" : "StoreFront (Coming Soon!)",
+        href: "/storefront",
+        icon: Store,
+        disabled: !storefrontEnabled,
+      },
+      {
+        label: newsroomEnabled ? "Newsroom" : "Newsroom (Coming soon)",
+        href: "/news",
+        icon: Newspaper,
+        disabled: !newsroomEnabled,
+      },
     ],
-    []
+    [newsroomEnabled, storefrontEnabled]
   );
-
-  const normalizedCurrentPath = normalizePath(currentPath);
-  const communityActive =
-    normalizedCurrentPath === "/community" ||
-    normalizedCurrentPath.startsWith("/friends") ||
-    normalizedCurrentPath.startsWith("/groups") ||
-    normalizedCurrentPath.startsWith("/forums");
-  const messagesActive = normalizedCurrentPath.startsWith("/messages");
 
   const renderLinkRow = (item: MenuRowLink) => {
     const Icon = item.icon;
@@ -296,13 +334,27 @@ export default function UserMenuDrawer({
                   {communityRows.map((item) => {
                     const SubIcon = item.icon;
                     const active = isActivePath(currentPath, item.href);
+                    const className = `user-menu-drawer__submenu-row${
+                      active ? " is-active" : ""
+                    }${item.disabled ? " user-menu-drawer__submenu-row--disabled" : ""}`;
+                    if (item.disabled) {
+                      return (
+                        <button
+                          key={item.href}
+                          type="button"
+                          className={className}
+                          disabled
+                          aria-disabled="true"
+                        >
+                          <span className="user-menu-drawer__submenu-icon" aria-hidden="true">
+                            <SubIcon size={16} />
+                          </span>
+                          <span>{item.label}</span>
+                        </button>
+                      );
+                    }
                     return (
-                      <Link
-                        key={item.href}
-                        to={item.href}
-                        className={`user-menu-drawer__submenu-row${active ? " is-active" : ""}`}
-                        onClick={onClose}
-                      >
+                      <Link key={item.href} to={item.href} className={className} onClick={onClose}>
                         <span className="user-menu-drawer__submenu-icon" aria-hidden="true">
                           <SubIcon size={16} />
                         </span>
@@ -311,6 +363,11 @@ export default function UserMenuDrawer({
                       </Link>
                     );
                   })}
+                  {customCommunityContent && (
+                    <div className="user-menu-drawer__custom-community">
+                      {customCommunityContent}
+                    </div>
+                  )}
                 </div>
               )}
 

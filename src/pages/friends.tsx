@@ -1,5 +1,5 @@
 // src/pages/Friends.tsx
-import { useEffect, useMemo, useState, useRef, useCallback } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "../css/dashboard.css";
 import "../css/friends.css";
@@ -13,7 +13,7 @@ import api from "../api/strapi";
 import Sidebar from "../components/Sidebar";
 import TopbarSearch from "../components/TopbarSearch";
 import { usePageMeta } from "../hooks/usePageMeta";
-import LinkPreviewCard from "../components/LinkPreviewCard";
+import FriendPostsFeed, { type FriendFeedPost } from "../components/FriendPostsFeed";
 import {
   buildProfilePayloadFromAttrs,
   decryptFriendProfilePayload,
@@ -25,17 +25,7 @@ import {
 } from "../utils/profile-e2ee";
 import { pickMediaUrl } from "../utils/media";
 
-type FriendPost = {
-  id: number | string;
-  title: string;
-  content: string;
-  imageUrl?: string;
-  createdAt?: string;
-  linkUrl?: string;
-  feedbackAudience?: string;
-  feedbackTargetId?: number;
-  feedbackTargetName?: string;
-};
+type FriendPost = FriendFeedPost;
 
 type FriendMediaItem = {
   id: number | string;
@@ -89,15 +79,6 @@ type FriendRelation = {
   targetFavorite?: boolean;
 };
 
-type LinkPreview = {
-  url: string;
-  title?: string;
-  description?: string;
-  image?: string;
-  siteName?: string;
-  type?: string;
-};
-
 type UserActionEntry = {
   userId: number;
   recordId: number | string;
@@ -126,14 +107,6 @@ const extractFirstUrl = (text: string) => {
   return url;
 };
 
-const isYoutubeUrl = (value: string) => {
-  try {
-    const host = new URL(value).hostname.toLowerCase();
-    return host.includes("youtube.com") || host === "youtu.be";
-  } catch {
-    return false;
-  }
-};
 const isVideoUrl = (value?: string) => !!value && /\.(mp4|webm|mov)$/i.test(value);
 
 const normalizeFriendSearch = (value: string) =>
@@ -215,30 +188,6 @@ const formatLastSeen = (value?: string) => {
   )}`;
 };
 
-const formatPostDate = (value?: string) => {
-  if (!value) return "";
-  try {
-    return new Intl.DateTimeFormat("en", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    }).format(new Date(value));
-  } catch {
-    return value;
-  }
-};
-
-const feedbackLabelFor = (post: FriendPost) => {
-  const audience = post.feedbackAudience;
-  if (!audience || audience === "none") return "";
-  if (audience === "public") return "Feedback: Public";
-  if (audience === "friends") return "Feedback: Friends";
-  if (audience === "specific") {
-    return `Feedback: ${post.feedbackTargetName || "You"}`;
-  }
-  return "";
-};
-
 export default function Friends() {
   const { user } = useAuth();
   const { openChat } = useChat();
@@ -267,23 +216,12 @@ export default function Friends() {
   const [mediaLightboxItems, setMediaLightboxItems] = useState<FriendMediaItem[]>([]);
   const [mediaLightboxIndex, setMediaLightboxIndex] = useState(0);
   const [selectedFriendId, setSelectedFriendId] = useState<number | null>(null);
-  const [showAllPosts, setShowAllPosts] = useState(false);
-  const allPostsRef = useRef<HTMLDivElement | null>(null);
-  const [linkPreviews, setLinkPreviews] = useState<Record<string, LinkPreview | null>>({});
-  const linkPreviewsRef = useRef(linkPreviews);
-  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    linkPreviewsRef.current = linkPreviews;
-  }, [linkPreviews]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [blockEntries, setBlockEntries] = useState<UserActionEntry[]>([]);
   const [muteEntries, setMuteEntries] = useState<UserActionEntry[]>([]);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
-  const [activePost, setActivePost] = useState<FriendPost | null>(null);
-  const [copyToast, setCopyToast] = useState<string | null>(null);
   const [friendPage, setFriendPage] = useState(1);
   const [incomingRequests, setIncomingRequests] = useState<FriendRequestItem[]>([]);
   const [outgoingRequests, setOutgoingRequests] = useState<FriendRequestItem[]>([]);
@@ -357,103 +295,6 @@ export default function Friends() {
         return { userId, recordId };
       })
       .filter(Boolean) as UserActionEntry[];
-  const showCopyToast = useCallback((message: string) => {
-    setCopyToast(message);
-    if (toastTimeoutRef.current) {
-      clearTimeout(toastTimeoutRef.current);
-    }
-    toastTimeoutRef.current = setTimeout(() => {
-      setCopyToast(null);
-    }, 2200);
-  }, []);
-
-  const copyToClipboard = useCallback(async (text: string) => {
-    if (!text) return false;
-    try {
-      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-        return true;
-      }
-    } catch {
-      // Fallback below.
-    }
-
-    if (typeof document === "undefined") return false;
-    const textarea = document.createElement("textarea");
-    textarea.value = text;
-    textarea.setAttribute("readonly", "true");
-    textarea.style.position = "fixed";
-    textarea.style.opacity = "0";
-    textarea.style.pointerEvents = "none";
-    document.body.appendChild(textarea);
-    textarea.select();
-    textarea.setSelectionRange(0, text.length);
-    const copied = document.execCommand("copy");
-    textarea.remove();
-    return copied;
-  }, []);
-
-  const getPostDescriptor = useCallback((post: FriendPost) => {
-    if (post.imageUrl) return isVideoUrl(post.imageUrl) ? "with a video" : "with a picture";
-    if (post.linkUrl) return "with a link";
-    return "";
-  }, []);
-
-  const handleDescriptorAction = useCallback(
-    async (post: FriendPost, descriptor: string) => {
-      if (descriptor === "with a picture" && post.imageUrl && !isVideoUrl(post.imageUrl)) {
-        if (typeof window !== "undefined" && !window.confirm("Download this picture?")) {
-          return;
-        }
-        if (typeof document === "undefined") return;
-        const link = document.createElement("a");
-        link.href = post.imageUrl;
-        link.download = `friend-post-${post.id}`;
-        link.rel = "noreferrer";
-        link.target = "_blank";
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        return;
-      }
-
-      if (descriptor === "with a link" && post.linkUrl) {
-        const copied = await copyToClipboard(post.linkUrl);
-        if (copied) {
-          showCopyToast("Link Copied");
-        } else {
-          setActionNotice("Unable to copy link.");
-        }
-      }
-    },
-    [copyToClipboard, showCopyToast]
-  );
-
-  const fetchLinkPreview = useCallback(async (url: string) => {
-    if (!url) return;
-    if (linkPreviewsRef.current[url] !== undefined) return;
-    try {
-      const res = await api.get("/link-preview", { params: { url } });
-      const data = res.data?.data;
-      const preview = data?.url
-        ? {
-            url: data.url,
-            title: data.title,
-            description: data.description,
-            image: data.image,
-            siteName: data.siteName,
-            type: data.type,
-          }
-        : null;
-      setLinkPreviews((prev) =>
-        prev[url] !== undefined ? prev : { ...prev, [url]: preview }
-      );
-    } catch {
-      setLinkPreviews((prev) =>
-        prev[url] !== undefined ? prev : { ...prev, [url]: null }
-      );
-    }
-  }, []);
 
   // Load current friends and their posts
   useEffect(() => {
@@ -648,10 +489,10 @@ export default function Friends() {
           `/users-posts?${ownerFilter}&populate=Users_Pictures&populate=owner&populate=feedbackTarget&sort=createdAt:desc&pagination[pageSize]=200&publicationState=preview`
         );
         const grouped: Record<number, FriendPost[]> = {};
-        const linkUrls = new Set<string>();
         (postsRes.data?.data ?? []).forEach((p: any) => {
           const attrs = normalize(p);
-          const ownerId = getEntityId(attrs.owner);
+          const ownerData = getEntity(attrs.owner);
+          const ownerId = getEntityId(ownerData);
           if (!ownerId) return;
           const imageUrl = pickMediaUrl(attrs.Users_Pictures, { kind: "post" });
           const content = attrs.Users_Content || "";
@@ -661,9 +502,12 @@ export default function Friends() {
             ? feedbackTargetAttrs?.email || `User ${feedbackTargetId}`
             : undefined;
           const linkUrl = extractFirstUrl(content);
-          if (linkUrl) linkUrls.add(linkUrl);
           (grouped[ownerId] = grouped[ownerId] || []).push({
             id: p.id ?? attrs.documentId,
+            numericId: Number.isFinite(Number(p.id)) ? Number(p.id) : undefined,
+            documentId: attrs.documentId ?? p.documentId,
+            ownerId,
+            ownerName: getUserDisplayName(ownerData),
             title: attrs.Title || "Untitled",
             content,
             imageUrl,
@@ -672,6 +516,11 @@ export default function Friends() {
             feedbackAudience: attrs.feedbackAudience || undefined,
             feedbackTargetId,
             feedbackTargetName,
+            likes: Number(attrs.likes ?? 0),
+            reactionCounts: attrs.reactionCounts,
+            myReaction: attrs.myReaction ?? null,
+            shares: Number(attrs.shares ?? 0),
+            visibility: attrs.visibility || undefined,
           });
         });
         Object.values(grouped).forEach((list) => {
@@ -682,9 +531,6 @@ export default function Friends() {
           });
         });
         setPostsByOwner(grouped);
-        linkUrls.forEach((url) => {
-          void fetchLinkPreview(url);
-        });
       } catch {
         setError("Failed to load friends.");
       } finally {
@@ -693,7 +539,7 @@ export default function Friends() {
       }
     };
     load();
-  }, [fetchLinkPreview, refreshToken, user]);
+  }, [refreshToken, user]);
 
   const presenceIds = useMemo(
     () =>
@@ -844,10 +690,6 @@ export default function Friends() {
       document.body.style.overflow = previousOverflow;
     };
   }, [mediaLightboxOpen]);
-  const selectedFriendLabel = selectedFriend
-    ? `${selectedFriend.firstName || ""} ${selectedFriend.lastName || ""}`.trim() ||
-      `@${selectedFriend.handle || "friend"}`
-    : "this user";
   const selectedVisibility = normalizeProfileVisibility(
     selectedFriend?.profileVisibility
   );
@@ -888,29 +730,6 @@ export default function Friends() {
   const isBlocked = Boolean(blockedEntry);
   const isMuted = Boolean(mutedEntry);
   const canViewPosts = !isBlocked && !isMuted;
-  const visiblePosts = canViewPosts ? selectedPosts : [];
-  const recentPosts = visiblePosts.slice(0, 3);
-  const activeDescriptor = activePost ? getPostDescriptor(activePost) : "";
-  const isActiveDescriptorActionable =
-    activeDescriptor === "with a picture" || activeDescriptor === "with a link";
-  const activePreview = activePost?.linkUrl ? linkPreviews[activePost.linkUrl] : null;
-  const activePreviewImage = activePreview?.image;
-  const activeIsYoutube = activePost?.linkUrl
-    ? isYoutubeUrl(activePost.linkUrl)
-    : false;
-  const showActivePreviewMedia = Boolean(
-    activePost && !activePost.imageUrl && activePreviewImage && !activeIsYoutube
-  );
-  const showActivePlaceholder = Boolean(
-    activePost && !activePost.imageUrl && !activePreviewImage
-  );
-  const activeFeedbackLabel = activePost ? feedbackLabelFor(activePost) : "";
-  const activeAuthorLabel = selectedFriendLabel;
-  const activePostTitleId = activePost ? `friend-post-title-${activePost.id}` : undefined;
-
-  useEffect(() => {
-    setShowAllPosts(false);
-  }, [isBlocked, isMuted, selectedFriendId]);
 
   const renderAvatar = (profile?: FriendProfile, size = 44) => {
     const handle = profile?.handle || "User";
@@ -1161,24 +980,6 @@ export default function Friends() {
     navigate(`/friends/${selectedFriend.userId}`);
   };
 
-  const handleShowAllPosts = () => {
-    if (!selectedFriend?.userId || !canViewPosts) return;
-    const shouldOpen = !showAllPosts;
-    setShowAllPosts(shouldOpen);
-    if (shouldOpen && allPostsRef.current) {
-      allPostsRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  };
-
-  const closePostModal = useCallback(() => {
-    setActivePost(null);
-  }, []);
-
-  const handleOpenPost = (post: FriendPost) => {
-    if (!post?.id) return;
-    setActivePost(post);
-  };
-
   useEffect(() => {
     const loadMedia = async () => {
       if (!selectedFriend?.userId) {
@@ -1203,84 +1004,6 @@ export default function Friends() {
 
     void loadMedia();
   }, [selectedFriend?.userId]);
-
-  useEffect(() => {
-    if (!activePost) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setActivePost(null);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activePost]);
-
-  useEffect(() => {
-    if (!activePost) return;
-    if (typeof document === "undefined") return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [activePost]);
-
-  useEffect(() => {
-    return () => {
-      if (toastTimeoutRef.current) {
-        clearTimeout(toastTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  const renderPostList = (posts: FriendPost[], expanded = false) => (
-    <ul className={`comment-list friend-posts-list${expanded ? " is-expanded" : ""}`}>
-      {posts.map((post) => {
-        const feedbackLabel = feedbackLabelFor(post);
-        return (
-          <li
-            key={post.id}
-            className="comment-item friend-post-item"
-            role="button"
-            tabIndex={0}
-            onClick={(event) => {
-              const target = event.target as HTMLElement;
-              if (target.closest("a")) return;
-              handleOpenPost(post);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                handleOpenPost(post);
-              }
-            }}
-          >
-            {post.imageUrl && (
-              <img
-                src={post.imageUrl}
-                alt={post.title}
-                className="avatar"
-                loading="lazy"
-                decoding="async"
-              />
-            )}
-            <div className="comment-body">
-              <div className="friend-post-title">
-                <strong>{post.title}</strong>
-                {feedbackLabel && <span className="post-feedback-tag">{feedbackLabel}</span>}
-              </div>
-              <p>{post.content}</p>
-              {post.linkUrl && (
-                <div className="friend-link-preview">
-                  <LinkPreviewCard preview={linkPreviews[post.linkUrl]} url={post.linkUrl} compact />
-                </div>
-              )}
-            </div>
-          </li>
-        );
-      })}
-    </ul>
-  );
 
   const renderSidebarContent = () => (
     <div className="friends-sidebar">
@@ -1720,15 +1443,6 @@ export default function Friends() {
                 <div className="comments">
                   <div className="friend-posts-header">
                     <p className="eyebrow">Most recent posts</p>
-                    {canViewPosts && selectedPosts.length > recentPosts.length && (
-                      <button
-                        className="btn ghost friend-posts-toggle"
-                        type="button"
-                        onClick={handleShowAllPosts}
-                      >
-                        {showAllPosts ? "Hide posts" : "Show all posts"}
-                      </button>
-                    )}
                   </div>
                   {!canViewPosts ? (
                     <p className="status">
@@ -1736,145 +1450,32 @@ export default function Friends() {
                         ? "You blocked this user. Unblock to see posts."
                         : "Muted: posts hidden."}
                     </p>
-                  ) : recentPosts.length ? (
-                    renderPostList(recentPosts)
+                  ) : selectedPosts.length ? (
+                    <FriendPostsFeed
+                      key={selectedFriend?.userId ?? "friend-posts"}
+                      posts={selectedPosts}
+                      onPostsChange={(updater) => {
+                        const userId = selectedFriend?.userId;
+                        if (!userId) return;
+                        setPostsByOwner((prev) => ({
+                          ...prev,
+                          [userId]:
+                            typeof updater === "function"
+                              ? updater(prev[userId] ?? [])
+                              : updater,
+                        }));
+                      }}
+                    />
                   ) : (
                     <p className="status">No posts yet.</p>
                   )}
                 </div>
-                {showAllPosts && canViewPosts && (
-                  <div className="comments" ref={allPostsRef}>
-                    <p className="eyebrow">All posts</p>
-                    {selectedPosts.length ? renderPostList(selectedPosts, true) : (
-                      <p className="status">No posts yet.</p>
-                    )}
-                  </div>
-                )}
                 </div>
               )}
           </section>
         </div>
 
       </div>
-
-      {activePost && (
-        <div
-          className="post-modal"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby={activePostTitleId}
-          onClick={closePostModal}
-        >
-          <div className="post-modal__panel" onClick={(event) => event.stopPropagation()}>
-            <div className="post-modal__handle" aria-hidden="true" />
-            <button
-              className="post-modal__close"
-              type="button"
-              onClick={closePostModal}
-              onPointerUp={closePostModal}
-              onTouchEnd={closePostModal}
-              aria-label="Close post"
-            >
-              X
-            </button>
-            <div className="post-modal__scroll">
-              <div className="post-modal__meta">
-                <div className="post-modal__meta-left">
-                  <span className="post-modal__author">{activeAuthorLabel}</span>
-                  {activePost.createdAt && (
-                    <span className="post-modal__time">
-                      {formatPostDate(activePost.createdAt)}
-                    </span>
-                  )}
-                </div>
-                <div className="post-modal__meta-right">
-                  {activeDescriptor &&
-                    (isActiveDescriptorActionable ? (
-                      <button
-                        type="button"
-                        className="post-meta-tag post-meta-tag--action"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          if (!activePost) return;
-                          void handleDescriptorAction(activePost, activeDescriptor);
-                        }}
-                        aria-label={
-                          activeDescriptor === "with a link"
-                            ? "Copy link"
-                            : "Download picture"
-                        }
-                      >
-                        {activeDescriptor}
-                      </button>
-                    ) : (
-                      <span className="post-meta-tag">{activeDescriptor}</span>
-                    ))}
-                  {activeFeedbackLabel && (
-                    <span className="post-feedback-tag">{activeFeedbackLabel}</span>
-                  )}
-                </div>
-              </div>
-
-              {activePost.imageUrl ? (
-                <div className="post-media post-modal__media">
-                  {isVideoUrl(activePost.imageUrl) ? (
-                    <video
-                      controls
-                      playsInline
-                      preload="metadata"
-                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                    >
-                      <source src={activePost.imageUrl} />
-                    </video>
-                  ) : (
-                    <img
-                      src={activePost.imageUrl}
-                      alt={activePost.title}
-                      loading="lazy"
-                      decoding="async"
-                    />
-                  )}
-                </div>
-              ) : showActivePreviewMedia ? (
-                <div className="post-media post-modal__media link-preview-media">
-                  <img
-                    src={activePreviewImage}
-                    alt={activePreview?.title || activePost.title}
-                    loading="lazy"
-                    decoding="async"
-                  />
-                </div>
-              ) : showActivePlaceholder ? (
-                <div className="post-media post-modal__media placeholder">
-                  <div className="dots" />
-                  <span>No image</span>
-                </div>
-              ) : null}
-
-              <div className="post-modal__body">
-                <h2 id={activePostTitleId}>{activePost.title}</h2>
-                <p>{activePost.content}</p>
-                {activePreview && !activePost.imageUrl && activePost.linkUrl && (
-                  <LinkPreviewCard preview={activePreview} url={activePost.linkUrl} />
-                )}
-              </div>
-            </div>
-            <div className="post-modal__mobile-actions">
-              <button
-                className="post-modal__close-btn"
-                type="button"
-                onClick={closePostModal}
-                onPointerUp={closePostModal}
-                onTouchEnd={closePostModal}
-              >
-                Close
-              </button>
-              <span className="post-modal__hint">Tap outside to close</span>
-            </div>
-          </div>
-        </div>
-      )}
-      {copyToast && <div className="toast success-toast">{copyToast}</div>}
 
       {mediaLightboxOpen && activeMediaItem && (
         <div

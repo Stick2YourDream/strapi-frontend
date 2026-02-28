@@ -21,6 +21,7 @@ type GroupDetail = {
   documentId?: string;
   name: string;
   description?: string;
+  location?: string;
   visibility: "public" | "private";
   backgroundImage?: string;
   gradientStart?: string;
@@ -42,9 +43,28 @@ type GroupInvite = {
   inviteeName: string;
 };
 
+type GroupJoinRequest = {
+  id: number | string;
+  requesterId?: number;
+  requesterName: string;
+  reason: string;
+  createdAt?: string;
+};
+
 type ReactionCounts = {
   thumbsUp: number;
   heart: number;
+  care: number;
+  haha: number;
+  wow: number;
+  sad: number;
+  angry: number;
+};
+
+type ReactionOption = {
+  key: keyof ReactionCounts;
+  emoji: string;
+  label: string;
 };
 
 type GroupPost = {
@@ -84,14 +104,38 @@ type LinkPreview = {
 const MAX_COMMENT_MEDIA_FILES = 4;
 const IMAGE_EXT_REGEX = /\.(?:png|jpe?g|webp|gif|bmp|avif)(?:\?|#|$)/i;
 const RELATIVE_UPLOAD_REGEX = /\/uploads\/[^\s)]+/g;
+const REACTION_OPTIONS: ReactionOption[] = [
+  { key: "thumbsUp", emoji: "👍", label: "Like" },
+  { key: "heart", emoji: "❤️", label: "Love" },
+  { key: "care", emoji: "🥰", label: "Care" },
+  { key: "haha", emoji: "😆", label: "Haha" },
+  { key: "wow", emoji: "😮", label: "Wow" },
+  { key: "sad", emoji: "😢", label: "Sad" },
+  { key: "angry", emoji: "😡", label: "Angry" },
+];
+const REACTION_VALUES = new Set(REACTION_OPTIONS.map((option) => option.emoji));
 
 const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
 const getEntity = (entry: any) => entry?.data ?? entry ?? null;
+const getErrorMessage = (error: unknown, fallback: string) =>
+  String(
+    (error as any)?.response?.data?.error?.message ||
+      (error as any)?.response?.data?.message ||
+      fallback
+  );
 const getEntityId = (entry: any) => {
   const data = getEntity(entry);
   const rawId = data?.id ?? normalize(data)?.id;
   const num = Number(rawId);
   return Number.isFinite(num) ? num : undefined;
+};
+const isContactLikeLabel = (value: string) => {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return false;
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return true;
+  if (/^phone[-_\s:]*\d+$/i.test(trimmed)) return true;
+  if (/^\+?\d[\d\s().-]{6,}$/.test(trimmed)) return true;
+  return false;
 };
 const getUserDisplayName = (entry: any, fallback = "Member") => {
   const attrs = normalize(entry);
@@ -99,17 +143,35 @@ const getUserDisplayName = (entry: any, fallback = "Member") => {
   const lastName = String(attrs?.lastName || attrs?.lastname || "").trim();
   const fullName = `${firstName} ${lastName}`.trim();
   const handle = String(attrs?.handle || attrs?.username || "").trim();
-  const email = String(attrs?.email || "").trim();
-  return fullName || handle || email || fallback;
+  if (fullName) return fullName;
+  if (handle && !isContactLikeLabel(handle)) return handle;
+  return fallback;
 };
 
 const normalizeReactionCounts = (value: unknown, fallbackLikes?: number): ReactionCounts => {
   const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
   const thumbsRaw = record.thumbsUp ?? record.thumbs_up;
   const heartRaw = record.heart;
+  const careRaw = record.care;
+  const hahaRaw = record.haha;
+  const wowRaw = record.wow;
+  const sadRaw = record.sad;
+  const angryRaw = record.angry;
   const thumbsUp = Number(thumbsRaw);
   const heart = Number(heartRaw);
-  const hasCounts = Number.isFinite(thumbsUp) || Number.isFinite(heart);
+  const care = Number(careRaw);
+  const haha = Number(hahaRaw);
+  const wow = Number(wowRaw);
+  const sad = Number(sadRaw);
+  const angry = Number(angryRaw);
+  const hasCounts =
+    Number.isFinite(thumbsUp) ||
+    Number.isFinite(heart) ||
+    Number.isFinite(care) ||
+    Number.isFinite(haha) ||
+    Number.isFinite(wow) ||
+    Number.isFinite(sad) ||
+    Number.isFinite(angry);
   return {
     thumbsUp: Number.isFinite(thumbsUp)
       ? thumbsUp
@@ -117,14 +179,29 @@ const normalizeReactionCounts = (value: unknown, fallbackLikes?: number): Reacti
       ? 0
       : Number(fallbackLikes ?? 0),
     heart: Number.isFinite(heart) ? heart : 0,
+    care: Number.isFinite(care) ? care : 0,
+    haha: Number.isFinite(haha) ? haha : 0,
+    wow: Number.isFinite(wow) ? wow : 0,
+    sad: Number.isFinite(sad) ? sad : 0,
+    angry: Number.isFinite(angry) ? angry : 0,
   };
 };
 
 const normalizeReactionValue = (value: unknown): string | null => {
   const trimmed = String(value || "").trim();
-  if (trimmed === "👍" || trimmed === "❤️") return trimmed;
-  return null;
+  return REACTION_VALUES.has(trimmed) ? trimmed : null;
 };
+
+const getTopReactionOptions = (counts: ReactionCounts, limit = 3): ReactionOption[] =>
+  REACTION_OPTIONS.map((option, index) => ({
+    option,
+    value: Number(counts[option.key] || 0),
+    index,
+  }))
+    .filter((entry) => entry.value > 0)
+    .sort((a, b) => (b.value === a.value ? a.index - b.index : b.value - a.value))
+    .slice(0, limit)
+    .map((entry) => entry.option);
 
 const hexToRgba = (value: string, alpha: number) => {
   const hex = (value || "").replace("#", "");
@@ -199,6 +276,11 @@ const stripImageUrls = (text: string, urls: string[]) => {
   return cleaned.replace(/\s{2,}/g, " ").trim();
 };
 
+const formatGroupLocation = (value?: string) => {
+  const trimmed = String(value || "").trim();
+  return trimmed || "Location flexible";
+};
+
 export default function GroupDetail() {
   const { groupId } = useParams();
   const navigate = useNavigate();
@@ -227,6 +309,8 @@ export default function GroupDetail() {
   const [editingComments, setEditingComments] = useState<Record<string, boolean>>({});
   const [commentMenuOpen, setCommentMenuOpen] = useState<Record<string, boolean>>({});
   const [openCommentsFor, setOpenCommentsFor] = useState<Record<string, boolean>>({});
+  const [reactionPickerFor, setReactionPickerFor] = useState<string | null>(null);
+  const [reactionBreakdownFor, setReactionBreakdownFor] = useState<string | null>(null);
   const [shareMenuFor, setShareMenuFor] = useState<string | null>(null);
   const [postMenuFor, setPostMenuFor] = useState<string | null>(null);
   const [editingPostId, setEditingPostId] = useState<string | null>(null);
@@ -242,6 +326,17 @@ export default function GroupDetail() {
   const [myRole, setMyRole] = useState<"admin" | "moderator" | "member" | null>(null);
   const [myMembershipId, setMyMembershipId] = useState<number | string | null>(null);
   const [pendingInviteId, setPendingInviteId] = useState<number | string | null>(null);
+  const [pendingJoinRequestId, setPendingJoinRequestId] = useState<number | string | null>(
+    null
+  );
+  const [joinRequests, setJoinRequests] = useState<GroupJoinRequest[]>([]);
+  const [joinRequestModalOpen, setJoinRequestModalOpen] = useState(false);
+  const [joinRequestReason, setJoinRequestReason] = useState("");
+  const [joinRequestStatus, setJoinRequestStatus] = useState<string | null>(null);
+  const [submittingJoinRequest, setSubmittingJoinRequest] = useState(false);
+  const [joinRequestActionBusy, setJoinRequestActionBusy] = useState<
+    Record<string, boolean>
+  >({});
 
   const [postTitle, setPostTitle] = useState("");
   const [postBody, setPostBody] = useState("");
@@ -255,6 +350,7 @@ export default function GroupDetail() {
 
   const [settingsName, setSettingsName] = useState("");
   const [settingsDescription, setSettingsDescription] = useState("");
+  const [settingsLocation, setSettingsLocation] = useState("");
   const [settingsVisibility, setSettingsVisibility] = useState<"public" | "private">("private");
   const [settingsUseGradient, setSettingsUseGradient] = useState(true);
   const [settingsGradientStart, setSettingsGradientStart] = useState("#2563eb");
@@ -276,6 +372,7 @@ export default function GroupDetail() {
       documentId: entry?.documentId ?? attrs.documentId,
       name: attrs.name || "Group",
       description: attrs.description || "",
+      location: String(attrs.location || "").trim(),
       visibility: attrs.visibility === "public" ? "public" : "private",
       backgroundImage: pickMediaUrl(attrs.backgroundImage, { kind: "cover" }),
       gradientStart: attrs.gradientStart || "",
@@ -351,41 +448,60 @@ export default function GroupDetail() {
       const detail = mapGroup(groupEntry);
       const groupNumericId = groupEntry.id ?? detail.id;
 
-      const [myMemberRes, membersRes, postsRes, inviteRes, adminInviteRes] = await Promise.all([
-        user?.id
-          ? api.get(
-              `/group-members?filters[group][id][$eq]=${groupNumericId}` +
-                `&filters[user][id][$eq]=${user.id}&pagination[pageSize]=1`
-            )
-          : Promise.resolve({ data: { data: [] } }),
-        api
-          .get(
-            `/group-members?filters[group][id][$eq]=${groupNumericId}` +
-              `&populate=user&pagination[pageSize]=200`
-          )
-          .catch(() => ({ data: { data: [] } })),
-        api
-          .get(
-            `/group-posts?filters[group][id][$eq]=${groupNumericId}` +
-              `&populate=media&populate=owner&sort=createdAt:desc&pagination[pageSize]=50`
-          )
-          .catch(() => ({ data: { data: [] } })),
-        user?.id
-          ? api
-              .get(
-                `/group-invites?filters[group][id][$eq]=${groupNumericId}` +
-                  `&filters[invitee][id][$eq]=${user.id}` +
-                  `&filters[status][$eq]=pending&pagination[pageSize]=1`
+      const [myMemberRes, membersRes, postsRes, inviteRes, adminInviteRes, myJoinReqRes, adminJoinReqRes] =
+        await Promise.all([
+          user?.id
+            ? api.get(
+                `/group-members?filters[group][id][$eq]=${groupNumericId}` +
+                  `&filters[user][id][$eq]=${user.id}&pagination[pageSize]=1`
               )
-              .catch(() => ({ data: { data: [] } }))
-          : Promise.resolve({ data: { data: [] } }),
-        api
-          .get(
-            `/group-invites?filters[group][id][$eq]=${groupNumericId}` +
-              `&filters[status][$eq]=pending&populate=invitee&pagination[pageSize]=200`
-          )
-          .catch(() => ({ data: { data: [] } })),
-      ]);
+            : Promise.resolve({ data: { data: [] } }),
+          api
+            .get(
+              `/group-members?filters[group][id][$eq]=${groupNumericId}` +
+                `&populate=user&pagination[pageSize]=200`
+            )
+            .catch(() => ({ data: { data: [] } })),
+          api
+            .get(
+              `/group-posts?filters[group][id][$eq]=${groupNumericId}` +
+                `&populate=media&populate=owner&sort=createdAt:desc&pagination[pageSize]=50`
+            )
+            .catch(() => ({ data: { data: [] } })),
+          user?.id
+            ? api
+                .get(
+                  `/group-invites?filters[group][id][$eq]=${groupNumericId}` +
+                    `&filters[invitee][id][$eq]=${user.id}` +
+                    `&filters[status][$eq]=pending&pagination[pageSize]=1`
+                )
+                .catch(() => ({ data: { data: [] } }))
+            : Promise.resolve({ data: { data: [] } }),
+          api
+            .get(
+              `/group-invites?filters[group][id][$eq]=${groupNumericId}` +
+                `&filters[status][$eq]=pending&populate=invitee&pagination[pageSize]=200`
+            )
+            .catch(() => ({ data: { data: [] } })),
+          user?.id
+            ? api
+                .get(
+                  `/group-join-requests?filters[group][id][$eq]=${groupNumericId}` +
+                    `&filters[requester][id][$eq]=${user.id}` +
+                    `&filters[status][$eq]=pending&pagination[pageSize]=1`
+                )
+                .catch(() => ({ data: { data: [] } }))
+            : Promise.resolve({ data: { data: [] } }),
+          user?.id
+            ? api
+                .get(
+                  `/group-join-requests?filters[group][id][$eq]=${groupNumericId}` +
+                    `&filters[status][$eq]=pending&populate=requester&sort=createdAt:asc` +
+                    `&pagination[pageSize]=200`
+                )
+                .catch(() => ({ data: { data: [] } }))
+            : Promise.resolve({ data: { data: [] } }),
+        ]);
 
       const memberEntry = myMemberRes.data?.data?.[0];
       const memberAttrs = normalize(memberEntry);
@@ -401,6 +517,7 @@ export default function GroupDetail() {
       setMyRole(role);
       setMyMembershipId(memberEntry?.id ?? null);
       setPendingInviteId(inviteRes.data?.data?.[0]?.id ?? null);
+      setPendingJoinRequestId(myJoinReqRes.data?.data?.[0]?.id ?? null);
 
       const membersList: GroupMember[] = (membersRes.data?.data ?? [])
         .map((entry: any) => {
@@ -474,8 +591,24 @@ export default function GroupDetail() {
         .filter((entry: GroupInvite) => entry.inviteeName);
       setInvites(role === "admin" ? inviteList : []);
 
+      const joinRequestList: GroupJoinRequest[] = (adminJoinReqRes.data?.data ?? [])
+        .map((entry: any) => {
+          const attrs = normalize(entry);
+          const requesterEntry = getEntity(attrs.requester);
+          return {
+            id: entry.id ?? attrs.documentId,
+            requesterId: requesterEntry?.id ?? normalize(requesterEntry)?.id,
+            requesterName: getUserDisplayName(requesterEntry, "Requester"),
+            reason: String(attrs.reason || "").trim(),
+            createdAt: attrs.createdAt,
+          };
+        })
+        .filter((entry: GroupJoinRequest) => entry.reason || entry.requesterName);
+      setJoinRequests(role === "admin" || role === "moderator" ? joinRequestList : []);
+
       setSettingsName(detail.name);
       setSettingsDescription(detail.description || "");
+      setSettingsLocation(detail.location || "");
       setSettingsVisibility(detail.visibility);
       const hasGradient = Boolean(detail.gradientStart || detail.gradientEnd);
       setSettingsUseGradient(hasGradient);
@@ -756,6 +889,10 @@ export default function GroupDetail() {
 
   const handleReaction = useCallback(
     async (post: GroupPost, postKey: string, emoji: string) => {
+      if (!REACTION_VALUES.has(emoji)) {
+        pushShareNotice(postKey, "Unsupported reaction.");
+        return;
+      }
       try {
         const res = await api.post(`/group-posts/${post.id}/react`, { emoji });
         const payload = res.data?.data;
@@ -769,6 +906,7 @@ export default function GroupDetail() {
         const counts = normalizeReactionCounts(payload?.reactionCounts, nextLikes);
         const reactionValue = normalizeReactionValue(payload?.myReaction ?? emoji);
         updatePostReactions(postKey, counts, reactionValue);
+        setReactionPickerFor(null);
         if (payload?.alreadyReacted) {
           pushShareNotice(
             postKey,
@@ -799,6 +937,7 @@ export default function GroupDetail() {
 
   const toggleComments = useCallback((postKey: string) => {
     setOpenCommentsFor((prev) => ({ ...prev, [postKey]: !prev[postKey] }));
+    setReactionBreakdownFor(null);
     setShareMenuFor(null);
     setPostMenuFor(null);
   }, []);
@@ -880,11 +1019,13 @@ export default function GroupDetail() {
 
   const toggleShareMenu = useCallback((postKey: string) => {
     setShareMenuFor((prev) => (prev === postKey ? null : postKey));
+    setReactionBreakdownFor(null);
     setPostMenuFor(null);
   }, []);
 
   const togglePostMenu = useCallback((postKey: string) => {
     setPostMenuFor((prev) => (prev === postKey ? null : postKey));
+    setReactionBreakdownFor(null);
     setShareMenuFor(null);
   }, []);
 
@@ -898,8 +1039,13 @@ export default function GroupDetail() {
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null;
       if (!target) return;
-      if (target.closest(".post-action-group") || target.closest(".post-menu-wrapper"))
+      if (
+        target.closest(".post-action-group") ||
+        target.closest(".post-menu-wrapper") ||
+        target.closest(".post-action-counts")
+      )
         return;
+      setReactionBreakdownFor(null);
       setShareMenuFor(null);
       setPostMenuFor(null);
     };
@@ -907,13 +1053,43 @@ export default function GroupDetail() {
     return () => document.removeEventListener("pointerdown", handlePointerDown);
   }, []);
 
+  const handleOpenJoinRequestModal = () => {
+    setJoinRequestReason("");
+    setJoinRequestStatus(null);
+    setJoinRequestModalOpen(true);
+  };
+
+  const handleCloseJoinRequestModal = () => {
+    if (submittingJoinRequest) return;
+    setJoinRequestModalOpen(false);
+    setJoinRequestReason("");
+    setJoinRequestStatus(null);
+  };
+
   const handleJoinGroup = async () => {
     if (!group) return;
+    const reason = joinRequestReason.trim();
+    if (!reason) {
+      setJoinRequestStatus("Tell the group why you want to join.");
+      return;
+    }
+    setSubmittingJoinRequest(true);
+    setJoinRequestStatus(null);
+    setError(null);
     try {
-      await api.post("/group-members", { data: { group: group.id } });
+      await api.post("/group-join-requests", {
+        data: {
+          group: group.id,
+          reason,
+        },
+      });
+      setJoinRequestModalOpen(false);
+      setJoinRequestReason("");
       await loadGroup();
-    } catch {
-      setError("Unable to join this group.");
+    } catch (err) {
+      setJoinRequestStatus(getErrorMessage(err, "Unable to submit join request."));
+    } finally {
+      setSubmittingJoinRequest(false);
     }
   };
 
@@ -955,6 +1131,23 @@ export default function GroupDetail() {
       setInviteStatus("Unable to send invite.");
     } finally {
       setInviting(false);
+    }
+  };
+
+  const handleReviewJoinRequest = async (
+    requestId: number | string,
+    status: "approved" | "denied"
+  ) => {
+    const busyKey = String(requestId);
+    setJoinRequestActionBusy((prev) => ({ ...prev, [busyKey]: true }));
+    setError(null);
+    try {
+      await api.put(`/group-join-requests/${requestId}`, { data: { status } });
+      await loadGroup();
+    } catch (err) {
+      setError(getErrorMessage(err, `Unable to ${status} join request.`));
+    } finally {
+      setJoinRequestActionBusy((prev) => ({ ...prev, [busyKey]: false }));
     }
   };
 
@@ -1129,6 +1322,7 @@ export default function GroupDetail() {
       const payload: any = {
         name: settingsName.trim(),
         description: settingsDescription.trim(),
+        location: settingsLocation.trim() || null,
         visibility: settingsVisibility,
       };
       if (settingsUseGradient) {
@@ -1176,6 +1370,7 @@ export default function GroupDetail() {
       ...group,
       name: settingsName || group.name,
       description: settingsDescription || group.description,
+      location: settingsLocation || group.location,
       visibility: settingsVisibility,
       gradientStart: settingsUseGradient ? settingsGradientStart : "",
       gradientEnd: settingsUseGradient ? settingsGradientEnd : "",
@@ -1251,14 +1446,25 @@ export default function GroupDetail() {
             </div>
             <h1>{group.name}</h1>
             <p>{group.description || "A focused space to build momentum."}</p>
+            <span className="group-detail-location">{formatGroupLocation(group.location)}</span>
             <div className="group-detail-hero__actions">
               <button className="btn ghost" type="button" onClick={() => navigate("/groups")}>
                 Back
               </button>
-              {!myRole && group.visibility === "public" && (
-                <button className="btn primary" type="button" onClick={handleJoinGroup}>
+              {!myRole && group.visibility === "public" && !pendingJoinRequestId && (
+                <button className="btn primary" type="button" onClick={handleOpenJoinRequestModal}>
                   Join group
                 </button>
+              )}
+              {!myRole && group.visibility === "public" && pendingJoinRequestId && (
+                <>
+                  <button className="btn primary" type="button" disabled>
+                    Pending approval
+                  </button>
+                  <span className="group-join-request-pending">
+                    Admins and moderators have been notified.
+                  </span>
+                </>
               )}
               {!myRole && group.visibility === "private" && pendingInviteId && (
                 <div className="group-invite-actions">
@@ -1381,6 +1587,60 @@ export default function GroupDetail() {
                 )}
               </section>
 
+              {canManageGroup && (
+                <section className="panel group-join-request-panel">
+                  <div className="panel-header">
+                    <p className="eyebrow">Requests</p>
+                    <h3>Join requests</h3>
+                    <p className="panel-sub">
+                      Review pending requests from people who want to join this group.
+                    </p>
+                  </div>
+                  {joinRequests.length === 0 ? (
+                    <p className="status">No pending join requests.</p>
+                  ) : (
+                    <div className="group-join-request-list">
+                      {joinRequests.map((request) => {
+                        const busy = Boolean(joinRequestActionBusy[String(request.id)]);
+                        return (
+                          <article key={request.id} className="group-join-request-card">
+                            <div className="group-join-request-meta">
+                              <div>
+                                <strong>{request.requesterName}</strong>
+                                <span>
+                                  {request.createdAt
+                                    ? formatPostUpdateLabel(request.createdAt)
+                                    : "Pending review"}
+                                </span>
+                              </div>
+                            </div>
+                            <p className="group-join-request-reason">{request.reason}</p>
+                            <div className="group-join-request-actions">
+                              <button
+                                className="btn ghost"
+                                type="button"
+                                disabled={busy}
+                                onClick={() => handleReviewJoinRequest(request.id, "denied")}
+                              >
+                                {busy ? "Working..." : "Deny"}
+                              </button>
+                              <button
+                                className="btn primary"
+                                type="button"
+                                disabled={busy}
+                                onClick={() => handleReviewJoinRequest(request.id, "approved")}
+                              >
+                                {busy ? "Working..." : "Approve"}
+                              </button>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  )}
+                </section>
+              )}
+
               {isAdmin && (
                 <section className="panel group-invite-admin">
                   <div className="panel-header">
@@ -1462,9 +1722,14 @@ export default function GroupDetail() {
                       post.reactionCounts,
                       likesCount
                     );
-                    const thumbsUpCount = reactionCounts.thumbsUp;
-                    const heartCount = reactionCounts.heart;
-                    const allReactionsCount = thumbsUpCount + heartCount;
+                    const reactionTotalCount = REACTION_OPTIONS.reduce(
+                      (sum, option) => sum + Number(reactionCounts[option.key] || 0),
+                      0
+                    );
+                    const topReactions = getTopReactionOptions(reactionCounts);
+                    const reactionBadgeOptions = topReactions.length
+                      ? topReactions
+                      : REACTION_OPTIONS.slice(0, 1);
                     const myReaction = normalizeReactionValue(post.myReaction);
                     const sharesCount = Number(post.shares ?? 0);
                     const commentsCount = comments.length;
@@ -1472,6 +1737,8 @@ export default function GroupDetail() {
                     const canDeletePost = isAdmin || post.ownerId === user?.id;
                     const isEditingPost = editingPostId === postKey;
                     const isSavingPost = Boolean(postEditing[postKey]);
+                    const isReactionPickerOpen = reactionPickerFor === postKey;
+                    const isReactionBreakdownOpen = reactionBreakdownFor === postKey;
                     return (
                       <div key={post.id} id={`post-${postKey}`} className="group-post-card">
                         <div className="group-post-header">
@@ -1610,32 +1877,46 @@ export default function GroupDetail() {
                           </>
                         )}
                         <div className="post-actions">
-                          <div className="post-action-counts">
+                          <div
+                            className={`post-action-counts post-action-counts--with-breakdown${
+                              isReactionBreakdownOpen ? " is-open" : ""
+                            }`}
+                            role="button"
+                            tabIndex={0}
+                            aria-label="Show reaction breakdown"
+                            aria-expanded={isReactionBreakdownOpen}
+                            onClick={() =>
+                              setReactionBreakdownFor((prev) =>
+                                prev === postKey ? null : postKey
+                              )
+                            }
+                            onKeyDown={(event) => {
+                              if (event.key !== "Enter" && event.key !== " ") return;
+                              event.preventDefault();
+                              setReactionBreakdownFor((prev) =>
+                                prev === postKey ? null : postKey
+                              );
+                            }}
+                          >
                             <span
-                              className={`post-action-count${
+                              className={`post-action-count post-action-count--reactions${
                                 myReaction ? " is-selected" : ""
                               }`}
-                              title="All reactions"
-                              aria-label={`All reactions: ${allReactionsCount}`}
                             >
-                              <span className="post-action-count-icon" aria-hidden="true">
-                                👍
+                              <span className="post-action-reaction-stack" aria-hidden="true">
+                                {reactionBadgeOptions.map((option, index) => (
+                                  <span
+                                    key={`${postKey}-${option.key}-${index}`}
+                                    className="post-action-reaction-chip"
+                                    title={option.label}
+                                  >
+                                    {option.emoji}
+                                  </span>
+                                ))}
                               </span>
-                              <span>{allReactionsCount}</span>
-                              <span className="post-action-count-label">All reactions</span>
-                            </span>
-                            <span
-                              className={`post-action-count${
-                                myReaction === "❤️" ? " is-selected" : ""
-                              }`}
-                              title="Love reactions"
-                              aria-label={`Love reactions: ${heartCount}`}
-                            >
-                              <span className="post-action-count-icon" aria-hidden="true">
-                                ❤️
+                              <span className="post-action-count-total">
+                                {reactionTotalCount}
                               </span>
-                              <span>{heartCount}</span>
-                              <span className="post-action-count-label">Love</span>
                             </span>
                             <span className="post-action-count">
                               <span className="post-action-count-icon" aria-hidden="true">
@@ -1649,37 +1930,73 @@ export default function GroupDetail() {
                               </span>
                               {sharesCount}
                             </span>
+                            <div
+                              className={`post-action-popover post-action-popover--reaction-breakdown${
+                                isReactionBreakdownOpen ? " is-open" : ""
+                              }`}
+                              role="tooltip"
+                            >
+                              <div className="post-reaction-breakdown">
+                                {REACTION_OPTIONS.map((option) => (
+                                  <div className="post-reaction-breakdown-row" key={option.key}>
+                                    <span className="post-reaction-breakdown-meta">
+                                      <span aria-hidden="true">{option.emoji}</span>
+                                      <span>{option.label}</span>
+                                    </span>
+                                    <strong>
+                                      {Number(reactionCounts[option.key] || 0)}
+                                    </strong>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
                           </div>
                           <div className="post-action-bar">
-                          <div className="post-action-group">
+                          <div className="post-action-group post-action-group--reaction">
                             <button
-                              className={`post-action-btn${
-                                myReaction === "👍" ? " is-reacted" : ""
-                              }`}
+                              className={`post-action-btn${myReaction ? " is-reacted" : ""}`}
                               type="button"
-                              aria-pressed={myReaction === "👍"}
-                              onClick={() => void handleReaction(post, postKey, "👍")}
+                              aria-pressed={Boolean(myReaction)}
+                              aria-expanded={isReactionPickerOpen}
+                              aria-haspopup="dialog"
+                              onClick={() =>
+                                setReactionPickerFor((prev) =>
+                                  prev === postKey ? null : postKey
+                                )
+                              }
                             >
                               <span className="post-action-icon" aria-hidden="true">
-                                👍
+                                {myReaction || "👍"}
                               </span>
                               <span>Like</span>
                             </button>
-                          </div>
-                          <div className="post-action-group">
-                            <button
-                              className={`post-action-btn${
-                                myReaction === "❤️" ? " is-reacted" : ""
-                              }`}
-                              type="button"
-                              aria-pressed={myReaction === "❤️"}
-                              onClick={() => void handleReaction(post, postKey, "❤️")}
+                            <PopupModal
+                              open={isReactionPickerOpen}
+                              title="Choose reaction"
+                              onClose={() => setReactionPickerFor(null)}
+                              className="post-action-dialog"
+                              bodyClassName="post-action-dialog-body"
                             >
-                              <span className="post-action-icon" aria-hidden="true">
-                                ❤️
-                              </span>
-                              <span>Heart</span>
-                            </button>
+                              <div className="post-reaction-picker post-reaction-picker--modal">
+                                {REACTION_OPTIONS.map((option) => (
+                                  <button
+                                    key={option.key}
+                                    className={`post-reaction-emoji${
+                                      myReaction === option.emoji ? " is-selected" : ""
+                                    }`}
+                                    type="button"
+                                    aria-label={option.label}
+                                    title={option.label}
+                                    onClick={() => {
+                                      setReactionPickerFor(null);
+                                      void handleReaction(post, postKey, option.emoji);
+                                    }}
+                                  >
+                                    {option.emoji}
+                                  </button>
+                                ))}
+                              </div>
+                            </PopupModal>
                           </div>
                           <div className="post-action-group">
                             <button
@@ -2253,6 +2570,13 @@ export default function GroupDetail() {
                     onChange={(e) => setSettingsDescription(e.target.value)}
                     placeholder="Description"
                   />
+                  <input
+                    className="auth-input"
+                    type="text"
+                    value={settingsLocation}
+                    onChange={(e) => setSettingsLocation(e.target.value)}
+                    placeholder="Location, region, or online"
+                  />
                   <div className="group-toggle-row">
                     <label className="group-toggle">
                       <input
@@ -2372,12 +2696,59 @@ export default function GroupDetail() {
                     <span className="pill">{settingsVisibility}</span>
                     <h3>{settingsPreview.name}</h3>
                     <p>{settingsPreview.description || "Describe the vibe."}</p>
+                    <span className="group-settings-preview__location">
+                      {formatGroupLocation(settingsPreview.location)}
+                    </span>
                   </div>
                 </div>
               </section>
             </div>
           </section>
         )}
+
+        <PopupModal
+          open={joinRequestModalOpen}
+          title={`Join ${group.name}`}
+          onClose={handleCloseJoinRequestModal}
+          className="group-join-modal"
+          bodyClassName="group-join-modal__body"
+        >
+          <div className="group-join-modal__lead">
+            Your request will stay pending until a group admin or moderator reviews it.
+          </div>
+          <div className="group-join-modal__card">
+            <label className="group-join-modal__label" htmlFor="group-request-reason">
+              Why do you want to join this group?
+            </label>
+            <textarea
+              id="group-request-reason"
+              className="group-join-modal__textarea"
+              rows={6}
+              maxLength={600}
+              placeholder="Share what brings you here and what you want to contribute."
+              value={joinRequestReason}
+              onChange={(e) => setJoinRequestReason(e.target.value)}
+            />
+            <div className="group-join-modal__footer">
+              <span>{joinRequestReason.trim().length}/600</span>
+              <span>Admins and moderators will be emailed and notified.</span>
+            </div>
+          </div>
+          {joinRequestStatus && <p className="status status-error">{joinRequestStatus}</p>}
+          <div className="group-join-modal__actions">
+            <button className="btn ghost" type="button" onClick={handleCloseJoinRequestModal}>
+              Cancel
+            </button>
+            <button
+              className="btn primary"
+              type="button"
+              onClick={handleJoinGroup}
+              disabled={submittingJoinRequest}
+            >
+              {submittingJoinRequest ? "Sending..." : "Send request"}
+            </button>
+          </div>
+        </PopupModal>
       </div>
     </div>
   );
