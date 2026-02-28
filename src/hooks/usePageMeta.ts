@@ -111,7 +111,7 @@ export const usePageMeta = ({
       ? NOINDEX_ROBOTS_DIRECTIVES
       : robots || DEFAULT_ROBOTS_DIRECTIVES;
     const keywordsContent = keywords?.trim();
-    const metaImage = buildAbsoluteUrl(baseUrl, (image || "/logo.png").trim());
+    const metaImage = buildAbsoluteUrl(baseUrl, (image || "/logo2.png").trim());
     const metaImageAlt = (imageAlt || safeTitle).trim();
     const lang = (document.documentElement.lang || "en").toLowerCase();
     const ogLocale = lang.includes("-")
@@ -170,7 +170,7 @@ export const usePageMeta = ({
           "@id": organizationId,
           name: siteName,
           url: `${baseUrl}/`,
-          logo: `${baseUrl}/logo.png`,
+          logo: `${baseUrl}/logo2.png`,
         },
         {
           "@type": "WebSite",

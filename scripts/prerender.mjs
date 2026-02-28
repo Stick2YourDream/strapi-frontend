@@ -199,7 +199,7 @@ const buildJsonLd = (meta) => {
           "@id": `${BASE_URL}/#organization`,
           name: "Your Social Place",
           url: `${BASE_URL}/`,
-          logo: `${BASE_URL}/logo.png`,
+          logo: `${BASE_URL}/logo2.png`,
         },
         {
           "@type": "WebSite",

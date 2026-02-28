@@ -24,7 +24,7 @@
       }
     },
     {
-      "route": "/logo.png",
+      "route": "/logo2.png",
       "headers": {
         "Cache-Control": "public, max-age=31536000, immutable"
       }

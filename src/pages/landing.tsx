@@ -94,7 +94,7 @@ const LANDING_CAROUSEL_CAPTIONS = [
 ] as const;
 const LANDING_CAROUSEL_ASSET_VERSION = "2026-02-23d";
 const LANDING_BRAND_LOGO_SRC = "/logo2.png?v=2026-02-23d";
-const LANDING_BRAND_LOGO_FALLBACK = "/logo.png";
+const LANDING_BRAND_LOGO_FALLBACK = "/logo2.png";
 const LANDING_CAROUSEL_HIGH_QUALITY_SOURCES = Array.from(
   { length: 20 },
   (_, index) =>

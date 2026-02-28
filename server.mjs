@@ -167,7 +167,7 @@ app.get("/share/post", async (req, res) => {
   const redirectUrl = `${safeOrigin}/dashboard?post=${encodeURIComponent(
     id
   )}&source=${encodeURIComponent(source)}`;
-  const defaultImage = `${safeOrigin}/logo.png`;
+  const defaultImage = `${safeOrigin}/logo2.png`;
 
   let title = "Your Social Place shared post";
   let description = "Open this post on Your Social Place.";
