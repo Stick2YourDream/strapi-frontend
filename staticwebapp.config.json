@@ -8,7 +8,7 @@
   },
   "navigationFallback": {
     "rewrite": "/index.html",
-    "exclude": ["/assets/*", "/api/*", "/downloads/*"]
+    "exclude": ["/assets/*", "/api/*", "/downloads/*", "/news-proxy/*"]
   },
   "routes": [
     {

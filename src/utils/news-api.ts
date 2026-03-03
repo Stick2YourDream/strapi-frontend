@@ -73,6 +73,9 @@ export type NewsReadable = {
 };
 
 const NEWS_PROXY_PATH = "/news";
+const NEWS_PROXY_BASE = String(import.meta.env.VITE_NEWS_PROXY_URL || "")
+  .trim()
+  .replace(/\/+$/, "");
 const NEWS_DIRECT_BASE = (import.meta.env.VITE_NEWS_API_URL ||
   "https://newsapp_backend.rousehouse.net"
 ).replace(/\/$/, "");
@@ -152,7 +155,9 @@ const buildHeaders = () => {
 const shouldUseDirectOnly = NEWS_ACCESS_MODE === "direct";
 const canFallbackToDirect =
   NEWS_ACCESS_MODE === "fallback" ||
-  (NEWS_ACCESS_MODE === "proxy" && Boolean(import.meta.env.VITE_NEWS_API_URL));
+  (NEWS_ACCESS_MODE === "proxy" &&
+    (Boolean(import.meta.env.VITE_NEWS_API_URL) ||
+      Boolean(import.meta.env.VITE_NEWS_API_KEY)));
 
 const requestNews = async (
   path: string,
@@ -163,6 +168,11 @@ const requestNews = async (
     const res =
       mode === "direct"
         ? await axios.get(`${NEWS_DIRECT_BASE}${path}`, {
+            params,
+            headers: buildHeaders(),
+          })
+        : NEWS_PROXY_BASE
+        ? await axios.get(`${NEWS_PROXY_BASE}${path}`, {
             params,
             headers: buildHeaders(),
           })

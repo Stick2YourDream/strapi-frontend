@@ -26,6 +26,7 @@ const RELEASE_NOTES = [
   "Registration and Login Flows Updated with new Designs",
   "Updated Like and Share Buttons",
   "Updated Chatbox look and design",
+  "Updated Chats Look and Design",
 ];
 const RELEASE_NOTES_SIGNATURE = `${RELEASE_NOTES_VERSION}:${RELEASE_NOTES.join("||")}`;
 
