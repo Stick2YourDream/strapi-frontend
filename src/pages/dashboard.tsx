@@ -8,7 +8,6 @@ import "../css/dashboard.css";
 import FullScreenLoader from "../components/FullScreenLoader";
 import { useAuth } from "../context/AuthContext";
 import Sidebar from "../components/Sidebar";
-import TopbarSearch from "../components/TopbarSearch";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { useUserPreferences } from "../context/UserPreferencesContext";
 import { SIGNAL_TAGS, formatSignalTag, type SignalTag } from "../constants/signalTags";
@@ -16,7 +15,7 @@ import { sanitizePostText } from "../utils/emoji";
 import { formatPostUpdateLabel } from "../utils/time";
 import { pickMediaUrl } from "../utils/media";
 import GoalsImpactPanel from "../components/GoalsImpactPanel";
-import { Target } from "lucide-react";
+import { ArrowUp, Target } from "lucide-react";
 import { useImpactStats } from "../hooks/useImpactStats";
 import { useNewsPreference } from "../hooks/useNewsPreference";
 import LinkPreviewCard from "../components/LinkPreviewCard";
@@ -507,6 +506,7 @@ const MAX_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024;
 const MAX_VIDEO_UPLOAD_LABEL = "100 MB";
 const MAX_POST_MEDIA_FILES = 10;
 const MAX_COMMENT_MEDIA_FILES = 4;
+const DASHBOARD_DESKTOP_SIDEBAR_KEY = "dashboard:desktop-sidebar-collapsed";
 const USERS_POST_POPULATE =
   "populate[0]=Users_Pictures&populate[1]=owner&populate[2]=feedbackTarget&populate[3]=trustedCircle";
 const GROUP_POST_POPULATE = "populate[0]=media&populate[1]=owner&populate[2]=group";
@@ -1079,6 +1079,10 @@ export default function Dashboard() {
   const [goalsModalOpen, setGoalsModalOpen] = useState(false);
   const [formFilePreviewUrls, setFormFilePreviewUrls] = useState<string[]>([]);
   const [formDragActive, setFormDragActive] = useState(false);
+  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem(DASHBOARD_DESKTOP_SIDEBAR_KEY) === "1";
+  });
   const [linkPreview, setLinkPreview] = useState<LinkPreview | null>(null);
   const [linkPreviewLoading, setLinkPreviewLoading] = useState(false);
   const [linkPreviewError, setLinkPreviewError] = useState<string | null>(null);
@@ -1148,6 +1152,14 @@ export default function Dashboard() {
   useEffect(() => {
     commentPreviewRef.current = commentMediaPreviews;
   }, [commentMediaPreviews]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(
+      DASHBOARD_DESKTOP_SIDEBAR_KEY,
+      desktopSidebarCollapsed ? "1" : "0"
+    );
+  }, [desktopSidebarCollapsed]);
 
   useEffect(() => {
     return () => {
@@ -3837,9 +3849,17 @@ export default function Dashboard() {
   const showInitialLoader = loading && !hasLoadedOnce;
 
   return (
-    <div className="dashboard-shell" style={getBackgroundStyle("dashboard")}>
+    <div
+      className={`dashboard-shell${desktopSidebarCollapsed ? " is-sidebar-collapsed" : ""}`}
+      style={getBackgroundStyle("dashboard")}
+    >
       {showInitialLoader && <FullScreenLoader label="Loading dashboard" />}
-      <Sidebar active="dashboard" />
+      <Sidebar
+        active="dashboard"
+        enableDesktopCollapse
+        desktopCollapsed={desktopSidebarCollapsed}
+        onDesktopCollapsedChange={setDesktopSidebarCollapsed}
+      />
 
       <div className="main-content">
         {user && (
@@ -3848,8 +3868,6 @@ export default function Dashboard() {
             <span className="topbar-greeting-sub">{motivation}</span>
           </div>
         )}
-        <TopbarSearch />
-
       {loading && <p className="status">Loading posts…</p>}
       {error && <p className="status status-error">{error}</p>}
 
@@ -5643,8 +5661,10 @@ export default function Dashboard() {
               type="button"
               className="go-top-button"
               onClick={handleGoToTop}
+              aria-label="Go to top"
+              title="Go to top"
             >
-              Go to top
+              <ArrowUp size={18} aria-hidden="true" />
             </button>
           )}
       </>

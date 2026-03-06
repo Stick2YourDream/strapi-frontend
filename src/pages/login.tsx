@@ -1312,7 +1312,7 @@ export default function Login() {
             </div>
 
             <p className="auth-hint">
-              If you have 2FA enabled, you will need to enter the code from your authenticator app.
+              If 2FA is enabled on your account, you will need to enter a verification code.
             </p>
 
             {allowAlternateOnLogin && (
@@ -1329,16 +1329,6 @@ export default function Login() {
                 </div>
                 {showLoginAlternateOptions && (
                   <div className="sms-actions">
-                    <button
-                      type="button"
-                      className="btn ghost"
-                      onClick={() => void handleTryAnotherWay("totp")}
-                      disabled={alternateLoading || loginLoading || verifying}
-                    >
-                      {alternateLoading && alternateMethod === "totp"
-                        ? "Starting..."
-                        : "Use authenticator app"}
-                    </button>
                     <button
                       type="button"
                       className="btn ghost"
@@ -1409,21 +1399,6 @@ export default function Login() {
             </div>
             {showAlternateOptions && (
               <div className="sms-actions">
-                <button
-                  type="button"
-                  className="btn ghost"
-                  onClick={() => void handleTryAnotherWay("totp")}
-                  disabled={
-                    alternateLoading ||
-                    loginLoading ||
-                    verifying ||
-                    challengeMethod === "totp"
-                  }
-                >
-                  {alternateLoading && alternateMethod === "totp"
-                    ? "Starting..."
-                    : "Use authenticator app"}
-                </button>
                 <button
                   type="button"
                   className="btn ghost"

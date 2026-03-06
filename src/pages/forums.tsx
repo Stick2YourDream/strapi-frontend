@@ -11,7 +11,6 @@ import { useNavigate, useParams } from "react-router-dom";
 import "../css/forums.css";
 import api from "../api/strapi";
 import Sidebar from "../components/Sidebar";
-import TopbarSearch from "../components/TopbarSearch";
 import { useAuth } from "../context/AuthContext";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { useUserPreferences } from "../context/UserPreferencesContext";
@@ -1624,7 +1623,6 @@ export default function Forums() {
     >
       <Sidebar active="forums" />
       <div className="main-content">
-        <TopbarSearch />
         <div className="forums-page">
           <div className="forums-shell">
         {!isDetailView && (

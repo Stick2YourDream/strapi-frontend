@@ -5,6 +5,8 @@
     <link rel="icon" type="image/png" href="/logo2.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="dns-prefetch" href="//www.googletagmanager.com" />
+    <link rel="preconnect" href="https://www.googletagmanager.com" crossorigin />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
@@ -87,8 +89,15 @@
         ]
       }
     </script>
-    <script async src="https://www.googletagmanager.com/gtag/js?id=G-L96XEJPQN0"></script>
     <script>
+      const loadAnalyticsScript = () => {
+        if (document.querySelector("script[data-ga-id='G-L96XEJPQN0']")) return;
+        const script = document.createElement("script");
+        script.async = true;
+        script.src = "https://www.googletagmanager.com/gtag/js?id=G-L96XEJPQN0";
+        script.dataset.gaId = "G-L96XEJPQN0";
+        document.head.appendChild(script);
+      };
       window.dataLayer = window.dataLayer || [];
       function gtag(){dataLayer.push(arguments);}
       gtag('js', new Date());
@@ -101,6 +110,11 @@
       });
 
       gtag('config', 'G-S1TQT23WTQ');
+      if ("requestIdleCallback" in window) {
+        window.requestIdleCallback(loadAnalyticsScript, { timeout: 4000 });
+      } else {
+        setTimeout(loadAnalyticsScript, 2000);
+      }
     </script>
     <title>Your Social Place | Motivational social network without all the fluff</title>
   </head>

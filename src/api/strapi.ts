@@ -33,17 +33,36 @@ const API_RETRY_BASE_DELAY_MS = Math.max(
 const API_CACHE_ENABLED = String(import.meta.env.VITE_API_CACHE_ENABLED ?? "true")
   .trim()
   .toLowerCase() !== "false";
+const API_INFLIGHT_DEDUP_ENABLED = String(
+  import.meta.env.VITE_API_INFLIGHT_DEDUP_ENABLED ?? "true"
+)
+  .trim()
+  .toLowerCase() !== "false";
 const API_CACHE_TTL_MS = Math.max(
   1000,
   asNumberOr(import.meta.env.VITE_API_CACHE_TTL_MS, 10000)
+);
+const API_CACHE_STALE_IF_ERROR_MS = Math.max(
+  0,
+  asNumberOr(import.meta.env.VITE_API_STALE_IF_ERROR_MS, 60000)
 );
 const API_CACHE_MAX_ENTRIES = Math.max(
   20,
   asNumberOr(import.meta.env.VITE_API_CACHE_MAX_ENTRIES, 250)
 );
+const API_CACHE_MAX_PAYLOAD_BYTES = Math.max(
+  50_000,
+  asNumberOr(import.meta.env.VITE_API_CACHE_MAX_PAYLOAD_BYTES, 700_000)
+);
+const API_UPLOAD_TIMEOUT_MS = Math.max(
+  API_TIMEOUT_MS,
+  asNumberOr(import.meta.env.VITE_API_UPLOAD_TIMEOUT_MS, 60000)
+);
 const RETRYABLE_STATUS_CODES = new Set([408, 425, 429, 500, 502, 503, 504]);
 const RETRYABLE_ERROR_CODES = new Set(["ECONNABORTED", "ERR_NETWORK", "ETIMEDOUT"]);
 const READ_HEAVY_ENDPOINT_RE = /^(?:api\/)?(?:users-posts|posts|group-posts|profiles)(?:\/|$)/i;
+const UPLOAD_ENDPOINT_RE =
+  /(?:^|\/)(?:upload|uploads|upload-media|files)(?:\/|$)/i;
 const publicAuthEndpoints = new Set([
   "auth/local",
   "auth/login",
@@ -170,10 +189,62 @@ const getRetryDelayMs = (attempt: number) => {
   return Math.min(3000, exponential + jitter);
 };
 
+const parseRetryAfterMs = (value: unknown) => {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const asSeconds = Number(raw);
+  if (Number.isFinite(asSeconds) && asSeconds >= 0) {
+    return Math.min(10000, Math.round(asSeconds * 1000));
+  }
+  const dateMs = Date.parse(raw);
+  if (!Number.isFinite(dateMs)) return null;
+  return Math.min(10000, Math.max(0, dateMs - Date.now()));
+};
+
+const getHeaderValue = (headers: Record<string, unknown>, key: string) => {
+  const lowered = key.toLowerCase();
+  for (const [headerKey, headerValue] of Object.entries(headers || {})) {
+    if (headerKey.toLowerCase() === lowered) {
+      return String(headerValue ?? "").trim();
+    }
+  }
+  return "";
+};
+
+const parseContentLength = (headers: Record<string, unknown>) => {
+  const raw = getHeaderValue(headers, "content-length");
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+};
+
+const estimatePayloadBytes = (payload: unknown) => {
+  if (payload == null) return 0;
+  if (typeof payload === "string") {
+    return new TextEncoder().encode(payload).byteLength;
+  }
+  if (payload instanceof Blob) {
+    return payload.size;
+  }
+  if (payload instanceof ArrayBuffer) {
+    return payload.byteLength;
+  }
+  if (ArrayBuffer.isView(payload)) {
+    return payload.byteLength;
+  }
+  try {
+    return new TextEncoder().encode(JSON.stringify(payload)).byteLength;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+};
+
 type RetriableRequestConfig = InternalAxiosRequestConfig & {
   __retryAttempt?: number;
   __cacheKey?: string;
+  __cacheScope?: string;
   __cacheHit?: boolean;
+  __inFlightKey?: string;
+  __inFlightOwner?: boolean;
 };
 
 type CachedEntry = {
@@ -184,10 +255,93 @@ type CachedEntry = {
   data: unknown;
 };
 
+type ResponseSnapshot = Omit<CachedEntry, "expiresAt">;
+
+type InFlightRequestEntry = {
+  promise: Promise<ResponseSnapshot>;
+  resolve: (snapshot: ResponseSnapshot) => void;
+  reject: (reason?: unknown) => void;
+  startedAt: number;
+};
+
 const responseCache = new Map<string, CachedEntry>();
+const inFlightRequests = new Map<string, InFlightRequestEntry>();
+
+const toResponseSnapshot = (response: AxiosResponse): ResponseSnapshot => ({
+  status: response.status,
+  statusText: response.statusText,
+  headers: (response.headers || {}) as Record<string, unknown>,
+  data: response.data,
+});
+
+const toAxiosResponse = (
+  snapshot: ResponseSnapshot,
+  config: InternalAxiosRequestConfig
+) =>
+  ({
+    data: snapshot.data,
+    status: snapshot.status,
+    statusText: snapshot.statusText,
+    headers: snapshot.headers,
+    config,
+    request: undefined,
+  }) as AxiosResponse;
+
+const createInFlightEntry = (): InFlightRequestEntry => {
+  let resolve: (snapshot: ResponseSnapshot) => void = () => undefined;
+  let reject: (reason?: unknown) => void = () => undefined;
+  const promise = new Promise<ResponseSnapshot>((innerResolve, innerReject) => {
+    resolve = innerResolve;
+    reject = innerReject;
+  });
+  // Avoid unhandled rejection warnings when a stalled owner request is pruned.
+  promise.catch(() => undefined);
+  return {
+    promise,
+    resolve,
+    reject,
+    startedAt: Date.now(),
+  };
+};
+
+const settleInFlightSuccess = (
+  config: RetriableRequestConfig,
+  snapshot: ResponseSnapshot
+) => {
+  if (!config.__inFlightOwner || !config.__inFlightKey) return;
+  const entry = inFlightRequests.get(config.__inFlightKey);
+  if (!entry) return;
+  entry.resolve(snapshot);
+  inFlightRequests.delete(config.__inFlightKey);
+};
+
+const settleInFlightFailure = (config: RetriableRequestConfig, reason: unknown) => {
+  if (!config.__inFlightOwner || !config.__inFlightKey) return;
+  const entry = inFlightRequests.get(config.__inFlightKey);
+  if (!entry) return;
+  entry.reject(reason);
+  inFlightRequests.delete(config.__inFlightKey);
+};
 
 const clearResponseCache = () => {
   responseCache.clear();
+};
+
+const clearResponseCacheForScope = (scope: string) => {
+  const prefix = `${scope}|`;
+  for (const key of responseCache.keys()) {
+    if (key.startsWith(prefix)) {
+      responseCache.delete(key);
+    }
+  }
+};
+
+const clearInFlightRequests = () => {
+  if (inFlightRequests.size === 0) return;
+  for (const entry of inFlightRequests.values()) {
+    entry.reject(new Error("auth-token-updated"));
+  }
+  inFlightRequests.clear();
 };
 
 const isReadHeavyEndpoint = (path: string, url: string) => {
@@ -207,11 +361,17 @@ const isReadHeavyEndpoint = (path: string, url: string) => {
 const makeTokenScope = (token: string | null) =>
   token ? `user:${token.slice(-16)}` : "anon";
 
+const touchResponseCacheEntry = (key: string, entry: CachedEntry) => {
+  responseCache.delete(key);
+  responseCache.set(key, entry);
+};
+
 const pruneResponseCache = () => {
   if (responseCache.size === 0) return;
   const now = Date.now();
   for (const [key, entry] of responseCache.entries()) {
-    if (entry.expiresAt <= now) {
+    const hardExpiry = entry.expiresAt + API_CACHE_STALE_IF_ERROR_MS;
+    if (hardExpiry <= now) {
       responseCache.delete(key);
     }
   }
@@ -222,9 +382,42 @@ const pruneResponseCache = () => {
   }
 };
 
+const isLikelyUploadRequest = (config: RetriableRequestConfig, requestPath: string) => {
+  if (isIdempotentMethod(config.method)) return false;
+  if (config.data instanceof FormData) return true;
+  return UPLOAD_ENDPOINT_RE.test(requestPath);
+};
+
+const shouldStoreResponseInCache = (response: AxiosResponse) => {
+  const headers = (response.headers || {}) as Record<string, unknown>;
+  const cacheControl = getHeaderValue(headers, "cache-control").toLowerCase();
+  if (cacheControl.includes("no-store") || cacheControl.includes("private")) {
+    return false;
+  }
+  const contentLength = parseContentLength(headers);
+  if (contentLength !== null) {
+    return contentLength <= API_CACHE_MAX_PAYLOAD_BYTES;
+  }
+  const estimatedBytes = estimatePayloadBytes(response.data);
+  return estimatedBytes <= API_CACHE_MAX_PAYLOAD_BYTES;
+};
+
+const pruneInFlightRequests = () => {
+  if (inFlightRequests.size === 0) return;
+  const now = Date.now();
+  const staleAfterMs = API_TIMEOUT_MS * 2;
+  for (const [key, entry] of inFlightRequests.entries()) {
+    if (now - entry.startedAt > staleAfterMs) {
+      entry.reject(new Error("in-flight-request-timeout"));
+      inFlightRequests.delete(key);
+    }
+  }
+};
+
 export const setAuthToken = (token: string | null) => {
   cachedToken = normalizeToken(token);
   clearResponseCache();
+  clearInFlightRequests();
   if (cachedToken) {
     api.defaults.headers.common.Authorization = `Bearer ${cachedToken}`;
   } else {
@@ -267,18 +460,27 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   }
 
   const cacheConfig = config as RetriableRequestConfig;
+  const requestPath = extractPath(cacheConfig);
+  const tokenScope = makeTokenScope(token);
+  cacheConfig.__cacheScope = tokenScope;
+  if (isLikelyUploadRequest(cacheConfig, requestPath)) {
+    const currentTimeout = Number(cacheConfig.timeout || API_TIMEOUT_MS);
+    cacheConfig.timeout = Math.max(API_UPLOAD_TIMEOUT_MS, currentTimeout);
+  }
   cacheConfig.__cacheHit = false;
   cacheConfig.__cacheKey = undefined;
+  cacheConfig.__inFlightKey = undefined;
+  cacheConfig.__inFlightOwner = false;
   if (API_CACHE_ENABLED && isIdempotentMethod(cacheConfig.method)) {
-    const requestPath = extractPath(cacheConfig);
     const requestUri = api.getUri(cacheConfig);
     if (isReadHeavyEndpoint(requestPath, requestUri)) {
       pruneResponseCache();
-      const tokenScope = makeTokenScope(token);
+      pruneInFlightRequests();
       const cacheKey = `${tokenScope}|${requestUri}`;
       cacheConfig.__cacheKey = cacheKey;
       const cached = responseCache.get(cacheKey);
       if (cached && cached.expiresAt > Date.now()) {
+        touchResponseCacheEntry(cacheKey, cached);
         cacheConfig.__cacheHit = true;
         cacheConfig.adapter = async () =>
           ({
@@ -289,6 +491,40 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
             config: cacheConfig,
             request: undefined,
           }) as AxiosResponse;
+      } else if (
+        typeof navigator !== "undefined" &&
+        navigator.onLine === false &&
+        cached &&
+        cached.expiresAt + API_CACHE_STALE_IF_ERROR_MS > Date.now()
+      ) {
+        touchResponseCacheEntry(cacheKey, cached);
+        cacheConfig.__cacheHit = true;
+        cacheConfig.adapter = async () =>
+          ({
+            data: cached.data,
+            status: cached.status,
+            statusText: cached.statusText,
+            headers: {
+              ...(cached.headers || {}),
+              "x-ysp-offline-cache": "1",
+            },
+            config: cacheConfig,
+            request: undefined,
+          }) as AxiosResponse;
+      } else if (API_INFLIGHT_DEDUP_ENABLED) {
+        const existingInFlight = inFlightRequests.get(cacheKey);
+        if (existingInFlight) {
+          cacheConfig.__inFlightKey = cacheKey;
+          cacheConfig.adapter = async () => {
+            const snapshot = await existingInFlight.promise;
+            return toAxiosResponse(snapshot, cacheConfig);
+          };
+        } else {
+          const inFlightEntry = createInFlightEntry();
+          inFlightRequests.set(cacheKey, inFlightEntry);
+          cacheConfig.__inFlightKey = cacheKey;
+          cacheConfig.__inFlightOwner = true;
+        }
       }
     }
   }
@@ -318,7 +554,12 @@ api.interceptors.response.use(
     if (!config) return response;
 
     if (isIdempotentMethod(config.method)) {
-      if (API_CACHE_ENABLED && config.__cacheKey && !config.__cacheHit) {
+      if (
+        API_CACHE_ENABLED &&
+        config.__cacheKey &&
+        !config.__cacheHit &&
+        shouldStoreResponseInCache(response)
+      ) {
         responseCache.set(config.__cacheKey, {
           expiresAt: Date.now() + API_CACHE_TTL_MS,
           status: response.status,
@@ -328,17 +569,43 @@ api.interceptors.response.use(
         });
         pruneResponseCache();
       }
+      settleInFlightSuccess(config, toResponseSnapshot(response));
     } else {
-      clearResponseCache();
+      clearResponseCacheForScope(config.__cacheScope || "anon");
     }
 
     return response;
   },
   async (error) => {
     const config = (error?.config || null) as RetriableRequestConfig | null;
-    if (!config || API_RETRY_MAX <= 0 || !isIdempotentMethod(config.method)) {
+    if (!config || !isIdempotentMethod(config.method)) {
       return Promise.reject(error);
     }
+    const isCanceledRequest =
+      config.signal?.aborted === true ||
+      String(error?.code || "").toUpperCase() === "ERR_CANCELED" ||
+      String(error?.name || "").toLowerCase() === "cancelederror";
+    if (isCanceledRequest) {
+      settleInFlightFailure(config, error);
+      return Promise.reject(error);
+    }
+
+    const toStaleCacheFallback = () => {
+      if (!API_CACHE_ENABLED || API_CACHE_STALE_IF_ERROR_MS <= 0) return null;
+      if (!config.__cacheKey) return null;
+      const cached = responseCache.get(config.__cacheKey);
+      if (!cached) return null;
+      if (cached.expiresAt + API_CACHE_STALE_IF_ERROR_MS <= Date.now()) return null;
+      return {
+        status: cached.status,
+        statusText: cached.statusText,
+        headers: {
+          ...(cached.headers || {}),
+          "x-ysp-stale-cache": "1",
+        },
+        data: cached.data,
+      } as ResponseSnapshot;
+    };
 
     const status = Number(error?.response?.status || 0);
     const code = String(error?.code || "");
@@ -348,16 +615,32 @@ api.interceptors.response.use(
       !error?.response;
 
     if (!retryable) {
+      const staleSnapshot = toStaleCacheFallback();
+      if (staleSnapshot) {
+        settleInFlightSuccess(config, staleSnapshot);
+        return toAxiosResponse(staleSnapshot, config);
+      }
+      settleInFlightFailure(config, error);
       return Promise.reject(error);
     }
 
     const attempt = Number(config.__retryAttempt || 0) + 1;
     if (attempt > API_RETRY_MAX) {
+      const staleSnapshot = toStaleCacheFallback();
+      if (staleSnapshot) {
+        settleInFlightSuccess(config, staleSnapshot);
+        return toAxiosResponse(staleSnapshot, config);
+      }
+      settleInFlightFailure(config, error);
       return Promise.reject(error);
     }
 
     config.__retryAttempt = attempt;
-    const delay = getRetryDelayMs(attempt);
+    const retryAfterRaw =
+      error?.response?.headers?.["retry-after"] ??
+      error?.response?.headers?.["Retry-After"];
+    const retryAfterDelayMs = parseRetryAfterMs(retryAfterRaw);
+    const delay = Math.max(getRetryDelayMs(attempt), retryAfterDelayMs ?? 0);
     await sleep(delay);
     return api.request(config);
   }

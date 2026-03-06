@@ -8,10 +8,10 @@ import {
   Bell,
   ChevronDown,
   ChevronLeft,
+  ChevronRight,
   Download,
   EyeOff,
   Home,
-  LayoutDashboard,
   LifeBuoy,
   Lock,
   LogOut,
@@ -29,6 +29,17 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import {
+  faCircleUser,
+  faNewspaper as faNewspaperSolid,
+  faPeopleGroup,
+  faRectangleList,
+  faShieldHalved,
+  faStore as faStoreSolid,
+  faTableCellsLarge,
+  faUserGroup,
+} from "@fortawesome/free-solid-svg-icons";
 import {
   useNotifications,
   type BirthdayPreview,
@@ -43,6 +54,7 @@ import {
   type ProfilePayload,
 } from "../utils/profile-e2ee";
 import { pickMediaUrl } from "../utils/media";
+import { preloadCriticalRouteForPath } from "../routes/routePreloaders";
 import "../css/sidebar.css";
 import AvatarImage from "./AvatarImage";
 import ProfilePhotoModal from "./ProfilePhotoModal";
@@ -97,6 +109,44 @@ const SETTINGS_SECTION_ICONS: Record<SettingsSection, ReactNode> = {
   changes: <RefreshCcw size={18} />,
 };
 
+type SidebarNavIconId =
+  | "dashboard"
+  | "profile"
+  | "friends"
+  | "groups"
+  | "forums"
+  | "storefront"
+  | "news"
+  | "moderation";
+
+const SIDEBAR_NAV_ICONS_LEGACY: Record<SidebarNavIconId, ReactNode> = {
+  dashboard: <Home size={18} />,
+  profile: <User size={18} />,
+  friends: <Users size={18} />,
+  groups: <UsersRound size={18} />,
+  forums: <MessageSquare size={18} />,
+  storefront: <Store size={18} />,
+  news: <Newspaper size={18} />,
+  moderation: <Shield size={18} />,
+};
+
+const SIDEBAR_NAV_ICONS_ENHANCED: Record<SidebarNavIconId, ReactNode> = {
+  dashboard: <FontAwesomeIcon icon={faTableCellsLarge} fixedWidth />,
+  profile: <FontAwesomeIcon icon={faCircleUser} fixedWidth />,
+  friends: <FontAwesomeIcon icon={faUserGroup} fixedWidth />,
+  groups: <FontAwesomeIcon icon={faPeopleGroup} fixedWidth />,
+  forums: <FontAwesomeIcon icon={faRectangleList} fixedWidth />,
+  storefront: <FontAwesomeIcon icon={faStoreSolid} fixedWidth />,
+  news: <FontAwesomeIcon icon={faNewspaperSolid} fixedWidth />,
+  moderation: <FontAwesomeIcon icon={faShieldHalved} fixedWidth />,
+};
+
+// Set to true to quickly revert to the older Lucide icon set.
+const USE_LEGACY_SIDEBAR_NAV_ICONS = false;
+const SIDEBAR_NAV_ICONS = USE_LEGACY_SIDEBAR_NAV_ICONS
+  ? SIDEBAR_NAV_ICONS_LEGACY
+  : SIDEBAR_NAV_ICONS_ENHANCED;
+
 const BIRTHDAY_MESSAGES = [
   "Happy birthday!",
   "Have an awesome birthday!",
@@ -107,6 +157,7 @@ const RECENT_LOGINS_KEY = "auth:recent-logins";
 const MAX_RECENT_LOGINS = 4;
 const NOTIFICATION_SOURCE_FILTERS_KEY = "notifications-source-filters-v1";
 const MOBILE_MENU_VARIANT_KEY = "sidebar:mobile-menu-variant-v1";
+const DESKTOP_SIDEBAR_COLLAPSE_KEY = "dashboard:desktop-sidebar-collapsed";
 
 type MobileMenuVariant = "panel" | "drawer";
 
@@ -125,6 +176,13 @@ const normalizeMobileMenuVariant = (value: unknown): MobileMenuVariant =>
 const readMobileMenuVariant = (): MobileMenuVariant => {
   if (typeof window === "undefined") return "drawer";
   return normalizeMobileMenuVariant(window.localStorage.getItem(MOBILE_MENU_VARIANT_KEY));
+};
+
+const readDesktopSidebarCollapsed = (): boolean => {
+  if (typeof window === "undefined") return true;
+  const stored = window.localStorage.getItem(DESKTOP_SIDEBAR_COLLAPSE_KEY);
+  if (stored === null) return true;
+  return stored === "1";
 };
 
 const normalizeNotificationSourceFilters = (value: unknown): NotificationSourceFilters => {
@@ -200,6 +258,9 @@ type SidebarProps = {
   hideNavLinks?: boolean;
   hideBio?: boolean;
   mobileMenuVariant?: MobileMenuVariant;
+  enableDesktopCollapse?: boolean;
+  desktopCollapsed?: boolean;
+  onDesktopCollapsedChange?: (collapsed: boolean) => void;
 };
 
 const trimPreviewText = (value?: string, max = 72) => {
@@ -316,6 +377,9 @@ export default function Sidebar({
   hideNavLinks = false,
   hideBio = false,
   mobileMenuVariant,
+  enableDesktopCollapse = true,
+  desktopCollapsed,
+  onDesktopCollapsedChange,
 }: SidebarProps) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -346,6 +410,9 @@ export default function Sidebar({
     useState<NotificationSourceFilters>(DEFAULT_NOTIFICATION_SOURCE_FILTERS);
   const [storedMobileMenuVariant, setStoredMobileMenuVariant] =
     useState<MobileMenuVariant>(readMobileMenuVariant);
+  const [internalDesktopCollapsed, setInternalDesktopCollapsed] = useState<boolean>(
+    readDesktopSidebarCollapsed
+  );
   const [photoModalOpen, setPhotoModalOpen] = useState(false);
   const {
     counts,
@@ -649,11 +716,17 @@ export default function Sidebar({
   };
 
   const handleLogoClick = () => {
+    preloadCriticalRouteForPath("/dashboard");
     navigate("/dashboard");
     setMenuOpen(false);
   };
 
+  const handleRouteIntent = (path: string) => {
+    preloadCriticalRouteForPath(path);
+  };
+
   const handleProfileAction = (path: string) => {
+    handleRouteIntent(path);
     navigate(path);
     setShowProfileMenu(false);
     setShowNotifications(false);
@@ -906,6 +979,36 @@ export default function Sidebar({
     appSettings?.mobileMenuVariant === "panel" ? "panel" : "drawer";
   const effectiveMobileMenuVariant =
     mobileMenuVariant || appMobileMenuVariant || storedMobileMenuVariant;
+  const isDesktopCollapseControlled = typeof desktopCollapsed === "boolean";
+  const isDesktopCollapsed = isDesktopCollapseControlled
+    ? Boolean(desktopCollapsed)
+    : internalDesktopCollapsed;
+  const isDesktopVisuallyCollapsed = enableDesktopCollapse && isDesktopCollapsed;
+  const showCollapsedDesktopTooltips = isDesktopVisuallyCollapsed;
+  const getCollapsedDesktopTooltip = (label: string) =>
+    showCollapsedDesktopTooltips ? label : undefined;
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (isDesktopCollapseControlled) return;
+    window.localStorage.setItem(
+      DESKTOP_SIDEBAR_COLLAPSE_KEY,
+      internalDesktopCollapsed ? "1" : "0"
+    );
+  }, [internalDesktopCollapsed, isDesktopCollapseControlled]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const className = "ysp-sidebar-collapsed";
+    if (enableDesktopCollapse && isDesktopCollapsed) {
+      document.body.classList.add(className);
+    } else {
+      document.body.classList.remove(className);
+    }
+    return () => {
+      document.body.classList.remove(className);
+    };
+  }, [enableDesktopCollapse, isDesktopCollapsed]);
 
   useEffect(() => {
     if (!menuOpen || usesInlineMobileCustomContent) return;
@@ -929,6 +1032,14 @@ export default function Sidebar({
     setShowNotifications(false);
     setMenuOpen(false);
     onSettingsSectionChange(section);
+  };
+
+  const toggleDesktopCollapse = () => {
+    const next = !isDesktopCollapsed;
+    if (!isDesktopCollapseControlled) {
+      setInternalDesktopCollapsed(next);
+    }
+    onDesktopCollapsedChange?.(next);
   };
 
   const handleGroupSettingsToggle = () => {
@@ -1487,7 +1598,11 @@ export default function Sidebar({
   return (
     <>
       <ProfilePhotoModal open={photoModalOpen} onClose={() => setPhotoModalOpen(false)} />
-      <div className={`sidebar-shell ${menuOpen ? "open" : ""}`}>
+      <div
+        className={`sidebar-shell ${menuOpen ? "open" : ""}${
+          isDesktopVisuallyCollapsed ? " is-desktop-collapsed" : ""
+        }`}
+      >
       <div className="sidebar-topbar">
         <button className="brand" type="button" onClick={handleLogoClick} style={{ cursor: "pointer" }}>
           <span className="brand-mark" aria-hidden="true">
@@ -1616,7 +1731,7 @@ export default function Sidebar({
                       onClick={() => handleProfileAction("/dashboard")}
                     >
                       <span className="sidebar-nav-icon" aria-hidden="true">
-                        <Home size={18} />
+                        {SIDEBAR_NAV_ICONS.dashboard}
                       </span>
                     </button>
                   </div>
@@ -1631,7 +1746,7 @@ export default function Sidebar({
                     onClick={() => handleProfileAction("/dashboard")}
                   >
                     <span className="sidebar-nav-icon" aria-hidden="true">
-                      <Home size={18} />
+                      {SIDEBAR_NAV_ICONS.dashboard}
                     </span>
                     <span>My Dashboard</span>
                   </button>
@@ -1723,7 +1838,7 @@ export default function Sidebar({
                     onClick={() => handleProfileAction("/dashboard")}
                   >
                     <span className="sidebar-nav-icon" aria-hidden="true">
-                      <Home size={18} />
+                      {SIDEBAR_NAV_ICONS.dashboard}
                     </span>
                     <span>My Dashboard</span>
                   </button>
@@ -1767,7 +1882,7 @@ export default function Sidebar({
                       >
                         <span className="mobile-profile-section-toggle-copy">
                           <span className="sidebar-nav-icon" aria-hidden="true">
-                            <UsersRound size={18} />
+                            {SIDEBAR_NAV_ICONS.friends}
                           </span>
                           <span className="mobile-profile-section-title">Community</span>
                         </span>
@@ -1789,7 +1904,7 @@ export default function Sidebar({
                             onClick={() => handleProfileAction("/friends")}
                           >
                             <span className="sidebar-nav-icon" aria-hidden="true">
-                              <Users size={18} />
+                              {SIDEBAR_NAV_ICONS.friends}
                             </span>
                             <span>My Friends</span>
                           </button>
@@ -1800,7 +1915,7 @@ export default function Sidebar({
                             onClick={() => handleProfileAction("/groups")}
                           >
                             <span className="sidebar-nav-icon" aria-hidden="true">
-                              <UsersRound size={18} />
+                              {SIDEBAR_NAV_ICONS.groups}
                             </span>
                             <span>My Groups</span>
                           </button>
@@ -1811,7 +1926,7 @@ export default function Sidebar({
                             onClick={() => handleProfileAction("/forums")}
                           >
                             <span className="sidebar-nav-icon" aria-hidden="true">
-                              <MessageSquare size={18} />
+                              {SIDEBAR_NAV_ICONS.forums}
                             </span>
                             <span>Forums</span>
                           </button>
@@ -1829,7 +1944,7 @@ export default function Sidebar({
                             }}
                           >
                             <span className="sidebar-nav-icon" aria-hidden="true">
-                              <Store size={18} />
+                              {SIDEBAR_NAV_ICONS.storefront}
                             </span>
                             <span>
                               {storefrontEnabled
@@ -1851,7 +1966,7 @@ export default function Sidebar({
                             }}
                           >
                             <span className="sidebar-nav-icon" aria-hidden="true">
-                              <Newspaper size={18} />
+                              {SIDEBAR_NAV_ICONS.news}
                             </span>
                             <span>
                               {newsroomEnabled ? "Newsroom" : "Newsroom (Coming soon)"}
@@ -1865,7 +1980,7 @@ export default function Sidebar({
                               onClick={() => handleProfileAction("/moderation")}
                             >
                               <span className="sidebar-nav-icon" aria-hidden="true">
-                                <Shield size={18} />
+                                {SIDEBAR_NAV_ICONS.moderation}
                               </span>
                               <span>Moderation</span>
                             </button>
@@ -2322,12 +2437,30 @@ export default function Sidebar({
       )}
 
       <aside className="dash-nav">
-        <button className="brand" type="button" onClick={handleLogoClick} style={{ cursor: "pointer" }}>
-          <span className="brand-mark" aria-hidden="true">
-            <img src="/logo2.png" alt="" />
-          </span>
-          <span className="brand-text">Your Social Place</span>
-        </button>
+        <div className="sidebar-brand-row">
+          <button className="brand" type="button" onClick={handleLogoClick} style={{ cursor: "pointer" }}>
+            <span className="brand-mark" aria-hidden="true">
+              <img src="/logo2.png" alt="" />
+            </span>
+            <span className="brand-text">Your Social Place</span>
+          </button>
+          {enableDesktopCollapse && (
+            <button
+              type="button"
+              className={`sidebar-desktop-toggle${isDesktopCollapsed ? " is-collapsed" : ""}`}
+              onClick={toggleDesktopCollapse}
+              aria-pressed={!isDesktopCollapsed}
+              aria-label={isDesktopCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              title={isDesktopCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            >
+              {isDesktopCollapsed ? (
+                <ChevronRight size={16} className="sidebar-toggle-icon" aria-hidden="true" />
+              ) : (
+                <ChevronLeft size={16} className="sidebar-toggle-icon" aria-hidden="true" />
+              )}
+            </button>
+          )}
+        </div>
         <div className="nav-actions" style={{ flexDirection: "column", alignItems: "flex-start", gap: "8px", width: "100%" }}>
           {profileCard && (
             <div className="sidebar-profile-slot">
@@ -2341,6 +2474,9 @@ export default function Sidebar({
                   }}
                   aria-expanded={showProfileMenu}
                   aria-controls="sidebar-profile-menu"
+                  data-collapsed-tooltip={getCollapsedDesktopTooltip(
+                    `${nameForDisplay} (${secondaryLine})`
+                  )}
                 >
                   {profileCard.avatarUrl ? (
                     <AvatarImage
@@ -2386,24 +2522,26 @@ export default function Sidebar({
                     </span>
                   </div>
                 </button>
-                <button
-                  type="button"
-                  className="sidebar-bell"
-                  aria-label={`Notifications (${filteredNotificationTotal})`}
-                  onClick={toggleNotifications}
-                >
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path
-                      d="M12 22a2.5 2.5 0 0 0 2.45-2H9.55A2.5 2.5 0 0 0 12 22zm7-6V11a7 7 0 1 0-14 0v5l-2 2v1h18v-1l-2-2z"
-                      fill="currentColor"
-                    />
-                  </svg>
-                  {filteredNotificationTotal > 0 && (
-                    <span className="sidebar-bell-badge">
-                      {filteredNotificationTotal > 99 ? "99+" : filteredNotificationTotal}
-                    </span>
-                  )}
-                </button>
+                {(!enableDesktopCollapse || !isDesktopCollapsed) && (
+                  <button
+                    type="button"
+                    className="sidebar-bell"
+                    aria-label={`Notifications (${filteredNotificationTotal})`}
+                    onClick={toggleNotifications}
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path
+                        d="M12 22a2.5 2.5 0 0 0 2.45-2H9.55A2.5 2.5 0 0 0 12 22zm7-6V11a7 7 0 1 0-14 0v5l-2 2v1h18v-1l-2-2z"
+                        fill="currentColor"
+                      />
+                    </svg>
+                    {filteredNotificationTotal > 0 && (
+                      <span className="sidebar-bell-badge">
+                        {filteredNotificationTotal > 99 ? "99+" : filteredNotificationTotal}
+                      </span>
+                    )}
+                  </button>
+                )}
               </div>
               {showProfileMenu && (
                 <>
@@ -2514,122 +2652,154 @@ export default function Sidebar({
             </div>
           )}
           {profileCard && showNavLinks && (
-            <div className="sidebar-nav-links">
-              <button
-                type="button"
-                className={`btn ghost sidebar-nav-link${
-                  active === "dashboard" ? " is-active" : ""
-                }`}
-                data-accent="dashboard"
-                onClick={() => handleProfileAction("/dashboard")}
-              >
-                <span className="sidebar-nav-icon" aria-hidden="true">
-                  <LayoutDashboard size={18} />
-                </span>
-                <span>My Dashboard</span>
-              </button>
-              <button
-                type="button"
-                className={`btn ghost sidebar-nav-link${
-                  active === "me" ? " is-active" : ""
-                }`}
-                data-accent="profile"
-                onClick={() => handleProfileAction("/me")}
-              >
-                <span className="sidebar-nav-icon" aria-hidden="true">
-                  <User size={18} />
-                </span>
-                <span>My Profile</span>
-              </button>
-              <button
-                type="button"
-                className={`btn ghost sidebar-nav-link${
-                  active === "friends" ? " is-active" : ""
-                }`}
-                data-accent="friends"
-                onClick={() => handleProfileAction("/friends")}
-              >
-                <span className="sidebar-nav-icon" aria-hidden="true">
-                  <Users size={18} />
-                </span>
-                <span>My Friends</span>
-              </button>
-              <button
-                type="button"
-                className={`btn ghost sidebar-nav-link${
-                  active === "groups" ? " is-active" : ""
-                }`}
-                data-accent="groups"
-                onClick={() => handleProfileAction("/groups")}
-              >
-                <span className="sidebar-nav-icon" aria-hidden="true">
-                  <UsersRound size={18} />
-                </span>
-                <span>My Groups</span>
-              </button>
-              <button
-                type="button"
-                className={`btn ghost sidebar-nav-link${
-                  active === "forums" ? " is-active" : ""
-                }`}
-                data-accent="forums"
-                onClick={() => handleProfileAction("/forums")}
-              >
-                <span className="sidebar-nav-icon" aria-hidden="true">
-                  <MessageSquare size={18} />
-                </span>
-                <span>Forums</span>
-              </button>
-              <button
-                type="button"
-                className={`btn ghost sidebar-nav-link${
-                  !storefrontEnabled ? " sidebar-nav-link--disabled" : ""
-                }${active === "storefront" ? " is-active" : ""}`}
-                data-accent="storefront"
-                disabled={!storefrontEnabled}
-                aria-disabled={!storefrontEnabled}
-                onClick={() => {
-                  if (!storefrontEnabled) return;
-                  handleProfileAction("/storefront");
-                }}
-              >
-                <span className="sidebar-nav-icon" aria-hidden="true">
-                  <Store size={18} />
-                </span>
-                <span>{storefrontEnabled ? "StoreFront" : "StoreFront (Coming Soon!)"}</span>
-              </button>
-              <button
-                type="button"
-                className={`btn ghost sidebar-nav-link${
-                  !newsroomEnabled ? " sidebar-nav-link--disabled" : ""
-                }${active === "news" ? " is-active" : ""}`}
-                data-accent="news"
-                disabled={!newsroomEnabled}
-                aria-disabled={!newsroomEnabled}
-                onClick={() => {
-                  if (!newsroomEnabled) return;
-                  handleProfileAction("/news");
-                }}
-              >
-                <span className="sidebar-nav-icon" aria-hidden="true">
-                  <Newspaper size={18} />
-                </span>
-                <span>{newsroomEnabled ? "Newsroom" : "Newsroom (Coming soon)"}</span>
-              </button>
-              {isStaff && (
+            <div className="sidebar-nav-links" role="navigation" aria-label="Main navigation">
+              <div className="sidebar-nav-section" aria-label="Primary">
+                <p className="sidebar-nav-section-label">Primary</p>
                 <button
                   type="button"
                   className={`btn ghost sidebar-nav-link${
-                    active === "moderation" ? " is-active" : ""
+                    active === "dashboard" ? " is-active" : ""
                   }`}
-                  data-accent="moderation"
-                  onClick={() => handleProfileAction("/moderation")}
+                  data-accent="dashboard"
+                  onClick={() => handleProfileAction("/dashboard")}
+                  onMouseEnter={() => handleRouteIntent("/dashboard")}
+                  onFocus={() => handleRouteIntent("/dashboard")}
+                  onTouchStart={() => handleRouteIntent("/dashboard")}
+                  data-collapsed-tooltip={getCollapsedDesktopTooltip("My Dashboard")}
                 >
                   <span className="sidebar-nav-icon" aria-hidden="true">
-                    <Shield size={18} />
+                    {SIDEBAR_NAV_ICONS.dashboard}
                   </span>
-                  <span>Moderation</span>
+                  <span>My Dashboard</span>
                 </button>
+                <button
+                  type="button"
+                  className={`btn ghost sidebar-nav-link${
+                    active === "me" ? " is-active" : ""
+                  }`}
+                  data-accent="profile"
+                  onClick={() => handleProfileAction("/me")}
+                  onMouseEnter={() => handleRouteIntent("/me")}
+                  onFocus={() => handleRouteIntent("/me")}
+                  onTouchStart={() => handleRouteIntent("/me")}
+                  data-collapsed-tooltip={getCollapsedDesktopTooltip("My Profile")}
+                >
+                  <span className="sidebar-nav-icon" aria-hidden="true">
+                    {SIDEBAR_NAV_ICONS.profile}
+                  </span>
+                  <span>My Profile</span>
+                </button>
+                <button
+                  type="button"
+                  className={`btn ghost sidebar-nav-link${
+                    active === "friends" ? " is-active" : ""
+                  }`}
+                  data-accent="friends"
+                  onClick={() => handleProfileAction("/friends")}
+                  data-collapsed-tooltip={getCollapsedDesktopTooltip("My Friends")}
+                >
+                  <span className="sidebar-nav-icon" aria-hidden="true">
+                    {SIDEBAR_NAV_ICONS.friends}
+                  </span>
+                  <span>My Friends</span>
+                </button>
+                <button
+                  type="button"
+                  className={`btn ghost sidebar-nav-link${
+                    active === "groups" ? " is-active" : ""
+                  }`}
+                  data-accent="groups"
+                  onClick={() => handleProfileAction("/groups")}
+                  data-collapsed-tooltip={getCollapsedDesktopTooltip("My Groups")}
+                >
+                  <span className="sidebar-nav-icon" aria-hidden="true">
+                    {SIDEBAR_NAV_ICONS.groups}
+                  </span>
+                  <span>My Groups</span>
+                </button>
+                <button
+                  type="button"
+                  className={`btn ghost sidebar-nav-link${
+                    active === "forums" ? " is-active" : ""
+                  }`}
+                  data-accent="forums"
+                  onClick={() => handleProfileAction("/forums")}
+                  data-collapsed-tooltip={getCollapsedDesktopTooltip("Forums")}
+                >
+                  <span className="sidebar-nav-icon" aria-hidden="true">
+                    {SIDEBAR_NAV_ICONS.forums}
+                  </span>
+                  <span>Forums</span>
+                </button>
+              </div>
+
+              <div className="sidebar-nav-section" aria-label="Content and commerce">
+                <p className="sidebar-nav-section-label">Content &amp; Commerce</p>
+                <button
+                  type="button"
+                  className={`btn ghost sidebar-nav-link${
+                    !storefrontEnabled ? " sidebar-nav-link--disabled" : ""
+                  }${active === "storefront" ? " is-active" : ""}`}
+                  data-accent="storefront"
+                  disabled={!storefrontEnabled}
+                  aria-disabled={!storefrontEnabled}
+                  onClick={() => {
+                    if (!storefrontEnabled) return;
+                    handleProfileAction("/storefront");
+                  }}
+                  data-collapsed-tooltip={getCollapsedDesktopTooltip(
+                    storefrontEnabled ? "StoreFront" : "StoreFront (Coming Soon!)"
+                  )}
+                >
+                  <span className="sidebar-nav-icon" aria-hidden="true">
+                    {SIDEBAR_NAV_ICONS.storefront}
+                  </span>
+                  <span>{storefrontEnabled ? "StoreFront" : "StoreFront (Coming Soon!)"}</span>
+                </button>
+                <button
+                  type="button"
+                  className={`btn ghost sidebar-nav-link${
+                    !newsroomEnabled ? " sidebar-nav-link--disabled" : ""
+                  }${active === "news" ? " is-active" : ""}`}
+                  data-accent="news"
+                  disabled={!newsroomEnabled}
+                  aria-disabled={!newsroomEnabled}
+                  onClick={() => {
+                    if (!newsroomEnabled) return;
+                    handleProfileAction("/news");
+                  }}
+                  data-collapsed-tooltip={getCollapsedDesktopTooltip(
+                    newsroomEnabled ? "Newsroom" : "Newsroom (Coming soon)"
+                  )}
+                >
+                  <span className="sidebar-nav-icon" aria-hidden="true">
+                    {SIDEBAR_NAV_ICONS.news}
+                  </span>
+                  <span>{newsroomEnabled ? "Newsroom" : "Newsroom (Coming soon)"}</span>
+                </button>
+              </div>
+
+              {isStaff && (
+                <div
+                  className="sidebar-nav-section sidebar-nav-section--admin"
+                  aria-label="Admin and safety"
+                >
+                  <p className="sidebar-nav-section-label">Admin &amp; Safety</p>
+                  <button
+                    type="button"
+                    className={`btn ghost sidebar-nav-link${
+                      active === "moderation" ? " is-active" : ""
+                    }`}
+                    data-accent="moderation"
+                    onClick={() => handleProfileAction("/moderation")}
+                    data-collapsed-tooltip={getCollapsedDesktopTooltip("Moderation")}
+                  >
+                    <span className="sidebar-nav-icon" aria-hidden="true">
+                      {SIDEBAR_NAV_ICONS.moderation}
+                    </span>
+                    <span>Moderation</span>
+                  </button>
+                </div>
               )}
             </div>
           )}
@@ -2642,6 +2812,9 @@ export default function Sidebar({
               data-accent="settings"
               onClick={handleSettingsToggle}
               aria-pressed={isSettingsView}
+              data-collapsed-tooltip={getCollapsedDesktopTooltip(
+                isSettingsView ? "Back to Profile" : "Settings"
+              )}
             >
               <span className="sidebar-settings-icon" aria-hidden="true">
                 {isSettingsView ? (
@@ -2662,6 +2835,9 @@ export default function Sidebar({
               data-accent="group-theme"
               onClick={handleGroupSettingsToggle}
               aria-pressed={isGroupSettingsView}
+              data-collapsed-tooltip={getCollapsedDesktopTooltip(
+                isGroupSettingsView ? "Return to group feed" : "Group look and feel"
+              )}
             >
               <span className="sidebar-settings-icon" aria-hidden="true">
                 {isGroupSettingsView ? (
@@ -2688,6 +2864,7 @@ export default function Sidebar({
                   }`}
                   data-accent={section.id}
                   onClick={() => handleSettingsSectionChange(section.id)}
+                  data-collapsed-tooltip={getCollapsedDesktopTooltip(section.label)}
                 >
                   <span className="sidebar-nav-icon" aria-hidden="true">
                     {SETTINGS_SECTION_ICONS[section.id]}

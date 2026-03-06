@@ -6,19 +6,22 @@ import {
   ChevronDown,
   ChevronRight,
   CircleHelp,
-  Home,
   LogOut,
   MessageSquare,
-  Newspaper,
   Settings,
   ShieldCheck,
-  Store,
-  User,
-  Users,
-  UsersRound,
   X,
-  type LucideIcon,
 } from "lucide-react";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import {
+  faCircleUser,
+  faNewspaper as faNewspaperSolid,
+  faPeopleGroup,
+  faRectangleList,
+  faStore as faStoreSolid,
+  faTableCellsLarge,
+  faUserGroup,
+} from "@fortawesome/free-solid-svg-icons";
 import "./UserMenuDrawer.css";
 
 export type FriendMessagePreview = {
@@ -49,7 +52,8 @@ export type MenuProps = {
 type CommunityRowLink = {
   label: string;
   href: string;
-  icon: LucideIcon;
+  icon: ReactNode;
+  accent: "friends" | "groups" | "forums" | "storefront" | "news";
   disabled?: boolean;
 };
 
@@ -65,7 +69,7 @@ type MenuRowLink = {
     | "privacy"
     | "support"
     | "logout";
-  icon: LucideIcon;
+  icon: ReactNode;
   badgeCount?: number;
 };
 
@@ -179,7 +183,7 @@ export default function UserMenuDrawer({
     {
       label: "Dashboard",
       href: "/dashboard",
-      icon: Home,
+      icon: <FontAwesomeIcon icon={faTableCellsLarge} fixedWidth />,
       accent: "dashboard",
     },
   ];
@@ -188,32 +192,49 @@ export default function UserMenuDrawer({
     {
       label: "Profile",
       href: "/me",
-      icon: User,
+      icon: <FontAwesomeIcon icon={faCircleUser} fixedWidth />,
       accent: "profile",
     },
     {
       label: "Privacy & Security",
       href: "/me?view=settings&section=security",
-      icon: ShieldCheck,
+      icon: <ShieldCheck size={20} />,
       accent: "privacy",
     },
   ];
 
   const communityRows = useMemo<CommunityRowLink[]>(
     () => [
-      { label: "Friends", href: "/friends", icon: Users },
-      { label: "Groups", href: "/groups", icon: UsersRound },
-      { label: "Forums", href: "/forums", icon: MessageSquare },
+      {
+        label: "Friends",
+        href: "/friends",
+        icon: <FontAwesomeIcon icon={faUserGroup} fixedWidth />,
+        accent: "friends",
+      },
+      {
+        label: "Groups",
+        href: "/groups",
+        icon: <FontAwesomeIcon icon={faPeopleGroup} fixedWidth />,
+        accent: "groups",
+      },
+      {
+        label: "Forums",
+        href: "/forums",
+        icon: <FontAwesomeIcon icon={faRectangleList} fixedWidth />,
+        accent: "forums",
+      },
       {
         label: storefrontEnabled ? "StoreFront" : "StoreFront (Coming Soon!)",
         href: "/storefront",
-        icon: Store,
+        icon: <FontAwesomeIcon icon={faStoreSolid} fixedWidth />,
+        accent: "storefront",
         disabled: !storefrontEnabled,
       },
       {
         label: newsroomEnabled ? "Newsroom" : "Newsroom (Coming soon)",
         href: "/news",
-        icon: Newspaper,
+        icon: <FontAwesomeIcon icon={faNewspaperSolid} fixedWidth />,
+        accent: "news",
         disabled: !newsroomEnabled,
       },
     ],
@@ -221,7 +242,6 @@ export default function UserMenuDrawer({
   );
 
   const renderLinkRow = (item: MenuRowLink) => {
-    const Icon = item.icon;
     const active = isActivePath(currentPath, item.href);
     const badge = formatBadge(item.badgeCount);
 
@@ -233,9 +253,7 @@ export default function UserMenuDrawer({
         data-accent={item.accent}
         onClick={onClose}
       >
-        <span className="user-menu-drawer__row-icon" aria-hidden="true">
-          <Icon size={20} />
-        </span>
+        <span className="user-menu-drawer__row-icon" aria-hidden="true">{item.icon}</span>
         <span className="user-menu-drawer__row-label">{item.label}</span>
         {badge && <span className="user-menu-drawer__badge">{badge}</span>}
       </Link>
@@ -316,7 +334,7 @@ export default function UserMenuDrawer({
                 aria-controls="user-menu-community-submenu"
               >
                 <span className="user-menu-drawer__row-icon" aria-hidden="true">
-                  <Users size={20} />
+                  <FontAwesomeIcon icon={faUserGroup} fixedWidth />
                 </span>
                 <span className="user-menu-drawer__row-label">Community</span>
                 <span
@@ -332,7 +350,6 @@ export default function UserMenuDrawer({
               {communityOpen && (
                 <div id="user-menu-community-submenu" className="user-menu-drawer__submenu">
                   {communityRows.map((item) => {
-                    const SubIcon = item.icon;
                     const active = isActivePath(currentPath, item.href);
                     const className = `user-menu-drawer__submenu-row${
                       active ? " is-active" : ""
@@ -343,20 +360,27 @@ export default function UserMenuDrawer({
                           key={item.href}
                           type="button"
                           className={className}
+                          data-accent={item.accent}
                           disabled
                           aria-disabled="true"
                         >
                           <span className="user-menu-drawer__submenu-icon" aria-hidden="true">
-                            <SubIcon size={16} />
+                            {item.icon}
                           </span>
                           <span>{item.label}</span>
                         </button>
                       );
                     }
                     return (
-                      <Link key={item.href} to={item.href} className={className} onClick={onClose}>
+                      <Link
+                        key={item.href}
+                        to={item.href}
+                        className={className}
+                        data-accent={item.accent}
+                        onClick={onClose}
+                      >
                         <span className="user-menu-drawer__submenu-icon" aria-hidden="true">
-                          <SubIcon size={16} />
+                          {item.icon}
                         </span>
                         <span>{item.label}</span>
                         <ChevronRight size={14} aria-hidden="true" />

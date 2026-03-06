@@ -27,6 +27,7 @@ const RELEASE_NOTES = [
   "Updated Like and Share Buttons",
   "Updated Chatbox look and design",
   "Updated Chats Look and Design",
+  "Added right sidebar and collapsable sidebars",
 ];
 const RELEASE_NOTES_SIGNATURE = `${RELEASE_NOTES_VERSION}:${RELEASE_NOTES.join("||")}`;
 

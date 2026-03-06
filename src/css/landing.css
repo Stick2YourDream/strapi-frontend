@@ -1184,8 +1184,7 @@
   }
 
   .landing-artboard {
-    width: 100%;
-    max-width: 420px;
+    display: none;
   }
 
   .landing-account-panel {

@@ -2,6 +2,8 @@ import "dotenv/config";
 import express from "express";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import fs from "node:fs";
+import http from "node:http";
+import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -13,12 +15,37 @@ const STATIC_DIR =
 const STRAPI_TARGET =
   process.env.STRAPI_TARGET || "http://127.0.0.1:1337";
 const PORT = Number(process.env.PORT || 4173);
+const PROXY_TIMEOUT_MS = Math.max(5000, Number(process.env.PROXY_TIMEOUT_MS || 30000));
+const READINESS_TIMEOUT_MS = Math.max(
+  500,
+  Number(process.env.READINESS_TIMEOUT_MS || 2500)
+);
 const STATIC_DIR_ABS = path.resolve(STATIC_DIR);
+const proxyTargetUrl = new URL(STRAPI_TARGET);
 const SHARE_SOURCE_SET = new Set(["user", "group", "admin"]);
 const SHARE_PREVIEW_TIMEOUT_MS = 5000;
+const ASSET_HASHED_PATH_RE = /[\\/]+assets[\\/].*\.[a-z0-9_-]{8,}\.[a-z0-9]+$/i;
+const HTML_CACHE_CONTROL = "no-cache, must-revalidate";
+const IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
+const STATIC_CACHE_CONTROL = "public, max-age=3600, stale-while-revalidate=86400";
 
 app.set("trust proxy", true);
 app.disable("x-powered-by");
+
+const proxyAgent =
+  proxyTargetUrl.protocol === "https:"
+    ? new https.Agent({
+        keepAlive: true,
+        maxSockets: 120,
+        maxFreeSockets: 24,
+        timeout: PROXY_TIMEOUT_MS,
+      })
+    : new http.Agent({
+        keepAlive: true,
+        maxSockets: 120,
+        maxFreeSockets: 24,
+        timeout: PROXY_TIMEOUT_MS,
+      });
 
 const isSecureRequest = (req) => {
   const forwardedProto = String(req.headers["x-forwarded-proto"] || "")
@@ -62,6 +89,24 @@ const resolvePrerenderedHtml = (requestPath) => {
   }
 
   return fs.existsSync(candidate) ? candidate : null;
+};
+
+const applyStaticCacheHeaders = (res, filePath) => {
+  const normalizedPath = String(filePath || "").toLowerCase();
+  const basename = path.basename(normalizedPath);
+  if (
+    basename === "index.html" ||
+    basename === "sw.js" ||
+    basename === "manifest.webmanifest"
+  ) {
+    res.setHeader("Cache-Control", HTML_CACHE_CONTROL);
+    return;
+  }
+  if (ASSET_HASHED_PATH_RE.test(normalizedPath)) {
+    res.setHeader("Cache-Control", IMMUTABLE_CACHE_CONTROL);
+    return;
+  }
+  res.setHeader("Cache-Control", STATIC_CACHE_CONTROL);
 };
 
 const normalizeSource = (value) => {
@@ -149,7 +194,72 @@ app.use((req, res, next) => {
   next();
 });
 
+app.get("/healthz", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store, max-age=0");
+  res.status(200).json({
+    status: "ok",
+    uptimeSeconds: Math.round(process.uptime()),
+    now: new Date().toISOString(),
+  });
+});
+
+const checkStrapiReadiness = async () => {
+  const target = new URL("/api", STRAPI_TARGET).toString();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), READINESS_TIMEOUT_MS);
+  try {
+    const response = await fetch(target, {
+      method: "GET",
+      headers: { accept: "application/json" },
+      signal: controller.signal,
+    });
+    return response.status < 500;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+app.get("/readyz", async (_req, res) => {
+  res.setHeader("Cache-Control", "no-store, max-age=0");
+  const ready = await checkStrapiReadiness();
+  if (!ready) {
+    res.status(503).json({ status: "degraded", upstream: "strapi-unreachable" });
+    return;
+  }
+  res.status(200).json({ status: "ready" });
+});
+
+const buildProxyMiddleware = (options = {}) =>
+  createProxyMiddleware({
+    target: STRAPI_TARGET,
+    changeOrigin: true,
+    ws: true,
+    xfwd: true,
+    agent: proxyAgent,
+    proxyTimeout: PROXY_TIMEOUT_MS,
+    timeout: PROXY_TIMEOUT_MS,
+    logLevel: "warn",
+    onError: (error, _req, res) => {
+      if (res.headersSent) return;
+      res.statusCode = 502;
+      res.setHeader("Cache-Control", "no-store, max-age=0");
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.end(
+        JSON.stringify({
+          error: "upstream_unavailable",
+          message: "Service temporarily unavailable.",
+        })
+      );
+      // eslint-disable-next-line no-console
+      console.warn("[proxy] upstream request failed", error);
+    },
+    ...options,
+  });
+
 app.get("/share/post", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store, max-age=0");
   const source = normalizeSource(req.query?.source);
   const id = String(req.query?.id || req.query?.post || "").trim();
   if (!id) {
@@ -216,39 +326,33 @@ app.get("/share/post", async (req, res) => {
 
 app.use(
   "/strapi",
-  createProxyMiddleware({
-    target: STRAPI_TARGET,
-    changeOrigin: true,
-    ws: true,
+  buildProxyMiddleware({
     pathRewrite: { "^/strapi": "" },
-    logLevel: "warn",
   })
 );
 
 app.use(
   "/api",
-  createProxyMiddleware({
-    target: STRAPI_TARGET,
-    changeOrigin: true,
-    ws: true,
+  buildProxyMiddleware({
     pathRewrite: (path) => `/api${path}`,
-    logLevel: "warn",
   })
 );
 
 app.use(
   "/uploads",
-  createProxyMiddleware({
-    target: STRAPI_TARGET,
-    changeOrigin: true,
-    ws: true,
-    logLevel: "warn",
+  buildProxyMiddleware()
+);
+
+app.use(
+  express.static(STATIC_DIR, {
+    maxAge: "1h",
+    index: false,
+    setHeaders: applyStaticCacheHeaders,
   })
 );
 
-app.use(express.static(STATIC_DIR, { maxAge: "1h" }));
-
 app.get("*", (req, res) => {
+  res.setHeader("Cache-Control", HTML_CACHE_CONTROL);
   const prerenderedFile = resolvePrerenderedHtml(req.path);
   if (prerenderedFile) {
     res.sendFile(prerenderedFile);
@@ -257,9 +361,35 @@ app.get("*", (req, res) => {
   res.sendFile(path.join(STATIC_DIR_ABS, "index.html"));
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   // eslint-disable-next-line no-console
   console.log(
     `[web-front] listening on :${PORT} | serving ${STATIC_DIR} | /strapi -> ${STRAPI_TARGET}`
   );
 });
+
+server.keepAliveTimeout = 65_000;
+server.headersTimeout = 70_000;
+server.requestTimeout = 120_000;
+
+const shutdown = (signal) => {
+  // eslint-disable-next-line no-console
+  console.log(`[web-front] received ${signal}, shutting down...`);
+  const forceExitTimer = setTimeout(() => {
+    // eslint-disable-next-line no-console
+    console.error("[web-front] force exiting after shutdown timeout");
+    process.exit(1);
+  }, 15_000);
+  forceExitTimer.unref();
+
+  server.close(() => {
+    proxyAgent.destroy();
+    clearTimeout(forceExitTimer);
+    // eslint-disable-next-line no-console
+    console.log("[web-front] shutdown complete");
+    process.exit(0);
+  });
+};
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));

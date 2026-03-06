@@ -1717,6 +1717,16 @@ const MobileSession = () => {
 };
 
 export default function App() {
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    // Keep browser install banners from covering the mobile step controls.
+    const blockInstallPrompt = (event: Event) => {
+      event.preventDefault();
+    };
+    window.addEventListener("beforeinstallprompt", blockInstallPrompt);
+    return () => window.removeEventListener("beforeinstallprompt", blockInstallPrompt);
+  }, []);
+
   usePageMeta({
     title: "Age Verification | Your Social Place",
     description: "Secure age verification workflow for private account and compliance checks.",

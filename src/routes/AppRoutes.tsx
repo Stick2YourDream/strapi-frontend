@@ -3,14 +3,23 @@ import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { Routes, Route, Navigate, useLocation, useParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import ProtectedRoute from "../components/ProtectedRoute";
+import {
+  canWarmCriticalRouteChunks,
+  loadDashboardRoute,
+  loadMeRoute,
+  loadStorefrontSellerRoute,
+  preloadDashboardRoute,
+  preloadMeRoute,
+  preloadStorefrontSellerRoute,
+} from "./routePreloaders";
 
 const VerifyEmail = lazy(() => import("../pages/verify-email"));
 const ForgotPassword = lazy(() => import("../pages/forgot-password"));
 const ResetPassword = lazy(() => import("../pages/reset-password"));
-const Dashboard = lazy(() => import("../pages/dashboard"));
+const Dashboard = lazy(loadDashboardRoute);
 const Friends = lazy(() => import("../pages/friends"));
 const FriendProfile = lazy(() => import("../pages/friend-profile"));
-const Me = lazy(() => import("../pages/me"));
+const Me = lazy(loadMeRoute);
 const MyPosts = lazy(() => import("../pages/my-posts"));
 const MyGallery = lazy(() => import("../pages/my-gallery"));
 const PostManager = lazy(() => import("../pages/post-manager"));
@@ -38,7 +47,7 @@ const Downloads = lazy(() => import("../pages/downloads"));
 const Forums = lazy(() => import("../pages/forums"));
 const Storefront = lazy(() => import("../pages/storefront"));
 const StorefrontListing = lazy(() => import("../pages/storefront-listing"));
-const StorefrontSeller = lazy(() => import("../pages/storefront-seller"));
+const StorefrontSeller = lazy(loadStorefrontSellerRoute);
 const StorefrontPaymentMethods = lazy(() => import("../pages/storefront-payment-methods"));
 const AgeVerifyApp = lazy(() => import("../modules/age-verify/AgeVerifyApp"));
 const Support = lazy(() => import("../pages/support"));
@@ -114,6 +123,69 @@ export default function AppRoutes(): JSX.Element {
     if (typeof window === "undefined") return;
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
   }, [location.pathname, location.search]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !isAuthed) return;
+    if (!canWarmCriticalRouteChunks()) return;
+
+    const normalizedPath = location.pathname.toLowerCase();
+    const warmQueue: Array<() => void> = [];
+
+    if (normalizedPath.startsWith("/dashboard")) {
+      warmQueue.push(preloadMeRoute);
+      if (storefrontEnabled) {
+        warmQueue.push(preloadStorefrontSellerRoute);
+      }
+    } else if (normalizedPath.startsWith("/me")) {
+      warmQueue.push(preloadDashboardRoute);
+      if (storefrontEnabled) {
+        warmQueue.push(preloadStorefrontSellerRoute);
+      }
+    } else if (normalizedPath.startsWith("/storefront")) {
+      warmQueue.push(preloadStorefrontSellerRoute, preloadDashboardRoute, preloadMeRoute);
+    } else {
+      warmQueue.push(preloadDashboardRoute, preloadMeRoute);
+      if (storefrontEnabled) {
+        warmQueue.push(preloadStorefrontSellerRoute);
+      }
+    }
+
+    const uniqueWarmQueue = Array.from(new Set(warmQueue));
+    const warmTimers: number[] = [];
+    const runWarmups = () => {
+      uniqueWarmQueue.forEach((warmRoute, index) => {
+        const timer = window.setTimeout(() => {
+          warmRoute();
+        }, index * 180);
+        warmTimers.push(timer);
+      });
+    };
+
+    let cancelWarmupTrigger = () => {};
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+
+    if (typeof idleWindow.requestIdleCallback === "function") {
+      const idleId = idleWindow.requestIdleCallback(() => runWarmups(), { timeout: 1500 });
+      cancelWarmupTrigger = () => {
+        if (typeof idleWindow.cancelIdleCallback === "function") {
+          idleWindow.cancelIdleCallback(idleId);
+        }
+      };
+    } else {
+      const fallbackTimer = window.setTimeout(runWarmups, 550);
+      cancelWarmupTrigger = () => {
+        window.clearTimeout(fallbackTimer);
+      };
+    }
+
+    return () => {
+      cancelWarmupTrigger();
+      warmTimers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [isAuthed, location.pathname, storefrontEnabled]);
 
   return (
     <Routes>

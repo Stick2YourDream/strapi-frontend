@@ -1575,11 +1575,6 @@ export default function Landing() {
     await startInlineLogin();
   };
 
-  const handleInlineUseAuthenticator = async () => {
-    if (loginLoading || verifying) return;
-    await startInlineLogin("totp");
-  };
-
   const handleInlineUseCodeFallback = async () => {
     if (loginLoading || verifying) return;
     const normalized = identifier.trim().toLowerCase();
@@ -2609,10 +2604,9 @@ export default function Landing() {
                           <button
                             type="button"
                             className="landing-btn landing-btn--ghost"
-                            onClick={() => void handleInlineUseAuthenticator()}
-                            disabled={loginLoading || verifying}
+                            onClick={() => navigate("/forgot-password")}
                           >
-                            Use authenticator app
+                            Forgot password?
                           </button>
                           {loginError &&
                             loginError.toLowerCase().includes("authenticator app is not configured") && (
@@ -2627,13 +2621,6 @@ export default function Landing() {
                                   : "Use text code instead"}
                               </button>
                             )}
-                          <button
-                            type="button"
-                            className="landing-btn landing-btn--ghost"
-                            onClick={() => navigate("/forgot-password")}
-                          >
-                            Forgot password?
-                          </button>
                         </>
                       ) : (
                         <div className="landing-login-inline-actions">

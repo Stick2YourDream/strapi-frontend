@@ -1,18 +1,40 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Download, Home, LayoutDashboard, LogOut, Settings, User, X } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  Home,
+  LayoutDashboard,
+  LogOut,
+  MessageSquare,
+  Newspaper,
+  Search,
+  Settings,
+  Shield,
+  Store,
+  User,
+  Users,
+  UsersRound,
+  X,
+} from "lucide-react";
 import "../css/dashboard.css";
 import "../css/storefront.css";
 import "../css/sidebar.css";
 import FullScreenLoader from "../components/FullScreenLoader";
-import TopbarSearch from "../components/TopbarSearch";
 import api from "../api/strapi";
 import AvatarImage from "../components/AvatarImage";
 import ProfilePhotoModal from "../components/ProfilePhotoModal";
+import RightSidebarShell from "../components/RightSidebarShell";
 import { useAuth } from "../context/AuthContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { pickMediaUrls } from "../utils/media";
+import {
+  canWarmCriticalRouteChunks,
+  preloadCriticalRouteForPath,
+  preloadStorefrontSellerRoute,
+} from "../routes/routePreloaders";
 import {
   STOREFRONT_DEMO_COUNT_KEY,
   STOREFRONT_DEMO_ENABLED_KEY,
@@ -144,6 +166,15 @@ const getEntityId = (value: any) => {
   return Number.isFinite(numeric) ? numeric : null;
 };
 
+const DESKTOP_SIDEBAR_COLLAPSE_KEY = "dashboard:desktop-sidebar-collapsed";
+
+const readDesktopSidebarCollapsed = () => {
+  if (typeof window === "undefined") return true;
+  const stored = window.localStorage.getItem(DESKTOP_SIDEBAR_COLLAPSE_KEY);
+  if (stored === null) return true;
+  return stored === "1";
+};
+
 export default function Storefront() {
   usePageMeta({
     title: "StoreFront | Your Social Place",
@@ -175,8 +206,9 @@ export default function Storefront() {
   const [freeOnly, setFreeOnly] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [desktopCollapsed, setDesktopCollapsed] = useState(readDesktopSidebarCollapsed);
   const [photoModalOpen, setPhotoModalOpen] = useState(false);
-  const { user, profile, logout } = useAuth();
+  const { user, profile, appSettings, logout } = useAuth();
   const loadingStartedRef = useRef(false);
   const listingGridRef = useRef<HTMLDivElement | null>(null);
   const [demoEnabled, setDemoEnabled] = useState(readStorefrontDemoEnabled);
@@ -467,11 +499,17 @@ export default function Storefront() {
     listingGridRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
+  const handleSellerRouteIntent = () => {
+    preloadStorefrontSellerRoute();
+  };
+
   const handleListProduct = () => {
+    handleSellerRouteIntent();
     navigate("/storefront/seller#list");
   };
 
   const handleOpenSellerDashboard = () => {
+    handleSellerRouteIntent();
     navigate("/storefront/seller");
   };
 
@@ -511,6 +549,58 @@ export default function Storefront() {
     void loadListings();
   }, [loadListings]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(
+      DESKTOP_SIDEBAR_COLLAPSE_KEY,
+      desktopCollapsed ? "1" : "0"
+    );
+  }, [desktopCollapsed]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const className = "ysp-sidebar-collapsed";
+    if (desktopCollapsed) {
+      document.body.classList.add(className);
+    } else {
+      document.body.classList.remove(className);
+    }
+    return () => {
+      document.body.classList.remove(className);
+    };
+  }, [desktopCollapsed]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!canWarmCriticalRouteChunks()) return;
+
+    let cancelWarmupTrigger = () => {};
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+
+    if (typeof idleWindow.requestIdleCallback === "function") {
+      const idleId = idleWindow.requestIdleCallback(() => handleSellerRouteIntent(), {
+        timeout: 1200,
+      });
+      cancelWarmupTrigger = () => {
+        if (typeof idleWindow.cancelIdleCallback === "function") {
+          idleWindow.cancelIdleCallback(idleId);
+        }
+      };
+    } else {
+      const fallbackTimer = window.setTimeout(handleSellerRouteIntent, 500);
+      cancelWarmupTrigger = () => {
+        window.clearTimeout(fallbackTimer);
+      };
+    }
+
+    return () => {
+      cancelWarmupTrigger();
+    };
+  }, []);
+
   const pageBackground = getBackgroundStyle("storefront") || getBackgroundStyle("dashboard");
   const showInitialLoader = loadingListings && !hasLoadedOnce;
   const displayName =
@@ -520,18 +610,172 @@ export default function Storefront() {
   const handleLine = profile?.handle || user?.email || "Profile";
   const avatarUrl = profile?.avatarUrl;
   const fallbackInitial = displayName.charAt(0).toUpperCase();
+  const newsroomEnabled = appSettings?.newsroomEnabled !== false;
+  const storefrontEnabled = appSettings?.storefrontEnabled !== false;
+  const isStaff = user?.appRole === "admin" || user?.appRole === "moderator";
+  const isDesktopVisuallyCollapsed = desktopCollapsed;
 
   const handleLogoClick = () => {
+    preloadCriticalRouteForPath("/dashboard");
     navigate("/dashboard");
     setShowProfileMenu(false);
     setMenuOpen(false);
   };
 
   const handleProfileAction = (path: string) => {
+    preloadCriticalRouteForPath(path);
     navigate(path);
     setShowProfileMenu(false);
     setMenuOpen(false);
   };
+
+  const toggleDesktopCollapse = () => setDesktopCollapsed((prev) => !prev);
+
+  const renderStorefrontSidebarPanel = (idPrefix: string, panelClassName = "") => (
+    <div
+      className={`storefront-sidebar-panel${panelClassName ? ` ${panelClassName}` : ""}`}
+    >
+      <div className="storefront-sidebar-header">
+        <p className="storefront-sidebar-eyebrow">Search listings</p>
+        <h3>Find exactly what you want</h3>
+        <p className="storefront-sidebar-sub">
+          Filter by location, price, and seller verification to narrow results fast.
+        </p>
+      </div>
+
+      <div className="storefront-sidebar-group">
+        <label className="storefront-field" htmlFor={`${idPrefix}-search`}>
+          <span>Keyword</span>
+          <input
+            id={`${idPrefix}-search`}
+            type="text"
+            placeholder="Search title, description, or location"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </label>
+        <label className="storefront-field" htmlFor={`${idPrefix}-location`}>
+          <span>Location</span>
+          <input
+            id={`${idPrefix}-location`}
+            type="text"
+            placeholder="City or state"
+            value={locationFilter}
+            onChange={(event) => setLocationFilter(event.target.value)}
+          />
+        </label>
+        <label className="storefront-field" htmlFor={`${idPrefix}-radius`}>
+          <span>Radius (miles)</span>
+          <input
+            id={`${idPrefix}-radius`}
+            type="number"
+            min="1"
+            step="1"
+            placeholder="e.g. 25"
+            value={radiusMiles}
+            onChange={(event) => setRadiusMiles(event.target.value)}
+          />
+        </label>
+        <p className="storefront-field-hint">
+          The radius is stored and prefilled but not used to actually filter listings yet
+          because listings only have a text location string (no lat/long). If you want true
+          radius filtering, I can add geocoding + distance checks.
+        </p>
+      </div>
+
+      <div className="storefront-sidebar-group">
+        <label className="storefront-field" htmlFor={`${idPrefix}-category`}>
+          <span>Category</span>
+          <select
+            id={`${idPrefix}-category`}
+            value={categoryFilter}
+            onChange={(event) => setCategoryFilter(event.target.value)}
+          >
+            {CATEGORY_OPTIONS.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="storefront-field" htmlFor={`${idPrefix}-condition`}>
+          <span>Condition</span>
+          <select
+            id={`${idPrefix}-condition`}
+            value={conditionFilter}
+            onChange={(event) => setConditionFilter(event.target.value)}
+          >
+            {CONDITION_OPTIONS.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div className="storefront-sidebar-group">
+        <div className="storefront-field">
+          <span>Price range</span>
+          <div className="storefront-range">
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="Min"
+              value={minPrice}
+              onChange={(event) => setMinPrice(event.target.value)}
+            />
+            <span className="storefront-range-sep">to</span>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="Max"
+              value={maxPrice}
+              onChange={(event) => setMaxPrice(event.target.value)}
+            />
+          </div>
+        </div>
+        <label className="storefront-field" htmlFor={`${idPrefix}-sort`}>
+          <span>Sort</span>
+          <select
+            id={`${idPrefix}-sort`}
+            value={sortMode}
+            onChange={(event) => setSortMode(event.target.value as "default" | "trending")}
+          >
+            <option value="default">Newest</option>
+            <option value="trending">Trending</option>
+          </select>
+        </label>
+      </div>
+
+      <div className="storefront-sidebar-toggles">
+        <label className="storefront-toggle">
+          <input
+            type="checkbox"
+            checked={verifiedOnly}
+            onChange={(event) => setVerifiedOnly(event.target.checked)}
+          />
+          <span className="storefront-switch" aria-hidden="true">
+            <span className="storefront-switch-thumb" />
+          </span>
+          <span className="storefront-toggle-text">Verified sellers only</span>
+        </label>
+        <label className="storefront-toggle">
+          <input
+            type="checkbox"
+            checked={freeOnly}
+            onChange={(event) => setFreeOnly(event.target.checked)}
+          />
+          <span className="storefront-switch" aria-hidden="true">
+            <span className="storefront-switch-thumb" />
+          </span>
+          <span className="storefront-toggle-text">Show free items only</span>
+        </label>
+      </div>
+    </div>
+  );
 
   return (
     <div className="dashboard-shell storefront-shell" style={pageBackground}>
@@ -540,7 +784,11 @@ export default function Storefront() {
         open={photoModalOpen}
         onClose={() => setPhotoModalOpen(false)}
       />
-      <div className={`sidebar-shell ${menuOpen ? "open" : ""}`}>
+      <div
+        className={`sidebar-shell ${menuOpen ? "open" : ""}${
+          isDesktopVisuallyCollapsed ? " is-desktop-collapsed" : ""
+        }`}
+      >
         <div className="sidebar-topbar">
           <button className="brand" type="button" onClick={handleLogoClick} style={{ cursor: "pointer" }}>
             <span className="brand-mark" aria-hidden="true">
@@ -687,12 +935,28 @@ export default function Storefront() {
         )}
 
         <aside className="dash-nav storefront-filter-nav">
-          <button className="brand" type="button" onClick={handleLogoClick}>
-            <span className="brand-mark" aria-hidden="true">
-              <img src="/logo2.png" alt="Your Social Place Logo" />
-            </span>
-            <span className="brand-text">Your Social Place</span>
-          </button>
+          <div className="sidebar-brand-row">
+            <button className="brand" type="button" onClick={handleLogoClick}>
+              <span className="brand-mark" aria-hidden="true">
+                <img src="/logo2.png" alt="Your Social Place Logo" />
+              </span>
+              <span className="brand-text">Your Social Place</span>
+            </button>
+            <button
+              type="button"
+              className={`sidebar-desktop-toggle${desktopCollapsed ? " is-collapsed" : ""}`}
+              onClick={toggleDesktopCollapse}
+              aria-pressed={!desktopCollapsed}
+              aria-label={desktopCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              title={desktopCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            >
+              {desktopCollapsed ? (
+                <ChevronRight size={16} className="sidebar-toggle-icon" aria-hidden="true" />
+              ) : (
+                <ChevronLeft size={16} className="sidebar-toggle-icon" aria-hidden="true" />
+              )}
+            </button>
+          </div>
 
           <div className="sidebar-profile-slot">
             <div className="sidebar-profile-row">
@@ -702,6 +966,7 @@ export default function Storefront() {
                 onClick={() => setShowProfileMenu((prev) => !prev)}
                 aria-expanded={showProfileMenu}
                 aria-controls="storefront-sidebar-profile-menu"
+                data-collapsed-tooltip={`${displayName} (${handleLine})`}
               >
                 {avatarUrl ? (
                   <AvatarImage
@@ -841,201 +1106,182 @@ export default function Storefront() {
             )}
           </div>
 
-          <div className="sidebar-nav-links">
-            <button
-              type="button"
-              className="btn ghost sidebar-nav-link"
-              data-accent="dashboard"
-              onClick={() => handleProfileAction("/dashboard")}
-            >
-              <span className="sidebar-nav-icon" aria-hidden="true">
-                <LayoutDashboard size={18} />
-              </span>
-              <span>Back to dashboard</span>
-            </button>
-          </div>
-
-          <div className="storefront-sidebar-panel">
-            <div className="storefront-sidebar-header">
-              <p className="storefront-sidebar-eyebrow">Search listings</p>
-              <h3>Find exactly what you want</h3>
-              <p className="storefront-sidebar-sub">
-                Filter by location, price, and seller verification to narrow results fast.
-              </p>
+          <div className="sidebar-nav-links" role="navigation" aria-label="Main navigation">
+            <div className="sidebar-nav-section" aria-label="Primary">
+              <p className="sidebar-nav-section-label">Primary</p>
+              <button
+                type="button"
+                className="btn ghost sidebar-nav-link"
+                data-accent="dashboard"
+                data-collapsed-tooltip="My Dashboard"
+                onClick={() => handleProfileAction("/dashboard")}
+                onMouseEnter={() => preloadCriticalRouteForPath("/dashboard")}
+                onFocus={() => preloadCriticalRouteForPath("/dashboard")}
+                onTouchStart={() => preloadCriticalRouteForPath("/dashboard")}
+              >
+                <span className="sidebar-nav-icon" aria-hidden="true">
+                  <LayoutDashboard size={18} />
+                </span>
+                <span>My Dashboard</span>
+              </button>
+              <button
+                type="button"
+                className="btn ghost sidebar-nav-link"
+                data-accent="profile"
+                data-collapsed-tooltip="My Profile"
+                onClick={() => handleProfileAction("/me")}
+              >
+                <span className="sidebar-nav-icon" aria-hidden="true">
+                  <User size={18} />
+                </span>
+                <span>My Profile</span>
+              </button>
+              <button
+                type="button"
+                className="btn ghost sidebar-nav-link"
+                data-accent="friends"
+                data-collapsed-tooltip="My Friends"
+                onClick={() => handleProfileAction("/friends")}
+              >
+                <span className="sidebar-nav-icon" aria-hidden="true">
+                  <Users size={18} />
+                </span>
+                <span>My Friends</span>
+              </button>
+              <button
+                type="button"
+                className="btn ghost sidebar-nav-link"
+                data-accent="groups"
+                data-collapsed-tooltip="My Groups"
+                onClick={() => handleProfileAction("/groups")}
+              >
+                <span className="sidebar-nav-icon" aria-hidden="true">
+                  <UsersRound size={18} />
+                </span>
+                <span>My Groups</span>
+              </button>
+              <button
+                type="button"
+                className="btn ghost sidebar-nav-link"
+                data-accent="forums"
+                data-collapsed-tooltip="Forums"
+                onClick={() => handleProfileAction("/forums")}
+              >
+                <span className="sidebar-nav-icon" aria-hidden="true">
+                  <MessageSquare size={18} />
+                </span>
+                <span>Forums</span>
+              </button>
             </div>
 
-            <div className="storefront-sidebar-group">
-              <label className="storefront-field" htmlFor="storefront-search">
-                <span>Keyword</span>
-                <input
-                  id="storefront-search"
-                  type="text"
-                  placeholder="Search title, description, or location"
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                />
-              </label>
-              <label className="storefront-field" htmlFor="storefront-location">
-                <span>Location</span>
-                <input
-                  id="storefront-location"
-                  type="text"
-                  placeholder="City or state"
-                  value={locationFilter}
-                  onChange={(event) => setLocationFilter(event.target.value)}
-                />
-              </label>
-              <label className="storefront-field" htmlFor="storefront-radius">
-                <span>Radius (miles)</span>
-                <input
-                  id="storefront-radius"
-                  type="number"
-                  min="1"
-                  step="1"
-                  placeholder="e.g. 25"
-                  value={radiusMiles}
-                  onChange={(event) => setRadiusMiles(event.target.value)}
-                />
-              </label>
-              <p className="storefront-field-hint">
-                The radius is stored and prefilled but not used to actually filter listings yet
-                because listings only have a text location string (no lat/long). If you want true
-                radius filtering, I can add geocoding + distance checks.
-              </p>
+            <div className="sidebar-nav-section" aria-label="Content and commerce">
+              <p className="sidebar-nav-section-label">Content &amp; Commerce</p>
+              <button
+                type="button"
+                className={`btn ghost sidebar-nav-link${
+                  !storefrontEnabled ? " sidebar-nav-link--disabled" : ""
+                } is-active`}
+                data-accent="storefront"
+                data-collapsed-tooltip={
+                  storefrontEnabled ? "StoreFront" : "StoreFront (Coming Soon!)"
+                }
+                disabled={!storefrontEnabled}
+                aria-disabled={!storefrontEnabled}
+                onClick={() => {
+                  if (!storefrontEnabled) return;
+                  handleProfileAction("/storefront");
+                }}
+              >
+                <span className="sidebar-nav-icon" aria-hidden="true">
+                  <Store size={18} />
+                </span>
+                <span>{storefrontEnabled ? "StoreFront" : "StoreFront (Coming Soon!)"}</span>
+              </button>
+              <button
+                type="button"
+                className={`btn ghost sidebar-nav-link${
+                  !newsroomEnabled ? " sidebar-nav-link--disabled" : ""
+                }`}
+                data-accent="news"
+                data-collapsed-tooltip={
+                  newsroomEnabled ? "Newsroom" : "Newsroom (Coming soon)"
+                }
+                disabled={!newsroomEnabled}
+                aria-disabled={!newsroomEnabled}
+                onClick={() => {
+                  if (!newsroomEnabled) return;
+                  handleProfileAction("/news");
+                }}
+              >
+                <span className="sidebar-nav-icon" aria-hidden="true">
+                  <Newspaper size={18} />
+                </span>
+                <span>{newsroomEnabled ? "Newsroom" : "Newsroom (Coming soon)"}</span>
+              </button>
             </div>
 
-            <div className="storefront-sidebar-group">
-              <label className="storefront-field" htmlFor="storefront-category">
-                <span>Category</span>
-                <select
-                  id="storefront-category"
-                  value={categoryFilter}
-                  onChange={(event) => setCategoryFilter(event.target.value)}
+            {isStaff && (
+              <div className="sidebar-nav-section sidebar-nav-section--admin" aria-label="Admin and safety">
+                <p className="sidebar-nav-section-label">Admin &amp; Safety</p>
+                <button
+                  type="button"
+                  className="btn ghost sidebar-nav-link"
+                  data-accent="moderation"
+                  data-collapsed-tooltip="Moderation"
+                  onClick={() => handleProfileAction("/moderation")}
                 >
-                  {CATEGORY_OPTIONS.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="storefront-field" htmlFor="storefront-condition">
-                <span>Condition</span>
-                <select
-                  id="storefront-condition"
-                  value={conditionFilter}
-                  onChange={(event) => setConditionFilter(event.target.value)}
-                >
-                  {CONDITION_OPTIONS.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <div className="storefront-sidebar-group">
-              <div className="storefront-field">
-                <span>Price range</span>
-                <div className="storefront-range">
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    placeholder="Min"
-                    value={minPrice}
-                    onChange={(event) => setMinPrice(event.target.value)}
-                  />
-                  <span className="storefront-range-sep">to</span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    placeholder="Max"
-                    value={maxPrice}
-                    onChange={(event) => setMaxPrice(event.target.value)}
-                  />
-                </div>
+                  <span className="sidebar-nav-icon" aria-hidden="true">
+                    <Shield size={18} />
+                  </span>
+                  <span>Moderation</span>
+                </button>
               </div>
-              <label className="storefront-field" htmlFor="storefront-sort">
-                <span>Sort</span>
-                <select
-                  id="storefront-sort"
-                  value={sortMode}
-                  onChange={(event) => setSortMode(event.target.value as "default" | "trending")}
-                >
-                  <option value="default">Newest</option>
-                  <option value="trending">Trending</option>
-                </select>
-              </label>
-            </div>
+            )}
+          </div>
 
-          <div className="storefront-sidebar-toggles">
-            <label className="storefront-toggle">
-              <input
-                type="checkbox"
-                checked={verifiedOnly}
-                onChange={(event) => setVerifiedOnly(event.target.checked)}
-              />
-              <span className="storefront-switch" aria-hidden="true">
-                <span className="storefront-switch-thumb" />
-              </span>
-              <span className="storefront-toggle-text">Verified sellers only</span>
-            </label>
-            <label className="storefront-toggle">
-              <input
-                type="checkbox"
-                checked={freeOnly}
-                onChange={(event) => setFreeOnly(event.target.checked)}
-              />
-              <span className="storefront-switch" aria-hidden="true">
-                <span className="storefront-switch-thumb" />
-              </span>
-              <span className="storefront-toggle-text">Show free items only</span>
-            </label>
-          </div>
-          </div>
+          {renderStorefrontSidebarPanel(
+            "storefront-left",
+            "storefront-sidebar-panel--desktop-hidden"
+          )}
         </aside>
       </div>
+      <RightSidebarShell
+        ariaLabel="Storefront search sidebar"
+        headTitle="Search listings"
+        headSubtitle={`${filteredProducts.length} results`}
+        headIcon={<Search size={18} />}
+        headTooltip="Storefront search"
+        className="right-search-sidebar"
+      >
+        {renderStorefrontSidebarPanel("storefront-right")}
+      </RightSidebarShell>
 
       <div className="main-content storefront-page">
-        <TopbarSearch />
-
-        <section className="dash-hero storefront-hero">
-          <div className="storefront-hero-copy">
-            <p className="storefront-eyebrow">StoreFront</p>
-            <h1>Find verified listings across every category.</h1>
-            <p>
-              Explore everything from free picks to cars and collectibles. Tap a listing to
-              view details, message the seller, or send a bargain offer.
-            </p>
-            <div className="storefront-hero-actions">
-              <button className="btn primary" type="button" onClick={handleListProduct}>
-                List a product
-              </button>
-              <button className="btn ghost" type="button" onClick={handleBrowseTrending}>
-                Browse trending
-              </button>
-              <button className="btn ghost" type="button" onClick={handleOpenSellerDashboard}>
-                Seller dashboard
-              </button>
-            </div>
-          </div>
-          <div className="storefront-hero-stats">
-            <div className="storefront-stat">
-              <span>Active listings</span>
-              <strong>{products.length}</strong>
-            </div>
-            <div className="storefront-stat">
-              <span>Platform fee</span>
-              <strong>2%</strong>
-              <small className="storefront-stat-note">4% for non-verified users</small>
-            </div>
-            <div className="storefront-stat">
-              <span>Verified protection</span>
-              <strong>Buyer + Seller</strong>
-            </div>
+        <section className="storefront-quick-actions" aria-label="Storefront quick actions">
+          <div className="storefront-hero-actions">
+            <button
+              className="btn primary"
+              type="button"
+              onClick={handleListProduct}
+              onMouseEnter={handleSellerRouteIntent}
+              onFocus={handleSellerRouteIntent}
+              onTouchStart={handleSellerRouteIntent}
+            >
+              List a product
+            </button>
+            <button className="btn ghost" type="button" onClick={handleBrowseTrending}>
+              Browse trending
+            </button>
+            <button
+              className="btn ghost"
+              type="button"
+              onClick={handleOpenSellerDashboard}
+              onMouseEnter={handleSellerRouteIntent}
+              onFocus={handleSellerRouteIntent}
+              onTouchStart={handleSellerRouteIntent}
+            >
+              Seller dashboard
+            </button>
           </div>
         </section>
 

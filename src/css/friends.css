@@ -377,6 +377,12 @@
 .friends-sidebar {
   display: grid;
   gap: 16px;
+  width: 100%;
+  align-content: start;
+}
+
+.friends-sidebar-dashboard {
+  width: 100%;
 }
 
 .friends-sidebar-panel {
@@ -389,6 +395,247 @@
 
 .friends-sidebar-panel .friend-pagination {
   justify-content: flex-start;
+}
+
+.friends-mobile-browser {
+  display: grid;
+  gap: 10px;
+}
+
+.friend-avatar-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  margin: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: default;
+}
+
+.friend-avatar-trigger:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.4);
+}
+
+.friends-mobile-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: none;
+}
+
+.friends-mobile-picker-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  background:
+    radial-gradient(circle at 50% 16%, rgba(20, 61, 134, 0.34), rgba(3, 8, 20, 0.82)),
+    rgba(3, 8, 20, 0.62);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.friends-mobile-picker {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(430px, calc(100vw - 18px));
+  max-height: min(86vh, 760px);
+  overflow: hidden;
+  padding: 12px;
+  border-radius: 24px;
+  border: 1px solid rgba(125, 211, 252, 0.22);
+  background:
+    radial-gradient(130% 140% at 8% 0%, rgba(35, 82, 178, 0.3), rgba(6, 12, 28, 0)),
+    linear-gradient(165deg, rgba(6, 14, 34, 0.98), rgba(3, 8, 21, 0.98));
+  box-shadow:
+    0 28px 72px rgba(1, 4, 14, 0.72),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+}
+
+.friends-mobile-picker__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.friends-mobile-picker__close {
+  border: 1px solid rgba(144, 179, 245, 0.34);
+  background: rgba(8, 15, 32, 0.88);
+  color: #cfe0ff;
+  border-radius: 999px;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease,
+    color 0.18s ease;
+}
+
+.friends-mobile-picker__close:hover {
+  border-color: rgba(125, 211, 252, 0.62);
+  color: #f8fbff;
+  box-shadow: 0 12px 20px rgba(2, 6, 23, 0.56);
+  transform: translateY(-1px);
+}
+
+.friends-mobile-picker__body {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+  display: grid;
+  gap: 10px;
+}
+
+.friends-mobile-picker__body .friend-search {
+  margin-top: 0;
+}
+
+.friends-mobile-picker__body .friend-search-input {
+  margin-bottom: 0;
+}
+
+@media (min-width: 961px) {
+  .friends-sidebar--desktop-hidden {
+    display: none;
+  }
+
+  .friends-mobile-browser {
+    display: none;
+  }
+
+  .friends-mobile-picker-overlay {
+    display: none !important;
+  }
+}
+
+@media (max-width: 960px) {
+  .friend-avatar-trigger {
+    cursor: pointer;
+  }
+
+  .friend-avatar-trigger:active {
+    transform: scale(0.98);
+  }
+
+  .friends-mobile-picker-overlay {
+    display: block;
+  }
+
+  .friends-mobile-picker {
+    width: min(430px, calc(100vw - 16px));
+    max-height: min(88vh, 760px);
+    border-radius: 18px;
+    padding: 10px;
+  }
+}
+
+@media (min-width: 961px) {
+  .sidebar-shell.is-desktop-collapsed .friends-sidebar {
+    gap: 8px;
+    justify-items: center;
+  }
+
+  .sidebar-shell.is-desktop-collapsed .friends-sidebar .friends-sidebar-dashboard {
+    width: 46px;
+    height: 46px;
+    padding: 0;
+    border-radius: 999px;
+  }
+
+  .sidebar-shell.is-desktop-collapsed
+    .friends-sidebar
+    .friends-sidebar-dashboard
+    .sidebar-nav-icon {
+    width: 24px;
+    height: 24px;
+    flex: 0 0 24px;
+  }
+
+  .sidebar-shell.is-desktop-collapsed
+    .friends-sidebar
+    .friends-sidebar-dashboard
+    .sidebar-nav-icon
+    svg {
+    width: 24px;
+    height: 24px;
+  }
+
+  .sidebar-shell.is-desktop-collapsed .friends-sidebar .friends-sidebar-panel {
+    gap: 8px;
+    padding: 10px 0;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    overflow: visible;
+  }
+
+  .sidebar-shell.is-desktop-collapsed .friends-sidebar .friend-panel-header,
+  .sidebar-shell.is-desktop-collapsed .friends-sidebar .friend-search,
+  .sidebar-shell.is-desktop-collapsed .friends-sidebar .friend-pagination,
+  .sidebar-shell.is-desktop-collapsed .friends-sidebar .status {
+    display: none;
+  }
+
+  .sidebar-shell.is-desktop-collapsed .friends-sidebar .friend-mini-list {
+    gap: 7px;
+  }
+
+  .sidebar-shell.is-desktop-collapsed .friends-sidebar .friend-mini-item {
+    display: flex;
+    justify-content: center;
+  }
+
+  .sidebar-shell.is-desktop-collapsed .friends-sidebar .friend-mini-button {
+    width: 46px;
+    height: 46px;
+    grid-template-columns: auto;
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .sidebar-shell.is-desktop-collapsed .friends-sidebar .friend-mini-meta {
+    display: none;
+  }
+
+  .sidebar-shell.is-desktop-collapsed .friends-sidebar .friend-mini-button .presence-avatar,
+  .sidebar-shell.is-desktop-collapsed .friends-sidebar .friend-mini-button .friend-avatar {
+    width: 40px;
+    height: 40px;
+  }
+
+  .sidebar-shell.is-desktop-collapsed .friends-sidebar .friend-mini-button:hover {
+    transform: none;
+    border-color: rgba(125, 211, 252, 0.52);
+    background: rgba(13, 24, 46, 0.48);
+    box-shadow: 0 10px 22px rgba(0, 0, 0, 0.28);
+  }
+
+  .sidebar-shell.is-desktop-collapsed .friends-sidebar .friend-mini-button.is-active {
+    border-color: rgba(92, 240, 199, 0.62);
+    background: rgba(17, 38, 40, 0.42);
+  }
+
+  .sidebar-shell.is-desktop-collapsed .friends-sidebar .presence-dot {
+    display: none;
+  }
 }
 
 .friend-panel-header > * {
@@ -1230,6 +1477,20 @@
 
 .friend-link-preview .link-preview-card {
   margin-top: 0;
+}
+
+@media (max-width: 450px) {
+  .friends-mobile-picker {
+    width: min(360px, 90vw);
+    max-width: calc(100vw - 16px);
+    max-height: min(90vh, 760px);
+    border-radius: 16px;
+    padding: 8px;
+  }
+
+  .friends-mobile-picker__header h3 {
+    font-size: 1.2rem;
+  }
 }
 
 .friend-current-card .link-preview-media {

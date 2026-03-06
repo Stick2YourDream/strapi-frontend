@@ -18,7 +18,6 @@ import { useUserPreferences } from "../context/UserPreferencesContext";
 import api from "../api/strapi";
 import axios from "axios";
 import Sidebar from "../components/Sidebar";
-import TopbarSearch from "../components/TopbarSearch";
 import LinkPreviewCard from "../components/LinkPreviewCard";
 import ProfilePhotoModal from "../components/ProfilePhotoModal";
 import PopupModal from "../components/PopupModal";
@@ -81,6 +80,8 @@ const SETTINGS_SECTION_IDS = [
   "time-limits",
   "changes",
 ] as const;
+const AUTHENTICATOR_APP_UNAVAILABLE_MESSAGE =
+  "Authenticator app is currently not working, we are sorry for the inconvenience";
 
 type SettingsSection = (typeof SETTINGS_SECTION_IDS)[number];
 
@@ -1271,17 +1272,18 @@ export default function Me() {
   const [twoFactorMethod, setTwoFactorMethod] = useState<TwoFactorMethod>("email");
   const [twoFactorHasAuthenticator, setTwoFactorHasAuthenticator] = useState(false);
   const [twoFactorLoading, setTwoFactorLoading] = useState(false);
-  const [twoFactorResetting, setTwoFactorResetting] = useState(false);
+  const [twoFactorResetting] = useState(false);
   const [twoFactorError, setTwoFactorError] = useState<string | null>(null);
   const [twoFactorSuccess, setTwoFactorSuccess] = useState<string | null>(null);
+  const [twoFactorNotice, setTwoFactorNotice] = useState<string | null>(null);
   const [phoneVerified, setPhoneVerified] = useState<boolean | null>(null);
   const [totpSetup, setTotpSetup] = useState<{
     otpauthUrl: string;
     qrCodeDataUrl: string;
   } | null>(null);
   const [totpCode, setTotpCode] = useState("");
-  const [totpSetupLoading, setTotpSetupLoading] = useState(false);
-  const [totpVerifyLoading, setTotpVerifyLoading] = useState(false);
+  const [totpSetupLoading] = useState(false);
+  const [totpVerifyLoading] = useState(false);
   const [pushStatus, setPushStatus] = useState<PushSyncStatus | null>(null);
   const [pushError, setPushError] = useState<string | null>(null);
   const [privacySaving, setPrivacySaving] = useState(false);
@@ -3787,6 +3789,18 @@ export default function Me() {
     }
   };
 
+  useEffect(() => {
+    if (!twoFactorNotice) return;
+    const timeoutId = window.setTimeout(() => {
+      setTwoFactorNotice(null);
+    }, 4200);
+    return () => window.clearTimeout(timeoutId);
+  }, [twoFactorNotice]);
+
+  const showAuthenticatorUnavailableNotice = useCallback(() => {
+    setTwoFactorNotice(AUTHENTICATOR_APP_UNAVAILABLE_MESSAGE);
+  }, []);
+
   const loadTwoFactorStatus = async () => {
     if (!user?.id) return;
     setTwoFactorLoading(true);
@@ -3794,15 +3808,21 @@ export default function Me() {
     try {
       const res = await api.get("/auth/2fa/status");
       const data = res.data ?? {};
-      const method =
+      const serverMethod =
         data.method === "sms" || data.method === "email" || data.method === "totp"
           ? data.method
           : "email";
+      const method: TwoFactorMethod = serverMethod === "totp" ? "email" : serverMethod;
       setTwoFactorEnabled(Boolean(data.enabled));
       setTwoFactorMethod(method);
-      setTwoFactorHasAuthenticator(Boolean(data.hasAuthenticator));
+      setTwoFactorHasAuthenticator(serverMethod === "totp" ? false : Boolean(data.hasAuthenticator));
       setPhoneVerified(Boolean(data.phoneVerified));
-      if (data.totpSecretInvalid) {
+      if (serverMethod === "totp") {
+        setTotpSetup(null);
+        setTotpCode("");
+        setTwoFactorError(AUTHENTICATOR_APP_UNAVAILABLE_MESSAGE);
+        showAuthenticatorUnavailableNotice();
+      } else if (data.totpSecretInvalid) {
         setTwoFactorError(
           "Your authenticator setup needs to be reset. Click Reset 2FA to re-enroll."
         );
@@ -3842,8 +3862,9 @@ export default function Me() {
         setTwoFactorSuccess("Two-factor authentication disabled.");
         return;
       }
-      if (twoFactorMethod === "totp" && !twoFactorHasAuthenticator) {
-        setTwoFactorError("Set up your authenticator app first.");
+      if (twoFactorMethod === "totp") {
+        setTwoFactorError(AUTHENTICATOR_APP_UNAVAILABLE_MESSAGE);
+        showAuthenticatorUnavailableNotice();
         return;
       }
       await api.post("/auth/2fa/enable", { method: twoFactorMethod });
@@ -3873,115 +3894,22 @@ export default function Me() {
   };
 
   const handleTwoFactorReset = async () => {
-    if (!user?.id) return;
-    if (typeof window !== "undefined") {
-      const confirmed = window.confirm(
-        "Reset two-factor authentication? This clears your current 2FA setup so you can re-enroll."
-      );
-      if (!confirmed) return;
-    }
-    setTwoFactorError(null);
     setTwoFactorSuccess(null);
-    setTwoFactorResetting(true);
-    try {
-      await api.post("/auth/2fa/reset");
-      setTwoFactorEnabled(false);
-      setTwoFactorMethod("totp");
-      setTwoFactorHasAuthenticator(false);
-      setTotpSetup(null);
-      setTotpCode("");
-      const started = await handleTotpSetup();
-      if (started) {
-        setTwoFactorSuccess("Two-factor reset. Scan the QR code to re-enroll.");
-      }
-    } catch (err) {
-      if (axios.isAxiosError(err)) {
-        const msg =
-          err.response?.data?.error?.message ||
-          err.response?.data?.message ||
-          "Unable to reset two-factor.";
-        setTwoFactorError(String(msg));
-      } else {
-        setTwoFactorError("Unable to reset two-factor.");
-      }
-    } finally {
-      setTwoFactorResetting(false);
-    }
+    setTwoFactorError(AUTHENTICATOR_APP_UNAVAILABLE_MESSAGE);
+    showAuthenticatorUnavailableNotice();
   };
 
   const handleTotpSetup = async () => {
-    setTwoFactorError(null);
     setTwoFactorSuccess(null);
-    setTotpSetupLoading(true);
-    try {
-      const res = await api.post("/auth/2fa/totp/setup");
-      const data = res.data ?? {};
-      if (!data.qrCodeDataUrl || !data.otpauthUrl) {
-        setTwoFactorError("Unable to start authenticator setup.");
-        return false;
-      }
-      setTotpSetup({
-        qrCodeDataUrl: data.qrCodeDataUrl,
-        otpauthUrl: data.otpauthUrl,
-      });
-      return true;
-    } catch (err) {
-      if (axios.isAxiosError(err)) {
-        const msg =
-          err.response?.data?.error?.message ||
-          err.response?.data?.message ||
-          "Unable to start authenticator setup.";
-        setTwoFactorError(String(msg));
-      } else {
-        setTwoFactorError("Unable to start authenticator setup.");
-      }
-      return false;
-    } finally {
-      setTotpSetupLoading(false);
-    }
+    setTwoFactorError(AUTHENTICATOR_APP_UNAVAILABLE_MESSAGE);
+    showAuthenticatorUnavailableNotice();
+    return false;
   };
 
   const handleTotpVerify = async () => {
-    if (!totpCode.trim()) {
-      setTwoFactorError("Enter the verification code.");
-      return;
-    }
-    setTwoFactorError(null);
     setTwoFactorSuccess(null);
-    setTotpVerifyLoading(true);
-    try {
-      await api.post("/auth/2fa/totp/verify", { code: totpCode.trim() });
-      setTwoFactorEnabled(true);
-      setTwoFactorMethod("totp");
-      setTwoFactorHasAuthenticator(true);
-      setTotpSetup(null);
-      setTotpCode("");
-      setTwoFactorSuccess("Authenticator app linked. Two-factor is enabled.");
-    } catch (err) {
-      if (axios.isAxiosError(err)) {
-        const msg =
-          err.response?.data?.error?.message ||
-          err.response?.data?.message ||
-          "Unable to verify authenticator code.";
-        const msgLower = String(msg).toLowerCase();
-        if (msgLower.includes("no pending authenticator setup")) {
-          setTwoFactorError("Setup expired. Starting a new authenticator setup.");
-          setTotpSetup(null);
-          setTotpCode("");
-          setTwoFactorHasAuthenticator(false);
-          const started = await handleTotpSetup();
-          if (started) {
-            setTwoFactorSuccess("New setup started. Scan the QR and enter the code.");
-          }
-          return;
-        }
-        setTwoFactorError(String(msg));
-      } else {
-        setTwoFactorError("Unable to verify authenticator code.");
-      }
-    } finally {
-      setTotpVerifyLoading(false);
-    }
+    setTwoFactorError(AUTHENTICATOR_APP_UNAVAILABLE_MESSAGE);
+    showAuthenticatorUnavailableNotice();
   };
 
   const activeChatPreset = useMemo(() => {
@@ -6838,6 +6766,14 @@ export default function Me() {
         open={photoModalOpen}
         onClose={() => setPhotoModalOpen(false)}
       />
+      {twoFactorNotice && (
+        <div className="two-factor-toast" role="status" aria-live="polite">
+          <span className="two-factor-toast__icon" aria-hidden="true">
+            !
+          </span>
+          <span>{twoFactorNotice}</span>
+        </div>
+      )}
       {errorModal && (
         <div
           style={{
@@ -7763,7 +7699,6 @@ export default function Me() {
       />
 
         <div className="main-content profile-content">
-          <TopbarSearch />
           {renderProfileHeader()}
           {isSettingsView && settingsSection === "appearance" && (
           <div className="panel-grid profile-appearance-row">
@@ -8808,9 +8743,16 @@ export default function Me() {
                   <select
                     className="auth-input"
                     value={twoFactorMethod}
-                    onChange={(e) =>
-                      setTwoFactorMethod(e.target.value as TwoFactorMethod)
-                    }
+                    onChange={(e) => {
+                      const nextMethod = e.target.value as TwoFactorMethod;
+                      if (nextMethod === "totp") {
+                        setTwoFactorError(AUTHENTICATOR_APP_UNAVAILABLE_MESSAGE);
+                        setTwoFactorSuccess(null);
+                        showAuthenticatorUnavailableNotice();
+                        return;
+                      }
+                      setTwoFactorMethod(nextMethod);
+                    }}
                   >
                     <option value="email">Email</option>
                     <option value="sms">SMS</option>

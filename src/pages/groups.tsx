@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { LayoutDashboard, MapPin, Star, Users } from "lucide-react";
+import { MapPin, Search, Star, Users } from "lucide-react";
 import "../css/dashboard.css";
 import "../css/groups.css";
 import api from "../api/strapi";
 import Sidebar from "../components/Sidebar";
-import TopbarSearch from "../components/TopbarSearch";
+import RightSidebarShell from "../components/RightSidebarShell";
 import PopupModal from "../components/PopupModal";
 import GroupPostsFeed, { type GroupFeedPost } from "../components/GroupPostsFeed";
 import { useAuth } from "../context/AuthContext";
@@ -209,7 +209,6 @@ export default function Groups() {
   const [gradientAngle, setGradientAngle] = useState(135);
   const [useImage, setUseImage] = useState(false);
   const [backgroundFile, setBackgroundFile] = useState<File | null>(null);
-  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [createStatus, setCreateStatus] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -229,6 +228,7 @@ export default function Groups() {
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [favoriteGroupKeys, setFavoriteGroupKeys] = useState<string[]>([]);
   const [favoritesLoaded, setFavoritesLoaded] = useState(false);
+  const [discoverModalOpen, setDiscoverModalOpen] = useState(false);
 
   const loadGroups = useCallback(async () => {
     const currentUserId = Number(user?.id || 0);
@@ -463,16 +463,6 @@ export default function Groups() {
   }, [loadGroups]);
 
   useEffect(() => {
-    if (!backgroundFile) {
-      setPreviewImageUrl(null);
-      return;
-    }
-    const url = URL.createObjectURL(backgroundFile);
-    setPreviewImageUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [backgroundFile]);
-
-  useEffect(() => {
     const currentUserId = Number(user?.id || 0);
     if (!Number.isFinite(currentUserId) || currentUserId <= 0) {
       setFavoriteGroupKeys([]);
@@ -615,30 +605,11 @@ export default function Groups() {
     setFavoritesOnly(false);
   };
 
-  const previewGroup: GroupSummary = useMemo(
-    () => ({
-      id: "preview",
-      name: groupName || "Your group vibe",
-      description: groupDescription || "Add a description that sets the tone.",
-      location: groupLocation || "City, state, region, or online",
-      visibility,
-      backgroundImage: useImage ? previewImageUrl || undefined : undefined,
-      gradientStart,
-      gradientEnd,
-      gradientAngle,
-    }),
-    [
-      groupDescription,
-      groupLocation,
-      groupName,
-      visibility,
-      previewImageUrl,
-      useImage,
-      gradientStart,
-      gradientEnd,
-      gradientAngle,
-    ]
-  );
+  const handleRightDiscoverHeadClick = useCallback(() => {
+    if (typeof document === "undefined") return;
+    if (!document.body.classList.contains("ysp-right-sidebar-collapsed")) return;
+    setDiscoverModalOpen(true);
+  }, []);
 
   const favoriteGroupSet = useMemo(() => new Set(favoriteGroupKeys), [favoriteGroupKeys]);
 
@@ -745,140 +716,138 @@ export default function Groups() {
     return parts.length ? parts.join(" • ") : "Showing every group you can access or discover.";
   }, [discoverLocation, discoverQuery, favoritesOnly, friendsOnly, sortMode, visibilityFilter]);
 
-  const renderSidebarContent = () => (
-    <div className="groups-sidebar">
-      <button
-        className="btn ghost sidebar-nav-link groups-sidebar-dashboard"
-        type="button"
-        data-accent="dashboard"
-        onClick={() => navigate("/dashboard")}
-      >
-        <span className="sidebar-nav-icon" aria-hidden="true">
-          <LayoutDashboard size={18} />
-        </span>
-        <span>My Dashboard</span>
-      </button>
-
-      <section className="panel groups-sidebar-panel">
-        <div className="panel-header groups-sidebar-panel__header">
-          <div>
-            <p className="eyebrow">Discover</p>
-            <h3>Find your next group</h3>
-            <p className="panel-sub">
-              Search by name, filter by location and type, and surface groups where your
-              friends already hang out.
-            </p>
-          </div>
+  const renderDiscoverPanel = (idPrefix: string) => (
+    <section className="panel groups-sidebar-panel">
+      <div className="panel-header groups-sidebar-panel__header">
+        <div>
+          <p className="eyebrow">Discover</p>
+          <h3>Find your next group</h3>
+          <p className="panel-sub">
+            Search by name, filter by location and type, and surface groups where your
+            friends already hang out.
+          </p>
         </div>
+      </div>
 
-        <div className="groups-sidebar-stats">
-          <article className="groups-sidebar-stat">
-            <span>Browseable</span>
-            <strong>{browseGroups.length}</strong>
-          </article>
-          <article className="groups-sidebar-stat">
-            <span>Favorites</span>
-            <strong>{favoriteGroups.length}</strong>
-          </article>
-          <article className="groups-sidebar-stat">
-            <span>Friends inside</span>
-            <strong>{groupsWithFriendsCount}</strong>
-          </article>
-          <article className="groups-sidebar-stat">
-            <span>Mine</span>
-            <strong>{myGroups.length}</strong>
-          </article>
-        </div>
+      <div className="groups-sidebar-stats">
+        <article className="groups-sidebar-stat">
+          <span>Browseable</span>
+          <strong>{browseGroups.length}</strong>
+        </article>
+        <article className="groups-sidebar-stat">
+          <span>Favorites</span>
+          <strong>{favoriteGroups.length}</strong>
+        </article>
+        <article className="groups-sidebar-stat">
+          <span>Friends inside</span>
+          <strong>{groupsWithFriendsCount}</strong>
+        </article>
+        <article className="groups-sidebar-stat">
+          <span>Mine</span>
+          <strong>{myGroups.length}</strong>
+        </article>
+      </div>
 
-        <div className="groups-sidebar-form">
-          <label className="groups-filter-field" htmlFor="groups-discover-name">
-            <span>Name</span>
-            <input
-              id="groups-discover-name"
-              type="search"
-              value={discoverQuery}
-              onChange={(event) => setDiscoverQuery(event.target.value)}
-              placeholder="Search by group name"
-            />
-          </label>
+      <div className="groups-sidebar-form">
+        <label className="groups-filter-field" htmlFor={`${idPrefix}-name`}>
+          <span>Name</span>
+          <input
+            id={`${idPrefix}-name`}
+            type="search"
+            value={discoverQuery}
+            onChange={(event) => setDiscoverQuery(event.target.value)}
+            placeholder="Search by group name"
+          />
+        </label>
 
-          <label className="groups-filter-field" htmlFor="groups-discover-location">
-            <span>Location</span>
-            <input
-              id="groups-discover-location"
-              type="text"
-              value={discoverLocation}
-              onChange={(event) => setDiscoverLocation(event.target.value)}
-              placeholder="City, state, region, or online"
-            />
-          </label>
+        <label className="groups-filter-field" htmlFor={`${idPrefix}-location`}>
+          <span>Location</span>
+          <input
+            id={`${idPrefix}-location`}
+            type="text"
+            value={discoverLocation}
+            onChange={(event) => setDiscoverLocation(event.target.value)}
+            placeholder="City, state, region, or online"
+          />
+        </label>
 
-          <label className="groups-filter-field" htmlFor="groups-discover-type">
-            <span>Group type</span>
-            <select
-              id="groups-discover-type"
-              value={visibilityFilter}
-              onChange={(event) =>
-                setVisibilityFilter(event.target.value as GroupVisibilityFilter)
-              }
-            >
-              <option value="all">All</option>
-              <option value="public">Public</option>
-              <option value="private">Private</option>
-            </select>
-          </label>
-
-          <label className="groups-filter-field" htmlFor="groups-discover-sort">
-            <span>Popularity</span>
-            <select
-              id="groups-discover-sort"
-              value={sortMode}
-              onChange={(event) => setSortMode(event.target.value as GroupSortMode)}
-            >
-              <option value="recommended">Recommended</option>
-              <option value="popular">Most popular</option>
-              <option value="friends">Most friends inside</option>
-              <option value="name">Alphabetical</option>
-            </select>
-          </label>
-        </div>
-
-        <div className="groups-sidebar-toggles">
-          <label className="groups-sidebar-toggle">
-            <input
-              type="checkbox"
-              checked={friendsOnly}
-              onChange={(event) => setFriendsOnly(event.target.checked)}
-            />
-            <span className="groups-sidebar-switch" aria-hidden="true">
-              <span className="groups-sidebar-switch__thumb" />
-            </span>
-            <span className="groups-sidebar-toggle__text">Only show groups with friends</span>
-          </label>
-          <label className="groups-sidebar-toggle">
-            <input
-              type="checkbox"
-              checked={favoritesOnly}
-              onChange={(event) => setFavoritesOnly(event.target.checked)}
-            />
-            <span className="groups-sidebar-switch" aria-hidden="true">
-              <span className="groups-sidebar-switch__thumb" />
-            </span>
-            <span className="groups-sidebar-toggle__text">Only show favorite groups</span>
-          </label>
-        </div>
-
-        <div className="groups-sidebar-actions">
-          <button
-            className="btn ghost"
-            type="button"
-            onClick={clearDiscoverFilters}
-            disabled={!activeFilters}
+        <label className="groups-filter-field" htmlFor={`${idPrefix}-type`}>
+          <span>Group type</span>
+          <select
+            id={`${idPrefix}-type`}
+            value={visibilityFilter}
+            onChange={(event) =>
+              setVisibilityFilter(event.target.value as GroupVisibilityFilter)
+            }
           >
-            Clear filters
-          </button>
-        </div>
-      </section>
+            <option value="all">All</option>
+            <option value="public">Public</option>
+            <option value="private">Private</option>
+          </select>
+        </label>
+
+        <label className="groups-filter-field" htmlFor={`${idPrefix}-sort`}>
+          <span>Popularity</span>
+          <select
+            id={`${idPrefix}-sort`}
+            value={sortMode}
+            onChange={(event) => setSortMode(event.target.value as GroupSortMode)}
+          >
+            <option value="recommended">Recommended</option>
+            <option value="popular">Most popular</option>
+            <option value="friends">Most friends inside</option>
+            <option value="name">Alphabetical</option>
+          </select>
+        </label>
+      </div>
+
+      <div className="groups-sidebar-toggles">
+        <label className="groups-sidebar-toggle">
+          <input
+            type="checkbox"
+            checked={friendsOnly}
+            onChange={(event) => setFriendsOnly(event.target.checked)}
+          />
+          <span className="groups-sidebar-switch" aria-hidden="true">
+            <span className="groups-sidebar-switch__thumb" />
+          </span>
+          <span className="groups-sidebar-toggle__text">Only show groups with friends</span>
+        </label>
+        <label className="groups-sidebar-toggle">
+          <input
+            type="checkbox"
+            checked={favoritesOnly}
+            onChange={(event) => setFavoritesOnly(event.target.checked)}
+          />
+          <span className="groups-sidebar-switch" aria-hidden="true">
+            <span className="groups-sidebar-switch__thumb" />
+          </span>
+          <span className="groups-sidebar-toggle__text">Only show favorite groups</span>
+        </label>
+      </div>
+
+      <div className="groups-sidebar-actions">
+        <button
+          className="btn ghost"
+          type="button"
+          onClick={clearDiscoverFilters}
+          disabled={!activeFilters}
+        >
+          Clear filters
+        </button>
+      </div>
+    </section>
+  );
+
+  const renderSidebarContent = () => (
+    <div className="groups-sidebar groups-sidebar--desktop-hidden">
+      {renderDiscoverPanel("groups-sidebar")}
+    </div>
+  );
+
+  const renderRightSidebarContent = () => (
+    <div className="groups-sidebar">
+      {renderDiscoverPanel("groups-right")}
     </div>
   );
 
@@ -953,10 +922,20 @@ export default function Groups() {
     <div className="dashboard-shell" style={pageBackground}>
       <Sidebar
         active="groups"
-        hideNavLinks
         hideBio
         sidebarContent={renderSidebarContent()}
       />
+      <RightSidebarShell
+        ariaLabel="Group discover sidebar"
+        headTitle="Discover"
+        headSubtitle={`${filteredBrowseGroups.length} results`}
+        headIcon={<Search size={18} />}
+        headTooltip="Group discover"
+        onHeadClick={handleRightDiscoverHeadClick}
+        className="right-search-sidebar"
+      >
+        {renderRightSidebarContent()}
+      </RightSidebarShell>
 
       <div className="main-content group-shell">
         <div className="topbar-greeting">
@@ -966,53 +945,6 @@ export default function Groups() {
             already are.
           </span>
         </div>
-        <TopbarSearch />
-
-        <div className="group-hero">
-          <div className="group-hero__text">
-            <p className="eyebrow">Create + Discover</p>
-            <h1>Build and find your people</h1>
-            <p className="subhead">
-              Launch a private squad or a public community, then browse groups by name,
-              location, popularity, and which ones already include your friends.
-            </p>
-          </div>
-          <div className="group-hero__preview" style={buildGroupStyle(previewGroup)}>
-            <div className="group-hero__preview-content">
-              <span className="pill">{visibility === "public" ? "Public" : "Private"}</span>
-              <h3>{previewGroup.name}</h3>
-              <p>{previewGroup.description}</p>
-              <span className="group-hero__preview-location">
-                <MapPin size={14} />
-                {formatGroupLocation(previewGroup.location)}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <section className="group-discovery-band" aria-label="Group discovery overview">
-          <article className="group-discovery-band__card">
-            <span>Browseable groups</span>
-            <strong>{browseGroups.length}</strong>
-            <small>Joined + public communities</small>
-          </article>
-          <article className="group-discovery-band__card">
-            <span>Favorite groups</span>
-            <strong>{favoriteGroups.length}</strong>
-            <small>Pin the spaces you revisit most</small>
-          </article>
-          <article className="group-discovery-band__card">
-            <span>Friend-backed groups</span>
-            <strong>{groupsWithFriendsCount}</strong>
-            <small>Communities where your friends are already members</small>
-          </article>
-          <article className="group-discovery-band__card">
-            <span>Discover results</span>
-            <strong>{filteredBrowseGroups.length}</strong>
-            <small>{activeFilters ? "Matching your current filters" : "All current options"}</small>
-          </article>
-        </section>
-
         {error && <p className="status status-error">{error}</p>}
         {loading && <p className="status">Loading groups...</p>}
 
@@ -1279,6 +1211,18 @@ export default function Groups() {
             )}
           </div>
         </section>
+
+        <PopupModal
+          open={discoverModalOpen}
+          title="Find your next group"
+          onClose={() => setDiscoverModalOpen(false)}
+          className="group-discover-modal"
+          bodyClassName="group-discover-modal__body"
+        >
+          <div className="group-discover-modal__content">
+            {renderDiscoverPanel("groups-modal")}
+          </div>
+        </PopupModal>
 
         <PopupModal
           open={Boolean(joinModalGroup)}

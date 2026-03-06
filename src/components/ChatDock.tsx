@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faComments, faMagnifyingGlass } from "@fortawesome/free-solid-svg-icons";
 import api from "../api/strapi";
 import { useAuth } from "../context/AuthContext";
 import { useChat } from "../context/ChatContext";
@@ -56,9 +58,18 @@ const getDisplayName = (handle?: string, firstName?: string, lastName?: string) 
   return name || (handle ? `@${handle}` : "Friend");
 };
 
+const FRIEND_MENU_PAGE_SIZE = 5;
+
+const isTypingTarget = (target: EventTarget | null) => {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  return target.isContentEditable;
+};
+
 export default function ChatDock() {
   const location = useLocation();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const { preferences, setChatPrefs } = useUserPreferences();
   const {
     activeFriend,
@@ -82,10 +93,13 @@ export default function ChatDock() {
   const [friendsLoading, setFriendsLoading] = useState(false);
   const [friendsError, setFriendsError] = useState<string | null>(null);
   const [friendMenuOpen, setFriendMenuOpen] = useState(false);
+  const [friendSearch, setFriendSearch] = useState("");
+  const [friendPage, setFriendPage] = useState(1);
   const [isMobile, setIsMobile] = useState(false);
   const [reactionPickerFor, setReactionPickerFor] = useState<string | null>(null);
   const [messageReactions, setMessageReactions] = useState<Record<string, string[]>>({});
   const friendMenuRef = useRef<HTMLDivElement | null>(null);
+  const friendSearchInputRef = useRef<HTMLInputElement | null>(null);
   const chatPrefs = preferences.chat;
 
   const hideForRoute =
@@ -106,6 +120,27 @@ export default function ChatDock() {
       ? friendOptions
       : [activeFriend, ...friendOptions];
   }, [activeFriend, friendOptions]);
+
+  const normalizedFriendSearch = friendSearch.trim().toLowerCase();
+
+  const filteredFriendList = useMemo(() => {
+    if (!normalizedFriendSearch) return friendList;
+    return friendList.filter((friend) => {
+      const display = getDisplayName(friend.handle, friend.firstName, friend.lastName).toLowerCase();
+      const handle = String(friend.handle || "").toLowerCase();
+      return display.includes(normalizedFriendSearch) || handle.includes(normalizedFriendSearch);
+    });
+  }, [friendList, normalizedFriendSearch]);
+
+  const totalFriendPages = Math.max(
+    1,
+    Math.ceil(filteredFriendList.length / FRIEND_MENU_PAGE_SIZE)
+  );
+
+  const pagedFriendList = useMemo(() => {
+    const start = (friendPage - 1) * FRIEND_MENU_PAGE_SIZE;
+    return filteredFriendList.slice(start, start + FRIEND_MENU_PAGE_SIZE);
+  }, [filteredFriendList, friendPage]);
 
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
   const getEntity = (entry: any) => entry?.data ?? entry ?? null;
@@ -144,6 +179,27 @@ export default function ChatDock() {
       setFriendMenuOpen(false);
     }
   }, [popoutMinimized]);
+
+  useEffect(() => {
+    if (!friendMenuOpen) {
+      setFriendSearch("");
+      setFriendPage(1);
+      return;
+    }
+    if (isMobile || typeof window === "undefined") return;
+    const rafId = window.requestAnimationFrame(() => {
+      friendSearchInputRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(rafId);
+  }, [friendMenuOpen, isMobile]);
+
+  useEffect(() => {
+    setFriendPage(1);
+  }, [normalizedFriendSearch]);
+
+  useEffect(() => {
+    setFriendPage((prev) => Math.min(Math.max(prev, 1), totalFriendPages));
+  }, [totalFriendPages]);
 
   useEffect(() => {
     if (isMobile || !popoutMinimized) return;
@@ -210,6 +266,31 @@ export default function ChatDock() {
       document.removeEventListener("keydown", handleKey);
     };
   }, [friendMenuOpen]);
+
+  useEffect(() => {
+    if (!friendMenuOpen || isMobile) return;
+    const handleTypeAhead = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key === "Escape" || event.key === "Enter" || event.key === "Tab") return;
+      if (isTypingTarget(event.target)) return;
+
+      if (event.key === "Backspace") {
+        event.preventDefault();
+        setFriendSearch((prev) => prev.slice(0, -1));
+        friendSearchInputRef.current?.focus();
+        return;
+      }
+
+      if (event.key.length !== 1) return;
+      event.preventDefault();
+      setFriendSearch((prev) => `${prev}${event.key}`);
+      friendSearchInputRef.current?.focus();
+    };
+
+    document.addEventListener("keydown", handleTypeAhead);
+    return () => document.removeEventListener("keydown", handleTypeAhead);
+  }, [friendMenuOpen, isMobile]);
 
   useEffect(() => {
     const lastPath = lastPathRef.current;
@@ -375,6 +456,16 @@ export default function ChatDock() {
     ? getDisplayName(activeFriend.handle, activeFriend.firstName, activeFriend.lastName)
     : "Select a friend";
   const handleLabel = activeFriend?.handle ? `@${activeFriend.handle}` : displayName;
+  const videoCallTooltip = activeFriend
+    ? `Start video call with ${displayName}`
+    : "Start video call";
+  const motivationalName =
+    `${profile?.firstName || ""} ${profile?.lastName || ""}`.trim() ||
+    user.username ||
+    user.email.split("@")[0];
+  const greetingHour = new Date().getHours();
+  const motivationalGreeting =
+    greetingHour < 12 ? "Good Morning" : greetingHour < 18 ? "Good Afternoon" : "Good Evening";
 
   const handleSend = async () => {
     if (!friendId) return;
@@ -505,58 +596,109 @@ export default function ChatDock() {
                 <span className="chat-friend-trigger__chevron" aria-hidden="true" />
               </button>
               {friendMenuOpen && (
-                <div className="chat-friend-menu" role="listbox">
-                  {friendsLoading ? (
-                    <div className="chat-friend-option is-disabled">Loading friends...</div>
-                  ) : friendList.length === 0 ? (
-                    <div className="chat-friend-option is-disabled">No friends yet.</div>
-                  ) : (
-                    friendList.map((friend) => {
-                      const label = getDisplayName(
-                        friend.handle,
-                        friend.firstName,
-                        friend.lastName
-                      );
-                      const isActive = friend.userId === friendId;
-                      const isOnline = onlineUserIds.has(friend.userId);
-                      const statusLabel = isOnline ? "Online" : "Offline";
-                      return (
-                        <button
-                          key={friend.userId}
-                          type="button"
-                          className={`chat-friend-option${isActive ? " is-active" : ""}`}
-                          role="option"
-                          aria-selected={isActive}
-                          onClick={() => handleSelectFriend(String(friend.userId))}
-                        >
-                          <span className="chat-friend-option__avatar-wrap">
-                            <span
-                              className="chat-friend-option__avatar"
-                              style={
-                                friend.avatarUrl
-                                  ? { backgroundImage: `url(${friend.avatarUrl})` }
-                                  : undefined
-                              }
-                            >
-                              {!friend.avatarUrl && getInitials(friend)}
-                            </span>
-                            <span
-                              className={`presence-dot ${isOnline ? "is-online" : "is-offline"}`}
-                              title={statusLabel}
-                              aria-label={statusLabel}
-                            />
-                          </span>
-                          <span className="chat-friend-option__meta">
-                            <span className="chat-friend-option__name">{label}</span>
-                            {friend.handle && (
-                              <span className="chat-friend-option__handle">
-                                @{friend.handle}
+                <div className="chat-friend-menu">
+                  {!isMobile && (
+                    <div className="chat-friend-menu__toolbar">
+                      <button
+                        type="button"
+                        className="chat-friend-search-btn"
+                        aria-label="Focus friend search"
+                        title="Search friends"
+                        onClick={() => friendSearchInputRef.current?.focus()}
+                      >
+                        <FontAwesomeIcon icon={faMagnifyingGlass} aria-hidden="true" />
+                      </button>
+                      <input
+                        ref={friendSearchInputRef}
+                        type="search"
+                        className="chat-friend-search-input"
+                        placeholder="Search by name or @handle"
+                        value={friendSearch}
+                        onChange={(event) => setFriendSearch(event.target.value)}
+                        autoComplete="off"
+                      />
+                    </div>
+                  )}
+
+                  <div className="chat-friend-menu__list" role="listbox">
+                    {friendsLoading ? (
+                      <div className="chat-friend-option is-disabled">Loading friends...</div>
+                    ) : filteredFriendList.length === 0 ? (
+                      <div className="chat-friend-option is-disabled">
+                        {normalizedFriendSearch ? "No friends match that search." : "No friends yet."}
+                      </div>
+                    ) : (
+                      pagedFriendList.map((friend) => {
+                        const label = getDisplayName(
+                          friend.handle,
+                          friend.firstName,
+                          friend.lastName
+                        );
+                        const isActive = friend.userId === friendId;
+                        const isOnline = onlineUserIds.has(friend.userId);
+                        const statusLabel = isOnline ? "Online" : "Offline";
+                        return (
+                          <button
+                            key={friend.userId}
+                            type="button"
+                            className={`chat-friend-option${isActive ? " is-active" : ""}`}
+                            role="option"
+                            aria-selected={isActive}
+                            onClick={() => handleSelectFriend(String(friend.userId))}
+                          >
+                            <span className="chat-friend-option__avatar-wrap">
+                              <span
+                                className="chat-friend-option__avatar"
+                                style={
+                                  friend.avatarUrl
+                                    ? { backgroundImage: `url(${friend.avatarUrl})` }
+                                    : undefined
+                                }
+                              >
+                                {!friend.avatarUrl && getInitials(friend)}
                               </span>
-                            )}
-                          </span>
-                        </button>
-                      );
-                    })
+                              <span
+                                className={`presence-dot ${isOnline ? "is-online" : "is-offline"}`}
+                                title={statusLabel}
+                                aria-label={statusLabel}
+                              />
+                            </span>
+                            <span className="chat-friend-option__meta">
+                              <span className="chat-friend-option__name">{label}</span>
+                              {friend.handle && (
+                                <span className="chat-friend-option__handle">
+                                  @{friend.handle}
+                                </span>
+                              )}
+                            </span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+
+                  {!friendsLoading && filteredFriendList.length > FRIEND_MENU_PAGE_SIZE && (
+                    <div className="chat-friend-menu__pagination">
+                      <button
+                        type="button"
+                        className="chat-friend-page-btn"
+                        onClick={() => setFriendPage((prev) => Math.max(1, prev - 1))}
+                        disabled={friendPage <= 1}
+                      >
+                        Prev
+                      </button>
+                      <span className="chat-friend-page-label">
+                        Page {friendPage} of {totalFriendPages}
+                      </span>
+                      <button
+                        type="button"
+                        className="chat-friend-page-btn"
+                        onClick={() => setFriendPage((prev) => Math.min(totalFriendPages, prev + 1))}
+                        disabled={friendPage >= totalFriendPages}
+                      >
+                        Next
+                      </button>
+                    </div>
                   )}
                 </div>
               )}
@@ -568,11 +710,13 @@ export default function ChatDock() {
           {!popoutMinimized && (
             <>
               <button
-                className="chat-video-launch chat-action chat-action--video"
+                className="chat-video-launch chat-action chat-action--video chat-action--video-icon-only"
                 type="button"
                 onClick={() =>
                   openCallComposer(activeFriend ? [toInvitee(activeFriend)] : [])
                 }
+                data-chat-tooltip={videoCallTooltip}
+                aria-label={videoCallTooltip}
               >
                 <span className="chat-action-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
@@ -592,24 +736,7 @@ export default function ChatDock() {
                     />
                   </svg>
                 </span>
-                <span className="chat-action-text">
-                  <span className="chat-action-title">Video Call</span>
-                  <span className="chat-action-help">Start face to face</span>
-                </span>
               </button>
-              <div className="chat-font-control">
-                <span className="chat-font-label">A</span>
-                <input
-                  aria-label="Chat text size"
-                  type="range"
-                  min={12}
-                  max={20}
-                  step={1}
-                  value={chatPrefs.fontSize}
-                  onChange={(e) => setChatPrefs({ fontSize: Number(e.target.value) })}
-                />
-                <span className="chat-font-label large">A</span>
-              </div>
             </>
           )}
         </div>
@@ -621,32 +748,11 @@ export default function ChatDock() {
           title={toggleLabel}
         >
           {popoutMinimized ? (
-            <svg
+            <FontAwesomeIcon
+              icon={faComments}
               className="chat-toggle-icon-svg is-minimized"
-              viewBox="0 0 24 24"
               aria-hidden="true"
-            >
-              <defs>
-                <linearGradient id="chat-toggle-min-gradient" x1="2" y1="3" x2="22" y2="21" gradientUnits="userSpaceOnUse">
-                  <stop offset="0%" stopColor="#22d3ee" />
-                  <stop offset="55%" stopColor="#60a5fa" />
-                  <stop offset="100%" stopColor="#a78bfa" />
-                </linearGradient>
-              </defs>
-              <path
-                d="M5 7.25A2.25 2.25 0 0 1 7.25 5h9.5A2.25 2.25 0 0 1 19 7.25v5.5A2.25 2.25 0 0 1 16.75 15H11l-4 3v-3h-.75A2.25 2.25 0 0 1 4 12.75v-5.5Z"
-                stroke="url(#chat-toggle-min-gradient)"
-                strokeWidth="2.1"
-                strokeLinejoin="round"
-                fill="none"
-              />
-              <path
-                d="M9 10.1h6M9 12.9h4.5"
-                stroke="url(#chat-toggle-min-gradient)"
-                strokeWidth="2.1"
-                strokeLinecap="round"
-              />
-            </svg>
+            />
           ) : (
             <svg className="chat-toggle-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
               <path
@@ -674,7 +780,10 @@ export default function ChatDock() {
           <>
           <div className="message-popout__body">
             {!friendId ? (
-              <div className="status">Select a friend to start chatting.</div>
+              <div className="chat-motivation-card" role="status" aria-live="polite">
+                <p className="chat-motivation-title">{`${motivationalGreeting}, ${motivationalName}`}</p>
+                <p className="chat-motivation-subtitle">The smallest step still moves you ahead.</p>
+              </div>
             ) : messages.length === 0 ? (
               <div className="status">No messages yet.</div>
             ) : (
@@ -813,10 +922,25 @@ export default function ChatDock() {
               disabled={!friendId}
             />
             {error && <p className="status status-error">{error}</p>}
-            <div className="auth-actions" style={{ justifyContent: "flex-end" }}>
-              <button className="btn primary" type="button" onClick={handleSend}>
-                Send
-              </button>
+            <div className="message-popout__footer-controls">
+              <div className="auth-actions">
+                <button className="btn primary" type="button" onClick={handleSend}>
+                  Send
+                </button>
+              </div>
+              <div className="chat-font-control chat-font-control--footer">
+                <span className="chat-font-label">A</span>
+                <input
+                  aria-label="Chat text size"
+                  type="range"
+                  min={12}
+                  max={20}
+                  step={1}
+                  value={chatPrefs.fontSize}
+                  onChange={(e) => setChatPrefs({ fontSize: Number(e.target.value) })}
+                />
+                <span className="chat-font-label large">A</span>
+              </div>
             </div>
           </div>
         </>

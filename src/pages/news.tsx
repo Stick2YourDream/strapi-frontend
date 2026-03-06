@@ -1,28 +1,21 @@
 // src/pages/news.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { Search } from "lucide-react";
 import "../css/dashboard.css";
 import "../css/news.css";
 import "../css/news-reader-overrides.css";
-import { LayoutDashboard } from "lucide-react";
 import FullScreenLoader from "../components/FullScreenLoader";
 import { useAuth } from "../context/AuthContext";
 import { useNewsPreference } from "../hooks/useNewsPreference";
 import { useUserPreferences } from "../context/UserPreferencesContext";
 import Sidebar from "../components/Sidebar";
-import TopbarSearch from "../components/TopbarSearch";
+import RightSidebarShell from "../components/RightSidebarShell";
 import { usePageMeta } from "../hooks/usePageMeta";
 import {
   fetchNewsArticles,
   fetchNewsAssets,
   fetchNewsArticleCount,
-  fetchNewsArticleSize,
-  fetchNewsAssetCount,
-  fetchNewsAssetSize,
-  fetchNewsContentTypes,
-  fetchNewsLastUpdated,
-  fetchNewsPageCount,
-  fetchNewsPageSize,
   fetchNewsPages,
   fetchNewsProviders,
   fetchNewsReadable,
@@ -74,21 +67,6 @@ const MALE_VOICE_HINTS = [
   "tom",
 ];
 
-const formatRelativeTime = (value?: string | Date | null) => {
-  if (!value) return "Updated just now";
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return "Updated just now";
-  const diffMs = Date.now() - date.getTime();
-  if (diffMs <= 0) return "Updated just now";
-  if (diffMs < 60000) return "Updated just now";
-  const minutes = Math.floor(diffMs / 60000);
-  if (minutes < 60) return `Updated ${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `Updated ${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `Updated ${days}d ago`;
-};
-
 const formatNewsTime = (value?: string) => {
   if (!value) return "";
   const date = new Date(value);
@@ -115,15 +93,6 @@ const escapeHtml = (value: string) =>
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
-
-const formatBytes = (value?: number) => {
-  if (!value || !Number.isFinite(value)) return "0 MB";
-  const mb = value / (1024 * 1024);
-  if (mb < 1) return `${Math.max(1, Math.round(value / 1024))} KB`;
-  if (mb < 1024) return `${mb.toFixed(1)} MB`;
-  const gb = mb / 1024;
-  return `${gb.toFixed(2)} GB`;
-};
 
 const sortArticlesByPublishedAt = (
   items: NewsArticle[],
@@ -240,10 +209,6 @@ export default function News() {
   const profileNewsEnabled = profile?.notificationSettings?.newsEnabled !== false;
   const newsroomEnabled = appSettings?.newsroomEnabled !== false;
   const newsEnabled = (newsOverride ?? profileNewsEnabled) && newsroomEnabled;
-  const newsAccessMode = String(import.meta.env.VITE_NEWS_ACCESS_MODE || "proxy")
-    .trim()
-    .toLowerCase();
-  const isDirectNewsMode = newsAccessMode === "direct";
 
   const [query, setQuery] = useState("");
   const [provider, setProvider] = useState("");
@@ -260,16 +225,7 @@ export default function News() {
   const [maxPageSeen, setMaxPageSeen] = useState(1);
   const [providers, setProviders] = useState<string[]>([]);
   const [sources, setSources] = useState<string[]>([]);
-  const [contentTypes, setContentTypes] = useState<string[]>([]);
   const [articleCount, setArticleCount] = useState(0);
-  const [assetCount, setAssetCount] = useState(0);
-  const [pageCount, setPageCount] = useState(0);
-  const [articleSize, setArticleSize] = useState(0);
-  const [assetSize, setAssetSize] = useState(0);
-  const [pageSize, setPageSize] = useState(0);
-  const [statsUpdatedAt, setStatsUpdatedAt] = useState<string>("");
-  const [statsError, setStatsError] = useState<string | null>(null);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [activeArticle, setActiveArticle] = useState<NewsArticle | null>(null);
   const [readableArticle, setReadableArticle] = useState<NewsReadable | null>(null);
   const [readableLoading, setReadableLoading] = useState(false);
@@ -307,30 +263,10 @@ export default function News() {
         const results = await Promise.allSettled([
           fetchNewsProviders(),
           fetchNewsSources(),
-          fetchNewsContentTypes(),
           fetchNewsArticleCount(),
-          fetchNewsAssetCount(),
-          fetchNewsPageCount(),
-          fetchNewsArticleSize(),
-          fetchNewsAssetSize(),
-          fetchNewsPageSize(),
-          fetchNewsLastUpdated(),
         ]);
         if (!active) return;
-        const [
-          providerResult,
-          sourceResult,
-          contentTypeResult,
-          articleCountResult,
-          assetCountResult,
-          pageCountResult,
-          articleSizeResult,
-          assetSizeResult,
-          pageSizeResult,
-          lastUpdatedResult,
-        ] = results;
-        const hasAnyStats = results.some((result) => result.status === "fulfilled");
-        setStatsError(hasAnyStats ? null : "Stats are temporarily unavailable.");
+        const [providerResult, sourceResult, articleCountResult] = results;
 
         if (providerResult.status === "fulfilled") {
           const providerList = providerResult.value as string[];
@@ -344,45 +280,17 @@ export default function News() {
             Array.from(new Set(sourceList)).sort((a, b) => a.localeCompare(b))
           );
         }
-        if (contentTypeResult.status === "fulfilled") {
-          const contentTypeList = contentTypeResult.value as string[];
-          setContentTypes(
-            Array.from(new Set(contentTypeList)).sort((a, b) => a.localeCompare(b))
-          );
-        }
         if (articleCountResult.status === "fulfilled") {
           setArticleCount((articleCountResult.value as number) || 0);
         }
-        if (assetCountResult.status === "fulfilled") {
-          setAssetCount((assetCountResult.value as number) || 0);
-        }
-        if (pageCountResult.status === "fulfilled") {
-          setPageCount((pageCountResult.value as number) || 0);
-        }
-        if (articleSizeResult.status === "fulfilled") {
-          setArticleSize((articleSizeResult.value as number) || 0);
-        }
-        if (assetSizeResult.status === "fulfilled") {
-          setAssetSize((assetSizeResult.value as number) || 0);
-        }
-        if (pageSizeResult.status === "fulfilled") {
-          setPageSize((pageSizeResult.value as number) || 0);
-        }
-        if (lastUpdatedResult.status === "fulfilled") {
-          setStatsUpdatedAt((lastUpdatedResult.value as string) || "");
-        }
-      } catch {
-        if (active) {
-          setStatsError("Stats are temporarily unavailable.");
-        }
-      }
+      } catch {}
     };
 
     loadMeta();
     return () => {
       active = false;
     };
-  }, [newsEnabled, isDirectNewsMode]);
+  }, [newsEnabled]);
 
   const speechSupported =
     typeof window !== "undefined" && "speechSynthesis" in window;
@@ -456,8 +364,6 @@ export default function News() {
           const nextValue = items.length >= PAGE_SIZE ? safePage + 1 : safePage;
           return Math.max(prev, nextValue);
         });
-        setLastUpdated(new Date());
-
         const hydrateImages = async () => {
           const missing = items
             .filter((article) => !article.image && article.url)
@@ -622,11 +528,17 @@ export default function News() {
     setEndDate("");
   };
 
-  const renderFilters = (variant: "sidebar" | "inline") => {
-    const idPrefix = variant === "sidebar" ? "news-sidebar" : "news-inline";
+  const renderFilters = (variant: "sidebar" | "inline" | "right") => {
+    const idPrefix =
+      variant === "sidebar"
+        ? "news-sidebar"
+        : variant === "right"
+        ? "news-right"
+        : "news-inline";
+    const filterStyleVariant = variant === "right" ? "sidebar" : variant;
     return (
       <section
-        className={`panel news-controls news-filters news-filters--${variant}`}
+        className={`panel news-controls news-filters news-filters--${filterStyleVariant}`}
       >
         <div className="news-filters-header">
           <p className="eyebrow">Filters</p>
@@ -733,20 +645,9 @@ export default function News() {
   };
 
   const renderSidebarContent = () => (
-    <>
-      <button
-        className="btn ghost sidebar-nav-link news-sidebar-link"
-        type="button"
-        data-accent="dashboard"
-        onClick={() => navigate("/dashboard")}
-      >
-        <span className="sidebar-nav-icon" aria-hidden="true">
-          <LayoutDashboard size={18} />
-        </span>
-        <span>Back to dashboard</span>
-      </button>
+    <div className="news-sidebar news-sidebar--desktop-hidden">
       {renderFilters("sidebar")}
-    </>
+    </div>
   );
 
   const filterSummary = useMemo(() => {
@@ -802,22 +703,6 @@ export default function News() {
     () => mergeOptions(sources, derivedSources, source),
     [derivedSources, source, sources]
   );
-  const statsUpdatedLabel = statsUpdatedAt
-    ? formatRelativeTime(statsUpdatedAt)
-    : "Updating";
-  const statsUnavailable = Boolean(statsError);
-  const articleCountDisplay = statsUnavailable
-    ? articles.length
-      ? `${articles.length}+`
-      : "--"
-    : articleCount.toLocaleString();
-  const assetCountDisplay = statsUnavailable ? "--" : assetCount.toLocaleString();
-  const pageCountDisplay = statsUnavailable ? "--" : pageCount.toLocaleString();
-  const catalogCountDisplay = statsUnavailable
-    ? "--"
-    : contentTypes.length
-    ? contentTypes.length
-    : "-";
 
   const topStories = useMemo(() => {
     if (!articles.length) return [];
@@ -1262,28 +1147,23 @@ export default function News() {
       {showInitialLoader && <FullScreenLoader label="Loading newsroom" />}
       <Sidebar
         active="news"
-        hideNavLinks
         hideBio
         sidebarContent={newsEnabled ? renderSidebarContent() : null}
       />
+      {newsEnabled ? (
+        <RightSidebarShell
+          ariaLabel="Newsroom filters sidebar"
+          headTitle="Newsroom filters"
+          headSubtitle={`${articles.length} loaded`}
+          headIcon={<Search size={18} />}
+          headTooltip="Newsroom filters"
+          className="right-search-sidebar"
+        >
+          {renderFilters("right")}
+        </RightSidebarShell>
+      ) : null}
 
       <div className="main-content">
-        <TopbarSearch />
-
-        <div className="dash-hero news-hero">
-          <div className="dash-hero__text">
-            <p className="eyebrow">Newsroom</p>
-            <h1>Powered By The Current Scope</h1>
-            <p className="subhead">
-              Discover the latest stories, trending topics, and conversation starters.
-            </p>
-          </div>
-          <div className="news-hero-meta">
-            <span className="news-pill">Live feed</span>
-            <span className="news-updated">{formatRelativeTime(lastUpdated)}</span>
-          </div>
-        </div>
-
         {!newsEnabled && (
           <section className="panel news-disabled">
             {newsroomEnabled ? (
@@ -1318,38 +1198,6 @@ export default function News() {
 
         {newsEnabled && (
           <>
-            <section className="news-stats is-hidden" aria-hidden="false">
-              <div className="news-stat-card">
-                <span className="news-stat-label">Articles</span>
-                <span className="news-stat-value">{articleCountDisplay}</span>
-                <span className="news-stat-meta">
-                  {statsUnavailable ? "Stats unavailable" : `${formatBytes(articleSize)} stored`}
-                </span>
-              </div>
-              <div className="news-stat-card">
-                <span className="news-stat-label">Assets</span>
-                <span className="news-stat-value">{assetCountDisplay}</span>
-                <span className="news-stat-meta">
-                  {statsUnavailable ? "Stats unavailable" : formatBytes(assetSize)}
-                </span>
-              </div>
-              <div className="news-stat-card">
-                <span className="news-stat-label">Pages</span>
-                <span className="news-stat-value">{pageCountDisplay}</span>
-                <span className="news-stat-meta">
-                  {statsUnavailable ? "Stats unavailable" : formatBytes(pageSize)}
-                </span>
-              </div>
-              <div className="news-stat-card">
-                <span className="news-stat-label">Catalog</span>
-                <span className="news-stat-value">{catalogCountDisplay}</span>
-                <span className="news-stat-meta">
-                  {statsUnavailable ? "Stats unavailable" : statsUpdatedLabel}
-                </span>
-              </div>
-            </section>
-            {statsError && <p className="status status-error">{statsError}</p>}
-
             {renderFilters("inline")}
 
             <div className="news-results">

@@ -33,6 +33,12 @@ export default defineConfig(({ mode }) => {
     if (id.includes("socket.io-client")) {
       return "vendor-realtime";
     }
+    if (id.includes("axios")) {
+      return "vendor-http";
+    }
+    if (id.includes("lucide-react") || id.includes("@fortawesome/")) {
+      return "vendor-ui";
+    }
     if (id.includes("@giphy/")) {
       return "vendor-giphy";
     }

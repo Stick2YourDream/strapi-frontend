@@ -3,10 +3,8 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { AuthProvider } from "./context/AuthContext";
-import { ChatProvider } from "./context/ChatContext";
 import { TranslationProvider } from "./i18n/TranslationProvider";
 import { UserPreferencesProvider } from "./context/UserPreferencesContext";
-import { VideoCallProvider } from "./context/VideoCallContext";
 import "./index.css";
 import "./css/4k.css";
 import "./css/link-preview.css";
@@ -18,11 +16,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <TranslationProvider>
       <AuthProvider>
         <UserPreferencesProvider>
-          <ChatProvider>
-            <VideoCallProvider>
-              <App />
-            </VideoCallProvider>
-          </ChatProvider>
+          <App />
         </UserPreferencesProvider>
       </AuthProvider>
     </TranslationProvider>
@@ -134,6 +128,13 @@ const monitorServiceWorkerUpdates = (registration: ServiceWorkerRegistration) =>
   });
 };
 
+const checkForServiceWorkerUpdate = () => {
+  if (!("serviceWorker" in navigator)) return;
+  navigator.serviceWorker.getRegistration().then((registration) => {
+    void registration?.update();
+  });
+};
+
 setupLaunchQueue();
 
 if (import.meta.env.DEV && "serviceWorker" in navigator) {
@@ -161,7 +162,32 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
         void registerBackgroundSync(registration);
         void registerPeriodicSync(registration);
         monitorServiceWorkerUpdates(registration);
+        void registration.update();
       })
       .catch(() => undefined);
+
+    const refreshInterval = window.setInterval(
+      checkForServiceWorkerUpdate,
+      30 * 60 * 1000
+    );
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        checkForServiceWorkerUpdate();
+      }
+    };
+    const handleOnline = () => {
+      checkForServiceWorkerUpdate();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener(
+      "beforeunload",
+      () => {
+        window.clearInterval(refreshInterval);
+        document.removeEventListener("visibilitychange", handleVisibility);
+        window.removeEventListener("online", handleOnline);
+      },
+      { once: true }
+    );
   });
 }

@@ -310,6 +310,10 @@
   flex: 0 0 22px;
 }
 
+.user-menu-drawer__row-icon .svg-inline--fa {
+  font-size: 18px;
+}
+
 .user-menu-drawer__row-label {
   min-width: 0;
   font-size: 16px;
@@ -419,6 +423,30 @@
   align-items: center;
   justify-content: center;
   color: #8fd1ff;
+}
+
+.user-menu-drawer__submenu-icon .svg-inline--fa {
+  font-size: 14px;
+}
+
+.user-menu-drawer__submenu-row[data-accent="friends"] .user-menu-drawer__submenu-icon {
+  color: #22c55e;
+}
+
+.user-menu-drawer__submenu-row[data-accent="groups"] .user-menu-drawer__submenu-icon {
+  color: #f97316;
+}
+
+.user-menu-drawer__submenu-row[data-accent="forums"] .user-menu-drawer__submenu-icon {
+  color: #ec4899;
+}
+
+.user-menu-drawer__submenu-row[data-accent="storefront"] .user-menu-drawer__submenu-icon {
+  color: #22d3ee;
+}
+
+.user-menu-drawer__submenu-row[data-accent="news"] .user-menu-drawer__submenu-icon {
+  color: #fbbf24;
 }
 
 .user-menu-drawer__submenu-row > :last-child {

@@ -1,9 +1,15 @@
 // src/App.tsx
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { BrowserRouter } from "react-router-dom";
 import AppRoutes from "./routes/AppRoutes";
 import { useAuth } from "./context/AuthContext";
 
+const ChatProvider = lazy(() =>
+  import("./context/ChatContext").then((mod) => ({ default: mod.ChatProvider }))
+);
+const VideoCallProvider = lazy(() =>
+  import("./context/VideoCallContext").then((mod) => ({ default: mod.VideoCallProvider }))
+);
 const ChatDock = lazy(() => import("./components/ChatDock"));
 const ConsentBanner = lazy(() => import("./components/ConsentBanner"));
 const KeyBackupModal = lazy(() => import("./components/KeyBackupModal"));
@@ -14,10 +20,29 @@ const TimeLimitManager = lazy(() => import("./components/TimeLimitManager"));
 const DobMismatchNotice = lazy(() => import("./components/DobMismatchNotice"));
 const SuggestionWidget = lazy(() => import("./components/SuggestionWidget"));
 
+function RuntimeProviders({
+  isAuthed,
+  children,
+}: {
+  isAuthed: boolean;
+  children: ReactNode;
+}): JSX.Element {
+  if (!isAuthed) {
+    return <>{children}</>;
+  }
+  return (
+    <Suspense fallback={<div className="status">Loading...</div>}>
+      <ChatProvider>
+        <VideoCallProvider>{children}</VideoCallProvider>
+      </ChatProvider>
+    </Suspense>
+  );
+}
+
 function AppChrome(): JSX.Element {
   const { user, sessionActive } = useAuth();
   const isAuthed = Boolean(user) || sessionActive;
-  return (
+  const chrome = (
     <>
       <AppRoutes />
       <Suspense fallback={null}>
@@ -33,6 +58,7 @@ function AppChrome(): JSX.Element {
       </Suspense>
     </>
   );
+  return <RuntimeProviders isAuthed={isAuthed}>{chrome}</RuntimeProviders>;
 }
 
 export default function App() {

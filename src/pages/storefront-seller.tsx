@@ -820,6 +820,7 @@ export default function StorefrontSeller(): JSX.Element {
   const [messageSending, setMessageSending] = useState<Record<string, boolean>>({});
   const [messageActionError, setMessageActionError] = useState<string | null>(null);
   const [messageActionNotice, setMessageActionNotice] = useState<string | null>(null);
+  const [storefrontChatOpen, setStorefrontChatOpen] = useState(false);
   const [sellerDashboardMockEnabled, setSellerDashboardMockEnabled] = useState(false);
   const [sellerDashboardMockData, setSellerDashboardMockData] =
     useState<SellerDashboardMockData | null>(null);
@@ -893,6 +894,7 @@ export default function StorefrontSeller(): JSX.Element {
   useEffect(() => {
     if (isListingView) {
       setFormError(null);
+      setStorefrontChatOpen(false);
     }
   }, [isListingView]);
 
@@ -4841,12 +4843,7 @@ export default function StorefrontSeller(): JSX.Element {
   const previewTitleId = "storefront-preview-title";
 
   return (
-    <div
-      className={`dashboard-shell storefront-shell${
-        isListingView ? "" : " storefront-shell--seller-messages"
-      }`}
-      style={pageBackground}
-    >
+    <div className="dashboard-shell storefront-shell" style={pageBackground}>
       <Sidebar active="storefront" />
       <div className="main-content storefront-page">
         {isListingView ? (
@@ -5487,15 +5484,26 @@ export default function StorefrontSeller(): JSX.Element {
         )}
       </div>
       {!isListingView && (
-        <aside
-          className="seller-messages-sidebar"
-          data-accent="storefront"
-          aria-label="Seller messages"
+        <button
+          type="button"
+          className="seller-storefront-chat-fab"
+          onClick={() => setStorefrontChatOpen(true)}
+          aria-label="Open storefront chat"
+          title="Storefront chat"
         >
-          <div className="seller-messages-scroll">
-            {renderWidgetContent("messages")}
-          </div>
-        </aside>
+          <span aria-hidden="true">🛍️</span>
+        </button>
+      )}
+      {!isListingView && (
+        <PopupModal
+          open={storefrontChatOpen}
+          title="Storefront chat"
+          onClose={() => setStorefrontChatOpen(false)}
+          className="seller-chat-modal"
+          bodyClassName="seller-chat-modal-body"
+        >
+          <div className="seller-chat-modal-content">{renderWidgetContent("messages")}</div>
+        </PopupModal>
       )}
       <PopupModal
         open={customizeOpen}

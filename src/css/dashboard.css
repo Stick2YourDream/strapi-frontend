@@ -21,7 +21,13 @@
   width: 100%;
   margin: 0 auto;
   --sidebar-width: 300px;
+  --sidebar-width-expanded: 300px;
+  --sidebar-collapsed-width: 92px;
   --sidebar-gap: 24px;
+  --right-sidebar-width: 0px;
+  --right-sidebar-width-expanded: 300px;
+  --right-sidebar-collapsed-width: 92px;
+  --right-sidebar-gap: 0px;
   --content-max: 1056px;
   --ysp-dashboard-blue: var(--ysp-brand-blue, #3f8dff);
   --ysp-dashboard-cyan: var(--ysp-brand-cyan, #24d3e3);
@@ -67,6 +73,74 @@
   );
   --dashboard-composer-border: 1px solid rgba(255, 255, 255, 0.1);
   font-size: var(--ui-font-size);
+}
+
+.dashboard-shell.is-sidebar-collapsed,
+body.ysp-sidebar-collapsed .dashboard-shell {
+  --sidebar-width: var(--sidebar-collapsed-width);
+  --sidebar-gap: 18px;
+}
+
+body.ysp-right-sidebar-expanded .dashboard-shell {
+  --right-sidebar-width: 300px;
+  --right-sidebar-gap: 24px;
+}
+
+body.ysp-right-sidebar-collapsed .dashboard-shell {
+  --right-sidebar-width: var(--right-sidebar-collapsed-width);
+  --right-sidebar-gap: 18px;
+}
+
+.dashboard-shell .topbar-greeting {
+  width: min(860px, 100%);
+  margin: 0 auto 16px;
+  padding: 14px 22px;
+  border-radius: 16px;
+  border: 1px solid rgba(134, 164, 228, 0.22);
+  background:
+    linear-gradient(
+      100deg,
+      rgba(7, 13, 31, 0.86) 0%,
+      rgba(46, 49, 64, 0.7) 48%,
+      rgba(26, 24, 37, 0.76) 100%
+    ),
+    radial-gradient(circle at 8% 20%, rgba(56, 189, 248, 0.14), transparent 42%);
+  box-shadow:
+    0 18px 34px rgba(1, 6, 18, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  text-align: center;
+}
+
+.dashboard-shell .topbar-greeting-title {
+  display: block;
+  margin: 0;
+  color: #f6f9ff;
+  font-weight: 800;
+  font-size: clamp(1.05rem, 0.9rem + 0.7vw, 2rem);
+  line-height: 1.18;
+  letter-spacing: 0.01em;
+}
+
+.dashboard-shell .topbar-greeting-sub {
+  display: block;
+  margin: 0;
+  color: #9fc2dd;
+  font-size: clamp(0.78rem, 0.72rem + 0.2vw, 0.96rem);
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+@media (max-width: 640px) {
+  .dashboard-shell .topbar-greeting {
+    padding: 10px 14px;
+    border-radius: 14px;
+    margin-bottom: 12px;
+  }
 }
 
 .dash-hero {
@@ -157,7 +231,13 @@
 }
 
 .main-content {
-  width: min(var(--content-max), calc(100% - var(--sidebar-width) - var(--sidebar-gap)));
+  width: min(
+    var(--content-max),
+    calc(
+      100% - var(--sidebar-width) - var(--sidebar-gap) - var(--right-sidebar-width) -
+        var(--right-sidebar-gap)
+    )
+  );
   margin-left: var(--sidebar-width);
   margin-right: auto;
   padding-left: clamp(16px, 2vw, 32px);
@@ -178,6 +258,7 @@
 @media (min-width: 1920px) {
   .dashboard-shell {
     --sidebar-width: 320px;
+    --sidebar-width-expanded: 320px;
     --sidebar-gap: 32px;
     --content-max: 1338px;
   }
@@ -186,6 +267,7 @@
 @media (min-width: 2560px) {
   .dashboard-shell {
     --sidebar-width: 500px;
+    --sidebar-width-expanded: 500px;
     --sidebar-gap: 40px;
     --content-max: 2000px;
   }
@@ -197,6 +279,7 @@
 @media (min-width: 3840px) {
   .dashboard-shell {
     --sidebar-width: 420px;
+    --sidebar-width-expanded: 420px;
     --sidebar-gap: 56px;
     --content-max: 3200px;
   }
@@ -205,6 +288,7 @@
 @media (min-width: 7680px) {
   .dashboard-shell {
     --sidebar-width: 520px;
+    --sidebar-width-expanded: 520px;
     --sidebar-gap: 80px;
     --content-max: 5600px;
   }
@@ -2445,24 +2529,85 @@
 
 .go-top-button {
   position: fixed;
-  left: 28px;
-  bottom: 28px;
+  left: calc(var(--sidebar-width) + var(--sidebar-gap));
+  bottom: 20px;
   z-index: 55;
+  width: 46px;
+  height: 46px;
   border-radius: 999px;
-  padding: 10px 16px;
-  border: 1px solid rgba(63, 141, 255, 0.4);
-  background: var(--ysp-surface-1-bg, rgba(12, 18, 32, 0.85));
+  border: 1px solid rgba(89, 175, 255, 0.56);
+  background:
+    radial-gradient(140% 140% at 20% 18%, rgba(56, 189, 248, 0.24), rgba(56, 189, 248, 0)),
+    linear-gradient(155deg, rgba(13, 22, 42, 0.96), rgba(7, 12, 25, 0.96));
   color: var(--ysp-fg, #e9ecf5);
-  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
-  transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+  box-shadow:
+    0 14px 28px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    background 0.18s ease;
+}
+
+.go-top-button svg {
+  transform-origin: center;
+  transition: filter 0.18s ease;
 }
 
 .go-top-button:hover {
-  transform: translateY(-2px);
-  border-color: rgba(var(--ysp-dashboard-cyan-rgb), 0.65);
-  background: var(--ysp-hover-bg, rgba(18, 26, 42, 0.9));
+  transform: translateY(-2px) scale(1.04);
+  border-color: rgba(125, 211, 252, 0.78);
+  background:
+    radial-gradient(145% 145% at 20% 18%, rgba(56, 189, 248, 0.32), rgba(56, 189, 248, 0)),
+    linear-gradient(155deg, rgba(16, 28, 52, 0.98), rgba(8, 14, 30, 0.98));
+  box-shadow:
+    0 18px 32px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+
+.go-top-button:hover svg,
+.go-top-button:focus-visible svg {
+  animation: go-top-arrow-lift 620ms cubic-bezier(0.22, 1, 0.36, 1) infinite;
+  filter: drop-shadow(0 0 10px rgba(125, 211, 252, 0.75));
+}
+
+.go-top-button:focus-visible {
+  outline: none;
+  border-color: rgba(125, 211, 252, 0.82);
+  box-shadow:
+    0 0 0 3px rgba(56, 189, 248, 0.22),
+    0 14px 28px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+@keyframes go-top-arrow-lift {
+  0% {
+    transform: translateY(0) scale(1);
+  }
+  35% {
+    transform: translateY(-4px) scale(1.08);
+  }
+  70% {
+    transform: translateY(-2px) scale(1.03);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .go-top-button:hover svg,
+  .go-top-button:focus-visible svg {
+    animation: none;
+    transform: translateY(-1px);
+  }
 }
 
 .goals-modal {
@@ -2883,6 +3028,8 @@
 @media (max-width: 960px) {
   .dashboard-shell {
     padding: 90px 16px 32px;
+    --right-sidebar-width: 0px;
+    --right-sidebar-gap: 0px;
   }
 
   .main-content {

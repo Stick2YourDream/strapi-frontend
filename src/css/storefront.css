@@ -233,6 +233,12 @@
   color: #a9b7d8;
 }
 
+@media (min-width: 961px) {
+  .storefront-sidebar-panel--desktop-hidden {
+    display: none;
+  }
+}
+
 .storefront-field input,
 .storefront-field select,
 .storefront-field textarea {
@@ -1179,6 +1185,16 @@
   height: 0;
 }
 
+@media (min-width: 961px) {
+  .sidebar-shell.is-desktop-collapsed .dash-nav.storefront-filter-nav .storefront-sidebar-panel {
+    display: none;
+  }
+
+  .sidebar-shell.is-desktop-collapsed .dash-nav.storefront-filter-nav {
+    gap: 10px;
+  }
+}
+
 .storefront-profile-button {
   width: 100%;
   display: flex;
@@ -1305,6 +1321,21 @@
   position: relative;
   z-index: 1;
   gap: 28px;
+}
+
+.storefront-quick-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.storefront-quick-actions .storefront-hero-actions {
+  margin: 0;
 }
 
 .storefront-hero {
@@ -1461,7 +1492,7 @@
 
 .storefront-grid {
   gap: 20px;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
 }
 
 .storefront-card {
@@ -1613,6 +1644,12 @@
   }
   .storefront-card {
     border-radius: 18px;
+  }
+}
+
+@media (max-width: 1200px) and (min-width: 641px) {
+  .storefront-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

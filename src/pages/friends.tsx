@@ -1,16 +1,17 @@
 // src/pages/Friends.tsx
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { Users, X } from "lucide-react";
 import "../css/dashboard.css";
 import "../css/friends.css";
 import "../css/media-lightbox.css";
-import { LayoutDashboard } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useChat } from "../context/ChatContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";
 import { useVideoCall, type VideoCallInvitee } from "../context/VideoCallContext";
 import api from "../api/strapi";
 import Sidebar from "../components/Sidebar";
+import RightSidebarShell from "../components/RightSidebarShell";
 import TopbarSearch from "../components/TopbarSearch";
 import { usePageMeta } from "../hooks/usePageMeta";
 import FriendPostsFeed, { type FriendFeedPost } from "../components/FriendPostsFeed";
@@ -230,6 +231,7 @@ export default function Friends() {
   const [requestNotice, setRequestNotice] = useState<string | null>(null);
   const [requestActionBusy, setRequestActionBusy] = useState<Record<string, boolean>>({});
   const [refreshToken, setRefreshToken] = useState(0);
+  const [mobileFriendPickerOpen, setMobileFriendPickerOpen] = useState(false);
 
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
   const getEntity = (entry: any) => entry?.data ?? entry ?? null;
@@ -625,6 +627,26 @@ export default function Friends() {
     setActionNotice(null);
   }, [selectedFriendId]);
 
+  useEffect(() => {
+    if (!mobileFriendPickerOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMobileFriendPickerOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [mobileFriendPickerOpen]);
+
+  useEffect(() => {
+    if (!mobileFriendPickerOpen || typeof document === "undefined") return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [mobileFriendPickerOpen]);
+
   const selectedFriend = useMemo(() => {
     if (!selectedFriendId) return null;
     return profiles.find((profile) => profile.userId === selectedFriendId) || null;
@@ -804,6 +826,13 @@ export default function Friends() {
   const handleSelectFriend = (profile: FriendProfile) => {
     if (!profile.userId) return;
     setSelectedFriendId(profile.userId);
+    setMobileFriendPickerOpen(false);
+  };
+
+  const handleOpenMobileFriendPicker = () => {
+    if (typeof window === "undefined") return;
+    if (!window.matchMedia("(max-width: 960px)").matches) return;
+    setMobileFriendPickerOpen(true);
   };
 
   const handleVideoCall = (profile: FriendProfile) => {
@@ -1005,111 +1034,101 @@ export default function Friends() {
     void loadMedia();
   }, [selectedFriend?.userId]);
 
+  const renderFriendBrowser = (searchInputId: string) => (
+    <>
+      {!loading && profiles.length > 0 && (
+        <div className="friend-search">
+          <label className="friend-search-label" htmlFor={searchInputId}>
+            Search Friends
+          </label>
+          <input
+            id={searchInputId}
+            className="friend-search-input"
+            type="search"
+            value={friendQuery}
+            onChange={(e) => setFriendQuery(e.target.value)}
+            placeholder="Find Your Friends"
+          />
+        </div>
+      )}
+      {loading ? (
+        <p className="status">Loading friends...</p>
+      ) : profiles.length === 0 ? (
+        <p className="status">No friends yet.</p>
+      ) : filteredFriends.length === 0 ? (
+        <p className="status">No friends match your search.</p>
+      ) : (
+        <>
+          <ul className="friend-mini-list">
+            {pagedFriends.map((friend) => {
+              const name = `${friend.firstName || ""} ${friend.lastName || ""}`.trim();
+              const handle = friend.handle || "friend";
+              const displayName = name || handle;
+              const isActive = friend.userId === selectedFriendId;
+              return (
+                <li key={friend.id} className="friend-mini-item">
+                  <button
+                    className={`friend-mini-button${isActive ? " is-active" : ""}`}
+                    type="button"
+                    onClick={() => handleSelectFriend(friend)}
+                    aria-label={displayName}
+                    data-collapsed-tooltip={displayName}
+                    data-right-tooltip={displayName}
+                  >
+                    {renderAvatar(friend, 32)}
+                    <span className="friend-mini-meta">
+                      <span className="friend-mini-name">{displayName}</span>
+                      {name && handle ? <span className="friend-mini-tag">@{handle}</span> : null}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          {totalFriendPages > 1 && (
+            <div className="friend-pagination">
+              <button
+                className="friend-page-btn"
+                type="button"
+                onClick={() => setFriendPage((prev) => Math.max(1, prev - 1))}
+                disabled={friendPage <= 1}
+              >
+                Prev
+              </button>
+              {Array.from({ length: totalFriendPages }, (_, index) => index + 1).map((page) => (
+                <button
+                  key={page}
+                  className={`friend-page-btn${page === friendPage ? " is-active" : ""}`}
+                  type="button"
+                  onClick={() => setFriendPage(page)}
+                >
+                  {page}
+                </button>
+              ))}
+              <button
+                className="friend-page-btn"
+                type="button"
+                onClick={() => setFriendPage((prev) => Math.min(totalFriendPages, prev + 1))}
+                disabled={friendPage >= totalFriendPages}
+              >
+                Next
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </>
+  );
+
   const renderSidebarContent = () => (
-    <div className="friends-sidebar">
-      <button
-        className="btn ghost sidebar-nav-link friends-sidebar-dashboard"
-        type="button"
-        data-accent="dashboard"
-        onClick={() => navigate("/dashboard")}
-      >
-        <span className="sidebar-nav-icon" aria-hidden="true">
-          <LayoutDashboard size={18} />
-        </span>
-        <span>My Dashboard</span>
-      </button>
+    <div className="friends-sidebar friends-sidebar--desktop-hidden">
       <section className="panel friends-sidebar-panel">
         <div className="panel-header friend-panel-header">
           <div>
             <p className="eyebrow">Friends</p>
           </div>
         </div>
-        {!loading && profiles.length > 0 && (
-          <div className="friend-search">
-            <label className="friend-search-label" htmlFor="friend-search-input">
-              Search Friends
-            </label>
-            <input
-              id="friend-search-input"
-              className="friend-search-input"
-              type="search"
-              value={friendQuery}
-              onChange={(e) => setFriendQuery(e.target.value)}
-              placeholder="Find Your Friends"
-            />
-          </div>
-        )}
-        {loading ? (
-          <p className="status">Loading friends...</p>
-        ) : profiles.length === 0 ? (
-          <p className="status">No friends yet.</p>
-        ) : filteredFriends.length === 0 ? (
-          <p className="status">No friends match your search.</p>
-        ) : (
-          <>
-            <ul className="friend-mini-list">
-              {pagedFriends.map((friend) => {
-                const name = `${friend.firstName || ""} ${friend.lastName || ""}`.trim();
-                const handle = friend.handle || "friend";
-                const displayName = name || handle;
-                const isActive = friend.userId === selectedFriendId;
-                return (
-                  <li key={friend.id} className="friend-mini-item">
-                    <button
-                      className={`friend-mini-button${isActive ? " is-active" : ""}`}
-                      type="button"
-                      onClick={() => handleSelectFriend(friend)}
-                    >
-                      {renderAvatar(friend, 32)}
-                      <span className="friend-mini-meta">
-                        <span className="friend-mini-name">{displayName}</span>
-                        {name && handle ? (
-                          <span className="friend-mini-tag">@{handle}</span>
-                        ) : null}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-            {totalFriendPages > 1 && (
-              <div className="friend-pagination">
-                <button
-                  className="friend-page-btn"
-                  type="button"
-                  onClick={() => setFriendPage((prev) => Math.max(1, prev - 1))}
-                  disabled={friendPage <= 1}
-                >
-                  Prev
-                </button>
-                {Array.from({ length: totalFriendPages }, (_, index) => index + 1).map(
-                  (page) => (
-                    <button
-                      key={page}
-                      className={`friend-page-btn${
-                        page === friendPage ? " is-active" : ""
-                      }`}
-                      type="button"
-                      onClick={() => setFriendPage(page)}
-                    >
-                      {page}
-                    </button>
-                  )
-                )}
-                <button
-                  className="friend-page-btn"
-                  type="button"
-                  onClick={() =>
-                    setFriendPage((prev) => Math.min(totalFriendPages, prev + 1))
-                  }
-                  disabled={friendPage >= totalFriendPages}
-                >
-                  Next
-                </button>
-              </div>
-            )}
-          </>
-        )}
+        {renderFriendBrowser("friend-search-input")}
       </section>
     </div>
   );
@@ -1118,13 +1137,57 @@ export default function Friends() {
     <div className="dashboard-shell friends-page" style={getBackgroundStyle("friends")}>
       <Sidebar
         active="friends"
-        hideNavLinks
         hideBio
         sidebarContent={renderSidebarContent()}
       />
+      <RightSidebarShell
+        ariaLabel="Friends sidebar"
+        headTitle="Friends"
+        headSubtitle={`${profiles.length} connected`}
+        headIcon={<Users size={18} />}
+        headTooltip="Friends"
+        className="right-friends-browser-sidebar"
+      >
+        {renderFriendBrowser("friend-search-input-right")}
+      </RightSidebarShell>
 
       <div className="main-content">
         <TopbarSearch value={query} onChange={setQuery} />
+
+        {mobileFriendPickerOpen && (
+          <div className="friends-mobile-picker-overlay" role="presentation">
+            <button
+              type="button"
+              className="friends-mobile-picker-backdrop"
+              aria-label="Close friends picker"
+              onClick={() => setMobileFriendPickerOpen(false)}
+            />
+            <section
+              className="friends-mobile-picker"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Choose a friend"
+            >
+              <div className="friends-mobile-picker__header">
+                <div>
+                  <p className="eyebrow">Friends</p>
+                  <h3>Browse and search</h3>
+                </div>
+                <button
+                  type="button"
+                  className="friends-mobile-picker__close"
+                  aria-label="Close friends picker"
+                  onClick={() => setMobileFriendPickerOpen(false)}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="friends-mobile-picker__body">
+                {renderFriendBrowser("friend-search-input-mobile-modal")}
+              </div>
+            </section>
+          </div>
+        )}
 
         {error && <p className="status status-error">{error}</p>}
         <section className="panel friend-requests-panel">
@@ -1242,11 +1305,19 @@ export default function Friends() {
             {!selectedFriend ? (
               <p className="status">Select a friend to see their recent posts.</p>
             ) : (
-              <div className="friend-detail">
-                <div className="friend-header">
-                  {renderAvatar(selectedFriend, 48)}
-                  <div className="friend-header-meta">
-                    <div className="friend-header-title">
+                <div className="friend-detail">
+                  <div className="friend-header">
+                    <button
+                      type="button"
+                      className="friend-avatar-trigger"
+                      onClick={handleOpenMobileFriendPicker}
+                      aria-label="Choose a different friend"
+                      title="Choose a different friend"
+                    >
+                      {renderAvatar(selectedFriend, 48)}
+                    </button>
+                    <div className="friend-header-meta">
+                      <div className="friend-header-title">
                       <strong>
                         {`${selectedFriend.firstName || ""} ${selectedFriend.lastName || ""}`.trim() ||
                           `@${selectedFriend.handle || "friend"}`}
