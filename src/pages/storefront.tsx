@@ -1,30 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import {
-  ChevronLeft,
-  ChevronRight,
-  Download,
-  Home,
-  LayoutDashboard,
-  LogOut,
-  MessageSquare,
-  Newspaper,
-  Search,
-  Settings,
-  Shield,
-  Store,
-  User,
-  Users,
-  UsersRound,
-  X,
-} from "lucide-react";
+import { Search } from "lucide-react";
 import "../css/dashboard.css";
 import "../css/storefront.css";
 import "../css/sidebar.css";
 import FullScreenLoader from "../components/FullScreenLoader";
 import api from "../api/strapi";
-import AvatarImage from "../components/AvatarImage";
-import ProfilePhotoModal from "../components/ProfilePhotoModal";
+import Sidebar from "../components/Sidebar";
 import RightSidebarShell from "../components/RightSidebarShell";
 import { useAuth } from "../context/AuthContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";
@@ -32,7 +14,6 @@ import { usePageMeta } from "../hooks/usePageMeta";
 import { pickMediaUrls } from "../utils/media";
 import {
   canWarmCriticalRouteChunks,
-  preloadCriticalRouteForPath,
   preloadStorefrontSellerRoute,
 } from "../routes/routePreloaders";
 import {
@@ -166,15 +147,6 @@ const getEntityId = (value: any) => {
   return Number.isFinite(numeric) ? numeric : null;
 };
 
-const DESKTOP_SIDEBAR_COLLAPSE_KEY = "dashboard:desktop-sidebar-collapsed";
-
-const readDesktopSidebarCollapsed = () => {
-  if (typeof window === "undefined") return true;
-  const stored = window.localStorage.getItem(DESKTOP_SIDEBAR_COLLAPSE_KEY);
-  if (stored === null) return true;
-  return stored === "1";
-};
-
 export default function Storefront() {
   usePageMeta({
     title: "StoreFront | Your Social Place",
@@ -204,11 +176,7 @@ export default function Storefront() {
   const [maxPrice, setMaxPrice] = useState("");
   const [verifiedOnly, setVerifiedOnly] = useState(false);
   const [freeOnly, setFreeOnly] = useState(false);
-  const [showProfileMenu, setShowProfileMenu] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [desktopCollapsed, setDesktopCollapsed] = useState(readDesktopSidebarCollapsed);
-  const [photoModalOpen, setPhotoModalOpen] = useState(false);
-  const { user, profile, appSettings, logout } = useAuth();
+  const { user, profile } = useAuth();
   const loadingStartedRef = useRef(false);
   const listingGridRef = useRef<HTMLDivElement | null>(null);
   const [demoEnabled, setDemoEnabled] = useState(readStorefrontDemoEnabled);
@@ -551,27 +519,6 @@ export default function Storefront() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    window.localStorage.setItem(
-      DESKTOP_SIDEBAR_COLLAPSE_KEY,
-      desktopCollapsed ? "1" : "0"
-    );
-  }, [desktopCollapsed]);
-
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    const className = "ysp-sidebar-collapsed";
-    if (desktopCollapsed) {
-      document.body.classList.add(className);
-    } else {
-      document.body.classList.remove(className);
-    }
-    return () => {
-      document.body.classList.remove(className);
-    };
-  }, [desktopCollapsed]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
     if (!canWarmCriticalRouteChunks()) return;
 
     let cancelWarmupTrigger = () => {};
@@ -603,33 +550,6 @@ export default function Storefront() {
 
   const pageBackground = getBackgroundStyle("storefront") || getBackgroundStyle("dashboard");
   const showInitialLoader = loadingListings && !hasLoadedOnce;
-  const displayName =
-    profile?.firstName || profile?.lastName
-      ? `${profile?.firstName || ""} ${profile?.lastName || ""}`.trim()
-      : profile?.handle || user?.email || "Guest";
-  const handleLine = profile?.handle || user?.email || "Profile";
-  const avatarUrl = profile?.avatarUrl;
-  const fallbackInitial = displayName.charAt(0).toUpperCase();
-  const newsroomEnabled = appSettings?.newsroomEnabled !== false;
-  const storefrontEnabled = appSettings?.storefrontEnabled !== false;
-  const isStaff = user?.appRole === "admin" || user?.appRole === "moderator";
-  const isDesktopVisuallyCollapsed = desktopCollapsed;
-
-  const handleLogoClick = () => {
-    preloadCriticalRouteForPath("/dashboard");
-    navigate("/dashboard");
-    setShowProfileMenu(false);
-    setMenuOpen(false);
-  };
-
-  const handleProfileAction = (path: string) => {
-    preloadCriticalRouteForPath(path);
-    navigate(path);
-    setShowProfileMenu(false);
-    setMenuOpen(false);
-  };
-
-  const toggleDesktopCollapse = () => setDesktopCollapsed((prev) => !prev);
 
   const renderStorefrontSidebarPanel = (idPrefix: string, panelClassName = "") => (
     <div
@@ -780,471 +700,7 @@ export default function Storefront() {
   return (
     <div className="dashboard-shell storefront-shell" style={pageBackground}>
       {showInitialLoader && <FullScreenLoader label="Loading storefront" />}
-      <ProfilePhotoModal
-        open={photoModalOpen}
-        onClose={() => setPhotoModalOpen(false)}
-      />
-      <div
-        className={`sidebar-shell ${menuOpen ? "open" : ""}${
-          isDesktopVisuallyCollapsed ? " is-desktop-collapsed" : ""
-        }`}
-      >
-        <div className="sidebar-topbar">
-          <button className="brand" type="button" onClick={handleLogoClick} style={{ cursor: "pointer" }}>
-            <span className="brand-mark" aria-hidden="true">
-              <img src="/logo2.png" alt="Your Social Place Logo" />
-            </span>
-            <span className="brand-text">Your Social Place</span>
-          </button>
-          <div className="mobile-topbar-actions">
-            <button
-              type="button"
-              className={`hamburger ${menuOpen ? "is-open" : ""}`}
-              onClick={() => {
-                setMenuOpen((prev) => !prev);
-                setShowProfileMenu(false);
-              }}
-              aria-label="Toggle storefront filters"
-            >
-              <span />
-              <span />
-              <span />
-            </button>
-            <button
-              type="button"
-              className={`mobile-avatar-button ${showProfileMenu ? "is-open" : ""}`}
-              onClick={() => {
-                setShowProfileMenu((prev) => !prev);
-                setMenuOpen(false);
-              }}
-              aria-label={`Open profile menu for ${displayName}`}
-            >
-              {avatarUrl ? (
-                <AvatarImage
-                  src={avatarUrl}
-                  alt={displayName}
-                  className="mobile-avatar-image"
-                  loading="lazy"
-                  decoding="async"
-                />
-              ) : (
-                <span className="mobile-avatar-fallback" aria-hidden="true">
-                  {fallbackInitial}
-                </span>
-              )}
-            </button>
-            {showProfileMenu && (
-              <>
-                <button
-                  type="button"
-                  className="mobile-profile-menu-backdrop"
-                  aria-label="Close profile navigation menu"
-                  onClick={() => setShowProfileMenu(false)}
-                />
-                <div className="mobile-profile-menu" role="dialog" aria-modal="true">
-                  <div className="mobile-profile-menu-header">
-                    <strong className="mobile-profile-menu-title">Navigation</strong>
-                    <button
-                      type="button"
-                      className="mobile-profile-menu-close"
-                      aria-label="Close menu"
-                      onClick={() => setShowProfileMenu(false)}
-                    >
-                      <X size={16} />
-                    </button>
-                  </div>
-                  <button
-                    className="mobile-profile-item"
-                    type="button"
-                    data-accent="home"
-                    onClick={() => handleProfileAction("/landing")}
-                  >
-                    <span className="sidebar-nav-icon" aria-hidden="true">
-                      <Home size={18} />
-                    </span>
-                    <span>Return to Landing Page</span>
-                  </button>
-                  <button
-                    className="mobile-profile-item"
-                    type="button"
-                    data-accent="downloads"
-                    onClick={() => handleProfileAction("/downloads")}
-                  >
-                    <span className="sidebar-nav-icon" aria-hidden="true">
-                      <Download size={18} />
-                    </span>
-                    <span>Downloads</span>
-                  </button>
-                  <button
-                    className="mobile-profile-item"
-                    type="button"
-                    data-accent="settings"
-                    onClick={() => handleProfileAction("/me?view=settings")}
-                  >
-                    <span className="sidebar-nav-icon" aria-hidden="true">
-                      <Settings size={18} />
-                    </span>
-                    <span>Account settings</span>
-                  </button>
-                  <button
-                    className="mobile-profile-item"
-                    type="button"
-                    data-accent="profile-photo"
-                    onClick={() => {
-                      setPhotoModalOpen(true);
-                      setShowProfileMenu(false);
-                      setMenuOpen(false);
-                    }}
-                  >
-                    <span className="sidebar-nav-icon" aria-hidden="true">
-                      <User size={18} />
-                    </span>
-                    <span>{profile?.avatarUrl ? "Edit Profile Photo" : "Add Profile Photo"}</span>
-                  </button>
-                  {user && (
-                    <button
-                      className="mobile-profile-item"
-                      type="button"
-                      data-accent="logout"
-                      onClick={() => {
-                        logout("user-action");
-                        navigate("/login");
-                        setShowProfileMenu(false);
-                        setMenuOpen(false);
-                      }}
-                    >
-                      <span className="sidebar-nav-icon" aria-hidden="true">
-                        <LogOut size={18} />
-                      </span>
-                      <span>Logout</span>
-                    </button>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-
-        {menuOpen && (
-          <button
-            type="button"
-            className="sidebar-overlay"
-            aria-label="Close storefront filters"
-            onClick={() => setMenuOpen(false)}
-          />
-        )}
-
-        <aside className="dash-nav storefront-filter-nav">
-          <div className="sidebar-brand-row">
-            <button className="brand" type="button" onClick={handleLogoClick}>
-              <span className="brand-mark" aria-hidden="true">
-                <img src="/logo2.png" alt="Your Social Place Logo" />
-              </span>
-              <span className="brand-text">Your Social Place</span>
-            </button>
-            <button
-              type="button"
-              className={`sidebar-desktop-toggle${desktopCollapsed ? " is-collapsed" : ""}`}
-              onClick={toggleDesktopCollapse}
-              aria-pressed={!desktopCollapsed}
-              aria-label={desktopCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-              title={desktopCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-            >
-              {desktopCollapsed ? (
-                <ChevronRight size={16} className="sidebar-toggle-icon" aria-hidden="true" />
-              ) : (
-                <ChevronLeft size={16} className="sidebar-toggle-icon" aria-hidden="true" />
-              )}
-            </button>
-          </div>
-
-          <div className="sidebar-profile-slot">
-            <div className="sidebar-profile-row">
-              <button
-                type="button"
-                className="sidebar-profile-button"
-                onClick={() => setShowProfileMenu((prev) => !prev)}
-                aria-expanded={showProfileMenu}
-                aria-controls="storefront-sidebar-profile-menu"
-                data-collapsed-tooltip={`${displayName} (${handleLine})`}
-              >
-                {avatarUrl ? (
-                  <AvatarImage
-                    src={avatarUrl}
-                    alt={displayName}
-                    className="avatar-octagon"
-                    style={{ width: 48, height: 48, borderRadius: "50%" }}
-                    loading="lazy"
-                    decoding="async"
-                  />
-                ) : (
-                  <div
-                    aria-hidden="true"
-                    style={{
-                      width: 48,
-                      height: 48,
-                      borderRadius: "50%",
-                      display: "grid",
-                      placeItems: "center",
-                      background: "linear-gradient(135deg, #60a5fa, #7c3aed)",
-                      color: "#0b0d14",
-                      fontWeight: 700,
-                    }}
-                  >
-                    {fallbackInitial}
-                  </div>
-                )}
-                <div style={{ textAlign: "left", minWidth: 0 }}>
-                  <strong style={{ display: "block" }}>{displayName}</strong>
-                  <span
-                    style={{
-                      fontSize: "12px",
-                      color: "var(--ysp-muted-2, #9ca3af)",
-                      display: "block",
-                      maxWidth: "100%",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                    title={handleLine}
-                  >
-                    {handleLine}
-                  </span>
-                </div>
-              </button>
-            </div>
-            {showProfileMenu && (
-              <>
-                <button
-                  type="button"
-                  className="sidebar-profile-menu-backdrop"
-                  aria-label="Close profile navigation menu"
-                  onClick={() => setShowProfileMenu(false)}
-                />
-                <div
-                  id="storefront-sidebar-profile-menu"
-                  className="sidebar-profile-menu"
-                  role="dialog"
-                  aria-modal="true"
-                  aria-label="Profile navigation menu"
-                >
-                  <div className="sidebar-profile-menu-header">
-                    <strong>Navigation</strong>
-                    <button
-                      type="button"
-                      className="sidebar-profile-menu-close"
-                      aria-label="Close menu"
-                      onClick={() => setShowProfileMenu(false)}
-                    >
-                      <X size={16} />
-                    </button>
-                  </div>
-                  <button
-                    className="btn ghost nav-btn sidebar-profile-menu-button"
-                    type="button"
-                    data-accent="home"
-                    onClick={() => handleProfileAction("/landing")}
-                  >
-                    <span className="sidebar-nav-icon" aria-hidden="true">
-                      <Home size={18} />
-                    </span>
-                    <span>Return to Landing Page</span>
-                  </button>
-                  <button
-                    className="btn ghost nav-btn sidebar-profile-menu-button"
-                    type="button"
-                    data-accent="downloads"
-                    onClick={() => handleProfileAction("/downloads")}
-                  >
-                    <span className="sidebar-nav-icon" aria-hidden="true">
-                      <Download size={18} />
-                    </span>
-                    <span>Downloads</span>
-                  </button>
-                  <button
-                    className="btn ghost nav-btn sidebar-profile-menu-button"
-                    type="button"
-                    data-accent="settings"
-                    onClick={() => handleProfileAction("/me?view=settings")}
-                  >
-                    <span className="sidebar-nav-icon" aria-hidden="true">
-                      <Settings size={18} />
-                    </span>
-                    <span>Account settings</span>
-                  </button>
-                  <button
-                    className="btn ghost nav-btn sidebar-profile-menu-button"
-                    type="button"
-                    data-accent="profile-photo"
-                    onClick={() => {
-                      setPhotoModalOpen(true);
-                      setShowProfileMenu(false);
-                    }}
-                  >
-                    <span className="sidebar-nav-icon" aria-hidden="true">
-                      <User size={18} />
-                    </span>
-                    <span>{profile?.avatarUrl ? "Edit Profile Photo" : "Add Profile Photo"}</span>
-                  </button>
-                  <button
-                    className="btn ghost nav-btn sidebar-profile-menu-button"
-                    type="button"
-                    data-accent="logout"
-                    onClick={() => {
-                      logout("user-action");
-                      navigate("/login");
-                      setShowProfileMenu(false);
-                    }}
-                  >
-                    <span className="sidebar-nav-icon" aria-hidden="true">
-                      <LogOut size={18} />
-                    </span>
-                    <span>Logout</span>
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-
-          <div className="sidebar-nav-links" role="navigation" aria-label="Main navigation">
-            <div className="sidebar-nav-section" aria-label="Primary">
-              <p className="sidebar-nav-section-label">Primary</p>
-              <button
-                type="button"
-                className="btn ghost sidebar-nav-link"
-                data-accent="dashboard"
-                data-collapsed-tooltip="My Dashboard"
-                onClick={() => handleProfileAction("/dashboard")}
-                onMouseEnter={() => preloadCriticalRouteForPath("/dashboard")}
-                onFocus={() => preloadCriticalRouteForPath("/dashboard")}
-                onTouchStart={() => preloadCriticalRouteForPath("/dashboard")}
-              >
-                <span className="sidebar-nav-icon" aria-hidden="true">
-                  <LayoutDashboard size={18} />
-                </span>
-                <span>My Dashboard</span>
-              </button>
-              <button
-                type="button"
-                className="btn ghost sidebar-nav-link"
-                data-accent="profile"
-                data-collapsed-tooltip="My Profile"
-                onClick={() => handleProfileAction("/me")}
-              >
-                <span className="sidebar-nav-icon" aria-hidden="true">
-                  <User size={18} />
-                </span>
-                <span>My Profile</span>
-              </button>
-              <button
-                type="button"
-                className="btn ghost sidebar-nav-link"
-                data-accent="friends"
-                data-collapsed-tooltip="My Friends"
-                onClick={() => handleProfileAction("/friends")}
-              >
-                <span className="sidebar-nav-icon" aria-hidden="true">
-                  <Users size={18} />
-                </span>
-                <span>My Friends</span>
-              </button>
-              <button
-                type="button"
-                className="btn ghost sidebar-nav-link"
-                data-accent="groups"
-                data-collapsed-tooltip="My Groups"
-                onClick={() => handleProfileAction("/groups")}
-              >
-                <span className="sidebar-nav-icon" aria-hidden="true">
-                  <UsersRound size={18} />
-                </span>
-                <span>My Groups</span>
-              </button>
-              <button
-                type="button"
-                className="btn ghost sidebar-nav-link"
-                data-accent="forums"
-                data-collapsed-tooltip="Forums"
-                onClick={() => handleProfileAction("/forums")}
-              >
-                <span className="sidebar-nav-icon" aria-hidden="true">
-                  <MessageSquare size={18} />
-                </span>
-                <span>Forums</span>
-              </button>
-            </div>
-
-            <div className="sidebar-nav-section" aria-label="Content and commerce">
-              <p className="sidebar-nav-section-label">Content &amp; Commerce</p>
-              <button
-                type="button"
-                className={`btn ghost sidebar-nav-link${
-                  !storefrontEnabled ? " sidebar-nav-link--disabled" : ""
-                } is-active`}
-                data-accent="storefront"
-                data-collapsed-tooltip={
-                  storefrontEnabled ? "StoreFront" : "StoreFront (Coming Soon!)"
-                }
-                disabled={!storefrontEnabled}
-                aria-disabled={!storefrontEnabled}
-                onClick={() => {
-                  if (!storefrontEnabled) return;
-                  handleProfileAction("/storefront");
-                }}
-              >
-                <span className="sidebar-nav-icon" aria-hidden="true">
-                  <Store size={18} />
-                </span>
-                <span>{storefrontEnabled ? "StoreFront" : "StoreFront (Coming Soon!)"}</span>
-              </button>
-              <button
-                type="button"
-                className={`btn ghost sidebar-nav-link${
-                  !newsroomEnabled ? " sidebar-nav-link--disabled" : ""
-                }`}
-                data-accent="news"
-                data-collapsed-tooltip={
-                  newsroomEnabled ? "Newsroom" : "Newsroom (Coming soon)"
-                }
-                disabled={!newsroomEnabled}
-                aria-disabled={!newsroomEnabled}
-                onClick={() => {
-                  if (!newsroomEnabled) return;
-                  handleProfileAction("/news");
-                }}
-              >
-                <span className="sidebar-nav-icon" aria-hidden="true">
-                  <Newspaper size={18} />
-                </span>
-                <span>{newsroomEnabled ? "Newsroom" : "Newsroom (Coming soon)"}</span>
-              </button>
-            </div>
-
-            {isStaff && (
-              <div className="sidebar-nav-section sidebar-nav-section--admin" aria-label="Admin and safety">
-                <p className="sidebar-nav-section-label">Admin &amp; Safety</p>
-                <button
-                  type="button"
-                  className="btn ghost sidebar-nav-link"
-                  data-accent="moderation"
-                  data-collapsed-tooltip="Moderation"
-                  onClick={() => handleProfileAction("/moderation")}
-                >
-                  <span className="sidebar-nav-icon" aria-hidden="true">
-                    <Shield size={18} />
-                  </span>
-                  <span>Moderation</span>
-                </button>
-              </div>
-            )}
-          </div>
-
-          {renderStorefrontSidebarPanel(
-            "storefront-left",
-            "storefront-sidebar-panel--desktop-hidden"
-          )}
-        </aside>
-      </div>
+      <Sidebar active="storefront" />
       <RightSidebarShell
         ariaLabel="Storefront search sidebar"
         headTitle="Search listings"
@@ -1257,119 +713,122 @@ export default function Storefront() {
       </RightSidebarShell>
 
       <div className="main-content storefront-page">
-        <section className="storefront-quick-actions" aria-label="Storefront quick actions">
-          <div className="storefront-hero-actions">
-            <button
-              className="btn primary"
-              type="button"
-              onClick={handleListProduct}
-              onMouseEnter={handleSellerRouteIntent}
-              onFocus={handleSellerRouteIntent}
-              onTouchStart={handleSellerRouteIntent}
-            >
-              List a product
-            </button>
-            <button className="btn ghost" type="button" onClick={handleBrowseTrending}>
-              Browse trending
-            </button>
-            <button
-              className="btn ghost"
-              type="button"
-              onClick={handleOpenSellerDashboard}
-              onMouseEnter={handleSellerRouteIntent}
-              onFocus={handleSellerRouteIntent}
-              onTouchStart={handleSellerRouteIntent}
-            >
-              Seller dashboard
-            </button>
-          </div>
-        </section>
+        <div className="storefront-results-shell">
+          <section className="storefront-quick-actions" aria-label="Storefront quick actions">
+            <h1 className="storefront-page-heading">YSP Storefront</h1>
+            <div className="storefront-hero-actions">
+              <button
+                className="btn primary"
+                type="button"
+                onClick={handleListProduct}
+                onMouseEnter={handleSellerRouteIntent}
+                onFocus={handleSellerRouteIntent}
+                onTouchStart={handleSellerRouteIntent}
+              >
+                List a product
+              </button>
+              <button className="btn ghost" type="button" onClick={handleBrowseTrending}>
+                Browse trending
+              </button>
+              <button
+                className="btn ghost"
+                type="button"
+                onClick={handleOpenSellerDashboard}
+                onMouseEnter={handleSellerRouteIntent}
+                onFocus={handleSellerRouteIntent}
+                onTouchStart={handleSellerRouteIntent}
+              >
+                Seller dashboard
+              </button>
+            </div>
+          </section>
 
-        <section className="storefront-layout is-single">
-          <div className="storefront-left">
-            {loadingListings && (
-              <div className="storefront-status">Loading listings...</div>
-            )}
-            {listingError && <div className="storefront-status error">{listingError}</div>}
-            {!loadingListings && !listingError && filteredProducts.length === 0 && (
-              <div className="storefront-status">
-                No listings yet. Be the first to list a product.
-              </div>
-            )}
+          <section className="storefront-layout is-single">
+            <div className="storefront-left">
+              {loadingListings && (
+                <div className="storefront-status">Loading listings...</div>
+              )}
+              {listingError && <div className="storefront-status error">{listingError}</div>}
+              {!loadingListings && !listingError && filteredProducts.length === 0 && (
+                <div className="storefront-status">
+                  No listings yet. Be the first to list a product.
+                </div>
+              )}
 
-            <div className="storefront-grid" ref={listingGridRef}>
-              {filteredProducts.map((product) => {
-                const statusLower = String(product.status || "active").toLowerCase();
-                const isSold = statusLower === "sold";
-                const isPending = statusLower === "pending";
-                const isAvailable = statusLower === "active" || statusLower === "available";
-                return (
-                <div
-                  key={product.id}
-                  role="button"
-                  tabIndex={0}
-                  className={`storefront-card ${
-                    isSold
-                      ? "is-sold"
-                      : isPending
-                      ? "is-pending"
-                      : ""
-                  }`}
-                  onClick={() => handleOpenListing(product.id)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      handleOpenListing(product.id);
-                    }
-                  }}
-                >
-                  <div className="storefront-card-image">
-                    {product.images[0] ? (
-                      <img src={product.images[0]} alt={product.title} />
-                    ) : (
-                      <div className="storefront-card-fallback" />
-                    )}
-                    {isSold && (
-                      <span className="storefront-card-ribbon is-sold">SOLD</span>
-                    )}
-                    {isPending && (
-                      <span className="storefront-card-ribbon is-pending">Pending</span>
-                    )}
-                    {isAvailable && (
-                      <span className="storefront-card-ribbon is-available">Available</span>
-                    )}
-                    <span className="storefront-card-condition">{product.condition}</span>
-                    <span className="storefront-card-price-pill">
-                      {formatPrice(product.price)}
-                    </span>
-                  </div>
-                  <div className="storefront-card-body">
-                    <h3>{product.title}</h3>
-                    <p className="storefront-card-location">{product.location}</p>
-                    <div className="storefront-card-row">
-                      <span className="storefront-card-price">
+              <div className="storefront-grid" ref={listingGridRef}>
+                {filteredProducts.map((product) => {
+                  const statusLower = String(product.status || "active").toLowerCase();
+                  const isSold = statusLower === "sold";
+                  const isPending = statusLower === "pending";
+                  const isAvailable = statusLower === "active" || statusLower === "available";
+                  return (
+                  <div
+                    key={product.id}
+                    role="button"
+                    tabIndex={0}
+                    className={`storefront-card ${
+                      isSold
+                        ? "is-sold"
+                        : isPending
+                        ? "is-pending"
+                        : ""
+                    }`}
+                    onClick={() => handleOpenListing(product.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        handleOpenListing(product.id);
+                      }
+                    }}
+                  >
+                    <div className="storefront-card-image">
+                      {product.images[0] ? (
+                        <img src={product.images[0]} alt={product.title} />
+                      ) : (
+                        <div className="storefront-card-fallback" />
+                      )}
+                      {isSold && (
+                        <span className="storefront-card-ribbon is-sold">SOLD</span>
+                      )}
+                      {isPending && (
+                        <span className="storefront-card-ribbon is-pending">Pending</span>
+                      )}
+                      {isAvailable && (
+                        <span className="storefront-card-ribbon is-available">Available</span>
+                      )}
+                      <span className="storefront-card-condition">{product.condition}</span>
+                      <span className="storefront-card-price-pill">
                         {formatPrice(product.price)}
                       </span>
-                      <span className="storefront-card-stock">
-                        {product.stock} in stock
-                      </span>
                     </div>
-                    <div className="storefront-card-tags">
-                      <span>{product.category}</span>
-                      {product.visibility === "friends" && (
-                        <span className="is-friends">Friends only</span>
-                      )}
-                      {product.seller.verifiedLevel === "verified" && (
-                        <span className="is-verified">Verified seller</span>
-                      )}
+                    <div className="storefront-card-body">
+                      <h3>{product.title}</h3>
+                      <p className="storefront-card-location">{product.location}</p>
+                      <div className="storefront-card-row">
+                        <span className="storefront-card-price">
+                          {formatPrice(product.price)}
+                        </span>
+                        <span className="storefront-card-stock">
+                          {product.stock} in stock
+                        </span>
+                      </div>
+                      <div className="storefront-card-tags">
+                        <span>{product.category}</span>
+                        {product.visibility === "friends" && (
+                          <span className="is-friends">Friends only</span>
+                        )}
+                        {product.seller.verifiedLevel === "verified" && (
+                          <span className="is-verified">Verified seller</span>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
+        </div>
       </div>
     </div>
   );

@@ -1,0 +1,55 @@
+.popup-modal.seller-chat-modal {
+  width: min(920px, 96vw);
+  max-height: min(90dvh, 860px);
+}
+
+.popup-modal.seller-chat-modal .popup-modal-header {
+  border-bottom-color: rgba(255, 184, 92, 0.22);
+}
+
+.popup-modal.seller-chat-modal .popup-modal-title {
+  letter-spacing: 0.02em;
+}
+
+.popup-modal.seller-chat-modal .popup-modal-body.seller-chat-modal-body {
+  padding: 14px 16px 18px;
+}
+
+.seller-chat-modal-content {
+  max-height: min(74dvh, 680px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.seller-chat-modal-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.seller-chat-modal-content::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(136, 165, 219, 0.35);
+}
+
+@media (max-width: 900px) {
+  .popup-modal.seller-chat-modal {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+
+  .popup-modal.seller-chat-modal .popup-modal-header {
+    padding-top: max(16px, env(safe-area-inset-top));
+  }
+
+  .popup-modal.seller-chat-modal .popup-modal-body.seller-chat-modal-body {
+    padding: 12px 12px max(14px, env(safe-area-inset-bottom));
+  }
+
+  .seller-chat-modal-content {
+    max-height: none;
+    height: calc(100dvh - 146px);
+    padding-right: 0;
+  }
+}

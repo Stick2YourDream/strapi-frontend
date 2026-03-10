@@ -1,8 +1,6 @@
 import {
   type CSSProperties,
   type DragEvent,
-  type KeyboardEvent,
-  type MouseEvent,
   type ReactNode,
   useCallback,
   useEffect,
@@ -13,10 +11,22 @@ import {
 import { useLocation, useNavigate } from "react-router-dom";
 import "../css/dashboard.css";
 import "../css/storefront-seller.css";
+import "../css/mobile-storefront-seller.css";
 import Sidebar from "../components/Sidebar";
-import PopupModal from "../components/PopupModal";
+import StorefrontSellerDashboard from "../components/storefront-seller/StorefrontSellerDashboard";
+import SellerChatModal from "../components/storefront-seller/modals/SellerChatModal";
+import SellerDeleteListingModal from "../components/storefront-seller/modals/SellerDeleteListingModal";
+import SellerDetailModal from "../components/storefront-seller/modals/SellerDetailModal";
+import SellerPreviewModal from "../components/storefront-seller/modals/SellerPreviewModal";
+import SellerPublishSuccessModal from "../components/storefront-seller/modals/SellerPublishSuccessModal";
+import {
+  DEFAULT_SELLER_DASHBOARD_UI_CONFIG,
+  mergeSellerDashboardUiConfig,
+  type SellerDashboardUiConfig,
+} from "../components/storefront-seller/sellerDashboardUiConfig";
 import api from "../api/strapi";
 import { useAuth } from "../context/AuthContext";
+import { useChat } from "../context/ChatContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";
 import { MARKETPLACE_POLICY_VERSION } from "../content/marketplace-policy";
 import { MARKETPLACE_FEE_VERSION } from "../content/marketplace-fee-disclosure";
@@ -272,6 +282,7 @@ type DashboardTheme = {
   cardBg: string;
   cardOpacity: number;
   accent: string;
+  ui?: SellerDashboardUiConfig;
 };
 
 type DashboardWidgetStyle = {
@@ -629,26 +640,13 @@ const DEFAULT_DASHBOARD_THEME: DashboardTheme = {
   cardBg: "#0f172a",
   cardOpacity: 1,
   accent: "#4da3ff",
+  ui: DEFAULT_SELLER_DASHBOARD_UI_CONFIG,
 };
 
 const DEFAULT_WIDGET_CONFIG: DashboardWidgetConfig = {
   hidden: ["buyerDisputes"],
   styles: {},
 };
-
-const DASHBOARD_WIDGETS = [
-  { id: "totalEarnings", title: "Total earnings", helper: "Net revenue" },
-  { id: "buyerPayments", title: "Buyer payments", helper: "Recent captures" },
-  { id: "payouts", title: "Payouts", helper: "Next payouts" },
-  { id: "orders", title: "Orders", helper: "Latest transactions" },
-  { id: "activeListings", title: "Active listings", helper: "Inventory snapshot" },
-  { id: "offers", title: "Offers", helper: "Open bargains" },
-  { id: "bids", title: "Bids", helper: "Auction activity" },
-  { id: "verification", title: "Verification", helper: "Trust & safety" },
-  { id: "topProducts", title: "Top products", helper: "Best sellers" },
-  { id: "buyerDisputes", title: "Buyer disputes", helper: "Open cases" },
-];
-const DASHBOARD_WIDGET_IDS = DASHBOARD_WIDGETS.map((widget) => widget.id);
 
 const BASE_LAYOUT: Layout[] = [
   { i: "totalEarnings", x: 0, y: 0, w: 4, h: 2 },
@@ -710,11 +708,31 @@ const toRgba = (hex: string, opacity: number) => {
   return `rgba(${r}, ${g}, ${b}, ${clampNumber(opacity)})`;
 };
 
+const toCssUrl = (value: string, fallback: string) => {
+  const source = String(value || "").trim() || fallback;
+  const escaped = source.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `url("${escaped}")`;
+};
+
+const normalizeDashboardTheme = (value?: Partial<DashboardTheme> | null): DashboardTheme => {
+  const next = value ?? {};
+  const pageOpacity = Number(next.pageOpacity);
+  const cardOpacity = Number(next.cardOpacity);
+  return {
+    pageBg: String(next.pageBg || DEFAULT_DASHBOARD_THEME.pageBg),
+    pageOpacity: Number.isFinite(pageOpacity) ? clampNumber(pageOpacity) : DEFAULT_DASHBOARD_THEME.pageOpacity,
+    cardBg: String(next.cardBg || DEFAULT_DASHBOARD_THEME.cardBg),
+    cardOpacity: Number.isFinite(cardOpacity) ? clampNumber(cardOpacity) : DEFAULT_DASHBOARD_THEME.cardOpacity,
+    accent: String(next.accent || DEFAULT_DASHBOARD_THEME.accent),
+    ui: mergeSellerDashboardUiConfig(next.ui),
+  };
+};
+
 const normalizeViewEntry = (entry: any): DashboardView => {
   const attrs = normalize(entry);
   const id = Number(entry?.id ?? attrs.id ?? 0);
   const documentId = String(entry?.documentId ?? attrs.documentId ?? "").trim();
-  const theme = { ...DEFAULT_DASHBOARD_THEME, ...(attrs.theme || {}) };
+  const theme = normalizeDashboardTheme(attrs.theme);
   return {
     id,
     documentId: documentId || undefined,
@@ -773,7 +791,8 @@ const createBulkDraft = (): BulkListingDraft => ({
 });
 
 export default function StorefrontSeller(): JSX.Element {
-  const { profile, user, appSettings } = useAuth();
+  const { user, appSettings } = useAuth();
+  const { popoutMinimized, setPopoutMinimized } = useChat();
   const storefrontEnabled = appSettings?.storefrontEnabled !== false;
   const { getBackgroundStyle } = useUserPreferences();
   const navigate = useNavigate();
@@ -825,15 +844,12 @@ export default function StorefrontSeller(): JSX.Element {
   const [sellerDashboardMockData, setSellerDashboardMockData] =
     useState<SellerDashboardMockData | null>(null);
   const [dashboardViews, setDashboardViews] = useState<DashboardView[]>([]);
-  const [dashboardLayouts, setDashboardLayouts] = useState<Layouts>(buildDefaultLayouts());
   const [dashboardTheme, setDashboardTheme] =
-    useState<DashboardTheme>(DEFAULT_DASHBOARD_THEME);
+    useState<DashboardTheme>(normalizeDashboardTheme(DEFAULT_DASHBOARD_THEME));
   const [widgetConfig, setWidgetConfig] =
     useState<DashboardWidgetConfig>(DEFAULT_WIDGET_CONFIG);
-  const [revenueRange, setRevenueRange] = useState<7 | 30 | 90>(30);
-  const [dashboardError, setDashboardError] = useState<string | null>(null);
+  const revenueRange: 7 | 30 | 90 = 30;
   const [activeViewId, setActiveViewId] = useState<number | null>(null);
-  const [customizeOpen, setCustomizeOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [activeDashboardModule, setActiveDashboardModule] = useState<string | null>(null);
   const [dashboardDirty, setDashboardDirty] = useState(false);
@@ -891,6 +907,31 @@ export default function StorefrontSeller(): JSX.Element {
   const layoutSaveRef = useRef<number | null>(null);
   const location = useLocation();
   const isListingView = location.hash === "#list";
+  const isGlobalChatOpen = !popoutMinimized;
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const className = "storefront-seller-chat-open";
+    if (storefrontChatOpen) {
+      document.body.classList.add(className);
+    } else {
+      document.body.classList.remove(className);
+    }
+    return () => {
+      document.body.classList.remove(className);
+    };
+  }, [storefrontChatOpen]);
+
+  useEffect(() => {
+    if (!storefrontChatOpen) return;
+    setPopoutMinimized(true);
+  }, [setPopoutMinimized, storefrontChatOpen]);
+
+  useEffect(() => {
+    if (!storefrontChatOpen || !isGlobalChatOpen) return;
+    setStorefrontChatOpen(false);
+  }, [isGlobalChatOpen, storefrontChatOpen]);
+
   useEffect(() => {
     if (isListingView) {
       setFormError(null);
@@ -1362,7 +1403,6 @@ export default function StorefrontSeller(): JSX.Element {
       dashboardSaveBlockedRef.current = false;
       return;
     }
-    setDashboardError(null);
     dashboardReadyRef.current = false;
     try {
       const res = await api.get("/marketplace-dashboard-views/me");
@@ -1376,14 +1416,13 @@ export default function StorefrontSeller(): JSX.Element {
             isDefault: true,
             layout: buildDefaultLayouts(),
             widgets: DEFAULT_WIDGET_CONFIG,
-            theme: DEFAULT_DASHBOARD_THEME,
+            theme: normalizeDashboardTheme(DEFAULT_DASHBOARD_THEME),
           },
         });
         const createdEntry = normalizeViewEntry(created.data?.data);
         setDashboardViews([createdEntry]);
         setActiveViewId(createdEntry.id);
-        setDashboardLayouts(createdEntry.layout || buildDefaultLayouts());
-        setDashboardTheme(DEFAULT_DASHBOARD_THEME);
+        setDashboardTheme(normalizeDashboardTheme(createdEntry.theme));
         setWidgetConfig(createdEntry.widgets || DEFAULT_WIDGET_CONFIG);
         setDashboardDirty(false);
         setDashboardSaveState("idle");
@@ -1395,15 +1434,13 @@ export default function StorefrontSeller(): JSX.Element {
       const defaultView = views.find((view) => view.isDefault) ?? views[0] ?? null;
       setDashboardViews(defaultView ? [defaultView] : []);
       setActiveViewId(defaultView?.id ?? null);
-      setDashboardLayouts(defaultView?.layout || buildDefaultLayouts());
-      setDashboardTheme(DEFAULT_DASHBOARD_THEME);
+      setDashboardTheme(normalizeDashboardTheme(defaultView?.theme));
       setWidgetConfig(defaultView?.widgets || DEFAULT_WIDGET_CONFIG);
       setDashboardDirty(false);
       setDashboardSaveState("idle");
       dashboardReadyRef.current = true;
       dashboardSaveBlockedRef.current = false;
     } catch {
-      setDashboardError("Unable to load dashboard settings.");
       dashboardReadyRef.current = false;
     } finally {
     }
@@ -1413,8 +1450,7 @@ export default function StorefrontSeller(): JSX.Element {
     (view: DashboardView | null) => {
       if (!view) return;
       setActiveViewId(view.id);
-      setDashboardLayouts(ensureLayouts(view.layout));
-      setDashboardTheme(DEFAULT_DASHBOARD_THEME);
+      setDashboardTheme(normalizeDashboardTheme(view.theme));
       setWidgetConfig(view.widgets || DEFAULT_WIDGET_CONFIG);
       setDashboardDirty(false);
       setDashboardSaveState("idle");
@@ -1452,51 +1488,6 @@ export default function StorefrontSeller(): JSX.Element {
     },
     [applyViewState, loadDashboardViews, user?.id]
   );
-
-  const persistDashboardView = useCallback(async (view: DashboardView) => {
-    const viewKey = view.documentId || view.id;
-    await api.put(`/marketplace-dashboard-views/${viewKey}`, {
-      data: {
-        name: view.name,
-        isDefault: Boolean(view.isDefault),
-        layout: view.layout,
-        widgets: view.widgets,
-        theme: DEFAULT_DASHBOARD_THEME,
-      },
-    });
-  }, []);
-
-  const handleSaveDashboardChanges = useCallback(async () => {
-    if (!activeViewId) return;
-    const view = dashboardViews.find((item) => item.id === activeViewId);
-    if (!view) return;
-    const nextView: DashboardView = {
-      ...view,
-      layout: dashboardLayouts,
-      widgets: { ...widgetConfig, styles: {} },
-      theme: DEFAULT_DASHBOARD_THEME,
-    };
-    setDashboardSaveState("saving");
-    setDashboardViews((prev) =>
-      prev.map((item) => (item.id === activeViewId ? nextView : item))
-    );
-    try {
-      await persistDashboardView(nextView);
-      setDashboardSaveState("saved");
-      setDashboardDirty(false);
-      await refreshDashboardViews({ applyActive: true });
-    } catch {
-      setDashboardSaveState("error");
-      setDashboardError("Unable to save dashboard settings.");
-    }
-  }, [
-    activeViewId,
-    dashboardLayouts,
-    dashboardViews,
-    persistDashboardView,
-    refreshDashboardViews,
-    widgetConfig,
-  ]);
 
   const handleRequestVerification = async () => {
     if (verificationLoading) return;
@@ -2370,7 +2361,7 @@ export default function StorefrontSeller(): JSX.Element {
     if (!user?.id || isListingView) return;
     const syncIfVisible = () => {
       if (document.visibilityState !== "visible") return;
-      void refreshDashboardViews({ applyActive: !customizeOpen && !dashboardDirty });
+      void refreshDashboardViews({ applyActive: !dashboardDirty });
     };
     const intervalId = window.setInterval(syncIfVisible, DASHBOARD_SYNC_INTERVAL);
     window.addEventListener("visibilitychange", syncIfVisible);
@@ -2380,7 +2371,7 @@ export default function StorefrontSeller(): JSX.Element {
       window.removeEventListener("visibilitychange", syncIfVisible);
       window.removeEventListener("focus", syncIfVisible);
     };
-  }, [customizeOpen, dashboardDirty, isListingView, refreshDashboardViews, user?.id]);
+  }, [dashboardDirty, isListingView, refreshDashboardViews, user?.id]);
 
   useEffect(() => {
     setSellerDashboardMockEnabled(readSellerDashboardMockEnabled(user?.id ?? null));
@@ -2436,9 +2427,7 @@ export default function StorefrontSeller(): JSX.Element {
     }
   }, [activeViewId, dashboardDirty]);
 
-  const isMockMode = Boolean(
-    customizeOpen && sellerDashboardMockEnabled && sellerDashboardMockData
-  );
+  const isMockMode = Boolean(sellerDashboardMockEnabled && sellerDashboardMockData);
 
   const dashboardProducts = useMemo(
     () =>
@@ -2890,14 +2879,6 @@ export default function StorefrontSeller(): JSX.Element {
   }, [activeViewId]);
 
   const hiddenWidgets = widgetConfig.hidden ?? [];
-  const showRevenuePanel = !hiddenWidgets.includes("totalEarnings");
-  const showActivityPanel = !hiddenWidgets.includes("orders");
-  const visibleKpiCount = [
-    !hiddenWidgets.includes("totalEarnings"),
-    !hiddenWidgets.includes("payouts"),
-    !hiddenWidgets.includes("orders"),
-    true,
-  ].filter(Boolean).length;
 
   const sellerOrders = useMemo(
     () => dashboardOrders.filter((order) => Number(order.sellerId) === Number(user?.id || 0)),
@@ -2995,62 +2976,30 @@ export default function StorefrontSeller(): JSX.Element {
     }));
   }, [buyerPayments, revenueRange]);
 
-  const earningsSparkMax = useMemo(
-    () => Math.max(...earningsSeries.map((point) => point.total), 1),
-    [earningsSeries]
-  );
-
   const trendPreviewSeries = useMemo(
     () => (earningsSeries.length ? earningsSeries.slice(-8) : [{ label: "Now", total: 0 }]),
     [earningsSeries]
   );
-
-  const featuredListingImages = useMemo(
-    () =>
-      sellerListings
-        .flatMap((listing) => (Array.isArray(listing.images) ? listing.images.slice(0, 1) : []))
-        .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-        .slice(0, 4),
-    [sellerListings]
-  );
-
-  const listingImageById = useMemo(() => {
-    const map = new Map<string, string>();
-    sellerListings.forEach((listing) => {
-      const listingKey = String(listing.rawId ?? listing.id ?? listing.documentId ?? "");
-      if (!listingKey) return;
-      const previewImage = listing.images.find(
-        (image) => typeof image === "string" && image.trim().length > 0
-      );
-      if (previewImage) {
-        map.set(listingKey, previewImage);
-      }
+  const snapshotChart = useMemo(() => {
+    const source = trendPreviewSeries.length
+      ? trendPreviewSeries
+      : [{ label: "Now", total: 0 }];
+    const max = Math.max(...source.map((point) => Number(point.total) || 0), 1);
+    const points = source.map((point, index) => {
+      const x = source.length === 1 ? 50 : (index / (source.length - 1)) * 100;
+      const y = 100 - ((Number(point.total) || 0) / max) * 100;
+      return { x, y };
     });
-    return map;
-  }, [sellerListings]);
-
-  const getOrderPreviewImage = useCallback(
-    (order: MarketplaceOrder) => {
-      if (order.listingId !== undefined && order.listingId !== null) {
-        const listingImage = listingImageById.get(String(order.listingId));
-        if (listingImage) return listingImage;
-      }
-      return featuredListingImages[0] ?? "";
-    },
-    [featuredListingImages, listingImageById]
-  );
-  const hasTrendData = trendPreviewSeries.some((point) => Number(point.total) > 0);
-  const hasListingMedia = featuredListingImages.length > 0;
-  const hasHeroMedia = hasListingMedia;
-  const overviewClassName = [
-    "storefront-dashboard seller-dashboard seller-dashboard--overview",
-    "seller-dashboard--overview-v2",
-    "seller-dashboard--neo",
-    `seller-dashboard--overview-kpis-${Math.min(4, Math.max(1, visibleKpiCount))}`,
-    showRevenuePanel ? "seller-dashboard--has-revenue" : "seller-dashboard--no-revenue",
-    showActivityPanel ? "seller-dashboard--has-activity" : "seller-dashboard--no-activity",
-    hasHeroMedia ? "seller-dashboard--has-hero" : "seller-dashboard--no-hero",
-  ].join(" ");
+    const linePath = points
+      .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`)
+      .join(" ");
+    const areaPath = `${linePath} L 100 100 L 0 100 Z`;
+    return {
+      points,
+      linePath,
+      areaPath,
+    };
+  }, [trendPreviewSeries]);
 
   const payoutPending = useMemo(
     () =>
@@ -3069,22 +3018,15 @@ export default function StorefrontSeller(): JSX.Element {
     [payoutPending]
   );
 
-  const availableBalance = Math.max(0, totalEarningsValue - pendingPayoutAmount);
-
-  const openOrders = useMemo(
-    () =>
-      sellerOrders.filter((order) =>
-        ["completed", "delivered", "cancelled", "refunded"].every(
-          (status) => status !== String(order.status || "").toLowerCase()
-        )
-      ),
-    [sellerOrders]
-  );
-
   const conversionRate = useMemo(() => {
     const base = sellerListings.length;
     if (!base) return 0;
     return (sellerOrders.length / base) * 100;
+  }, [sellerListings.length, sellerOrders.length]);
+
+  const snapshotVisitors = useMemo(() => {
+    if (!sellerListings.length && !sellerOrders.length) return 0;
+    return Math.max(sellerListings.length * 12 + sellerOrders.length * 3, sellerOrders.length);
   }, [sellerListings.length, sellerOrders.length]);
 
   const orderStatusMix = useMemo(() => {
@@ -3162,34 +3104,41 @@ export default function StorefrontSeller(): JSX.Element {
   const displayDisputesLoading = !isMockMode && disputesLoading;
   const displayDisputesError = !isMockMode ? disputesError : null;
 
+  const dashboardUiConfig = useMemo(
+    () => mergeSellerDashboardUiConfig(dashboardTheme.ui),
+    [dashboardTheme.ui]
+  );
+
   const dashboardStyle = useMemo(() => {
+    const ui = dashboardUiConfig;
     return {
       background: toRgba(dashboardTheme.pageBg, dashboardTheme.pageOpacity),
       "--dashboard-card-bg": toRgba(dashboardTheme.cardBg, dashboardTheme.cardOpacity),
       "--seller-card-bg": toRgba(dashboardTheme.cardBg, dashboardTheme.cardOpacity),
       "--dashboard-accent": dashboardTheme.accent,
+      "--seller-cc-bg-top": ui.colors.bgTop,
+      "--seller-cc-bg-bottom": ui.colors.bgBottom,
+      "--seller-cc-border": ui.colors.border,
+      "--seller-cc-border-strong": ui.colors.borderStrong,
+      "--seller-cc-text": ui.colors.text,
+      "--seller-cc-muted": ui.colors.muted,
+      "--seller-cc-accent": ui.colors.accent,
+      "--seller-cc-primary-start": ui.colors.primaryStart,
+      "--seller-cc-primary-end": ui.colors.primaryEnd,
+      "--seller-cc-primary-text": ui.colors.primaryText,
+      "--seller-cc-shell-max-width": `${ui.shellMaxWidth}px`,
+      "--seller-cc-hero-image": toCssUrl(
+        ui.heroImageUrl,
+        DEFAULT_SELLER_DASHBOARD_UI_CONFIG.heroImageUrl
+      ),
+      "--seller-cc-hero-image-inset": `${ui.heroImageInset}%`,
+      "--seller-cc-hero-image-opacity": String(ui.heroImageOpacity),
+      "--seller-cc-hero-overlay-opacity": String(ui.heroOverlayOpacity),
     } as CSSProperties;
-  }, [dashboardTheme]);
-
-  const sellerDisplayName = useMemo(() => {
-    const name = `${String(profile?.firstName || "").trim()} ${String(
-      profile?.lastName || ""
-    ).trim()}`.trim();
-    if (name) return name;
-    if (profile?.handle) return profile.handle;
-    if (user?.username) return user.username;
-    if (user?.email) return user.email.split("@")[0];
-    return "Seller";
-  }, [profile?.firstName, profile?.handle, profile?.lastName, user?.email, user?.username]);
+  }, [dashboardTheme, dashboardUiConfig]);
 
   const nextChecklistItem =
     setupChecklist.find((item) => item.status !== "done") ?? null;
-  const allWidgetsSelected = DASHBOARD_WIDGET_IDS.every(
-    (id) => !hiddenWidgets.includes(id)
-  );
-  const noWidgetsSelected = DASHBOARD_WIDGET_IDS.every((id) =>
-    hiddenWidgets.includes(id)
-  );
 
   const handleSetupAction = (id: SetupChecklistItem["id"]) => {
     if (id === "listing") {
@@ -3205,31 +3154,6 @@ export default function StorefrontSeller(): JSX.Element {
     () => toRgba(dashboardTheme.cardBg, dashboardTheme.cardOpacity),
     [dashboardTheme]
   );
-
-  const markDashboardDirty = useCallback(() => {
-    setDashboardDirty(true);
-    setDashboardSaveState("idle");
-  }, []);
-
-  const handleToggleWidget = useCallback((id: string) => {
-    markDashboardDirty();
-    setWidgetConfig((prev) => {
-      const hidden = new Set(prev.hidden ?? []);
-      if (hidden.has(id)) hidden.delete(id);
-      else hidden.add(id);
-      return { ...prev, hidden: Array.from(hidden) };
-    });
-  }, [markDashboardDirty]);
-
-  const handleSelectAllWidgets = useCallback(() => {
-    markDashboardDirty();
-    setWidgetConfig((prev) => ({ ...prev, hidden: [] }));
-  }, [markDashboardDirty]);
-
-  const handleSelectNoneWidgets = useCallback(() => {
-    markDashboardDirty();
-    setWidgetConfig((prev) => ({ ...prev, hidden: [...DASHBOARD_WIDGET_IDS] }));
-  }, [markDashboardDirty]);
 
   const buildCardStyle = useCallback(
     (id?: string) => {
@@ -3983,21 +3907,6 @@ export default function StorefrontSeller(): JSX.Element {
   const closeDashboardModule = () => {
     setActiveDashboardModule(null);
   };
-
-  const handleModuleClick =
-    (moduleId: string) => (event: MouseEvent<HTMLDivElement>) => {
-      const target = event.target as HTMLElement;
-      if (target.closest("button, a, input, select, textarea, label")) return;
-      openDashboardModule(moduleId);
-    };
-
-  const handleModuleKeyDown =
-    (moduleId: string) => (event: KeyboardEvent<HTMLDivElement>) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        openDashboardModule(moduleId);
-      }
-    };
 
   const activeDashboardTitle = activeDashboardModule
     ? dashboardModuleTitles[activeDashboardModule] ?? "Details"
@@ -4800,6 +4709,15 @@ export default function StorefrontSeller(): JSX.Element {
     navigate("/storefront/payment-methods");
   }, [navigate]);
 
+  const handleOpenStorefrontChat = useCallback(() => {
+    setPopoutMinimized(true);
+    setStorefrontChatOpen(true);
+  }, [setPopoutMinimized]);
+
+  const handleCloseStorefrontChat = useCallback(() => {
+    setStorefrontChatOpen(false);
+  }, []);
+
   const handleOpenListing = useCallback(() => {
     if (location.hash === "#list") return;
     navigate({ pathname: location.pathname, hash: "#list" });
@@ -4850,994 +4768,116 @@ export default function StorefrontSeller(): JSX.Element {
           <section className="storefront-layout is-single storefront-layout--listing">
             <div className="storefront-left">{listingPanel}</div>
           </section>
-      ) : (
-        <section
-          className={overviewClassName}
-          style={dashboardStyle}
-        >
-            <div className="seller-dashboard-grid seller-dashboard-grid--overview">
-              <div className="seller-dashboard-topbar seller-overview-block seller-overview-block--topbar">
-                <header className="seller-dashboard-header">
-                  <div className="seller-dashboard-title">
-                    <div className="seller-dashboard-icon" aria-hidden="true">
-                      <span>🛍️</span>
-                    </div>
-                    <div>
-                      <span className="seller-dashboard-kicker">Seller Workspace</span>
-                      <h2>Storefront Control Center</h2>
-                      {sellerIsVerified && (
-                        <span className="seller-verified-badge">Verified seller</span>
-                      )}
-                      <p>Track revenue, orders, payouts, and account health.</p>
-                    </div>
-                  </div>
-                  <div className="seller-dashboard-actions">
-                    <button
-                      className="seller-dashboard-btn seller-dashboard-btn--ghost"
-                      type="button"
-                      onClick={handlePreviewStore}
-                      disabled={!storefrontEnabled}
-                      aria-disabled={!storefrontEnabled}
-                    >
-                      {storefrontEnabled ? "Preview my listings" : "StoreFront disabled"}
-                    </button>
-                    <button
-                      className="seller-dashboard-btn seller-dashboard-btn--primary"
-                      type="button"
-                      onClick={handleOpenListing}
-                    >
-                      Add Product
-                    </button>
-                    <button
-                      className="seller-dashboard-btn seller-dashboard-btn--ghost is-compact"
-                      type="button"
-                      onClick={() => setCustomizeOpen(true)}
-                    >
-                      Customize
-                    </button>
-                    <select
-                      className="seller-dashboard-range"
-                      defaultValue="30"
-                      aria-label="Dashboard range"
-                    >
-                      <option value="7">Last 7 Days</option>
-                      <option value="30">Last 30 Days</option>
-                      <option value="90">Last 90 Days</option>
-                    </select>
-                    <div
-                      className="seller-dashboard-account"
-                      ref={accountMenuRef}
-                    >
-                      <button
-                        className="seller-dashboard-account-trigger"
-                        type="button"
-                        onClick={() => setAccountMenuOpen((prev) => !prev)}
-                        aria-haspopup="menu"
-                        aria-expanded={accountMenuOpen}
-                      >
-                        <span>Account Settings</span>
-                        <span className="seller-dashboard-account-caret" aria-hidden="true" />
-                      </button>
-                      {accountMenuOpen && (
-                        <div className="seller-dashboard-account-menu" role="menu">
-                          <div className="seller-dashboard-account-meta">
-                            <div className="seller-dashboard-avatar">
-                              {sellerDisplayName.slice(0, 1).toUpperCase()}
-                            </div>
-                            <div>
-                              <span>Signed in as</span>
-                              <strong>{sellerDisplayName}</strong>
-                              {sellerIsVerified && (
-                                <span className="seller-verified-badge">Verified seller</span>
-                              )}
-                            </div>
-                          </div>
-                          <button
-                            className="seller-dashboard-account-link"
-                            type="button"
-                            role="menuitem"
-                            onClick={handleOpenPaymentMethods}
-                          >
-                            Payment Methods
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  {hasHeroMedia && (
-                    <div
-                      className={`seller-dashboard-hero-media${
-                        hasTrendData ? "" : " is-media-only"
-                      }`}
-                    >
-                      {hasTrendData && hasListingMedia && (
-                        <div
-                          className="seller-dashboard-mini-chart"
-                          role="img"
-                          aria-label="Revenue trend"
-                        >
-                          {trendPreviewSeries.map((point, index) => (
-                            <span
-                              key={`trend-preview-${index}`}
-                              style={{
-                                height: `${Math.max(
-                                  10,
-                                  (point.total / Math.max(earningsSparkMax, 1)) * 100
-                                )}%`,
-                              }}
-                            />
-                          ))}
-                        </div>
-                      )}
-                      <div className="seller-dashboard-media-grid">
-                        {featuredListingImages.map((imageUrl, index) => (
-                          <figure
-                            className="seller-dashboard-media-tile"
-                            key={`featured-listing-${index}`}
-                          >
-                            <img
-                              src={imageUrl}
-                              alt={`Listing preview ${index + 1}`}
-                              loading="lazy"
-                            />
-                          </figure>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </header>
-
-              </div>
-
-              <div className="seller-dashboard-kpis seller-overview-block seller-overview-block--kpis">
-                {!hiddenWidgets.includes("totalEarnings") && (
-                <div
-                  className="seller-kpi-card seller-kpi-card--k1"
-                  style={buildCardStyle("totalEarnings")}
-                  role="button"
-                  tabIndex={0}
-                  onClick={handleModuleClick("totalEarnings")}
-                  onKeyDown={handleModuleKeyDown("totalEarnings")}
-                  aria-label="View total sales details"
-                >
-                  <div className="seller-kpi-header">
-                    <span className="seller-kpi-label">Total Sales</span>
-                    <span className="seller-kpi-icon" aria-hidden="true">
-                      💰
-                    </span>
-                  </div>
-                  <div className="seller-kpi-value">
-                    {formatCurrency(totalEarningsValue, "USD")}
-                  </div>
-                  <div className="seller-kpi-meta">
-                    {sellerOrders.length ? `${sellerOrders.length} orders` : "No orders yet"}
-                  </div>
-                  <div className="seller-kpi-sparkline" aria-hidden="true">
-                    {earningsSeries.map((point, index) => (
-                      <span
-                        key={`net-${index}`}
-                        style={{
-                          height: `${Math.max(
-                            6,
-                            (point.total / earningsSparkMax) * 100
-                          )}%`,
-                        }}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
-              {!hiddenWidgets.includes("payouts") && (
-                <div
-                  className="seller-kpi-card seller-kpi-card--k2"
-                  style={buildCardStyle("payouts")}
-                  role="button"
-                  tabIndex={0}
-                  onClick={handleModuleClick("payouts")}
-                  onKeyDown={handleModuleKeyDown("payouts")}
-                  aria-label="View payout details"
-                >
-                  <div className="seller-kpi-header">
-                    <span className="seller-kpi-label">Payout Balance</span>
-                    <span className="seller-kpi-icon" aria-hidden="true">
-                      💳
-                    </span>
-                  </div>
-                  <div className="seller-kpi-value">
-                    {formatCurrency(availableBalance, "USD")}
-                  </div>
-                  <div className="seller-kpi-meta">
-                    Next payout:{" "}
-                    {pendingPayoutAmount
-                      ? formatCurrency(pendingPayoutAmount, "USD")
-                      : "—"}
-                  </div>
-                  <div className="seller-kpi-sparkline" aria-hidden="true">
-                    {earningsSeries.map((point, index) => (
-                      <span
-                        key={`balance-${index}`}
-                        style={{
-                          height: `${Math.max(
-                            6,
-                            (point.total / earningsSparkMax) * 100
-                          )}%`,
-                        }}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
-              {!hiddenWidgets.includes("orders") && (
-                <div
-                  className="seller-kpi-card seller-kpi-card--k3"
-                  style={buildCardStyle("orders")}
-                  role="button"
-                  tabIndex={0}
-                  onClick={handleModuleClick("orders")}
-                  onKeyDown={handleModuleKeyDown("orders")}
-                  aria-label="View order details"
-                >
-                  <div className="seller-kpi-header">
-                    <span className="seller-kpi-label">Orders</span>
-                    <span className="seller-kpi-icon" aria-hidden="true">
-                      📦
-                    </span>
-                  </div>
-                  <div className="seller-kpi-value">{openOrders.length}</div>
-                  <div className="seller-kpi-meta">
-                    {openOrders.length
-                      ? `${openOrders.length} pending`
-                      : "No pending orders"}
-                  </div>
-                  <div className="seller-kpi-sparkline" aria-hidden="true">
-                    {earningsSeries.map((point, index) => (
-                      <span
-                        key={`orders-${index}`}
-                        style={{
-                          height: `${Math.max(
-                            6,
-                            (point.total / earningsSparkMax) * 100
-                          )}%`,
-                        }}
-                      />
-                    ))}
-                  </div>
-                </div>
-              )}
-              <div
-                className="seller-kpi-card seller-kpi-card--k4"
-                style={buildCardStyle()}
-                role="button"
-                tabIndex={0}
-                onClick={handleModuleClick("conversion")}
-                onKeyDown={handleModuleKeyDown("conversion")}
-                aria-label="View conversion details"
-              >
-                <div className="seller-kpi-header">
-                  <span className="seller-kpi-label">Conversion</span>
-                  <span className="seller-kpi-icon" aria-hidden="true">
-                    📈
-                  </span>
-                </div>
-                <div className="seller-kpi-value">{conversionRate.toFixed(1)}%</div>
-                <div className="seller-kpi-meta">From StoreFront listings</div>
-                <div className="seller-kpi-sparkline" aria-hidden="true">
-                  {earningsSeries.map((point, index) => (
-                    <span
-                      key={`conversion-${index}`}
-                      style={{
-                        height: `${Math.max(6, (point.total / earningsSparkMax) * 100)}%`,
-                      }}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              </div>
-
-                {showRevenuePanel && (
-                  <div
-                    className="seller-panel seller-panel--overview-revenue seller-overview-block seller-overview-block--revenue"
-                    style={buildCardStyle("totalEarnings")}
-                    role="button"
-                    tabIndex={0}
-                    onClick={handleModuleClick("totalEarnings")}
-                    onKeyDown={handleModuleKeyDown("totalEarnings")}
-                    aria-label="View revenue details"
-                  >
-                    <div className="seller-panel-header">
-                      <div>
-                        <span className="seller-panel-eyebrow">Revenue</span>
-                        <h3>Revenue</h3>
-                      </div>
-                      <div
-                        className="seller-panel-tabs"
-                        role="group"
-                        aria-label="Revenue range"
-                      >
-                        <button
-                          type="button"
-                          className={revenueRange === 7 ? "is-active" : "is-muted"}
-                          onClick={() => setRevenueRange(7)}
-                          aria-pressed={revenueRange === 7}
-                        >
-                          7 Days
-                        </button>
-                        <button
-                          type="button"
-                          className={revenueRange === 30 ? "is-active" : "is-muted"}
-                          onClick={() => setRevenueRange(30)}
-                          aria-pressed={revenueRange === 30}
-                        >
-                          30 Days
-                        </button>
-                        <button
-                          type="button"
-                          className={revenueRange === 90 ? "is-active" : "is-muted"}
-                          onClick={() => setRevenueRange(90)}
-                          aria-pressed={revenueRange === 90}
-                        >
-                          90 Days
-                        </button>
-                      </div>
-                    </div>
-                    <div className="seller-panel-body">
-                      {renderWidgetContent("totalEarnings")}
-                    </div>
-                  </div>
-                )}
-
-                {showActivityPanel && (
-                  <div
-                    className="seller-panel seller-panel--overview-activity seller-overview-block seller-overview-block--activity"
-                    style={buildCardStyle("orders")}
-                    role="button"
-                    tabIndex={0}
-                    onClick={handleModuleClick("orders")}
-                    onKeyDown={handleModuleKeyDown("orders")}
-                    aria-label="View recent orders"
-                  >
-                    <div className="seller-panel-header">
-                      <div>
-                        <span className="seller-panel-eyebrow">Recent activity</span>
-                        <h3>Recent activity</h3>
-                      </div>
-                      <button className="seller-panel-action" type="button">
-                        View all
-                      </button>
-                    </div>
-                    <div className="seller-panel-body">
-                      {displayOrdersLoading && <p>Loading orders...</p>}
-                      {displayOrdersError && <p>{displayOrdersError}</p>}
-                      {orderActionError && <p className="storefront-form-error">{orderActionError}</p>}
-                      {orderActionNotice && <p className="storefront-status success">{orderActionNotice}</p>}
-                      {!displayOrdersLoading &&
-                        !displayOrdersError &&
-                        sellerOrders.length === 0 && (
-                          <div className="seller-empty">
-                            <p>No orders yet.</p>
-                            <button
-                              className="btn primary small"
-                              type="button"
-                              onClick={() => navigate("/storefront/seller#list")}
-                            >
-                              Create your first listing
-                            </button>
-                          </div>
-                        )}
-                      {!displayOrdersLoading &&
-                        !displayOrdersError &&
-                        sellerOrders.length > 0 && (
-                          <div className="seller-activity-table" role="table">
-                            <div
-                              className="seller-activity-row seller-activity-row--header"
-                              role="row"
-                            >
-                              <span role="columnheader">Customer</span>
-                              <span role="columnheader">Status</span>
-                              <span role="columnheader">Amount</span>
-                              <span role="columnheader" className="seller-activity-time">
-                                When
-                              </span>
-                            </div>
-                            {recentOrderSummary.map(({ count, displayOrder }) => {
-                              const orderPreviewImage = getOrderPreviewImage(displayOrder);
-                              return (
-                                <div
-                                  key={`order-activity-${displayOrder.id}`}
-                                  className="seller-activity-row"
-                                  role="row"
-                                >
-                                  <div className="seller-activity-customer" role="cell">
-                                    <span className="seller-activity-thumb" aria-hidden="true">
-                                      {orderPreviewImage ? (
-                                        <img src={orderPreviewImage} alt="" loading="lazy" />
-                                      ) : (
-                                        <span className="seller-activity-thumb-fallback" />
-                                      )}
-                                    </span>
-                                    <div className="seller-activity-customer-meta">
-                                      <strong>{displayOrder.buyerName}</strong>
-                                      <span>
-                                        {displayOrder.listingTitle}
-                                        {count > 1 ? ` (x${count})` : ""}
-                                      </span>
-                                    </div>
-                                  </div>
-                                  <span
-                                    className={`seller-status-chip ${getStatusTone(displayOrder.status)}`}
-                                    role="cell"
-                                  >
-                                    {displayOrder.status}
-                                  </span>
-                                  <div className="seller-activity-amount" role="cell">
-                                    <strong>
-                                      {formatCurrency(displayOrder.amount, displayOrder.currency)}
-                                    </strong>
-                                    <span>
-                                      Net {formatCurrency(displayOrder.net, displayOrder.currency)}
-                                    </span>
-                                    {canRefundOrder(displayOrder) && (
-                                      <button
-                                        className="btn ghost small"
-                                        type="button"
-                                        onClick={() => void handleRefundOrder(displayOrder)}
-                                        disabled={Boolean(orderActionLoading[displayOrder.id])}
-                                      >
-                                        {orderActionLoading[displayOrder.id]
-                                          ? "Refunding..."
-                                          : "Refund"}
-                                      </button>
-                                    )}
-                                  </div>
-                                  <span className="seller-activity-time" role="cell">
-                                    {formatRelativeTime(displayOrder.createdAt)}
-                                  </span>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                    </div>
-                    {!hiddenWidgets.includes("offers") && (
-                      <div className="seller-panel-subsection">
-                        <div className="seller-panel-subheader">
-                          <span className="seller-panel-eyebrow">Offers</span>
-                          <h4>Offers</h4>
-                        </div>
-                        <div className="seller-panel-body">
-                          {renderWidgetContent("offers")}
-                        </div>
-                      </div>
-                    )}
-                    {!hiddenWidgets.includes("bids") && (
-                      <div className="seller-panel-subsection">
-                        <div className="seller-panel-subheader">
-                          <span className="seller-panel-eyebrow">Bids</span>
-                          <h4>Bids</h4>
-                        </div>
-                        <div className="seller-panel-body">
-                          {renderWidgetContent("bids")}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <div
-                  className="seller-panel seller-panel--overview-traffic seller-overview-block seller-overview-block--traffic"
-                  style={buildCardStyle("status")}
-                >
-                  <div className="seller-panel-header">
-                    <div>
-                      <span className="seller-panel-eyebrow">Order mix</span>
-                      <h3>Order status</h3>
-                    </div>
-                    <button
-                      className="seller-panel-action"
-                      type="button"
-                      onClick={() => openDashboardModule("orders")}
-                    >
-                      View details
-                    </button>
-                  </div>
-                  <div className="seller-panel-body">
-                    {orderStatusMix.total === 0 ? (
-                      <div className="seller-empty">
-                        <p>No orders yet.</p>
-                        <button
-                          className="btn primary small"
-                          type="button"
-                          onClick={() => navigate("/storefront/seller#list")}
-                        >
-                          Create your first listing
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="seller-traffic">
-                        <div
-                          className="seller-traffic-donut"
-                          style={
-                            {
-                              "--seg-paid": `${orderStatusMix.percent.paid}%`,
-                              "--seg-pending": `${orderStatusMix.percent.pending}%`,
-                              "--seg-issue": `${orderStatusMix.percent.issue}%`,
-                            } as CSSProperties
-                          }
-                          aria-hidden="true"
-                        />
-                        <div className="seller-traffic-legend">
-                          <div className="seller-traffic-row">
-                            <span className="seller-traffic-dot is-paid" />
-                            <span>Paid</span>
-                            <strong>{orderStatusMix.percent.paid}%</strong>
-                          </div>
-                          <div className="seller-traffic-row">
-                            <span className="seller-traffic-dot is-pending" />
-                            <span>Pending</span>
-                            <strong>{orderStatusMix.percent.pending}%</strong>
-                          </div>
-                          <div className="seller-traffic-row">
-                            <span className="seller-traffic-dot is-issue" />
-                            <span>Issue</span>
-                            <strong>{orderStatusMix.percent.issue}%</strong>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    <div className="seller-status-summary">
-                      {!hiddenWidgets.includes("verification") && (
-                        <div className="seller-status-row">
-                          <div>
-                            <span>Verification</span>
-                            <strong>{sellerVerificationSummaryLabel}</strong>
-                          </div>
-                          {!sellerAgeVerified && (
-                            <button
-                              className="btn danger small"
-                              type="button"
-                              onClick={handleRequestVerification}
-                            >
-                              Verify
-                            </button>
-                          )}
-                          {sellerAgeVerified && !sellerPayoutVerified && (
-                            <button
-                              className="btn ghost small"
-                              type="button"
-                              onClick={() => openDashboardModule("payouts")}
-                            >
-                              Add payout
-                            </button>
-                          )}
-                        </div>
-                      )}
-                      {!hiddenWidgets.includes("payouts") && (
-                        <div className="seller-status-row">
-                          <div>
-                            <span>Pending payouts</span>
-                            <strong>
-                              {pendingPayoutAmount
-                                ? formatCurrency(pendingPayoutAmount, "USD")
-                                : "None"}
-                            </strong>
-                          </div>
-                          <button
-                            className="btn ghost small"
-                            type="button"
-                            onClick={() => openDashboardModule("payouts")}
-                          >
-                            View
-                          </button>
-                        </div>
-                      )}
-                      {!hiddenWidgets.includes("activeListings") && (
-                        <div className="seller-status-row">
-                          <div>
-                            <span>Active listings</span>
-                            <strong>{sellerListings.length}</strong>
-                          </div>
-                          <button
-                            className="btn ghost small"
-                            type="button"
-                            onClick={() => openDashboardModule("activeListings")}
-                          >
-                            Open
-                          </button>
-                        </div>
-                      )}
-                      <div className="seller-status-row">
-                        <div>
-                          <span>Setup checklist</span>
-                          <strong>
-                            {setupCompletedCount}/{setupChecklist.length}
-                          </strong>
-                        </div>
-                        <button
-                          className="btn ghost small"
-                          type="button"
-                          onClick={() => openDashboardModule("setup")}
-                        >
-                          Review
-                        </button>
-                      </div>
-                      {!hiddenWidgets.includes("buyerDisputes") && (
-                        <div className="seller-status-row">
-                          <div>
-                            <span>Open disputes</span>
-                            <strong>{openDisputes.length}</strong>
-                          </div>
-                          <button
-                            className="btn ghost small"
-                            type="button"
-                            onClick={() => openDashboardModule("buyerDisputes")}
-                          >
-                            View
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-          </section>
+        ) : (
+          <StorefrontSellerDashboard
+            dashboardStyle={dashboardStyle}
+            uiConfig={dashboardUiConfig}
+            sellerIsVerified={sellerIsVerified}
+            storefrontEnabled={storefrontEnabled}
+            onPreviewStore={handlePreviewStore}
+            onOpenListing={handleOpenListing}
+            accountMenuRef={accountMenuRef}
+            accountMenuOpen={accountMenuOpen}
+            onToggleAccountMenu={() => setAccountMenuOpen((prev) => !prev)}
+            onOpenPaymentMethods={handleOpenPaymentMethods}
+            buildCardStyle={buildCardStyle}
+            onOpenDashboardModule={openDashboardModule}
+            displayOrdersLoading={displayOrdersLoading}
+            displayOrdersError={displayOrdersError}
+            recentOrderSummary={recentOrderSummary}
+            onCreateFirstListing={handleOpenListing}
+            formatRelativeTime={formatRelativeTime}
+            formatCurrency={formatCurrency}
+            getStatusTone={getStatusTone}
+            sellerVerificationSummaryLabel={sellerVerificationSummaryLabel}
+            pendingPayoutAmount={pendingPayoutAmount}
+            pendingPayoutCount={payoutPending.length}
+            activeListingCount={sellerListings.length}
+            setupCompletedCount={setupCompletedCount}
+            setupChecklist={setupChecklist}
+            nextChecklistItem={nextChecklistItem}
+            orderStatusPaidPercent={orderStatusMix.percent.paid}
+            orderStatusPendingPercent={orderStatusMix.percent.pending}
+            openDisputesCount={openDisputes.length}
+            onSetupAction={handleSetupAction}
+            setupActionLabels={SETUP_ACTION_LABELS}
+            displayListingsLoading={displayListingsLoading}
+            displayListingError={displayListingError}
+            sellerListings={sellerListings}
+            formatPrice={formatPrice}
+            onEditListingById={(listingId) => {
+              const listing = sellerListings.find(
+                (entry) => String(entry.id) === String(listingId)
+              );
+              if (!listing) return;
+              handleEditListing(listing);
+            }}
+            totalEarningsValue={totalEarningsValue}
+            snapshotChart={snapshotChart}
+            sellerOrdersCount={sellerOrders.length}
+            snapshotVisitors={snapshotVisitors}
+          />
         )}
       </div>
-      {!isListingView && (
+      {!isListingView && !isGlobalChatOpen && !storefrontChatOpen && (
         <button
           type="button"
           className="seller-storefront-chat-fab"
-          onClick={() => setStorefrontChatOpen(true)}
+          onClick={handleOpenStorefrontChat}
           aria-label="Open storefront chat"
           title="Storefront chat"
         >
           <span aria-hidden="true">🛍️</span>
         </button>
       )}
-      {!isListingView && (
-        <PopupModal
-          open={storefrontChatOpen}
-          title="Storefront chat"
-          onClose={() => setStorefrontChatOpen(false)}
-          className="seller-chat-modal"
-          bodyClassName="seller-chat-modal-body"
-        >
-          <div className="seller-chat-modal-content">{renderWidgetContent("messages")}</div>
-        </PopupModal>
+      {!isListingView && !isGlobalChatOpen && (
+        <SellerChatModal open={storefrontChatOpen} onClose={handleCloseStorefrontChat}>
+          {renderWidgetContent("messages")}
+        </SellerChatModal>
       )}
-      <PopupModal
-        open={customizeOpen}
-        title="Customize dashboard"
-        onClose={() => setCustomizeOpen(false)}
-        className="seller-customize-modal"
-        bodyClassName="seller-customize-modal-body"
-      >
-        <div className="storefront-panel seller-dashboard-customize-panel">
-          <div className="storefront-panel-header">
-            <div>
-              <p className="storefront-panel-eyebrow">Seller workspace</p>
-              <h3>Dashboard layout</h3>
-            </div>
-            <div className="storefront-dashboard-actions">
-              <button
-                className="btn primary small"
-                type="button"
-                onClick={handleSaveDashboardChanges}
-                disabled={
-                  !activeViewId || !dashboardDirty || dashboardSaveState === "saving"
-                }
-              >
-                {dashboardSaveState === "saving" ? "Saving..." : "Save changes"}
-              </button>
-              {dashboardSaveState === "saved" && (
-                <span className="storefront-dashboard-save-status" role="status">
-                  Saved
-                </span>
-              )}
-              {dashboardSaveState === "error" && (
-                <span className="storefront-dashboard-save-status is-error" role="status">
-                  Save failed
-                </span>
-              )}
-            </div>
-          </div>
-          <p className="seller-panel-note">
-            Custom dashboard views and themes are disabled. Everyone uses the same
-            default look.
-          </p>
-          {dashboardError && <p className="storefront-form-error">{dashboardError}</p>}
-          <div className="storefront-dashboard-customize">
-            <div className="storefront-dashboard-widgets">
-              <h4>Widgets</h4>
-              <div className="storefront-dashboard-widget-actions">
-                <label className="storefront-switch storefront-switch--compact">
-                  <input
-                    type="checkbox"
-                    checked={allWidgetsSelected}
-                    onChange={(event) => {
-                      if (event.target.checked) {
-                        handleSelectAllWidgets();
-                      }
-                    }}
-                  />
-                  <span className="storefront-switch-track" aria-hidden="true" />
-                  <span className="storefront-switch-label">Select all</span>
-                </label>
-                <label className="storefront-switch storefront-switch--compact">
-                  <input
-                    type="checkbox"
-                    checked={noWidgetsSelected}
-                    onChange={(event) => {
-                      if (event.target.checked) {
-                        handleSelectNoneWidgets();
-                      }
-                    }}
-                  />
-                  <span className="storefront-switch-track" aria-hidden="true" />
-                  <span className="storefront-switch-label">Select none</span>
-                </label>
-              </div>
-              <div className="storefront-dashboard-widget-grid">
-                {DASHBOARD_WIDGETS.map((widget) => (
-                  <div key={widget.id} className="storefront-dashboard-widget-row">
-                    <label className="storefront-switch storefront-switch--compact">
-                      <input
-                        type="checkbox"
-                        checked={!hiddenWidgets.includes(widget.id)}
-                        onChange={() => handleToggleWidget(widget.id)}
-                      />
-                      <span className="storefront-switch-track" aria-hidden="true" />
-                      <span className="storefront-switch-label">
-                        <span className="storefront-widget-title">{widget.title}</span>
-                        <span className="storefront-widget-helper">{widget.helper}</span>
-                      </span>
-                    </label>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      </PopupModal>
-      <PopupModal
+      <SellerDetailModal
         open={Boolean(activeDashboardModule)}
         title={activeDashboardTitle}
         onClose={closeDashboardModule}
-        className="seller-detail-modal"
-        bodyClassName="seller-detail-modal-body"
       >
         {activeDashboardModule && renderDashboardModuleContent(activeDashboardModule)}
-      </PopupModal>
-      {listingDeleteTarget && (
-        <div
-          className="storefront-modal-overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="delete-listing-title"
-          onClick={closeListingDeleteModal}
-        >
-          <div
-            className="storefront-modal storefront-modal--danger"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="storefront-modal-header">
-              <p className="storefront-modal-eyebrow">Listing</p>
-              <h3 id="delete-listing-title">Delete listing?</h3>
-              <p className="storefront-modal-sub">
-                Delete "{listingDeleteTarget.title || "this listing"}"? This action
-                cannot be undone.
-              </p>
-            </div>
-            {listingDeleteError && (
-              <p className="storefront-modal-error">{listingDeleteError}</p>
-            )}
-            <div className="storefront-modal-actions">
-              <button
-                className="btn ghost"
-                type="button"
-                onClick={closeListingDeleteModal}
-                disabled={listingDeleteSaving}
-              >
-                Cancel
-              </button>
-              <button
-                className="btn danger"
-                type="button"
-                onClick={confirmDeleteListing}
-                disabled={listingDeleteSaving}
-              >
-                {listingDeleteSaving ? "Deleting..." : "Delete listing"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {previewMode && (
-        <div
-          className="storefront-preview-overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby={previewTitleId}
-          onClick={closePreviewModal}
-        >
-          <div
-            className="storefront-preview-modal"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="storefront-preview-header">
-              <div>
-                <p className="storefront-preview-eyebrow">Listing preview</p>
-                <h3 id={previewTitleId}>{previewTitle}</h3>
-                <p className="storefront-preview-sub">{previewSubtitle}</p>
-              </div>
-              <button
-                className="btn ghost"
-                type="button"
-                onClick={closePreviewModal}
-                disabled={isPublishing}
-              >
-                Close
-              </button>
-            </div>
-            <div className="storefront-preview-body">
-              {previewError && (
-                <p className="storefront-preview-alert">{previewError}</p>
-              )}
-              <div className="storefront-preview-grid">
-                {previewItems.map((item, index) => {
-                  const priceValue = Number(item.price);
-                  const priceNumber = Number.isFinite(priceValue) ? priceValue : 0;
-                  const locationLabel =
-                    item.location || formatLocationLabel(item.locationCity, item.locationState);
-                  const primaryImage = item.images[0]?.url;
-                  const isBulkPreview = previewMode === "bulk";
-                  return (
-                    <div key={item.id} className="storefront-preview-item">
-                      <div className="storefront-preview-meta">
-                        <span className="storefront-preview-label">
-                          Listing {index + 1}
-                        </span>
-                      </div>
-                      <div className="storefront-card storefront-preview-card">
-                        <div className="storefront-card-image">
-                          {primaryImage ? (
-                            <img src={primaryImage} alt={item.title || "Listing"} />
-                          ) : (
-                            <div className="storefront-card-fallback" />
-                          )}
-                          <span className="storefront-card-condition">
-                            {item.condition || "Condition"}
-                          </span>
-                          <span className="storefront-card-price-pill">
-                            {formatPrice(priceNumber)}
-                          </span>
-                        </div>
-                        <div className="storefront-card-body">
-                          <h3>{item.title || "Untitled listing"}</h3>
-                          <p className="storefront-card-location">
-                            {locationLabel || "Location"}
-                          </p>
-                          <div className="storefront-card-row">
-                            <span className="storefront-card-price">
-                              {formatPrice(priceNumber)}
-                            </span>
-                            <span className="storefront-card-stock">1 in stock</span>
-                          </div>
-                          <div className="storefront-card-tags">
-                            <span>{item.category || "Category"}</span>
-                            {item.visibility === "friends" && (
-                              <span className="is-friends">Friends only</span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="storefront-preview-actions">
-                        <button
-                          className="btn ghost"
-                          type="button"
-                          onClick={handlePreviewEdit}
-                          disabled={isPublishing}
-                        >
-                          Edit listing
-                        </button>
-                        <button
-                          className="btn ghost"
-                          type="button"
-                          onClick={() =>
-                            isBulkPreview
-                              ? handlePreviewDeleteBulk(item.id)
-                              : handlePreviewDeleteSingle()
-                          }
-                          disabled={isPublishing}
-                        >
-                          Delete listing
-                        </button>
-                        <button
-                          className="btn ghost"
-                          type="button"
-                          onClick={() =>
-                            isBulkPreview
-                              ? handlePreviewChangeBulkPhotos(item.id)
-                              : handlePreviewChangeSinglePhotos()
-                          }
-                          disabled={isPublishing}
-                        >
-                          Change photos
-                        </button>
-                      </div>
-                      {item.images.length > 0 && (
-                        <div className="storefront-upload-grid storefront-preview-upload">
-                          {item.images.map((image) => (
-                            <div key={image.id} className="storefront-upload-item">
-                              <img
-                                src={image.url}
-                                alt={`${item.title || "Listing"} preview`}
-                              />
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  isBulkPreview
-                                    ? handleRemoveBulkPhoto(item.id, image.id)
-                                    : handleRemovePhoto(image.id)
-                                }
-                                disabled={isPublishing}
-                              >
-                                Remove
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-            <div className="storefront-preview-footer">
-              <button
-                className="btn ghost"
-                type="button"
-                onClick={handlePreviewEdit}
-                disabled={isPublishing}
-              >
-                {previewMode === "bulk" ? "Edit listings" : "Edit listing"}
-              </button>
-              <button
-                className="btn primary"
-                type="button"
-                onClick={previewMode === "bulk" ? publishBulkListings : publishSingleListing}
-                disabled={isPublishing}
-              >
-                {isPublishing ? "Publishing..." : previewPublishLabel}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {publishSuccess && (
-        <div
-          className="storefront-success-overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-live="polite"
-          onClick={handleClosePublishSuccess}
-        >
-          <div
-            className="storefront-success-modal"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <h3>{publishSuccess}</h3>
-            <p>
-              {publishSuccess.toLowerCase().includes("updated")
-                ? "Your listing updates are now live on the StoreFront."
-                : "Your listing is now live on the StoreFront."}
-            </p>
-            <button className="btn primary" type="button" onClick={handleClosePublishSuccess}>
-              Close
-            </button>
-          </div>
-        </div>
-      )}
+      </SellerDetailModal>
+      <SellerDeleteListingModal
+        open={Boolean(listingDeleteTarget)}
+        listingTitle={listingDeleteTarget?.title}
+        error={listingDeleteError}
+        saving={listingDeleteSaving}
+        onClose={closeListingDeleteModal}
+        onConfirm={confirmDeleteListing}
+      />
+      {previewMode ? (
+        <SellerPreviewModal
+          open
+          previewTitleId={previewTitleId}
+          previewTitle={previewTitle}
+          previewSubtitle={previewSubtitle}
+          previewError={previewError}
+          previewMode={previewMode}
+          previewItems={previewItems}
+          previewPublishLabel={previewPublishLabel}
+          isPublishing={isPublishing}
+          formatPrice={formatPrice}
+          formatLocationLabel={formatLocationLabel}
+          onClose={closePreviewModal}
+          onEdit={handlePreviewEdit}
+          onDeleteSingle={handlePreviewDeleteSingle}
+          onDeleteBulk={handlePreviewDeleteBulk}
+          onChangeSinglePhotos={handlePreviewChangeSinglePhotos}
+          onChangeBulkPhotos={handlePreviewChangeBulkPhotos}
+          onRemoveSinglePhoto={handleRemovePhoto}
+          onRemoveBulkPhoto={handleRemoveBulkPhoto}
+          onPublish={previewMode === "bulk" ? publishBulkListings : publishSingleListing}
+        />
+      ) : null}
+      <SellerPublishSuccessModal message={publishSuccess} onClose={handleClosePublishSuccess} />
     </div>
   );
 }
+
+
+

@@ -1,0 +1,115 @@
+.seller-admin-editor {
+  display: grid;
+  gap: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(122, 179, 255, 0.26);
+  background: linear-gradient(160deg, rgba(9, 18, 35, 0.9), rgba(8, 16, 30, 0.8));
+  padding: 14px;
+}
+
+.seller-admin-editor--locked {
+  padding: 12px 14px;
+}
+
+.seller-admin-editor h4,
+.seller-admin-editor h5,
+.seller-admin-editor p {
+  margin: 0;
+}
+
+.seller-admin-editor-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.seller-admin-editor-head p {
+  color: rgba(171, 197, 234, 0.9);
+  font-size: 12px;
+}
+
+.seller-admin-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.seller-admin-editor-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(122, 179, 255, 0.24);
+  background: rgba(9, 17, 31, 0.66);
+}
+
+.seller-admin-editor-card h5 {
+  font-size: 13px;
+  color: #dceaff;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.seller-admin-editor-card label {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: rgba(180, 205, 236, 0.9);
+}
+
+.seller-admin-editor-card input,
+.seller-admin-editor-card select {
+  width: 100%;
+  min-height: 34px;
+  border-radius: 10px;
+  border: 1px solid rgba(120, 168, 229, 0.34);
+  background: rgba(7, 14, 28, 0.86);
+  color: #eef5ff;
+  padding: 0 10px;
+}
+
+.seller-admin-editor-card input[type="range"] {
+  min-height: 26px;
+  padding: 0;
+}
+
+.seller-admin-editor-colors {
+  display: grid;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.seller-admin-editor-color-row {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.seller-admin-editor-color-row input[type="color"] {
+  padding: 2px;
+  min-height: 34px;
+  border-radius: 10px;
+}
+
+.seller-admin-editor-checkbox {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.seller-admin-editor-checkbox input {
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  padding: 0;
+}
+
+@media (max-width: 1100px) {
+  .seller-admin-editor-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

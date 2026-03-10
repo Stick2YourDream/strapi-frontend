@@ -749,6 +749,11 @@ html.key-backup-active .chat-toggle-icon {
   display: none !important;
 }
 
+body.storefront-seller-chat-open .message-popout,
+html.storefront-seller-chat-open .message-popout {
+  display: none !important;
+}
+
 .message-popout__body {
   position: relative;
   padding: 14px;

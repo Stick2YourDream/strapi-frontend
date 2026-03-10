@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="no-js">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/logo2.png" />
@@ -8,6 +8,15 @@
     <link rel="dns-prefetch" href="//www.googletagmanager.com" />
     <link rel="preconnect" href="https://www.googletagmanager.com" crossorigin />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      document.documentElement.classList.remove("no-js");
+      document.documentElement.classList.add("js");
+    </script>
+    <style>
+      .js #seo-static-content {
+        display: none !important;
+      }
+    </style>
 
     <meta name="seo-platform-verification" content="verify_8c699a1a6078d3ab892e">
     <script async src="https://seo.jasonhouse.net/tracker.js?token=track_df90ab8a7caceed70ffe72fd"></script>
@@ -39,7 +48,7 @@
     <meta property="og:locale" content="en_US" />
     <meta
       property="og:title"
-      content="Your Social Place | Motivational social network without all the fluff"
+      content="Motivational Social Network | Your Social Place"
     />
     <meta
       property="og:description"
@@ -55,7 +64,7 @@
     <meta name="twitter:card" content="summary_large_image" />
     <meta
       name="twitter:title"
-      content="Your Social Place | Motivational social network without all the fluff"
+      content="Motivational Social Network | Your Social Place"
     />
     <meta
       name="twitter:description"
@@ -86,7 +95,7 @@
             "@type": "WebPage",
             "@id": "https://yoursocialplace.com/#webpage",
             "url": "https://yoursocialplace.com/",
-            "name": "Your Social Place | Motivational social network without all the fluff",
+            "name": "Motivational Social Network | Your Social Place",
             "description": "Your Social Place is a motivational social network for accountability with live video calls, screen sharing, real-time chat, groups, and Newsroom updates.",
             "isPartOf": { "@id": "https://yoursocialplace.com/#website" },
             "about": { "@id": "https://yoursocialplace.com/#organization" }
@@ -121,61 +130,121 @@
         setTimeout(loadAnalyticsScript, 2000);
       }
     </script>
-    <title>Your Social Place | Motivational social network without all the fluff</title>
+    <title>Motivational Social Network | Your Social Place</title>
   </head>
   <body>
     <div id="root">
       <!--ssg-outlet-->
-      <noscript>
-        <main
-          style="
-            min-height: 100vh;
-            padding: 48px 24px;
-            font-family: system-ui, -apple-system, Segoe UI, sans-serif;
-            background: #0b0d14;
-            color: #eef2ff;
-          "
+      <main
+        id="seo-static-content"
+        style="
+          min-height: 100vh;
+          padding: 48px 24px;
+          font-family: system-ui, -apple-system, Segoe UI, sans-serif;
+          background: #0b0d14;
+          color: #eef2ff;
+        "
+      >
+        <header style="max-width: 980px; margin: 0 auto 28px;">
+          <p
+            style="
+              letter-spacing: 0.2em;
+              text-transform: uppercase;
+              font-size: 12px;
+              color: #8fb5ff;
+              margin: 0 0 10px;
+            "
+          >
+            Your Social Place
+          </p>
+          <h1 style="font-size: 38px; line-height: 1.2; margin: 0 0 16px;">
+            Motivational social network built for accountability and daily progress.
+          </h1>
+          <p style="font-size: 17px; line-height: 1.7; margin: 0 0 16px; color: #dbe7ff;">
+            Your Social Place is a social platform for people who want momentum, honest support,
+            and practical accountability. Members share updates, celebrate wins, and keep each
+            other on track with clear goals, consistent check-ins, and encouraging feedback.
+          </p>
+          <p style="font-size: 17px; line-height: 1.7; margin: 0; color: #dbe7ff;">
+            Join a community where progress matters more than performance, where conversations stay
+            constructive, and where tools are designed to help you follow through on your plans.
+          </p>
+        </header>
+
+        <nav
+          aria-label="Primary pages"
+          style="max-width: 980px; margin: 0 auto 28px; display: flex; flex-wrap: wrap; gap: 12px;"
         >
-          <header style="max-width: 900px; margin: 0 auto 32px;">
-            <p style="letter-spacing: 0.2em; text-transform: uppercase; font-size: 12px; color: #8fb5ff;">
-              Your Social Place
-            </p>
-            <h1 style="font-size: 36px; margin: 12px 0;">
-              Build momentum with friends who show up for your goals.
-            </h1>
-            <p style="font-size: 16px; line-height: 1.6; color: #cbd5f5;">
-              A motivational support network where friends celebrate progress, share updates, and keep each other accountable.
-            </p>
-          </header>
-          <section style="max-width: 900px; margin: 0 auto; display: flex; gap: 12px; flex-wrap: wrap;">
-            <a
-              href="/register"
-              style="
-                padding: 12px 18px;
-                border-radius: 999px;
-                background: linear-gradient(135deg, #5cf0c7, #3b82f6);
-                color: #0b0d14;
-                font-weight: 700;
-                text-decoration: none;
-              "
-            >
-              Join the community
-            </a>
-            <a
-              href="/login"
-              style="
-                padding: 12px 18px;
-                border-radius: 999px;
-                border: 1px solid rgba(255, 255, 255, 0.2);
-                color: #e2e8f0;
-                text-decoration: none;
-              "
-            >
-              Already with us?
-            </a>
-          </section>
-        </main>
-      </noscript>
+          <a
+            href="/register"
+            style="padding: 10px 16px; border-radius: 999px; background: #22c55e; color: #04150a; text-decoration: none; font-weight: 700;"
+          >
+            Create account
+          </a>
+          <a
+            href="/login"
+            style="padding: 10px 16px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.25); color: #e2e8f0; text-decoration: none;"
+          >
+            Log in
+          </a>
+          <a href="/what-makes-us-different" style="color: #8fd0ff;">What makes us different</a>
+          <a href="/apps" style="color: #8fd0ff;">Apps</a>
+          <a href="/downloads" style="color: #8fd0ff;">Downloads</a>
+          <a href="/forums" style="color: #8fd0ff;">Forums</a>
+          <a href="/groups" style="color: #8fd0ff;">Groups</a>
+          <a href="/news" style="color: #8fd0ff;">Newsroom</a>
+          <a href="/support" style="color: #8fd0ff;">Support</a>
+        </nav>
+
+        <section style="max-width: 980px; margin: 0 auto;">
+          <h2 style="font-size: 26px; margin: 0 0 14px;">How Your Social Place helps you stay consistent</h2>
+          <p style="font-size: 16px; line-height: 1.75; margin: 0 0 14px; color: #dbe7ff;">
+            On Your Social Place, accountability is built into everyday interaction. You can post
+            updates, track milestones, and receive encouragement from people who care about your
+            real outcomes. Instead of endless noise, the platform focuses on meaningful progress,
+            supportive routines, and practical motivation that helps you keep going when life gets
+            busy.
+          </p>
+          <p style="font-size: 16px; line-height: 1.75; margin: 0 0 14px; color: #dbe7ff;">
+            Members use live video calls and real-time chat to collaborate on goals, unblock each
+            other, and maintain momentum through hard weeks. If you are building a business,
+            improving health habits, learning a new skill, or rebuilding structure after a setback,
+            this network gives you consistent social support with less distraction and more follow
+            through.
+          </p>
+          <p style="font-size: 16px; line-height: 1.75; margin: 0 0 14px; color: #dbe7ff;">
+            Safety and transparency are core features. Community expectations are documented in the
+            <a href="/guidelines" style="color: #8fd0ff;"> Community Guidelines</a>, moderation
+            details are explained on the <a href="/safety" style="color: #8fd0ff;"> Safety page</a>,
+            and users can quickly <a href="/report" style="color: #8fd0ff;"> report content</a> that
+            breaks trust. For account support, policy questions, or technical help, visit
+            <a href="/support" style="color: #8fd0ff;"> Support</a>.
+          </p>
+          <p style="font-size: 16px; line-height: 1.75; margin: 0 0 14px; color: #dbe7ff;">
+            The platform is available as a progressive web app and includes install options in
+            <a href="/apps" style="color: #8fd0ff;"> Apps and Downloads</a>. You can browse
+            community conversation in <a href="/forums" style="color: #8fd0ff;"> Forums</a>, discover
+            curated stories in <a href="/news" style="color: #8fd0ff;"> Newsroom</a>, and connect with
+            focused communities through <a href="/groups" style="color: #8fd0ff;"> Groups</a>.
+          </p>
+          <p style="font-size: 16px; line-height: 1.75; margin: 0 0 14px; color: #dbe7ff;">
+            Before getting started, you can review the
+            <a href="/terms" style="color: #8fd0ff;"> Terms and Conditions</a>,
+            <a href="/privacy" style="color: #8fd0ff;"> Privacy Policy</a>, and
+            <a href="/cookies" style="color: #8fd0ff;"> Cookie Policy</a> to understand how the
+            service works. If you are ready to build better habits with people who show up, create
+            your account and begin sharing your progress today.
+          </p>
+          <p style="font-size: 16px; line-height: 1.75; margin: 0; color: #dbe7ff;">
+            Many members also use Your Social Place to replace inconsistent routines with clear
+            weekly systems. The structure is simple: set a target, share progress, ask for support
+            when needed, and return to the same network that knows your goals. Over time, that
+            consistency compounds into better decision making, stronger confidence, and healthier
+            habits. If your current social feed drains focus, this platform gives you a practical
+            alternative designed for effort, follow-through, and measurable progress.
+          </p>
+        </section>
+      </main>
     </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

@@ -1,0 +1,125 @@
+.storefront-preview-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 15, 0.72);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  z-index: 1200;
+}
+
+.storefront-preview-modal {
+  color: #f8fafc;
+  width: min(1040px, 96vw);
+  max-height: 92vh;
+  background: rgba(9, 13, 23, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 24px;
+  box-shadow: 0 30px 80px rgba(3, 6, 14, 0.75);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  overflow: hidden;
+}
+
+.storefront-preview-header {
+  padding: 20px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.storefront-preview-eyebrow {
+  margin: 0 0 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.24em;
+  color: #8fb1ff;
+}
+
+.storefront-preview-sub {
+  margin: 6px 0 0;
+  color: #9fb0d3;
+  font-size: 13px;
+}
+
+.storefront-preview-body {
+  padding: 20px 24px;
+  overflow: auto;
+  display: grid;
+  gap: 16px;
+}
+
+.storefront-preview-alert {
+  margin: 0;
+  font-size: 12px;
+  color: #ff8fa3;
+}
+
+.storefront-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 18px;
+}
+
+.storefront-preview-item {
+  display: grid;
+  gap: 12px;
+}
+
+.storefront-preview-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.storefront-preview-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: #9bb6e4;
+}
+
+.storefront-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.storefront-preview-footer {
+  padding: 16px 24px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.storefront-preview-card {
+  pointer-events: none;
+  cursor: default;
+}
+
+.storefront-preview-upload {
+  margin-top: 4px;
+}
+
+@media (max-width: 720px) {
+  .storefront-preview-overlay {
+    padding: 16px;
+  }
+
+  .storefront-preview-modal {
+    width: 100%;
+    max-height: 94vh;
+  }
+
+  .storefront-preview-footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

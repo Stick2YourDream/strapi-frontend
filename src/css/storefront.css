@@ -239,6 +239,10 @@
   }
 }
 
+.storefront-sidebar-panel--mobile {
+  margin: 0;
+}
+
 .storefront-field input,
 .storefront-field select,
 .storefront-field textarea {
@@ -408,7 +412,8 @@
 .storefront-card-image img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
+  object-position: center;
   display: block;
 }
 
@@ -1323,10 +1328,16 @@
   gap: 28px;
 }
 
+.storefront-results-shell {
+  display: grid;
+  gap: 1rem;
+}
+
 .storefront-quick-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
+  display: grid;
+  gap: 0.7rem;
+  align-items: start;
+  justify-items: start;
   padding: 0;
   margin: 0;
   background: transparent;
@@ -1336,6 +1347,34 @@
 
 .storefront-quick-actions .storefront-hero-actions {
   margin: 0;
+}
+
+.storefront-page-heading {
+  margin: 0;
+  width: 100%;
+  text-align: center;
+  font-size: clamp(1.4rem, 2.4vw, 2.5rem);
+  line-height: 1.08;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #f3f8ff;
+  text-shadow: 0 8px 24px rgba(6, 10, 20, 0.55);
+}
+
+.storefront-page-heading::after {
+  content: "";
+  display: block;
+  width: min(220px, 42vw);
+  height: 2px;
+  margin: 0.45rem auto 0;
+  background: linear-gradient(
+    90deg,
+    rgba(77, 163, 255, 0),
+    rgba(77, 163, 255, 0.95),
+    rgba(124, 231, 255, 0.95),
+    rgba(77, 163, 255, 0)
+  );
+  border-radius: 999px;
 }
 
 .storefront-hero {
@@ -1492,7 +1531,7 @@
 
 .storefront-grid {
   gap: 20px;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
 .storefront-card {
@@ -1531,6 +1570,11 @@
   inset: 0;
   background: linear-gradient(180deg, transparent 0%, rgba(5, 9, 18, 0.65) 100%);
   opacity: 0.6;
+}
+
+.storefront-card-image {
+  height: clamp(170px, 20vw, 250px);
+  aspect-ratio: auto;
 }
 
 .storefront-card-price-pill {
@@ -1647,16 +1691,13 @@
   }
 }
 
-@media (max-width: 1200px) and (min-width: 641px) {
-  .storefront-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
 @media (max-width: 640px) {
   .storefront-hero-actions {
     flex-direction: column;
     align-items: stretch;
+  }
+  .storefront-quick-actions {
+    justify-items: stretch;
   }
   .storefront-toolbar {
     grid-template-columns: 1fr;

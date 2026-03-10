@@ -1,0 +1,126 @@
+/* Responsive rules for storefront seller page (non-dashboard module styles) */
+
+@media (max-width: 1400px) {
+  .storefront-bulk-list {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+
+  .storefront-bulk-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1220px) {
+  .seller-module-activity-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1100px) {
+  .storefront-layout--listing .storefront-form-panel {
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    min-height: 0;
+  }
+
+  .storefront-bulk-list {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+
+  .storefront-bulk-grid {
+    grid-template-columns: repeat(1, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .seller-module-activity-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 700px) {
+  .storefront-stepper {
+    align-items: flex-start;
+  }
+
+  .storefront-stepper-progress {
+    width: 100%;
+    justify-items: start;
+  }
+
+  .storefront-step-bar {
+    width: 100%;
+  }
+
+  .storefront-step-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .storefront-switch-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .storefront-switch-grid--compact {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+
+  .storefront-bulk-list {
+    grid-template-columns: 1fr;
+  }
+
+  .storefront-bulk-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .storefront-layout--listing .storefront-form-panel {
+    padding: 18px;
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    min-height: 0;
+  }
+
+}
+
+@media (max-width: 640px) {
+  .seller-storefront-chat-fab {
+    right: 14px;
+    width: 50px;
+    height: 50px;
+    font-size: 22px;
+    bottom: 82px;
+    bottom: calc(82px + env(safe-area-inset-bottom));
+  }
+}
+
+@media (min-width: 1400px) {
+  .storefront-shell {
+    --content-max: 1870px;
+  }
+}
+
+@media (min-width: 1920px) {
+  .storefront-shell {
+    --content-max: 2090px;
+  }
+}
+
+@media (min-width: 2560px) {
+  .storefront-shell {
+    --content-max: 2420px;
+  }
+}
+
+@media (min-width: 3840px) {
+  .storefront-shell {
+    --content-max: 3020px;
+  }
+}
+
+@media (min-width: 7680px) {
+  .storefront-shell {
+    --content-max: 3850px;
+  }
+}

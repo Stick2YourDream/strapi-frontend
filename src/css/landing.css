@@ -1116,6 +1116,14 @@
 }
 
 @media (max-height: 880px) and (min-width: 981px) {
+  .landing-frame {
+    height: auto;
+    min-height: 100vh;
+    min-height: 100dvh;
+    max-height: none;
+    overflow: visible;
+  }
+
   .landing-left {
     padding: 12px 16px;
     gap: 10px;
@@ -1123,6 +1131,11 @@
 
   .landing-right {
     padding: 12px 16px;
+    align-content: center;
+  }
+
+  .landing-right.is-registering {
+    align-content: start;
   }
 
   .landing-artboard {

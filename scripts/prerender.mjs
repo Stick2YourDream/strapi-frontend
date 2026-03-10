@@ -23,7 +23,7 @@ const routes = [
   {
     path: "/",
     meta: {
-      title: "Your Social Place | Motivational social network without all the fluff",
+      title: "Motivational Social Network | Your Social Place",
       description:
         "Your Social Place is a community driven motivational social network where real people share dreams, goals, progress, and help uplift each other.",
       url: `${BASE_URL}/`,

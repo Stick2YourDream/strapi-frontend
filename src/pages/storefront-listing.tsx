@@ -4,7 +4,6 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 import "../css/dashboard.css";
 import "../css/storefront-listing.css";
 import Sidebar from "../components/Sidebar";
-import TopbarSearch from "../components/TopbarSearch";
 import api from "../api/strapi";
 import { useAuth } from "../context/AuthContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";
@@ -312,6 +311,8 @@ export default function StorefrontListing() {
   const [verificationNotice, setVerificationNotice] = useState<string | null>(null);
   const [verificationError, setVerificationError] = useState<string | null>(null);
   const [verificationLoading, setVerificationLoading] = useState(false);
+  const [galleryModalOpen, setGalleryModalOpen] = useState(false);
+  const [galleryModalIndex, setGalleryModalIndex] = useState(0);
   const captureGuardRef = useRef<string | null>(null);
   const resolvePayPalMockCode = useCallback(
     (stage: "create" | "capture") => {
@@ -820,6 +821,9 @@ export default function StorefrontListing() {
       filteredProducts[0]
     );
   }, [filteredProducts, listingId, products, selectedId]);
+  const selectedProductImages = selectedProduct?.images ?? [];
+  const activeGalleryImage =
+    selectedProductImages[galleryModalIndex] ?? selectedProductImages[0] ?? "";
 
   const similarListings = useMemo(() => {
     if (!selectedProduct) return [];
@@ -959,6 +963,26 @@ export default function StorefrontListing() {
     setCheckoutError(null);
     setCheckoutStatus(null);
   }, [selectedProduct?.id]);
+
+  useEffect(() => {
+    setGalleryModalOpen(false);
+    setGalleryModalIndex(0);
+  }, [selectedProduct?.id]);
+
+  useEffect(() => {
+    if (!selectedProductImages.length) {
+      if (galleryModalIndex !== 0) {
+        setGalleryModalIndex(0);
+      }
+      if (galleryModalOpen) {
+        setGalleryModalOpen(false);
+      }
+      return;
+    }
+    if (galleryModalIndex >= selectedProductImages.length) {
+      setGalleryModalIndex(0);
+    }
+  }, [galleryModalIndex, galleryModalOpen, selectedProductImages.length]);
 
   const conversation = useMemo(() => {
     if (!selectedProduct) return [];
@@ -1109,6 +1133,65 @@ export default function StorefrontListing() {
   const handleOpenOfferPanel = () => {
     offerPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
+
+  const handleOpenGalleryModal = useCallback(
+    (imageIndex: number) => {
+      if (!selectedProductImages.length) return;
+      const nextIndex = Math.max(0, Math.min(imageIndex, selectedProductImages.length - 1));
+      setGalleryModalIndex(nextIndex);
+      setGalleryModalOpen(true);
+    },
+    [selectedProductImages]
+  );
+
+  const handleCloseGalleryModal = useCallback(() => {
+    setGalleryModalOpen(false);
+  }, []);
+
+  const handlePreviousGalleryImage = useCallback(() => {
+    if (!selectedProductImages.length) return;
+    setGalleryModalIndex((current) => {
+      if (current <= 0) return selectedProductImages.length - 1;
+      return current - 1;
+    });
+  }, [selectedProductImages.length]);
+
+  const handleNextGalleryImage = useCallback(() => {
+    if (!selectedProductImages.length) return;
+    setGalleryModalIndex((current) => (current + 1) % selectedProductImages.length);
+  }, [selectedProductImages.length]);
+
+  useEffect(() => {
+    if (!galleryModalOpen) return;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        handleCloseGalleryModal();
+        return;
+      }
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        handlePreviousGalleryImage();
+        return;
+      }
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        handleNextGalleryImage();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [
+    galleryModalOpen,
+    handleCloseGalleryModal,
+    handleNextGalleryImage,
+    handlePreviousGalleryImage,
+  ]);
 
   const handleSubmitOffer = async () => {
     if (!selectedProduct || !user?.id || isListingOwner) return;
@@ -1338,8 +1421,6 @@ export default function StorefrontListing() {
       <Sidebar active="storefront" />
 
       <div className="main-content storefront-page storefront-detail-page">
-        <TopbarSearch />
-
         <div className="storefront-detail-header">
           <button
             className="btn ghost small"
@@ -1431,9 +1512,15 @@ export default function StorefrontListing() {
                       </div>
                     )}
                     {selectedProduct.images.map((image, index) => (
-                      <div key={`${image}-${index}`} className="storefront-gallery-item">
+                      <button
+                        key={`${image}-${index}`}
+                        type="button"
+                        className="storefront-gallery-item"
+                        onClick={() => handleOpenGalleryModal(index)}
+                        aria-label={`Open image ${index + 1} of ${selectedProduct.images.length}`}
+                      >
                         <img src={image} alt={`${selectedProduct.title} ${index + 1}`} />
-                      </div>
+                      </button>
                     ))}
                   </div>
                   <div className="storefront-seller">
@@ -2006,6 +2093,77 @@ export default function StorefrontListing() {
             </div>
           </aside>
         </section>
+
+        {galleryModalOpen && selectedProduct && activeGalleryImage && (
+          <div
+            className="storefront-image-modal-backdrop"
+            role="presentation"
+            onClick={handleCloseGalleryModal}
+          >
+            <div
+              className="storefront-image-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-label={`${selectedProduct.title} image viewer`}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button
+                className="storefront-image-modal-close"
+                type="button"
+                onClick={handleCloseGalleryModal}
+                aria-label="Close image viewer"
+              >
+                ×
+              </button>
+              <div className="storefront-image-modal-stage">
+                {selectedProductImages.length > 1 && (
+                  <button
+                    className="storefront-image-modal-nav prev"
+                    type="button"
+                    onClick={handlePreviousGalleryImage}
+                    aria-label="Previous image"
+                  >
+                    ‹
+                  </button>
+                )}
+                <img
+                  src={activeGalleryImage}
+                  alt={`${selectedProduct.title} ${galleryModalIndex + 1}`}
+                />
+                {selectedProductImages.length > 1 && (
+                  <button
+                    className="storefront-image-modal-nav next"
+                    type="button"
+                    onClick={handleNextGalleryImage}
+                    aria-label="Next image"
+                  >
+                    ›
+                  </button>
+                )}
+              </div>
+              <div className="storefront-image-modal-footer">
+                <p className="storefront-image-modal-counter">
+                  Image {galleryModalIndex + 1} of {selectedProductImages.length}
+                </p>
+                <div className="storefront-image-modal-thumbs">
+                  {selectedProductImages.map((image, index) => (
+                    <button
+                      key={`${image}-thumb-${index}`}
+                      type="button"
+                      className={`storefront-image-modal-thumb${
+                        index === galleryModalIndex ? " is-active" : ""
+                      }`}
+                      onClick={() => setGalleryModalIndex(index)}
+                      aria-label={`View image ${index + 1}`}
+                    >
+                      <img src={image} alt={`${selectedProduct.title} thumbnail ${index + 1}`} />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

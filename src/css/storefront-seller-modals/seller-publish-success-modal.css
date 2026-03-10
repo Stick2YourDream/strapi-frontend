@@ -1,0 +1,36 @@
+.storefront-success-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 15, 0.72);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 1210;
+}
+
+.storefront-success-modal {
+  color: #f8fafc;
+  width: min(420px, 92vw);
+  background: rgba(10, 16, 28, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 20px;
+  padding: 22px;
+  display: grid;
+  gap: 12px;
+  text-align: center;
+  box-shadow: 0 28px 70px rgba(3, 6, 14, 0.65);
+}
+
+.storefront-success-modal h3 {
+  margin: 0;
+  font-size: 18px;
+  color: #f3f6ff;
+}
+
+.storefront-success-modal p {
+  margin: 0;
+  color: #9fb0d3;
+  font-size: 13px;
+}

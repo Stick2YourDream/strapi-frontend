@@ -563,7 +563,7 @@ export default function Landing() {
   }, []);
 
   usePageMeta({
-    title: "Your Social Place | Motivational social network without all the fluff",
+    title: "Motivational Social Network | Your Social Place",
     description:
       "Your Social Place is a motivational social network for accountability with live video calls, screen sharing, real-time chat, groups, and Newsroom updates.",
     type: "website",
@@ -2034,7 +2034,7 @@ export default function Landing() {
           </h1>
         </section>
 
-        <aside className="landing-right">
+        <aside className={`landing-right${showRegisterForm ? " is-registering" : ""}`}>
           <section
             className={`landing-account-panel${showRegisterForm ? " is-registering" : ""}`}
             aria-label="Account actions"
