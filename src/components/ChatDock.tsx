@@ -59,6 +59,47 @@ const getDisplayName = (handle?: string, firstName?: string, lastName?: string) 
 };
 
 const FRIEND_MENU_PAGE_SIZE = 5;
+const CHAT_MOTIVATION_LINES = [
+  "Small steps today build the momentum you want tomorrow.",
+  "Show up for yourself and the win will follow.",
+  "Progress over perfection, always.",
+  "Keep going. Your future self is already grateful.",
+  "Consistency beats intensity. You have this.",
+  "One focused action can change your whole day.",
+  "You do not need to be perfect, just present.",
+  "Start where you are and make the next right move.",
+  "One brave step changes everything.",
+  "You are not alone in the work.",
+  "Focus, breathe, move forward.",
+  "You are creating your own momentum.",
+  "The smallest step still moves you ahead.",
+  "Your courage is in the try.",
+  "Be the friend you need today.",
+  "Progress loves patience.",
+  "Let your actions speak louder than your doubts.",
+  "Simple and steady beats rushed and messy.",
+  "You are building trust with yourself.",
+  "Your best effort today is enough.",
+  "You have the power to choose a better next step.",
+];
+
+const pickChatMotivation = (previous?: string) => {
+  if (!CHAT_MOTIVATION_LINES.length) {
+    return "Keep showing up for yourself.";
+  }
+  if (CHAT_MOTIVATION_LINES.length === 1) {
+    return CHAT_MOTIVATION_LINES[0];
+  }
+  let next = CHAT_MOTIVATION_LINES[Math.floor(Math.random() * CHAT_MOTIVATION_LINES.length)];
+  if (previous && CHAT_MOTIVATION_LINES.includes(previous)) {
+    let safety = 0;
+    while (next === previous && safety < 12) {
+      next = CHAT_MOTIVATION_LINES[Math.floor(Math.random() * CHAT_MOTIVATION_LINES.length)];
+      safety += 1;
+    }
+  }
+  return next;
+};
 
 const isTypingTarget = (target: EventTarget | null) => {
   if (!(target instanceof HTMLElement)) return false;
@@ -98,6 +139,7 @@ export default function ChatDock() {
   const [isMobile, setIsMobile] = useState(false);
   const [reactionPickerFor, setReactionPickerFor] = useState<string | null>(null);
   const [messageReactions, setMessageReactions] = useState<Record<string, string[]>>({});
+  const [motivationalQuote, setMotivationalQuote] = useState(() => pickChatMotivation());
   const friendMenuRef = useRef<HTMLDivElement | null>(null);
   const friendSearchInputRef = useRef<HTMLInputElement | null>(null);
   const chatPrefs = preferences.chat;
@@ -179,6 +221,12 @@ export default function ChatDock() {
       setFriendMenuOpen(false);
     }
   }, [popoutMinimized]);
+
+  useEffect(() => {
+    if (popoutMinimized) return;
+    if (activeFriend?.userId) return;
+    setMotivationalQuote((prev) => pickChatMotivation(prev));
+  }, [activeFriend?.userId, popoutMinimized]);
 
   useEffect(() => {
     if (!friendMenuOpen) {
@@ -782,7 +830,7 @@ export default function ChatDock() {
             {!friendId ? (
               <div className="chat-motivation-card" role="status" aria-live="polite">
                 <p className="chat-motivation-title">{`${motivationalGreeting}, ${motivationalName}`}</p>
-                <p className="chat-motivation-subtitle">The smallest step still moves you ahead.</p>
+                <p className="chat-motivation-subtitle">{motivationalQuote}</p>
               </div>
             ) : messages.length === 0 ? (
               <div className="status">No messages yet.</div>
