@@ -79,7 +79,9 @@ export default function StorefrontPaymentMethods(): JSX.Element {
     const loadVerification = async () => {
       setLoading(true);
       try {
-        const res = await api.get("/marketplace-verifications/me");
+        const res = await api.get("/marketplace-verifications/me", {
+          params: { _: Date.now() },
+        });
         const entry = normalize(res.data?.data ?? null);
         const payoutProvider = getText(entry, ["payoutProvider", "payout_provider"]).toLowerCase();
         const merchantId = normalizePayPalMerchantId(
