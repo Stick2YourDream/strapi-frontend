@@ -1,5 +1,5 @@
 // src/pages/news.tsx
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type TouchEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { Search } from "lucide-react";
 import "../css/dashboard.css";
@@ -28,6 +28,9 @@ import {
 const PAGE_SIZE = 10;
 const SEARCH_DEBOUNCE_MS = 400;
 const IMAGE_LOOKUP_LIMIT = 12;
+const NEWS_LOADING_GAME_DELAY_MS = 5000;
+const SNAKE_GRID_SIZE = 16;
+const SNAKE_TICK_MS = 135;
 
 const QUICK_TOPICS = [
   "Community",
@@ -201,6 +204,284 @@ const isImageAsset = (asset: NewsAsset) => {
   return false;
 };
 
+type SnakeDirection = "up" | "down" | "left" | "right";
+
+type SnakePoint = {
+  x: number;
+  y: number;
+};
+
+const START_SNAKE: SnakePoint[] = [
+  { x: 7, y: 8 },
+  { x: 6, y: 8 },
+  { x: 5, y: 8 },
+];
+
+const DIRECTION_VECTORS: Record<SnakeDirection, SnakePoint> = {
+  up: { x: 0, y: -1 },
+  down: { x: 0, y: 1 },
+  left: { x: -1, y: 0 },
+  right: { x: 1, y: 0 },
+};
+
+const isOppositeDirection = (a: SnakeDirection, b: SnakeDirection) =>
+  (a === "up" && b === "down") ||
+  (a === "down" && b === "up") ||
+  (a === "left" && b === "right") ||
+  (a === "right" && b === "left");
+
+const randomSnakeFood = (snake: SnakePoint[]): SnakePoint => {
+  const occupied = new Set(snake.map((cell) => `${cell.x},${cell.y}`));
+  const freeCells: SnakePoint[] = [];
+  for (let y = 0; y < SNAKE_GRID_SIZE; y += 1) {
+    for (let x = 0; x < SNAKE_GRID_SIZE; x += 1) {
+      const key = `${x},${y}`;
+      if (!occupied.has(key)) {
+        freeCells.push({ x, y });
+      }
+    }
+  }
+  if (!freeCells.length) return { x: 0, y: 0 };
+  return freeCells[Math.floor(Math.random() * freeCells.length)];
+};
+
+function NewsLoadingSnakeModal({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  const [snake, setSnake] = useState<SnakePoint[]>(START_SNAKE);
+  const [food, setFood] = useState<SnakePoint>(() => randomSnakeFood(START_SNAKE));
+  const [direction, setDirection] = useState<SnakeDirection>("right");
+  const [score, setScore] = useState(0);
+  const [highScore, setHighScore] = useState(0);
+  const [isAlive, setIsAlive] = useState(true);
+  const [boardPixels, setBoardPixels] = useState(340);
+  const directionRef = useRef<SnakeDirection>("right");
+  const queuedDirectionRef = useRef<SnakeDirection | null>(null);
+  const scoreRef = useRef(0);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+
+  const requestDirectionChange = useCallback((next: SnakeDirection) => {
+    const current = queuedDirectionRef.current ?? directionRef.current;
+    if (next === current || isOppositeDirection(current, next)) return;
+    queuedDirectionRef.current = next;
+  }, []);
+
+  const resetRound = useCallback(() => {
+    directionRef.current = "right";
+    queuedDirectionRef.current = null;
+    scoreRef.current = 0;
+    setDirection("right");
+    setScore(0);
+    setIsAlive(true);
+    setSnake(START_SNAKE);
+    setFood(randomSnakeFood(START_SNAKE));
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    resetRound();
+  }, [open, resetRound]);
+
+  useEffect(() => {
+    if (!open) return;
+    const resize = () => {
+      const viewportWidth = window.innerWidth;
+      const next = Math.max(220, Math.min(420, viewportWidth - 64));
+      setBoardPixels(next);
+    };
+    resize();
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      if (key === "arrowup" || key === "w") {
+        event.preventDefault();
+        requestDirectionChange("up");
+      } else if (key === "arrowdown" || key === "s") {
+        event.preventDefault();
+        requestDirectionChange("down");
+      } else if (key === "arrowleft" || key === "a") {
+        event.preventDefault();
+        requestDirectionChange("left");
+      } else if (key === "arrowright" || key === "d") {
+        event.preventDefault();
+        requestDirectionChange("right");
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, { passive: false });
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, requestDirectionChange]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (isAlive) return;
+    const timeout = window.setTimeout(() => {
+      resetRound();
+    }, 900);
+    return () => window.clearTimeout(timeout);
+  }, [isAlive, open, resetRound]);
+
+  useEffect(() => {
+    if (!open || !isAlive) return;
+    const interval = window.setInterval(() => {
+      const nextDirection = queuedDirectionRef.current ?? directionRef.current;
+      queuedDirectionRef.current = null;
+      directionRef.current = nextDirection;
+      setDirection(nextDirection);
+
+      setSnake((currentSnake) => {
+        const head = currentSnake[0];
+        const vector = DIRECTION_VECTORS[nextDirection];
+        const nextHead = {
+          x: head.x + vector.x,
+          y: head.y + vector.y,
+        };
+
+        const hitWall =
+          nextHead.x < 0 ||
+          nextHead.x >= SNAKE_GRID_SIZE ||
+          nextHead.y < 0 ||
+          nextHead.y >= SNAKE_GRID_SIZE;
+        const hitBody = currentSnake.some(
+          (segment) => segment.x === nextHead.x && segment.y === nextHead.y
+        );
+        if (hitWall || hitBody) {
+          setIsAlive(false);
+          setHighScore((prev) => Math.max(prev, scoreRef.current));
+          return currentSnake;
+        }
+
+        const ateFood = nextHead.x === food.x && nextHead.y === food.y;
+        const nextSnake = ateFood
+          ? [nextHead, ...currentSnake]
+          : [nextHead, ...currentSnake.slice(0, -1)];
+
+        if (ateFood) {
+          const nextScore = scoreRef.current + 1;
+          scoreRef.current = nextScore;
+          setScore(nextScore);
+          setHighScore((prev) => Math.max(prev, nextScore));
+          setFood(randomSnakeFood(nextSnake));
+        }
+        return nextSnake;
+      });
+    }, SNAKE_TICK_MS);
+    return () => window.clearInterval(interval);
+  }, [food.x, food.y, isAlive, open]);
+
+  const snakeSet = useMemo(
+    () => new Set(snake.map((segment) => `${segment.x},${segment.y}`)),
+    [snake]
+  );
+  const headKey = snake.length ? `${snake[0].x},${snake[0].y}` : "";
+
+  const handleTouchStart = (event: TouchEvent<HTMLDivElement>) => {
+    const touch = event.changedTouches[0];
+    if (!touch) return;
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+  };
+
+  const handleTouchEnd = (event: TouchEvent<HTMLDivElement>) => {
+    const start = touchStartRef.current;
+    const touch = event.changedTouches[0];
+    touchStartRef.current = null;
+    if (!start || !touch) return;
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    if (Math.abs(dx) < 20 && Math.abs(dy) < 20) return;
+    if (Math.abs(dx) > Math.abs(dy)) {
+      requestDirectionChange(dx > 0 ? "right" : "left");
+    } else {
+      requestDirectionChange(dy > 0 ? "down" : "up");
+    }
+  };
+
+  if (!open) return null;
+
+  return (
+    <div className="news-snake-overlay" role="dialog" aria-modal="true" aria-labelledby="news-snake-title">
+      <section className="news-snake-modal">
+        <header className="news-snake-head">
+          <div>
+            <p className="eyebrow">Still Loading</p>
+            <h3 id="news-snake-title">Play Snake While You Wait</h3>
+          </div>
+          <button
+            type="button"
+            className="news-snake-close"
+            onClick={onClose}
+            aria-label="Close waiting game"
+          >
+            ×
+          </button>
+        </header>
+        <p className="news-snake-sub">
+          Newsroom is taking a moment. Move with arrow keys, WASD, or swipe.
+        </p>
+        <div className="news-snake-scorebar">
+          <span>Score: {score}</span>
+          <span>Best: {highScore}</span>
+          <span>Direction: {direction.toUpperCase()}</span>
+        </div>
+        <div
+          className="news-snake-board"
+          style={{
+            width: `${boardPixels}px`,
+            height: `${boardPixels}px`,
+            gridTemplateColumns: `repeat(${SNAKE_GRID_SIZE}, 1fr)`,
+            gridTemplateRows: `repeat(${SNAKE_GRID_SIZE}, 1fr)`,
+          }}
+          onTouchStart={handleTouchStart}
+          onTouchEnd={handleTouchEnd}
+        >
+          {Array.from({ length: SNAKE_GRID_SIZE * SNAKE_GRID_SIZE }, (_, index) => {
+            const x = index % SNAKE_GRID_SIZE;
+            const y = Math.floor(index / SNAKE_GRID_SIZE);
+            const key = `${x},${y}`;
+            const isFood = x === food.x && y === food.y;
+            const isSnake = snakeSet.has(key);
+            const isHead = key === headKey;
+            const className = [
+              "news-snake-cell",
+              isSnake ? "is-snake" : "",
+              isHead ? "is-head" : "",
+              isFood ? "is-food" : "",
+            ]
+              .filter(Boolean)
+              .join(" ");
+            return <span key={`snake-cell-${key}`} className={className} />;
+          })}
+          {!isAlive && <div className="news-snake-crash">Crash! Restarting...</div>}
+        </div>
+        <div className="news-snake-controls" aria-label="Snake controls">
+          <button type="button" onClick={() => requestDirectionChange("up")} aria-label="Move up">
+            ↑
+          </button>
+          <div>
+            <button type="button" onClick={() => requestDirectionChange("left")} aria-label="Move left">
+              ←
+            </button>
+            <button type="button" onClick={() => requestDirectionChange("down")} aria-label="Move down">
+              ↓
+            </button>
+            <button type="button" onClick={() => requestDirectionChange("right")} aria-label="Move right">
+              →
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export default function News() {
   const navigate = useNavigate();
   const { user, profile, appSettings } = useAuth();
@@ -219,6 +500,8 @@ export default function News() {
   const [articles, setArticles] = useState<NewsArticle[]>([]);
   const [loading, setLoading] = useState(false);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  const [showLoadingGame, setShowLoadingGame] = useState(false);
+  const [suppressLoadingGameForCycle, setSuppressLoadingGameForCycle] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
@@ -245,6 +528,7 @@ export default function News() {
   const speechIndexRef = useRef(0);
   const speechTextRef = useRef("");
   const speechUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const loadingGameTimerRef = useRef<number | null>(null);
 
   usePageMeta({
     title: "Newsroom | Your Social Place",
@@ -1140,11 +1424,41 @@ export default function News() {
     }
   }, [loading]);
 
+  useEffect(() => {
+    if (!newsEnabled || !loading) {
+      if (loadingGameTimerRef.current !== null) {
+        window.clearTimeout(loadingGameTimerRef.current);
+        loadingGameTimerRef.current = null;
+      }
+      setShowLoadingGame(false);
+      setSuppressLoadingGameForCycle(false);
+      return;
+    }
+    if (showLoadingGame || suppressLoadingGameForCycle) return;
+    if (loadingGameTimerRef.current !== null) return;
+    loadingGameTimerRef.current = window.setTimeout(() => {
+      setShowLoadingGame(true);
+      loadingGameTimerRef.current = null;
+    }, NEWS_LOADING_GAME_DELAY_MS);
+    return () => {
+      if (loadingGameTimerRef.current !== null) {
+        window.clearTimeout(loadingGameTimerRef.current);
+        loadingGameTimerRef.current = null;
+      }
+    };
+  }, [loading, newsEnabled, showLoadingGame, suppressLoadingGameForCycle]);
+
+  const handleCloseLoadingGame = useCallback(() => {
+    setShowLoadingGame(false);
+    setSuppressLoadingGameForCycle(true);
+  }, []);
+
   const showInitialLoader = loading && !hasLoadedOnce;
 
   return (
     <div className="dashboard-shell" style={newsModalBackground}>
       {showInitialLoader && <FullScreenLoader label="Loading newsroom" />}
+      <NewsLoadingSnakeModal open={showLoadingGame && loading && newsEnabled} onClose={handleCloseLoadingGame} />
       <Sidebar
         active="news"
         hideBio
