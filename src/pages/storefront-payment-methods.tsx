@@ -14,6 +14,39 @@ const PAYMENT_METHOD = {
   hint: "We'll redirect you to PayPal to connect and confirm your account.",
 } as const;
 
+const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
+
+const getField = (entry: any, keys: string[]) => {
+  for (const key of keys) {
+    const value = entry?.[key];
+    if (value !== undefined && value !== null) return value;
+  }
+  return undefined;
+};
+
+const getText = (entry: any, keys: string[]) => String(getField(entry, keys) || "").trim();
+
+const getFlag = (entry: any, keys: string[]) => {
+  const value = getField(entry, keys);
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return false;
+  return ["1", "true", "yes", "y"].includes(normalized);
+};
+
+const normalizePayPalMerchantId = (value: unknown) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const upper = raw.toUpperCase();
+  const direct = upper.replace(/[^A-Z0-9]/g, "");
+  if (/^[A-Z0-9]{13}$/.test(direct)) return direct;
+  const tokens = upper.match(/[A-Z0-9]{10,20}/g) || [];
+  const exact = tokens.find((token) => token.length === 13);
+  if (exact) return exact;
+  return direct;
+};
+
 export default function StorefrontPaymentMethods(): JSX.Element {
   const { getBackgroundStyle } = useUserPreferences();
   const navigate = useNavigate();
@@ -47,14 +80,19 @@ export default function StorefrontPaymentMethods(): JSX.Element {
       setLoading(true);
       try {
         const res = await api.get("/marketplace-verifications/me");
-        const entry = res.data?.data ?? null;
-        const payoutProvider = String(entry?.payoutProvider || "").toLowerCase();
-        const merchantId = String(entry?.paypalMerchantIdInPayPal || "");
-        const payoutEmail = String(entry?.payoutEmail || "").trim();
-        const consentStatus = Boolean(entry?.paypalConsentStatus);
-        const permissionsGranted = Boolean(entry?.paypalPermissionsGranted);
-        const accountStatus = String(entry?.paypalAccountStatus || "");
-        const returnMessage = String(entry?.paypalReturnMessage || "");
+        const entry = normalize(res.data?.data ?? null);
+        const payoutProvider = getText(entry, ["payoutProvider", "payout_provider"]).toLowerCase();
+        const merchantId = normalizePayPalMerchantId(
+          getText(entry, ["paypalMerchantIdInPayPal", "paypal_merchant_id_in_pay_pal"])
+        );
+        const payoutEmail = getText(entry, ["payoutEmail", "payout_email"]);
+        const consentStatus = getFlag(entry, ["paypalConsentStatus", "paypal_consent_status"]);
+        const permissionsGranted = getFlag(entry, [
+          "paypalPermissionsGranted",
+          "paypal_permissions_granted",
+        ]);
+        const accountStatus = getText(entry, ["paypalAccountStatus", "paypal_account_status"]);
+        const returnMessage = getText(entry, ["paypalReturnMessage", "paypal_return_message"]);
         if (!mounted) return;
 
         if (payoutProvider) {
@@ -117,9 +155,12 @@ export default function StorefrontPaymentMethods(): JSX.Element {
     api
       .post("/marketplace-verifications/paypal/confirm", { data: payload })
       .then((res) => {
-        const entry = res.data?.data ?? null;
-        const merchant = String(entry?.paypalMerchantIdInPayPal || merchantIdInPayPal || "");
-        const payoutEmail = String(entry?.payoutEmail || "").trim();
+        const entry = normalize(res.data?.data ?? null);
+        const merchant = normalizePayPalMerchantId(
+          getText(entry, ["paypalMerchantIdInPayPal", "paypal_merchant_id_in_pay_pal"]) ||
+            String(merchantIdInPayPal || "")
+        );
+        const payoutEmail = getText(entry, ["payoutEmail", "payout_email"]);
         if (merchant) {
           setPaypalMerchantId(merchant);
           setMerchantIdInput(merchant);
@@ -131,8 +172,8 @@ export default function StorefrontPaymentMethods(): JSX.Element {
           setPaypalNotice(null);
           setPaypalError("PayPal connection was not completed.");
         }
-        const accountStatus = String(entry?.paypalAccountStatus || "");
-        const returnMessage = String(entry?.paypalReturnMessage || "");
+        const accountStatus = getText(entry, ["paypalAccountStatus", "paypal_account_status"]);
+        const returnMessage = getText(entry, ["paypalReturnMessage", "paypal_return_message"]);
         if (accountStatus) setPaypalAccountStatus(accountStatus);
         if (returnMessage) setPaypalReturnMessage(returnMessage);
         if (payoutEmail) setPayoutEmailInput(payoutEmail);
@@ -201,7 +242,7 @@ export default function StorefrontPaymentMethods(): JSX.Element {
   const handleSavePayoutMethod = async () => {
     if (savingPayout) return;
     const payoutEmail = payoutEmailInput.trim().toLowerCase();
-    const merchantId = merchantIdInput.trim();
+    const merchantId = normalizePayPalMerchantId(merchantIdInput);
     if (!payoutEmail) {
       setPayoutError("Payout email is required.");
       return;
@@ -218,9 +259,13 @@ export default function StorefrontPaymentMethods(): JSX.Element {
           paypalMerchantIdInPayPal: merchantId || null,
         },
       });
-      const entry = res.data?.data ?? null;
-      const savedPayoutEmail = String(entry?.payoutEmail || payoutEmail).trim();
-      const savedMerchantId = String(entry?.paypalMerchantIdInPayPal || merchantId).trim();
+      const entry = normalize(res.data?.data ?? null);
+      const savedPayoutEmail =
+        getText(entry, ["payoutEmail", "payout_email"]) || payoutEmail;
+      const savedMerchantId =
+        normalizePayPalMerchantId(
+          getText(entry, ["paypalMerchantIdInPayPal", "paypal_merchant_id_in_pay_pal"])
+        ) || merchantId;
 
       setSavedProvider("paypal");
       setPayoutEmailInput(savedPayoutEmail);
@@ -256,12 +301,13 @@ export default function StorefrontPaymentMethods(): JSX.Element {
           paypalMerchantIdInPayPal: null,
         },
       });
-      const entry = res.data?.data ?? null;
+      const entry = normalize(res.data?.data ?? null);
       setMerchantIdInput("");
       setPaypalMerchantId("");
       setPaypalStatus("idle");
-      if (String(entry?.payoutEmail || "").trim()) {
-        setPayoutEmailInput(String(entry?.payoutEmail || "").trim());
+      const savedPayoutEmail = getText(entry, ["payoutEmail", "payout_email"]);
+      if (savedPayoutEmail) {
+        setPayoutEmailInput(savedPayoutEmail);
       }
       setPayoutNotice("PayPal account unlinked. You can reconnect anytime.");
     } catch (err) {

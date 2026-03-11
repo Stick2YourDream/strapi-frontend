@@ -1660,6 +1660,8 @@ export default function StorefrontSeller(): JSX.Element {
     const listingId =
       listing.documentId ?? listing.id ?? listing.rawId ?? null;
     if (listingId === null || listingId === undefined || listingId === "") return;
+    // If edit was launched from a detail popup, close it before entering form mode.
+    setActiveDashboardModule(null);
     const listingKey = String(listingId);
     const locationParts = parseLocationParts(listing.location);
     const matchedState = matchByName(stateOptions, locationParts.state);

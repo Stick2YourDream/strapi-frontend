@@ -124,6 +124,16 @@ export default function StorefrontSellerDashboard({
   const previewLabel = storefrontEnabled
     ? uiConfig.previewButtonLabel
     : uiConfig.previewDisabledLabel;
+  const hasActiveListings = activeListingCount > 0;
+  const orderEmptyLabel = hasActiveListings
+    ? `No orders yet from your ${activeListingCount} active listing${activeListingCount === 1 ? "" : "s"}.`
+    : uiConfig.orderEmptyLabel;
+  const orderEmptyActionLabel = hasActiveListings
+    ? "View Active Listings"
+    : uiConfig.orderCtaLabel;
+  const handleOrderEmptyAction = hasActiveListings
+    ? () => onOpenDashboardModule("activeListings")
+    : onCreateFirstListing;
   const closeGearMenu = () => {
     if (!accountMenuOpen) return;
     onToggleAccountMenu();
@@ -243,13 +253,13 @@ export default function StorefrontSellerDashboard({
               {displayOrdersError && <p className="seller-cc-order-note">{displayOrdersError}</p>}
               {!displayOrdersLoading && !displayOrdersError && recentOrderSummary.length === 0 && (
                 <div className="seller-cc-order-empty">
-                  <p>{uiConfig.orderEmptyLabel}</p>
+                  <p>{orderEmptyLabel}</p>
                   <button
                     className="seller-cc-btn seller-cc-btn--primary seller-cc-btn--wide"
                     type="button"
-                    onClick={onCreateFirstListing}
+                    onClick={handleOrderEmptyAction}
                   >
-                    {uiConfig.orderCtaLabel}
+                    {orderEmptyActionLabel}
                   </button>
                 </div>
               )}
