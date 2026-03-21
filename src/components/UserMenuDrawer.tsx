@@ -38,6 +38,7 @@ export type MenuProps = {
   onLogout: () => void;
   onNotificationsClick?: () => void;
   onEditProfilePicture?: () => void;
+  onMessagesOpen?: () => void;
   user: { name: string; avatarUrl?: string };
   currentPath: string;
   notificationsCount?: number;
@@ -47,6 +48,8 @@ export type MenuProps = {
   storefrontEnabled?: boolean;
   newsroomEnabled?: boolean;
   showBilling?: boolean;
+  emptyMessagesTitle?: string;
+  emptyMessagesSubtitle?: string;
 };
 
 type CommunityRowLink = {
@@ -114,6 +117,7 @@ export default function UserMenuDrawer({
   onLogout,
   onNotificationsClick,
   onEditProfilePicture,
+  onMessagesOpen,
   user,
   currentPath,
   notificationsCount = 0,
@@ -122,6 +126,8 @@ export default function UserMenuDrawer({
   customCommunityContent,
   storefrontEnabled = true,
   newsroomEnabled = true,
+  emptyMessagesTitle = "No new friend messages",
+  emptyMessagesSubtitle = "Open friends inbox",
 }: MenuProps) {
   const titleId = useId();
   const avatarModalTitleId = useId();
@@ -176,6 +182,12 @@ export default function UserMenuDrawer({
       setCommunityOpen(true);
     }
   }, [open, shouldAutoOpenCommunity]);
+
+  const handleMessagesOpen = () => {
+    if (!onMessagesOpen) return;
+    onClose();
+    onMessagesOpen();
+  };
 
   if (!open) return null;
 
@@ -444,23 +456,53 @@ export default function UserMenuDrawer({
                 <div id="user-menu-messages-submenu" className="user-menu-drawer__submenu">
                   {friendMessages.length > 0 ? (
                     friendMessages.map((item) => (
-                      <Link
-                        key={item.id}
-                        to={item.href || "/friends"}
-                        className="user-menu-drawer__message-row"
-                        onClick={onClose}
-                      >
-                        <span className="user-menu-drawer__message-copy">
-                          <strong>{item.friendName}</strong>
-                          <span>{trimPreview(item.preview)}</span>
-                        </span>
-                        {item.unreadCount && item.unreadCount > 0 ? (
-                          <span className="user-menu-drawer__message-count">
-                            {formatBadge(item.unreadCount)}
+                      onMessagesOpen ? (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className="user-menu-drawer__message-row"
+                          onClick={handleMessagesOpen}
+                        >
+                          <span className="user-menu-drawer__message-copy">
+                            <strong>{item.friendName}</strong>
+                            <span>{trimPreview(item.preview)}</span>
                           </span>
-                        ) : null}
-                      </Link>
+                          {item.unreadCount && item.unreadCount > 0 ? (
+                            <span className="user-menu-drawer__message-count">
+                              {formatBadge(item.unreadCount)}
+                            </span>
+                          ) : null}
+                        </button>
+                      ) : (
+                        <Link
+                          key={item.id}
+                          to={item.href || "/friends"}
+                          className="user-menu-drawer__message-row"
+                          onClick={onClose}
+                        >
+                          <span className="user-menu-drawer__message-copy">
+                            <strong>{item.friendName}</strong>
+                            <span>{trimPreview(item.preview)}</span>
+                          </span>
+                          {item.unreadCount && item.unreadCount > 0 ? (
+                            <span className="user-menu-drawer__message-count">
+                              {formatBadge(item.unreadCount)}
+                            </span>
+                          ) : null}
+                        </Link>
+                      )
                     ))
+                  ) : onMessagesOpen ? (
+                    <button
+                      type="button"
+                      className="user-menu-drawer__message-row user-menu-drawer__message-row--empty"
+                      onClick={handleMessagesOpen}
+                    >
+                      <span className="user-menu-drawer__message-copy">
+                        <strong>{emptyMessagesTitle}</strong>
+                        <span>{emptyMessagesSubtitle}</span>
+                      </span>
+                    </button>
                   ) : (
                     <Link
                       to="/friends"
@@ -468,8 +510,8 @@ export default function UserMenuDrawer({
                       onClick={onClose}
                     >
                       <span className="user-menu-drawer__message-copy">
-                        <strong>No new friend messages</strong>
-                        <span>Open friends inbox</span>
+                        <strong>{emptyMessagesTitle}</strong>
+                        <span>{emptyMessagesSubtitle}</span>
                       </span>
                     </Link>
                   )}

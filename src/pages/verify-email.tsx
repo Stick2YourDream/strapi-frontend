@@ -2,6 +2,7 @@ import { useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent } fr
 import { useNavigate, useSearchParams } from "react-router-dom";
 import api from "../api/strapi";
 import { usePageMeta } from "../hooks/usePageMeta";
+import "../css/login.css";
 import "../css/verify-email.css";
 
 const CODE_LENGTH = 6;

@@ -4,6 +4,7 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 import "../css/dashboard.css";
 import "../css/storefront-listing.css";
 import Sidebar from "../components/Sidebar";
+import StorefrontCartModal from "../components/StorefrontCartModal";
 import api from "../api/strapi";
 import { useAuth } from "../context/AuthContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";
@@ -16,6 +17,10 @@ import {
   readStorefrontDemoCount,
   readStorefrontDemoEnabled,
 } from "../data/storefront-demo";
+import {
+  isStorefrontListingVisible,
+  resolveStorefrontDisplayStatus,
+} from "../utils/storefront-listing-state";
 
 const VERIFIED_SELLER_FEE_RATE = 0.02;
 const STANDARD_SELLER_FEE_RATE = 0.04;
@@ -39,6 +44,8 @@ type StorefrontProduct = {
   title: string;
   price: number;
   status?: string;
+  purchaseState?: string;
+  soldAt?: string;
   auctionEnabled?: boolean;
   auctionEndAt?: string;
   startingBid?: number;
@@ -100,6 +107,19 @@ type StorefrontBid = {
   createdAt: string;
 };
 
+type StorefrontCartOrder = {
+  id: number;
+  listingId?: number | null;
+  offerId?: number | null;
+  status: string;
+  amount: number;
+  fee: number;
+  net: number;
+  currency: string;
+  paypalOrderId?: string;
+  reservationExpiresAt?: string;
+};
+
 type VerificationItem = {
   label: string;
   status: "verified" | "pending" | "optional";
@@ -121,6 +141,7 @@ type VerificationStatus = {
   buyerAddressCountry?: string;
   payoutProvider?: string;
   payoutEmail?: string;
+  paypalMerchantIdInPayPal?: string;
   stripeIdentityStatus?: string;
 };
 
@@ -158,6 +179,8 @@ const buildStorefrontProduct = (entry: any): StorefrontProduct => {
     title: String(attrs.title || "Untitled listing"),
     price: Number(attrs.price || 0),
     status: String(attrs.status || "active"),
+    purchaseState: String(attrs.purchaseState || "available"),
+    soldAt: attrs.soldAt ? String(attrs.soldAt) : undefined,
     auctionEnabled: Boolean(attrs.auctionEnabled),
     auctionEndAt: attrs.auctionEndAt ? String(attrs.auctionEndAt) : undefined,
     startingBid: Number(attrs.startingBid ?? 0) || undefined,
@@ -199,6 +222,14 @@ const currency = new Intl.NumberFormat("en-US", {
 
 const formatPrice = (value: number) => (value <= 0 ? "Free" : currency.format(value));
 const roundCurrency = (value: number) => Math.round(value * 100) / 100;
+
+const normalizePayPalMockCodeInput = (value: unknown) =>
+  String(value || "")
+    .trim()
+    .split(",")
+    .map((entry) => entry.trim().toUpperCase())
+    .filter((entry) => /^[A-Z0-9_]+$/.test(entry))
+    .join(",");
 const formatCurrency = (value: number, currencyCode?: string) => {
   if (!currencyCode || currencyCode.toUpperCase() === "USD") {
     return formatPrice(value);
@@ -241,23 +272,42 @@ const normalizeStatus = (value?: string | null): VerificationItem["status"] => {
   return "optional";
 };
 
-const buildSellerVerification = (status?: VerificationStatus | null): VerificationItem[] => [
-  {
-    label: "Government ID",
-    status: normalizeStatus(status?.sellerIdStatus),
-    detail: "Optional for verified seller badge",
-  },
-  {
-    label: "Payout method",
-    status: normalizeStatus(status?.sellerPayoutStatus),
-    detail: "Optional payout verification",
-  },
-  {
-    label: "Activity history",
-    status: "pending",
-    detail: "Earn buyer trust over time",
-  },
-];
+const buildSellerVerification = (
+  status?: VerificationStatus | null,
+  ageVerified?: boolean,
+  hasPayoutMethod?: boolean
+): VerificationItem[] => {
+  const sellerIdStatus = ageVerified ? "verified" : normalizeStatus(status?.sellerIdStatus);
+  const sellerIdPending = sellerIdStatus === "pending" || ageVerified === false;
+
+  return [
+    {
+      label: "Age verification",
+      status: sellerIdStatus === "verified" ? "verified" : sellerIdPending ? "pending" : "optional",
+      detail:
+        sellerIdStatus === "verified"
+          ? "Age verified for marketplace access"
+          : sellerIdPending
+          ? "Verify your age to keep your seller account active"
+          : "Supports the verified seller badge",
+    },
+    {
+      label: "Payout method",
+      status:
+        normalizeStatus(status?.sellerPayoutStatus) === "verified" || hasPayoutMethod
+          ? "verified"
+          : "pending",
+      detail: hasPayoutMethod
+        ? "Payout method saved for seller payouts"
+        : "Optional payout verification",
+    },
+    {
+      label: "Activity history",
+      status: "pending",
+      detail: "Earn buyer trust over time",
+    },
+  ];
+};
 
 const QUICK_BUYER_MESSAGES = [
   "Hi! Is this still available?",
@@ -305,6 +355,10 @@ export default function StorefrontListing() {
   const [sellerVerification, setSellerVerification] = useState<VerificationStatus | null>(
     null
   );
+  const [cartOrders, setCartOrders] = useState<StorefrontCartOrder[]>([]);
+  const [cartModalOpen, setCartModalOpen] = useState(false);
+  const [cartLoading, setCartLoading] = useState(false);
+  const [cartError, setCartError] = useState<string | null>(null);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
   const [checkoutStatus, setCheckoutStatus] = useState<string | null>(null);
@@ -314,9 +368,19 @@ export default function StorefrontListing() {
   const [galleryModalOpen, setGalleryModalOpen] = useState(false);
   const [galleryModalIndex, setGalleryModalIndex] = useState(0);
   const captureGuardRef = useRef<string | null>(null);
+  const allowPayPalRequestMocks =
+    String(import.meta.env.VITE_PAYPAL_ALLOW_REQUEST_MOCKS || "")
+      .trim()
+      .toLowerCase() === "true";
   const resolvePayPalMockCode = useCallback(
     (stage: "create" | "capture") => {
       if (typeof window === "undefined") return "";
+      if (!allowPayPalRequestMocks) {
+        window.localStorage.removeItem("paypalMockCreateCode");
+        window.localStorage.removeItem("paypalMockCaptureCode");
+        window.localStorage.removeItem("paypalMockCode");
+        return "";
+      }
       const params = new URLSearchParams(location.search);
       const stageParam =
         stage === "create" ? params.get("ppMockCreate") : params.get("ppMockCapture");
@@ -331,14 +395,37 @@ export default function StorefrontListing() {
           ""
       ).trim();
       if (!raw) return "";
-      return raw
-        .split(",")
-        .map((value) => value.trim().toUpperCase())
-        .filter((value) => /^[A-Z0-9_]+$/.test(value))
-        .join(",");
+      return normalizePayPalMockCodeInput(raw);
     },
-    [location.search]
+    [allowPayPalRequestMocks, location.search]
   );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!allowPayPalRequestMocks) {
+      window.localStorage.removeItem("paypalMockCreateCode");
+      window.localStorage.removeItem("paypalMockCaptureCode");
+      window.localStorage.removeItem("paypalMockCode");
+      return;
+    }
+    const params = new URLSearchParams(location.search);
+    const genericMockCode = normalizePayPalMockCodeInput(params.get("ppMock"));
+    const createMockCode = normalizePayPalMockCodeInput(
+      params.get("ppMockCreate") || genericMockCode
+    );
+    const captureMockCode = normalizePayPalMockCodeInput(
+      params.get("ppMockCapture") || genericMockCode
+    );
+
+    if (genericMockCode) {
+      window.localStorage.setItem("paypalMockCode", genericMockCode);
+    }
+    if (createMockCode) {
+      window.localStorage.setItem("paypalMockCreateCode", createMockCode);
+    }
+    if (captureMockCode) {
+      window.localStorage.setItem("paypalMockCaptureCode", captureMockCode);
+    }
+  }, [allowPayPalRequestMocks, location.search]);
   const offerPanelRef = useRef<HTMLDivElement | null>(null);
   const searchContext = useMemo(
     () => (location.state && typeof location.state === "object" ? location.state : {}) as {
@@ -391,11 +478,6 @@ export default function StorefrontListing() {
     type: "website",
     robots: "noindex, nofollow",
   });
-
-  const sellerVerificationItems = useMemo(
-    () => buildSellerVerification(sellerVerification),
-    [sellerVerification]
-  );
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -474,8 +556,15 @@ export default function StorefrontListing() {
             if (!ownerId) return;
             const sellerIdStatus = attrs.sellerIdStatus;
             const sellerPayoutStatus = attrs.sellerPayoutStatus;
+            const hasPayoutMethod = Boolean(
+              String(attrs.payoutEmail || "").trim() ||
+                String(attrs.paypalMerchantIdInPayPal || "").trim()
+            );
             let level: StorefrontSeller["verifiedLevel"] = "unverified";
-            if (sellerIdStatus === "verified" && sellerPayoutStatus === "verified") {
+            if (
+              sellerIdStatus === "verified" &&
+              (sellerPayoutStatus === "verified" || hasPayoutMethod)
+            ) {
               level = "verified";
             } else if (sellerIdStatus === "pending" || sellerPayoutStatus === "pending") {
               level = "pending";
@@ -598,10 +687,14 @@ export default function StorefrontListing() {
     };
 
     if (!selfVerification) {
-      payload.sellerIdStatus = "pending";
+      if (!user?.ageVerified) {
+        payload.sellerIdStatus = "pending";
+      }
       payload.sellerPayoutStatus = "pending";
     } else {
-      markPending("sellerIdStatus", selfVerification.sellerIdStatus);
+      if (!user?.ageVerified) {
+        markPending("sellerIdStatus", selfVerification.sellerIdStatus);
+      }
       markPending("sellerPayoutStatus", selfVerification.sellerPayoutStatus);
     }
 
@@ -786,9 +879,49 @@ export default function StorefrontListing() {
     [user?.id]
   );
 
+  const loadCartOrders = useCallback(async () => {
+    if (!user?.id) {
+      setCartOrders([]);
+      return;
+    }
+    setCartLoading(true);
+    setCartError(null);
+    try {
+      const res = await api.get("/marketplace-orders/cart");
+      const mapped = (res.data?.data ?? []).map((entry: any) => {
+        const attrs = normalize(entry);
+        const listingData = attrs.listing?.data ?? attrs.listing;
+        const offerData = attrs.offer?.data ?? attrs.offer;
+        return {
+          id: Number(entry?.id ?? attrs.id ?? 0),
+          listingId: getEntityId(listingData),
+          offerId: getEntityId(offerData),
+          status: String(attrs.status || "cart").toLowerCase(),
+          amount: Number(attrs.amount || 0),
+          fee: Number(attrs.fee || 0),
+          net: Number(attrs.net || 0),
+          currency: String(attrs.currency || "USD").toUpperCase(),
+          paypalOrderId: String(attrs.paypalOrderId || ""),
+          reservationExpiresAt: attrs.reservationExpiresAt
+            ? String(attrs.reservationExpiresAt)
+            : undefined,
+        } satisfies StorefrontCartOrder;
+      });
+      setCartOrders(mapped);
+    } catch {
+      setCartError("Unable to load cart state.");
+      setCartOrders([]);
+    } finally {
+      setCartLoading(false);
+    }
+  }, [user?.id]);
+
   const filteredProducts = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     const filtered = products.filter((product) => {
+      if (!isStorefrontListingVisible(product)) {
+        return false;
+      }
       if (categoryFilter !== "All" && product.category !== categoryFilter) {
         return false;
       }
@@ -828,8 +961,7 @@ export default function StorefrontListing() {
   const similarListings = useMemo(() => {
     if (!selectedProduct) return [];
     const activeListings = products.filter((item) => {
-      const status = String(item.status || "active").toLowerCase();
-      return status === "active" && item.id !== selectedProduct.id;
+      return resolveStorefrontDisplayStatus(item) === "active" && item.id !== selectedProduct.id;
     });
     if (!activeListings.length) return [];
     const preferredCategory =
@@ -862,8 +994,52 @@ export default function StorefrontListing() {
   }, [products, searchQuery, selectedProduct]);
 
   const isListingOwner = selectedProduct?.seller.userId === user?.id;
-  const listingStatus = String(selectedProduct?.status || "active").toLowerCase();
+  const sellerVerificationSource = isListingOwner
+    ? selfVerification ?? sellerVerification
+    : sellerVerification;
+  const sellerHasPayoutMethod = Boolean(
+    sellerVerificationSource?.payoutEmail?.trim() ||
+      sellerVerificationSource?.paypalMerchantIdInPayPal?.trim()
+  );
+  const sellerPayoutVerified =
+    normalizeStatus(sellerVerificationSource?.sellerPayoutStatus) === "verified";
+  const sellerVerificationItems = useMemo(
+    () =>
+      buildSellerVerification(
+        sellerVerificationSource,
+        isListingOwner ? user?.ageVerified === true : undefined,
+        sellerHasPayoutMethod
+      ),
+    [isListingOwner, sellerHasPayoutMethod, sellerVerificationSource, user?.ageVerified]
+  );
+  const sellerVerificationActionLabel = user?.ageVerified ? "Continue verification" : "Verify age";
+  const sellerVerificationHint = !user?.ageVerified
+    ? "Age verification is required to keep your seller account active. Verified sellers display a badge on their listings."
+    : sellerPayoutVerified
+    ? "Age verification is complete and your payout setup is verified."
+    : sellerHasPayoutMethod
+    ? "Age verification is complete. Your payout method is saved and awaiting verification."
+    : "Age verification is complete. Add a payout method to finish seller verification.";
+  const listingStatus = resolveStorefrontDisplayStatus(selectedProduct);
+  const isListingSold = listingStatus === "sold";
+  const isListingPending = listingStatus === "pending";
   const isListingActive = listingStatus === "active";
+  const selectedListingNumericId =
+    selectedProduct?.rawId ?? Number(selectedProduct?.id ?? Number.NaN);
+  const currentCartOrder = useMemo(
+    () =>
+      cartOrders.find(
+        (order) =>
+          Number.isFinite(selectedListingNumericId) &&
+          order.listingId === selectedListingNumericId &&
+          (order.status === "cart" || order.status === "pending")
+      ) || null,
+    [cartOrders, selectedListingNumericId]
+  );
+  const currentCartStatus = String(currentCartOrder?.status || "").toLowerCase();
+  const isReservedByCurrentUser =
+    currentCartStatus === "cart" || currentCartStatus === "pending";
+  const isReservedByOtherBuyer = isListingPending && !isReservedByCurrentUser;
   const canMakeOffer = Boolean(
     selectedProduct && user?.id && !isListingOwner && isListingActive
   );
@@ -892,6 +1068,7 @@ export default function StorefrontListing() {
     captureGuardRef.current = captureKey;
     if (status === "cancel") {
       setCheckoutStatus("Payment cancelled.");
+      void loadCartOrders();
       return;
     }
     if (status !== "success") return;
@@ -903,12 +1080,22 @@ export default function StorefrontListing() {
       await api.post(`/marketplace-orders/paypal/${orderId}/capture`, {}, captureConfig);
       setCheckoutStatus("Payment captured. Your order is confirmed.");
       void loadListings();
+      void loadCartOrders();
     } catch (err) {
       setCheckoutError(
         getApiErrorMessage(err, "Unable to capture PayPal payment.")
       );
+      void loadListings();
+      void loadCartOrders();
     }
-  }, [loadListings, location.search, resolvePayPalMockCode]);
+  }, [loadCartOrders, loadListings, location.search, resolvePayPalMockCode]);
+
+  const hasPendingPayPalReturn = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    const status = params.get("paypal");
+    const orderId = params.get("orderId");
+    return Boolean(orderId && (status === "success" || status === "cancel"));
+  }, [location.search]);
 
   useEffect(() => {
     if (listingId) {
@@ -934,7 +1121,10 @@ export default function StorefrontListing() {
   useEffect(() => {
     void loadListings();
     void loadSelfVerification();
-  }, [loadListings, loadSelfVerification]);
+    if (!hasPendingPayPalReturn) {
+      void loadCartOrders();
+    }
+  }, [hasPendingPayPalReturn, loadCartOrders, loadListings, loadSelfVerification]);
 
   useEffect(() => {
     void capturePayPalReturn();
@@ -962,6 +1152,7 @@ export default function StorefrontListing() {
   useEffect(() => {
     setCheckoutError(null);
     setCheckoutStatus(null);
+    setCartError(null);
   }, [selectedProduct?.id]);
 
   useEffect(() => {
@@ -1072,9 +1263,64 @@ export default function StorefrontListing() {
     return null;
   };
 
+  const handleAddToCart = useCallback(async () => {
+    if (!selectedProduct) return;
+    if (isReservedByOtherBuyer || isListingSold) {
+      setCheckoutError("This listing is not available for your cart.");
+      return;
+    }
+    const listingId = resolveListingIdPayload(selectedProduct);
+    if (!listingId) {
+      setCheckoutError("Listing is not ready for checkout.");
+      return;
+    }
+    setCheckoutError(null);
+    setCheckoutStatus(null);
+    setCheckoutLoading(true);
+    try {
+      await api.post("/marketplace-orders/cart", {
+        listingId,
+        offerId: acceptedOffer?.id,
+      });
+      setCheckoutStatus("Added to cart. This listing is now reserved for you.");
+      await Promise.all([loadCartOrders(), loadListings()]);
+    } catch (err) {
+      setCheckoutError(getApiErrorMessage(err, "Unable to add this item to your cart."));
+    } finally {
+      setCheckoutLoading(false);
+    }
+  }, [
+    acceptedOffer?.id,
+    isListingSold,
+    isReservedByOtherBuyer,
+    loadCartOrders,
+    loadListings,
+    selectedProduct,
+  ]);
+
+  const handleRemoveFromCart = useCallback(async () => {
+    if (!currentCartOrder?.id) return;
+    setCheckoutError(null);
+    setCheckoutStatus(null);
+    setCheckoutLoading(true);
+    try {
+      await api.delete(`/marketplace-orders/cart/${currentCartOrder.id}`);
+      setCheckoutStatus("Removed from cart.");
+      await Promise.all([loadCartOrders(), loadListings()]);
+    } catch (err) {
+      setCheckoutError(getApiErrorMessage(err, "Unable to remove this cart item."));
+    } finally {
+      setCheckoutLoading(false);
+    }
+  }, [currentCartOrder?.id, loadCartOrders, loadListings]);
+
   const handlePayWithPaypal = useCallback(async () => {
     if (!selectedProduct) return;
-    if (!isListingActive) {
+    if (!isReservedByCurrentUser) {
+      setCheckoutError("Add this listing to your cart before starting checkout.");
+      return;
+    }
+    if (isListingSold) {
       setCheckoutError("Listing is not available for checkout.");
       return;
     }
@@ -1088,12 +1334,15 @@ export default function StorefrontListing() {
         return;
       }
       const createMockCode = resolvePayPalMockCode("create");
+      const captureMockCode = resolvePayPalMockCode("capture");
       const createConfig = createMockCode
         ? { headers: { "X-PayPal-Mock-Code": createMockCode } }
         : undefined;
       const res = await api.post("/marketplace-orders/paypal", {
         listingId,
-        offerId: acceptedOffer?.id,
+        cartOrderId: currentCartOrder?.id,
+        offerId: currentCartOrder?.offerId ?? acceptedOffer?.id,
+        paypalMockCaptureCode: captureMockCode || undefined,
         returnOrigin:
           typeof window !== "undefined" ? window.location.origin : undefined,
       }, createConfig);
@@ -1101,6 +1350,7 @@ export default function StorefrontListing() {
       if (approvalUrl && typeof window !== "undefined") {
         window.open(approvalUrl, "_blank", "noopener,noreferrer");
         setCheckoutStatus("Approve the payment in PayPal to continue.");
+        await Promise.all([loadCartOrders(), loadListings()]);
       } else {
         setCheckoutError("PayPal approval link not available.");
       }
@@ -1111,7 +1361,17 @@ export default function StorefrontListing() {
     } finally {
       setCheckoutLoading(false);
     }
-  }, [acceptedOffer, isListingActive, resolvePayPalMockCode, selectedProduct]);
+  }, [
+    acceptedOffer,
+    currentCartOrder?.id,
+    currentCartOrder?.offerId,
+    isListingSold,
+    isReservedByCurrentUser,
+    loadCartOrders,
+    loadListings,
+    resolvePayPalMockCode,
+    selectedProduct,
+  ]);
 
   const effectivePrice = selectedProduct
     ? acceptedOffer
@@ -1414,11 +1674,25 @@ export default function StorefrontListing() {
     setMessageDraft(next);
   };
 
+  const handleOpenStorefrontMessages = useCallback(() => {
+    navigate("/storefront/seller?messages=1");
+  }, [navigate]);
+
+  const handleCartModalUpdated = useCallback(() => {
+    void Promise.all([loadCartOrders(), loadListings()]);
+  }, [loadCartOrders, loadListings]);
+
   const pageBackground = getBackgroundStyle("storefront") || getBackgroundStyle("dashboard");
 
   return (
     <div className="dashboard-shell storefront-shell" style={pageBackground}>
-      <Sidebar active="storefront" />
+      <Sidebar
+        active="storefront"
+        onMobileMessagesOpen={handleOpenStorefrontMessages}
+        mobileMessagesFallbackText="Storefront buyer messages"
+        mobileMessagesEmptyTitle="No new storefront messages"
+        mobileMessagesEmptySubtitle="Open storefront inbox"
+      />
 
       <div className="main-content storefront-page storefront-detail-page">
         <div className="storefront-detail-header">
@@ -1438,11 +1712,20 @@ export default function StorefrontListing() {
               <span className="storefront-price-pill">
                 {formatPrice(selectedProduct.price)}
               </span>
-              {String(selectedProduct.status || "active").toLowerCase() === "sold" && (
+              {isListingSold && (
                 <span className="storefront-status-pill sold">Sold</span>
               )}
-              {String(selectedProduct.status || "active").toLowerCase() === "pending" && (
+              {isListingPending && (
                 <span className="storefront-status-pill pending">Pending</span>
+              )}
+              {!isListingOwner && (
+                <button
+                  className="btn ghost small"
+                  type="button"
+                  onClick={() => setCartModalOpen(true)}
+                >
+                  View cart
+                </button>
               )}
               {canMakeOffer && (
                 <button
@@ -1499,13 +1782,18 @@ export default function StorefrontListing() {
                     </div>
                     <div>
                       <span>Stock</span>
-                      <strong>{selectedProduct.stock} available</strong>
+                      <strong>
+                        {isListingSold
+                          ? "Sold"
+                          : isReservedByCurrentUser
+                          ? "Reserved in your cart"
+                          : isListingPending
+                          ? "Pending"
+                          : `${selectedProduct.stock} available`}
+                      </strong>
                     </div>
                   </div>
                   <div className="storefront-gallery">
-                    {String(selectedProduct.status || "active").toLowerCase() === "sold" && (
-                      <div className="storefront-sold-banner">Sold</div>
-                    )}
                     {selectedProduct.images.length === 0 && (
                       <div className="storefront-gallery-empty">
                         No additional images uploaded yet.
@@ -1532,13 +1820,22 @@ export default function StorefrontListing() {
                       {selectedProduct.seller.badges.map((badge) => (
                         <span key={badge}>{badge}</span>
                       ))}
+                      {selectedProduct.seller.verifiedLevel === "verified" && (
+                        <span
+                          className="storefront-verified-icon storefront-seller-verified-icon"
+                          aria-label="Verified seller"
+                          title="Verified seller"
+                        >
+                          ✓
+                        </span>
+                      )}
                     </div>
                   </div>
                 </>
               )}
             </div>
             {selectedProduct &&
-              String(selectedProduct.status || "active").toLowerCase() === "sold" &&
+              isListingSold &&
               similarListings.length > 0 && (
                 <div className="storefront-panel storefront-similar">
                   <div className="storefront-panel-header">
@@ -1649,14 +1946,58 @@ export default function StorefrontListing() {
               {checkoutStatus && (
                 <p className="storefront-status success">{checkoutStatus}</p>
               )}
-              {!isListingOwner && (
+              {cartLoading && (
+                <p className="storefront-field-hint">Refreshing cart reservation...</p>
+              )}
+              {cartError && <p className="storefront-field-hint">{cartError}</p>}
+              {!isListingOwner && isReservedByCurrentUser && (
+                <p className="storefront-field-hint">
+                  This listing is reserved in your cart. No other buyer can authorize a
+                  purchase until you remove it or complete checkout.
+                </p>
+              )}
+              {!isListingOwner && isReservedByOtherBuyer && (
+                <p className="storefront-field-hint">
+                  Another buyer already has this listing reserved.
+                </p>
+              )}
+              {!isListingOwner && !isReservedByCurrentUser && !isListingSold && (
                 <button
                   className="btn primary"
                   type="button"
-                  disabled={checkoutLoading || !selectedProduct}
-                  onClick={handlePayWithPaypal}
+                  disabled={checkoutLoading || !selectedProduct || isReservedByOtherBuyer}
+                  onClick={handleAddToCart}
                 >
-                  {checkoutLoading ? "Connecting..." : "Pay with PayPal"}
+                  {checkoutLoading ? "Saving..." : "Add to cart"}
+                </button>
+              )}
+              {!isListingOwner && isReservedByCurrentUser && (
+                <div className="storefront-detail-checkout-actions">
+                  <button
+                    className="btn primary"
+                    type="button"
+                    disabled={checkoutLoading || !selectedProduct}
+                    onClick={handlePayWithPaypal}
+                  >
+                    {checkoutLoading
+                      ? "Connecting..."
+                      : currentCartStatus === "pending"
+                      ? "Continue PayPal checkout"
+                      : "Checkout with PayPal"}
+                  </button>
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    disabled={checkoutLoading}
+                    onClick={handleRemoveFromCart}
+                  >
+                    Remove from cart
+                  </button>
+                </div>
+              )}
+              {!isListingOwner && isListingSold && (
+                <button className="btn ghost" type="button" disabled>
+                  Sold
                 </button>
               )}
               <a className="storefront-policy-link" href="/marketplace-policy">
@@ -2074,7 +2415,7 @@ export default function StorefrontListing() {
               {isListingOwner ? (
                 <>
                   <p className="storefront-field-hint">
-                    Verification is optional. Verified sellers display a badge on their listings.
+                    {sellerVerificationHint}
                   </p>
                   <button
                     className="btn ghost"
@@ -2082,7 +2423,7 @@ export default function StorefrontListing() {
                     disabled={verificationLoading}
                     onClick={handleRequestSellerVerification}
                   >
-                    {verificationLoading ? "Sending request..." : "Request verification"}
+                    {verificationLoading ? "Sending request..." : sellerVerificationActionLabel}
                   </button>
                 </>
               ) : (
@@ -2164,6 +2505,11 @@ export default function StorefrontListing() {
             </div>
           </div>
         )}
+        <StorefrontCartModal
+          open={cartModalOpen}
+          onClose={() => setCartModalOpen(false)}
+          onCartUpdated={handleCartModalUpdated}
+        />
       </div>
     </div>
   );

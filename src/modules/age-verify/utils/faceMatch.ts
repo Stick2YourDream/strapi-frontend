@@ -11,6 +11,11 @@ export type FaceMatchResult = {
   comparedCount: number;
 };
 
+type FaceDescriptor = {
+  points: number[];
+  ratios: number[];
+};
+
 type FaceMatchLogger = (event: string, payload?: Record<string, unknown>) => void;
 
 type ComputeFaceMatchOptions = {
@@ -102,6 +107,22 @@ const SIGNATURE_POINTS: number[] = [
   LANDMARK_INDEX.LEFT_CHEEK,
   LANDMARK_INDEX.RIGHT_CHEEK,
 ];
+const SIGNATURE_POINT_WEIGHTS = [
+  1.15,
+  1.15,
+  1.2,
+  1.2,
+  1.55,
+  1.25,
+  1.25,
+  1.05,
+  1.05,
+  1.35,
+  0.4,
+  0.65,
+  0.65,
+] as const;
+const SIGNATURE_TRIM_COUNT = 2;
 
 let landmarkerPromise: Promise<FaceLandmarker> | null = null;
 let landmarkerInstance: FaceLandmarker | null = null;
@@ -121,6 +142,11 @@ const nowMs = () =>
 
 const yieldToMainThread = () =>
   new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+
+const distance3 = (
+  a: { x: number; y: number; z: number },
+  b: { x: number; y: number; z: number }
+) => Math.hypot(a.x - b.x, a.y - b.y, (a.z - b.z) * 0.45);
 
 const toErrorMessage = (error: unknown) => {
   if (error instanceof Error) return error.message;
@@ -288,7 +314,73 @@ const downscaleImage = (image: TexImageSource) => {
   return canvas;
 };
 
-const buildSignature = (landmarks: Array<{ x: number; y: number; z: number }>) => {
+const rotatePoint = (x: number, y: number, angle: number) => {
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return {
+    x: x * cos - y * sin,
+    y: x * sin + y * cos,
+  };
+};
+
+const buildRatios = (
+  landmarks: Array<{ x: number; y: number; z: number }>,
+  scale: number
+) => {
+  const leftOuter = landmarks[LANDMARK_INDEX.LEFT_EYE_OUTER];
+  const rightOuter = landmarks[LANDMARK_INDEX.RIGHT_EYE_OUTER];
+  const leftInner = landmarks[LANDMARK_INDEX.LEFT_EYE_INNER];
+  const rightInner = landmarks[LANDMARK_INDEX.RIGHT_EYE_INNER];
+  const nose = landmarks[LANDMARK_INDEX.NOSE_TIP];
+  const mouthLeft = landmarks[LANDMARK_INDEX.MOUTH_LEFT];
+  const mouthRight = landmarks[LANDMARK_INDEX.MOUTH_RIGHT];
+  const mouthUpper = landmarks[LANDMARK_INDEX.MOUTH_UPPER];
+  const mouthLower = landmarks[LANDMARK_INDEX.MOUTH_LOWER];
+  const chin = landmarks[LANDMARK_INDEX.CHIN];
+  const leftCheek = landmarks[LANDMARK_INDEX.LEFT_CHEEK];
+  const rightCheek = landmarks[LANDMARK_INDEX.RIGHT_CHEEK];
+  if (
+    !leftOuter ||
+    !rightOuter ||
+    !leftInner ||
+    !rightInner ||
+    !nose ||
+    !mouthLeft ||
+    !mouthRight ||
+    !mouthUpper ||
+    !mouthLower ||
+    !chin ||
+    !leftCheek ||
+    !rightCheek
+  ) {
+    return null;
+  }
+  const eyeCenter = {
+    x: (leftOuter.x + rightOuter.x) / 2,
+    y: (leftOuter.y + rightOuter.y) / 2,
+    z: (leftOuter.z + rightOuter.z) / 2,
+  };
+  const mouthCenter = {
+    x: (mouthUpper.x + mouthLower.x) / 2,
+    y: (mouthUpper.y + mouthLower.y) / 2,
+    z: (mouthUpper.z + mouthLower.z) / 2,
+  };
+  return [
+    distance3(leftInner, rightInner) / scale,
+    distance3(nose, mouthUpper) / scale,
+    distance3(nose, mouthLower) / scale,
+    distance3(nose, chin) / scale,
+    distance3(mouthLeft, mouthRight) / scale,
+    distance3(leftOuter, mouthLeft) / scale,
+    distance3(rightOuter, mouthRight) / scale,
+    distance3(leftCheek, rightCheek) / scale,
+    distance3(eyeCenter, mouthCenter) / scale,
+  ];
+};
+
+const buildSignature = (
+  landmarks: Array<{ x: number; y: number; z: number }>
+): FaceDescriptor | null => {
   const leftEye = landmarks[LANDMARK_INDEX.LEFT_EYE_OUTER];
   const rightEye = landmarks[LANDMARK_INDEX.RIGHT_EYE_OUTER];
   if (!leftEye || !rightEye) return null;
@@ -299,29 +391,64 @@ const buildSignature = (landmarks: Array<{ x: number; y: number; z: number }>) =
     0.0001,
     Math.hypot(rightEye.x - leftEye.x, rightEye.y - leftEye.y)
   );
+  const rollAngle = -Math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x);
   const signature: number[] = [];
   for (const index of SIGNATURE_POINTS) {
     const point = landmarks[index];
     if (!point) return null;
+    const rotated = rotatePoint(point.x - centerX, point.y - centerY, rollAngle);
     signature.push(
-      (point.x - centerX) / scale,
-      (point.y - centerY) / scale,
-      (point.z - centerZ) / scale
+      rotated.x / scale,
+      rotated.y / scale,
+      ((point.z - centerZ) / scale) * 0.45
     );
   }
-  return signature;
+  const ratios = buildRatios(landmarks, scale);
+  if (!ratios) return null;
+  return { points: signature, ratios };
 };
 
-const signatureDistance = (a: number[], b: number[]) => {
+const weightedPointDistance = (a: number[], b: number[]) => {
   if (a.length !== b.length || a.length === 0) return Number.POSITIVE_INFINITY;
-  let sum = 0;
-  for (let i = 0; i < a.length; i += 3) {
+  const pointDistances: Array<{ dist: number; weight: number }> = [];
+  for (let i = 0, pointIndex = 0; i < a.length; i += 3, pointIndex += 1) {
     const dx = a[i] - b[i];
     const dy = a[i + 1] - b[i + 1];
     const dz = a[i + 2] - b[i + 2];
-    sum += Math.hypot(dx, dy, dz);
+    pointDistances.push({
+      dist: Math.hypot(dx, dy, dz),
+      weight: SIGNATURE_POINT_WEIGHTS[pointIndex] || 1,
+    });
   }
-  return sum / (a.length / 3);
+  pointDistances.sort((left, right) => right.dist - left.dist);
+  const trimmed = pointDistances.slice(
+    Math.min(SIGNATURE_TRIM_COUNT, Math.max(0, pointDistances.length - 6))
+  );
+  let weightedSum = 0;
+  let weightTotal = 0;
+  for (const entry of trimmed) {
+    weightedSum += entry.dist * entry.weight;
+    weightTotal += entry.weight;
+  }
+  return weightTotal > 0 ? weightedSum / weightTotal : Number.POSITIVE_INFINITY;
+};
+
+const ratioDistance = (a: number[], b: number[]) => {
+  if (a.length !== b.length || a.length === 0) return Number.POSITIVE_INFINITY;
+  let sum = 0;
+  for (let index = 0; index < a.length; index += 1) {
+    sum += Math.abs(a[index] - b[index]);
+  }
+  return sum / a.length;
+};
+
+const signatureDistance = (a: FaceDescriptor, b: FaceDescriptor) => {
+  const pointDistance = weightedPointDistance(a.points, b.points);
+  const proportionsDistance = ratioDistance(a.ratios, b.ratios);
+  if (!Number.isFinite(pointDistance) || !Number.isFinite(proportionsDistance)) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return pointDistance * 0.72 + proportionsDistance * 0.28;
 };
 
 const scoreFromDistance = (distance: number, maxDistance = DEFAULT_MAX_DISTANCE) => {
@@ -377,7 +504,7 @@ const extractSignature = async (
     log?.("extract-complete", {
       label,
       elapsedMs: Math.round(nowMs() - startedAt),
-      signaturePoints: signature ? signature.length / 3 : 0,
+      signaturePoints: signature ? signature.points.length / 3 : 0,
     });
     return signature;
   } finally {
@@ -440,7 +567,7 @@ export const computeFaceMatch = async (
     });
     return false;
   };
-  let idSignature: number[] | null = null;
+  let idSignature: FaceDescriptor | null = null;
   try {
     idSignature = await extractSignature(idFront, { label: "id-front", log });
   } catch (error) {
@@ -462,7 +589,7 @@ export const computeFaceMatch = async (
     await yieldToMainThread();
     const selfie = selfiePool[index];
     if (!selfie) continue;
-    let selfieSignature: number[] | null = null;
+    let selfieSignature: FaceDescriptor | null = null;
     try {
       selfieSignature = await extractSignature(selfie, {
         label: `selfie-${index + 1}`,

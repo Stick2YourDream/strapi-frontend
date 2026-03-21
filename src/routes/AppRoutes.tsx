@@ -46,6 +46,7 @@ const Apps = lazy(() => import("../pages/apps"));
 const Downloads = lazy(() => import("../pages/downloads"));
 const Forums = lazy(() => import("../pages/forums"));
 const Storefront = lazy(() => import("../pages/storefront"));
+const StorefrontCart = lazy(() => import("../pages/storefront-cart"));
 const StorefrontListing = lazy(() => import("../pages/storefront-listing"));
 const StorefrontSeller = lazy(loadStorefrontSellerRoute);
 const StorefrontPaymentMethods = lazy(() => import("../pages/storefront-payment-methods"));
@@ -242,6 +243,16 @@ export default function AppRoutes(): JSX.Element {
           <ProtectedRoute>
             {storefrontEnabled
               ? withRouteSuspense(<StorefrontListing />)
+              : <Navigate to="/dashboard" replace />}
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/storefront/cart"
+        element={
+          <ProtectedRoute>
+            {storefrontEnabled
+              ? withRouteSuspense(<StorefrontCart />)
               : <Navigate to="/dashboard" replace />}
           </ProtectedRoute>
         }

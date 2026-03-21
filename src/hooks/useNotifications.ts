@@ -375,6 +375,7 @@ export const useNotifications = (
   const birthdayTokensRef = useRef<string[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const initialLoadRef = useRef(true);
+  const hasPrimedCountsRef = useRef(false);
   const lastCountsRef = useRef<NotificationCounts | null>(null);
   const profileNameCacheRef = useRef<Record<number, string>>({});
   const lastSyncedReadStateRef = useRef<NotificationReadState | null>(null);
@@ -417,6 +418,7 @@ export const useNotifications = (
 
   useEffect(() => {
     initialLoadRef.current = true;
+    hasPrimedCountsRef.current = false;
     lastCountsRef.current = null;
   }, [userId]);
 
@@ -1114,7 +1116,7 @@ export const useNotifications = (
         }
       }
 
-      setCounts({
+      const nextCounts = {
         messages: messageCount,
         requests: pendingRequestCount,
         birthdays: birthdayCount,
@@ -1126,7 +1128,12 @@ export const useNotifications = (
         forums: forumCount,
         security: securityCount,
         marketplace: marketplaceCount,
-      });
+      };
+      if (!hasPrimedCountsRef.current) {
+        lastCountsRef.current = { ...nextCounts };
+        hasPrimedCountsRef.current = true;
+      }
+      setCounts(nextCounts);
       setPreviews({
         messages: messagePreview,
         requests: requestPreviews,

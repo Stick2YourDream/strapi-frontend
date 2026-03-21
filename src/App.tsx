@@ -1,8 +1,13 @@
 // src/App.tsx
 import { lazy, Suspense, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { BrowserRouter } from "react-router-dom";
 import AppRoutes from "./routes/AppRoutes";
 import { useAuth } from "./context/AuthContext";
+import "./css/maintenance-modal.css";
+
+// Set this to false or remove the modal component when maintenance is over.
+const SHOW_MAINTENANCE_MODAL = true;
 
 const ChatProvider = lazy(() =>
   import("./context/ChatContext").then((mod) => ({ default: mod.ChatProvider }))
@@ -58,7 +63,33 @@ function AppChrome(): JSX.Element {
       </Suspense>
     </>
   );
-  return <RuntimeProviders isAuthed={isAuthed}>{chrome}</RuntimeProviders>;
+  return (
+    <>
+      <RuntimeProviders isAuthed={isAuthed}>{chrome}</RuntimeProviders>
+      <MaintenanceModal />
+    </>
+  );
+}
+
+function MaintenanceModal(): JSX.Element | null {
+  if (!SHOW_MAINTENANCE_MODAL || typeof document === "undefined") {
+    return null;
+  }
+
+  return createPortal(
+    <div
+      className="maintenance-modal-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="maintenance-modal-title"
+    >
+      <div className="maintenance-modal-card">
+        <span className="maintenance-modal-eyebrow">Maintenance</span>
+        <h1 id="maintenance-modal-title">Website is currently down for maintenance</h1>
+      </div>
+    </div>,
+    document.body
+  );
 }
 
 export default function App() {

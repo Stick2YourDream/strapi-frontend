@@ -80,6 +80,7 @@ export type NotificationSettings = {
   friendsNotificationsEnabled?: boolean;
   groupsNotificationsEnabled?: boolean;
   forumsNotificationsEnabled?: boolean;
+  storefrontNotificationsEnabled?: boolean;
 };
 
 export type NotificationReadState = {

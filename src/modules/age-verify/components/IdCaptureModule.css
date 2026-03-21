@@ -67,6 +67,114 @@
   z-index: 4;
 }
 
+.id-guide-grid {
+  position: absolute;
+  overflow: hidden;
+  pointer-events: none;
+  --guide-grid-line-rgb: 125 211 252;
+  --guide-grid-line-opacity: 0.18;
+  --guide-scan-rgb: 110 231 255;
+  --guide-scan-soft-opacity: 0.04;
+  --guide-scan-peak-opacity: 0.12;
+  --guide-scan-duration: 2.6s;
+}
+
+.id-guide-front .id-guide-grid {
+  left: 10%;
+  top: 20%;
+  width: 80%;
+  height: 55%;
+  border-radius: 18px;
+}
+
+.id-guide-barcode .id-guide-grid {
+  left: 9%;
+  top: 60%;
+  width: 82%;
+  height: 24%;
+  border-radius: 16px;
+}
+
+.id-guide-grid::before,
+.id-guide-grid::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.id-guide-grid::before {
+  background-image:
+    linear-gradient(
+      to right,
+      rgb(var(--guide-grid-line-rgb) / var(--guide-grid-line-opacity)) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      to bottom,
+      rgb(var(--guide-grid-line-rgb) / var(--guide-grid-line-opacity)) 1px,
+      transparent 1px
+    );
+  background-size: calc(100% / 6) calc(100% / 6);
+  border-radius: inherit;
+  box-shadow: inset 0 0 26px rgba(15, 23, 42, 0.08);
+}
+
+.id-guide-grid::after {
+  inset: -45% 0;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    transparent 28%,
+    rgb(var(--guide-scan-rgb) / var(--guide-scan-soft-opacity)) 42%,
+    rgb(var(--guide-scan-rgb) / var(--guide-scan-peak-opacity)) 50%,
+    rgb(var(--guide-scan-rgb) / var(--guide-scan-soft-opacity)) 58%,
+    transparent 72%,
+    transparent 100%
+  );
+  animation: id-guide-scan-sweep var(--guide-scan-duration) linear infinite;
+}
+
+.id-guide-barcode .id-guide-grid::before {
+  --guide-grid-line-rgb: 74 222 128;
+  --guide-grid-line-opacity: 0.12;
+  --guide-scan-rgb: 34 197 94;
+  --guide-scan-soft-opacity: 0.03;
+  --guide-scan-peak-opacity: 0.09;
+  background-image:
+    linear-gradient(
+      to right,
+      rgb(var(--guide-grid-line-rgb) / var(--guide-grid-line-opacity)) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      to bottom,
+      rgb(var(--guide-grid-line-rgb) / var(--guide-grid-line-opacity)) 1px,
+      transparent 1px
+    );
+}
+
+.id-guide-barcode .id-guide-grid::after {
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    transparent 30%,
+    rgb(var(--guide-scan-rgb) / var(--guide-scan-soft-opacity)) 44%,
+    rgb(var(--guide-scan-rgb) / var(--guide-scan-peak-opacity)) 50%,
+    rgb(var(--guide-scan-rgb) / var(--guide-scan-soft-opacity)) 56%,
+    transparent 70%,
+    transparent 100%
+  );
+}
+
+@keyframes id-guide-scan-sweep {
+  0% {
+    transform: translateY(-55%);
+  }
+  100% {
+    transform: translateY(55%);
+  }
+}
+
 .id-guide-front::before {
   content: "";
   position: absolute;
@@ -159,12 +267,54 @@
 
 .id-status {
   position: absolute;
-  bottom: 118px;
-  left: 12px;
-  right: 12px;
-  background: rgba(15, 23, 42, 0.55);
-  border: 1px solid rgba(148, 163, 184, 0.35);
+  left: 50%;
+  bottom: 124px;
+  transform: translateX(-50%);
+  width: min(560px, calc(100% - 24px));
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(11, 18, 32, 0.74);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  box-shadow: 0 12px 28px rgba(2, 6, 23, 0.42);
+  backdrop-filter: blur(10px);
+  display: grid;
+  gap: 4px;
+  z-index: 6;
   font-size: 14px;
+}
+
+.id-status strong {
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.id-status span {
+  color: rgba(226, 232, 240, 0.92);
+  line-height: 1.35;
+}
+
+.id-status--neutral {
+  border-color: rgba(96, 165, 250, 0.34);
+}
+
+.id-status--warning {
+  border-color: rgba(251, 191, 36, 0.42);
+}
+
+.id-status--success {
+  border-color: rgba(34, 197, 94, 0.44);
+}
+
+.id-status--success strong {
+  color: rgba(134, 239, 172, 0.98);
+}
+
+.id-status--warning strong {
+  color: rgba(253, 224, 71, 0.98);
+}
+
+.id-status--neutral strong {
+  color: rgba(191, 219, 254, 0.98);
 }
 
 .id-action-bar {
@@ -223,8 +373,21 @@
 }
 
 @media (max-width: 700px) {
+  .id-guide-grid {
+    --guide-grid-line-opacity: 0.1;
+    --guide-scan-soft-opacity: 0.025;
+    --guide-scan-peak-opacity: 0.07;
+    --guide-scan-duration: 3.5s;
+  }
+
+  .id-guide-barcode .id-guide-grid {
+    --guide-grid-line-opacity: 0.08;
+    --guide-scan-soft-opacity: 0.02;
+    --guide-scan-peak-opacity: 0.06;
+  }
+
   .id-status {
-    bottom: 132px;
+    bottom: 138px;
   }
 
   .id-action-bar {
@@ -249,5 +412,20 @@
     width: 56px;
     height: 56px;
     font-size: 28px;
+  }
+}
+
+@media (pointer: coarse) and (max-width: 900px) {
+  .id-guide-grid {
+    --guide-grid-line-opacity: 0.09;
+    --guide-scan-soft-opacity: 0.02;
+    --guide-scan-peak-opacity: 0.06;
+    --guide-scan-duration: 3.8s;
+  }
+
+  .id-guide-barcode .id-guide-grid {
+    --guide-grid-line-opacity: 0.07;
+    --guide-scan-soft-opacity: 0.018;
+    --guide-scan-peak-opacity: 0.05;
   }
 }

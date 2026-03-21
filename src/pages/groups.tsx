@@ -833,7 +833,7 @@ export default function Groups() {
           onClick={clearDiscoverFilters}
           disabled={!activeFilters}
         >
-          Clear filters
+          Reset filters
         </button>
       </div>
     </section>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "../css/storefront-payment-methods.css";
 import Sidebar from "../components/Sidebar";
@@ -7,12 +7,13 @@ import { usePageMeta } from "../hooks/usePageMeta";
 import { useUserPreferences } from "../context/UserPreferencesContext";
 
 const PAYMENT_METHOD = {
-  id: "paypal",
   name: "PayPal",
-  icon: "PP",
   helper: "Connect your PayPal business account for payouts.",
   hint: "We'll redirect you to PayPal to connect and confirm your account.",
 } as const;
+
+const PAYPAL_DISCONNECT_DISCLAIMER =
+  "Disconnecting your PayPal account will prevent you from offering PayPal services and products on your website. Do you wish to continue?";
 
 const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
 
@@ -47,12 +48,121 @@ const normalizePayPalMerchantId = (value: unknown) => {
   return direct;
 };
 
+const isAttentionMessage = (value: string | null) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .startsWith("attention:");
+
+const isTechnicalStatusMessage = (value: string | null) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized || isAttentionMessage(value)) return false;
+  return (
+    normalized.includes("authorization_error") ||
+    normalized.includes("not authorized") ||
+    normalized.includes("merchant integration") ||
+    normalized.includes("debug_id")
+  );
+};
+
+const isPendingValidationMessage = (value: string | null) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .includes("account status validation");
+
+const isPaymentsReceivableAttention = (value: string | null) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .includes("cannot receive payments due to restriction");
+
+const isPrimaryEmailAttention = (value: string | null) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .includes("confirm your email address");
+
+const PAYPAL_MESSAGE_URL_PATTERN =
+  /https:\/\/www\.paypal\.com(?:\/businessprofile\/settings)?/g;
+
+const renderLinkedPayPalMessage = (message: string | null) => {
+  const source = String(message || "");
+  if (!source) return null;
+
+  const matches = Array.from(source.matchAll(PAYPAL_MESSAGE_URL_PATTERN));
+  if (!matches.length) return source;
+
+  const segments: Array<string | JSX.Element> = [];
+  let cursor = 0;
+
+  matches.forEach((match, index) => {
+    const url = match[0];
+    const start = match.index ?? 0;
+    if (start > cursor) {
+      segments.push(source.slice(cursor, start));
+    }
+    segments.push(
+      <a
+        key={`${url}-${index}`}
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+      >
+        {url.replace(/^https?:\/\//, "")}
+      </a>
+    );
+    cursor = start + url.length;
+  });
+
+  if (cursor < source.length) {
+    segments.push(source.slice(cursor));
+  }
+
+  return segments;
+};
+
+const PayPalWordmark = () => (
+  <svg
+    className="storefront-payment-wordmark"
+    viewBox="0 0 122 32"
+    role="img"
+    aria-label="PayPal"
+  >
+    <rect x="0" y="0" width="122" height="32" rx="10" fill="#ffffff" />
+    <path
+      d="M18.4 6.5h7.3c4 0 6.3 2 6.3 5.2 0 3.8-2.8 6.3-7.2 6.3h-2.5l-1 6H17l3.6-17.5Zm5.9 8.1c2.2 0 3.5-1 3.5-2.6 0-1.3-.9-2-2.8-2h-2.6l-1 4.6h3Z"
+      fill="#003087"
+    />
+    <path
+      d="M24.6 8.8h5.9c3.5 0 5.5 1.7 5.5 4.5 0 3.5-2.6 5.8-6.5 5.8h-2.2l-.9 4.9h-3.7l2.9-15.2Zm4.8 7c2 0 3.1-.9 3.1-2.3 0-1.1-.8-1.7-2.5-1.7h-2l-.8 4h2.2Z"
+      fill="#009cde"
+      opacity="0.9"
+    />
+    <text
+      x="42"
+      y="21.5"
+      fontFamily="Arial, Helvetica, sans-serif"
+      fontSize="17"
+      fontWeight="700"
+      letterSpacing="-0.2"
+    >
+      <tspan fill="#003087">Pay</tspan>
+      <tspan fill="#009cde">Pal</tspan>
+    </text>
+  </svg>
+);
+
 export default function StorefrontPaymentMethods(): JSX.Element {
   const { getBackgroundStyle } = useUserPreferences();
   const navigate = useNavigate();
   const [savedProvider, setSavedProvider] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [paypalMerchantId, setPaypalMerchantId] = useState("");
+  const [paypalDirectConnected, setPaypalDirectConnected] = useState(false);
+  const [paypalConsentStatus, setPaypalConsentStatus] = useState(false);
+  const [paypalPermissionsGranted, setPaypalPermissionsGranted] = useState(false);
+  const [paypalEmailConfirmed, setPaypalEmailConfirmed] = useState(false);
   const [paypalAccountStatus, setPaypalAccountStatus] = useState<string | null>(null);
   const [paypalReturnMessage, setPaypalReturnMessage] = useState<string | null>(null);
   const [paypalStatus, setPaypalStatus] = useState<
@@ -66,6 +176,11 @@ export default function StorefrontPaymentMethods(): JSX.Element {
   const [savingPayout, setSavingPayout] = useState(false);
   const [payoutNotice, setPayoutNotice] = useState<string | null>(null);
   const [payoutError, setPayoutError] = useState<string | null>(null);
+  const [disconnectConfirmOpen, setDisconnectConfirmOpen] = useState(false);
+
+  const handleOpenStorefrontMessages = useCallback(() => {
+    navigate("/storefront/seller?messages=1");
+  }, [navigate]);
 
   usePageMeta({
     title: "Payment Methods | Your Social Place",
@@ -93,8 +208,11 @@ export default function StorefrontPaymentMethods(): JSX.Element {
           "paypalPermissionsGranted",
           "paypal_permissions_granted",
         ]);
+        const emailConfirmed = getFlag(entry, ["paypalEmailConfirmed", "paypal_email_confirmed"]);
         const accountStatus = getText(entry, ["paypalAccountStatus", "paypal_account_status"]);
         const returnMessage = getText(entry, ["paypalReturnMessage", "paypal_return_message"]);
+        const directConnected =
+          Boolean(merchantId) && consentStatus && permissionsGranted && emailConfirmed;
         if (!mounted) return;
 
         if (payoutProvider) {
@@ -104,13 +222,27 @@ export default function StorefrontPaymentMethods(): JSX.Element {
         if (merchantId) {
           setPaypalMerchantId(merchantId);
           setMerchantIdInput(merchantId);
-          setPaypalStatus("connected");
+          setPaypalConsentStatus(consentStatus);
+          setPaypalPermissionsGranted(permissionsGranted);
+          setPaypalEmailConfirmed(emailConfirmed);
+          setPaypalDirectConnected(directConnected);
+          setPaypalStatus(directConnected ? "connected" : returnMessage ? "error" : "idle");
           setSavedProvider("paypal");
+        } else {
+          setPaypalMerchantId("");
+          setMerchantIdInput("");
+          setPaypalConsentStatus(false);
+          setPaypalPermissionsGranted(false);
+          setPaypalEmailConfirmed(false);
+          setPaypalDirectConnected(false);
+          setPaypalAccountStatus(null);
+          setPaypalReturnMessage(null);
+          setPaypalStatus("idle");
         }
         setPayoutEmailInput(payoutEmail);
 
-        if (accountStatus) setPaypalAccountStatus(accountStatus);
-        if (returnMessage) setPaypalReturnMessage(returnMessage);
+        setPaypalAccountStatus(merchantId ? accountStatus || null : null);
+        setPaypalReturnMessage(merchantId ? returnMessage || null : null);
 
         if (!merchantId && (consentStatus || permissionsGranted)) {
           setPaypalStatus("idle");
@@ -162,22 +294,41 @@ export default function StorefrontPaymentMethods(): JSX.Element {
           getText(entry, ["paypalMerchantIdInPayPal", "paypal_merchant_id_in_pay_pal"]) ||
             String(merchantIdInPayPal || "")
         );
+        const consentStatus = getFlag(entry, ["paypalConsentStatus", "paypal_consent_status"]);
+        const permissionsGranted = getFlag(entry, [
+          "paypalPermissionsGranted",
+          "paypal_permissions_granted",
+        ]);
+        const emailConfirmed = getFlag(entry, ["paypalEmailConfirmed", "paypal_email_confirmed"]);
+        const directConnected =
+          Boolean(merchant) && consentStatus && permissionsGranted && emailConfirmed;
         const payoutEmail = getText(entry, ["payoutEmail", "payout_email"]);
+        const accountStatus = getText(entry, ["paypalAccountStatus", "paypal_account_status"]);
+        const returnMessage = getText(entry, ["paypalReturnMessage", "paypal_return_message"]);
         if (merchant) {
           setPaypalMerchantId(merchant);
           setMerchantIdInput(merchant);
-          setPaypalStatus("connected");
+          setPaypalConsentStatus(consentStatus);
+          setPaypalPermissionsGranted(permissionsGranted);
+          setPaypalEmailConfirmed(emailConfirmed);
+          setPaypalDirectConnected(directConnected);
+          setPaypalStatus(directConnected ? "connected" : "error");
           setSavedProvider("paypal");
-          setPaypalNotice("PayPal connected successfully.");
+          setPaypalNotice(
+            directConnected
+              ? "PayPal connected successfully."
+              : returnMessage
+                ? null
+                : "PayPal merchant ID saved, but partner permissions are still pending."
+          );
         } else {
+          setPaypalDirectConnected(false);
           setPaypalStatus("error");
           setPaypalNotice(null);
           setPaypalError("PayPal connection was not completed.");
         }
-        const accountStatus = getText(entry, ["paypalAccountStatus", "paypal_account_status"]);
-        const returnMessage = getText(entry, ["paypalReturnMessage", "paypal_return_message"]);
-        if (accountStatus) setPaypalAccountStatus(accountStatus);
-        if (returnMessage) setPaypalReturnMessage(returnMessage);
+        setPaypalAccountStatus(accountStatus || null);
+        setPaypalReturnMessage(returnMessage || null);
         if (payoutEmail) setPayoutEmailInput(payoutEmail);
       })
       .catch(() => {
@@ -268,13 +419,29 @@ export default function StorefrontPaymentMethods(): JSX.Element {
         normalizePayPalMerchantId(
           getText(entry, ["paypalMerchantIdInPayPal", "paypal_merchant_id_in_pay_pal"])
         ) || merchantId;
+      const consentStatus = getFlag(entry, ["paypalConsentStatus", "paypal_consent_status"]);
+      const permissionsGranted = getFlag(entry, [
+        "paypalPermissionsGranted",
+        "paypal_permissions_granted",
+      ]);
+      const emailConfirmed = getFlag(entry, ["paypalEmailConfirmed", "paypal_email_confirmed"]);
+      const directConnected =
+        Boolean(savedMerchantId) && consentStatus && permissionsGranted && emailConfirmed;
 
       setSavedProvider("paypal");
       setPayoutEmailInput(savedPayoutEmail);
       setPaypalMerchantId(savedMerchantId);
       setMerchantIdInput(savedMerchantId);
-      setPaypalStatus(savedMerchantId ? "connected" : "idle");
-      setPayoutNotice("Payout method saved.");
+      setPaypalConsentStatus(consentStatus);
+      setPaypalPermissionsGranted(permissionsGranted);
+      setPaypalEmailConfirmed(emailConfirmed);
+      setPaypalDirectConnected(directConnected);
+      setPaypalStatus(directConnected ? "connected" : "idle");
+      setPayoutNotice(
+        savedMerchantId && !directConnected
+          ? "Payout method saved. Complete PayPal Connect to enable split payouts."
+          : "Payout method saved."
+      );
     } catch (err) {
       const apiMessage =
         (err as any)?.response?.data?.error?.message ||
@@ -285,32 +452,37 @@ export default function StorefrontPaymentMethods(): JSX.Element {
     }
   };
 
+  const handleRequestClearMerchantId = () => {
+    if (savingPayout || !merchantIdInput.trim()) return;
+    setPayoutError(null);
+    setPayoutNotice(null);
+    setDisconnectConfirmOpen(true);
+  };
+
   const handleClearMerchantId = async () => {
     if (savingPayout) return;
-    const payoutEmail = payoutEmailInput.trim().toLowerCase();
-    if (!payoutEmail) {
-      setPayoutError("Payout email is required.");
-      return;
-    }
     setPayoutError(null);
     setPayoutNotice(null);
     setSavingPayout(true);
     try {
-      const res = await api.put("/marketplace-verifications/me", {
+      await api.put("/marketplace-verifications/me", {
         data: {
           payoutProvider: "paypal",
-          payoutEmail,
+          payoutEmail: null,
           paypalMerchantIdInPayPal: null,
         },
       });
-      const entry = normalize(res.data?.data ?? null);
+      setPayoutEmailInput("");
       setMerchantIdInput("");
       setPaypalMerchantId("");
+      setPaypalConsentStatus(false);
+      setPaypalPermissionsGranted(false);
+      setPaypalEmailConfirmed(false);
+      setPaypalDirectConnected(false);
       setPaypalStatus("idle");
-      const savedPayoutEmail = getText(entry, ["payoutEmail", "payout_email"]);
-      if (savedPayoutEmail) {
-        setPayoutEmailInput(savedPayoutEmail);
-      }
+      setDisconnectConfirmOpen(false);
+      setPaypalAccountStatus(null);
+      setPaypalReturnMessage(null);
       setPayoutNotice("PayPal account unlinked. You can reconnect anytime.");
     } catch (err) {
       const apiMessage =
@@ -323,7 +495,24 @@ export default function StorefrontPaymentMethods(): JSX.Element {
   };
 
   const pageBackground = getBackgroundStyle("storefront") || getBackgroundStyle("dashboard");
-  const paypalConnected = Boolean(paypalMerchantId);
+  const paypalConnected = paypalDirectConnected;
+  const paypalSaved = Boolean(paypalMerchantId || savedProvider === "paypal");
+  const paypalTechnicalStatusBlocked =
+    paypalConnected && isTechnicalStatusMessage(paypalReturnMessage);
+  const visiblePaypalReturnMessage =
+    !paypalMerchantId || paypalTechnicalStatusBlocked ? null : paypalReturnMessage;
+  const canUnlinkPaypal = Boolean(merchantIdInput.trim());
+  const showManualPayoutEditor = !paypalConnected;
+  const paypalValidationPending =
+    Boolean(paypalMerchantId) &&
+    !paypalConnected &&
+    isPendingValidationMessage(visiblePaypalReturnMessage);
+  const paymentsReceivableAttention = isPaymentsReceivableAttention(visiblePaypalReturnMessage);
+  const primaryEmailAttention = isPrimaryEmailAttention(visiblePaypalReturnMessage);
+  const paypalNeedsAttention =
+    (Boolean(visiblePaypalReturnMessage) && !paypalValidationPending) ||
+    (Boolean(paypalMerchantId) &&
+      (!paypalConsentStatus || !paypalPermissionsGranted || !paypalEmailConfirmed));
   const savedLabel = paypalConnected
     ? "PayPal"
     : savedProvider
@@ -332,9 +521,15 @@ export default function StorefrontPaymentMethods(): JSX.Element {
 
   return (
     <div className="dashboard-shell storefront-shell" style={pageBackground}>
-      <Sidebar active="storefront" />
-      <div className="main-content storefront-page">
-        <section className="storefront-layout storefront-layout--payment">
+      <Sidebar
+        active="storefront"
+        onMobileMessagesOpen={handleOpenStorefrontMessages}
+        mobileMessagesFallbackText="Storefront buyer messages"
+        mobileMessagesEmptyTitle="No new storefront messages"
+        mobileMessagesEmptySubtitle="Open storefront inbox"
+      />
+      <div className="main-content storefront-page storefront-payment-methods-page">
+        <section className="storefront-layout storefront-layout--payment storefront-payment-methods-layout">
           <div className="storefront-panel storefront-payment-panel">
             <div className="storefront-panel-header storefront-payment-header">
               <div>
@@ -362,19 +557,32 @@ export default function StorefrontPaymentMethods(): JSX.Element {
             </div>
 
             <div className="storefront-payment-grid">
-              <div className="storefront-payment-card is-active">
-                <span
-                  className={`storefront-payment-icon ${PAYMENT_METHOD.id}`}
-                  aria-hidden="true"
-                >
-                  {PAYMENT_METHOD.icon}
+              <button
+                className="storefront-payment-card storefront-payment-card-button is-active"
+                type="button"
+                onClick={handleStartPaypalOnboarding}
+                disabled={paypalStatus === "connecting" || confirmingPaypal}
+                aria-label={
+                  paypalConnected ? "Reconnect PayPal" : "Connect PayPal"
+                }
+              >
+                <span className="storefront-payment-icon paypal" aria-hidden="true">
+                  <PayPalWordmark />
                 </span>
                 <div>
                   <strong>{PAYMENT_METHOD.name}</strong>
                   <p className="storefront-payment-desc">{PAYMENT_METHOD.helper}</p>
                 </div>
-                {paypalConnected && <span className="storefront-payment-tag">Saved</span>}
-              </div>
+                {paypalConnected ? (
+                  <span className="storefront-payment-tag">Connected</span>
+                ) : paypalValidationPending ? (
+                  <span className="storefront-payment-tag is-pending">Pending validation</span>
+                ) : paypalNeedsAttention ? (
+                  <span className="storefront-payment-tag is-warning">Needs attention</span>
+                ) : paypalSaved ? (
+                  <span className="storefront-payment-tag">Saved</span>
+                ) : null}
+              </button>
             </div>
 
             <div className="storefront-payment-details">
@@ -395,22 +603,110 @@ export default function StorefrontPaymentMethods(): JSX.Element {
                   Connect your PayPal account for live seller payouts, or set payout email for
                   platform-managed payouts.
                 </p>
+                <div className="storefront-payment-health-grid">
+                  <div
+                    className={`storefront-payment-health-card${
+                      paypalPermissionsGranted
+                        ? " is-ready"
+                        : paymentsReceivableAttention
+                          ? " is-warning"
+                          : paypalValidationPending
+                            ? " is-pending"
+                            : paypalMerchantId
+                              ? " is-warning"
+                              : ""
+                    }`}
+                  >
+                    <span>Payments receivable</span>
+                    <strong>
+                      {paypalPermissionsGranted
+                        ? "Ready"
+                        : paymentsReceivableAttention
+                          ? "Needs attention"
+                          : paypalValidationPending
+                            ? "Pending validation"
+                            : paypalMerchantId
+                              ? "Needs attention"
+                              : "Not checked"}
+                    </strong>
+                  </div>
+                  <div
+                    className={`storefront-payment-health-card${
+                      paypalEmailConfirmed
+                        ? " is-ready"
+                        : primaryEmailAttention
+                          ? " is-warning"
+                          : paypalValidationPending
+                            ? " is-pending"
+                            : paypalMerchantId
+                              ? " is-warning"
+                              : ""
+                    }`}
+                  >
+                    <span>Primary email confirmed</span>
+                    <strong>
+                      {paypalEmailConfirmed
+                        ? "Confirmed"
+                        : primaryEmailAttention
+                          ? "Needs confirmation"
+                          : paypalValidationPending
+                            ? "Pending validation"
+                            : paypalMerchantId
+                              ? "Needs confirmation"
+                              : "Not checked"}
+                    </strong>
+                  </div>
+                </div>
                 {paypalMerchantId && (
                   <div className="storefront-payment-status">
-                    <strong>Connected PayPal ID</strong>
+                    <strong>
+                      {paypalConnected
+                        ? "Connected PayPal ID"
+                        : "Saved PayPal merchant ID"}
+                    </strong>
                     <span>{paypalMerchantId}</span>
                   </div>
+                )}
+                {paypalMerchantId && !paypalConnected && (
+                  <p className="storefront-payment-note">
+                    Partner split payouts are not active for this merchant ID yet. Complete
+                    PayPal Connect to send checkout funds directly to this PayPal account.
+                  </p>
                 )}
                 {paypalAccountStatus && (
                   <p className="storefront-payment-note">
                     Account status: {paypalAccountStatus}
                   </p>
                 )}
-                {paypalReturnMessage && (
-                  <p className="storefront-payment-note">{paypalReturnMessage}</p>
+                {visiblePaypalReturnMessage && (
+                  <div
+                    className={`storefront-payment-alert ${
+                      isAttentionMessage(visiblePaypalReturnMessage) ? "is-warning" : "is-info"
+                    }`}
+                    role={isAttentionMessage(visiblePaypalReturnMessage) ? "alert" : "status"}
+                  >
+                    <strong>
+                      {isAttentionMessage(visiblePaypalReturnMessage)
+                        ? "Action required"
+                        : "PayPal status"}
+                    </strong>
+                    <p>{renderLinkedPayPalMessage(visiblePaypalReturnMessage)}</p>
+                  </div>
+                )}
+                {paypalTechnicalStatusBlocked && (
+                  <div className="storefront-payment-alert is-info" role="status">
+                    <strong>PayPal connected</strong>
+                    <p>
+                      PayPal connected successfully. Additional merchant-status verification
+                      from PayPal is unavailable for this app right now.
+                    </p>
+                  </div>
                 )}
                 {paypalNotice && (
-                  <p className="storefront-payment-note is-info">{paypalNotice}</p>
+                  <div className="storefront-payment-alert is-info" role="status">
+                    <strong>{paypalConnected ? "PayPal connected" : "PayPal update"}</strong>
+                    <p>{paypalNotice}</p>
+                  </div>
                 )}
                 {paypalError && <p className="storefront-form-error">{paypalError}</p>}
                 <div className="storefront-payment-actions">
@@ -426,63 +722,90 @@ export default function StorefrontPaymentMethods(): JSX.Element {
                         ? "Reconnect PayPal"
                         : "Connect PayPal"}
                   </button>
+                  {canUnlinkPaypal && (
+                    <button
+                      className="btn ghost"
+                      type="button"
+                      disabled={savingPayout}
+                      onClick={handleRequestClearMerchantId}
+                    >
+                      Unlink PayPal account
+                    </button>
+                  )}
                   {confirmingPaypal && (
                     <span className="storefront-payment-loading">Confirming...</span>
                   )}
                   {loading && <span className="storefront-payment-loading">Syncing...</span>}
                 </div>
+                {disconnectConfirmOpen && (
+                  <div className="storefront-payment-alert is-danger" role="alert">
+                    <strong>Disconnect PayPal</strong>
+                    <p>{PAYPAL_DISCONNECT_DISCLAIMER}</p>
+                    <div className="storefront-payment-actions">
+                      <button
+                        className="btn ghost"
+                        type="button"
+                        onClick={() => setDisconnectConfirmOpen(false)}
+                      >
+                        Keep PayPal connected
+                      </button>
+                      <button
+                        className="btn primary"
+                        type="button"
+                        disabled={savingPayout}
+                        onClick={handleClearMerchantId}
+                      >
+                        {savingPayout ? "Disconnecting..." : "Disconnect PayPal"}
+                      </button>
+                    </div>
+                  </div>
+                )}
 
-                <div className="storefront-payment-manual">
-                  <h4>Edit payout method</h4>
-                  <p className="storefront-payment-note">
-                    Sellers can change payout email at any time. Merchant ID is optional for
-                    partner split payouts.
-                  </p>
-                  <div className="storefront-payment-manual-grid">
-                    <label className="storefront-field">
-                      Payout email
-                      <input
-                        type="email"
-                        value={payoutEmailInput}
-                        onChange={(event) => setPayoutEmailInput(event.target.value)}
-                        placeholder="seller@paypal.com"
-                        autoComplete="email"
-                      />
-                    </label>
-                    <label className="storefront-field">
-                      PayPal merchant ID (optional)
-                      <input
-                        type="text"
-                        value={merchantIdInput}
-                        onChange={(event) => setMerchantIdInput(event.target.value)}
-                        placeholder="ABCD1234EFGH"
-                        autoComplete="off"
-                      />
-                    </label>
+                {showManualPayoutEditor && (
+                  <div className="storefront-payment-manual">
+                    <h4>Edit payout method</h4>
+                    <p className="storefront-payment-note">
+                      Sellers can change payout email at any time. Merchant ID is optional for
+                      partner split payouts.
+                    </p>
+                    <div className="storefront-payment-manual-grid">
+                      <label className="storefront-field">
+                        Payout email
+                        <input
+                          type="email"
+                          value={payoutEmailInput}
+                          onChange={(event) => setPayoutEmailInput(event.target.value)}
+                          placeholder="seller@paypal.com"
+                          autoComplete="email"
+                        />
+                      </label>
+                      <label className="storefront-field">
+                        PayPal merchant ID (optional)
+                        <input
+                          type="text"
+                          value={merchantIdInput}
+                          onChange={(event) => setMerchantIdInput(event.target.value)}
+                          placeholder="ABCD1234EFGH"
+                          autoComplete="off"
+                        />
+                      </label>
+                    </div>
+                    {payoutNotice && (
+                      <p className="storefront-payment-note is-info">{payoutNotice}</p>
+                    )}
+                    {payoutError && <p className="storefront-form-error">{payoutError}</p>}
+                    <div className="storefront-payment-actions">
+                      <button
+                        className="btn primary"
+                        type="button"
+                        disabled={savingPayout}
+                        onClick={handleSavePayoutMethod}
+                      >
+                        {savingPayout ? "Saving..." : "Save payout method"}
+                      </button>
+                    </div>
                   </div>
-                  {payoutNotice && (
-                    <p className="storefront-payment-note is-info">{payoutNotice}</p>
-                  )}
-                  {payoutError && <p className="storefront-form-error">{payoutError}</p>}
-                  <div className="storefront-payment-actions">
-                    <button
-                      className="btn primary"
-                      type="button"
-                      disabled={savingPayout}
-                      onClick={handleSavePayoutMethod}
-                    >
-                      {savingPayout ? "Saving..." : "Save payout method"}
-                    </button>
-                    <button
-                      className="btn ghost"
-                      type="button"
-                      disabled={savingPayout || !merchantIdInput.trim()}
-                      onClick={handleClearMerchantId}
-                    >
-                      Unlink PayPal account
-                    </button>
-                  </div>
-                </div>
+                )}
 
                 <div className="storefront-payment-tools">
                   <h4>Seller tools</h4>
@@ -494,7 +817,7 @@ export default function StorefrontPaymentMethods(): JSX.Element {
                       <strong>Transaction dashboard</strong>
                       <p>Review buyer payments, order status, and payout progress from your seller dashboard.</p>
                       <button
-                        className="btn ghost small"
+                        className="btn ghost small storefront-payment-tool-button"
                         type="button"
                         onClick={() => navigate("/storefront/seller")}
                       >
@@ -505,9 +828,9 @@ export default function StorefrontPaymentMethods(): JSX.Element {
                       <strong>Refund management</strong>
                       <p>Open recent orders and issue PayPal refunds when needed.</p>
                       <button
-                        className="btn ghost small"
+                        className="btn ghost small storefront-payment-tool-button"
                         type="button"
-                        onClick={() => navigate("/storefront/seller")}
+                        onClick={() => navigate("/storefront/seller?dashboard=orders")}
                       >
                         Open orders & refunds
                       </button>
@@ -515,16 +838,16 @@ export default function StorefrontPaymentMethods(): JSX.Element {
                     <div className="storefront-payment-tool-card">
                       <strong>Unlink account</strong>
                       <p>Disconnect the current PayPal merchant link and switch payout settings.</p>
-                      <button
-                        className="btn ghost small"
-                        type="button"
-                        disabled={savingPayout || !merchantIdInput.trim()}
-                        onClick={handleClearMerchantId}
-                      >
-                        Unlink PayPal
-                      </button>
-                    </div>
-                  </div>
+                        <button
+                          className="btn ghost small storefront-payment-tool-button"
+                          type="button"
+                          disabled={savingPayout || !merchantIdInput.trim()}
+                          onClick={handleRequestClearMerchantId}
+                       >
+                         Unlink PayPal
+                       </button>
+                     </div>
+                   </div>
                 </div>
               </div>
             </div>

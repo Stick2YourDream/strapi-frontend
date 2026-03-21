@@ -11,8 +11,8 @@ import "./CameraShared.css";
 import "./IdCaptureModule.css";
 
 const ENV_OPENCV_URL = String(import.meta.env.VITE_OPENCV_URL || "").trim();
-const MANUAL_ID_CAPTURE_ONLY = true;
-const ENABLE_PERSPECTIVE_CAPTURE = false;
+const MANUAL_ID_CAPTURE_ONLY = false;
+const ENABLE_PERSPECTIVE_CAPTURE = true;
 const OPENCV_URLS = [
   ENV_OPENCV_URL,
   "https://docs.opencv.org/4.8.0/opencv.js",
@@ -21,7 +21,7 @@ const OPENCV_URLS = [
 ].filter(Boolean);
 const OPENCV_READY_TIMEOUT_MS = 3500;
 const OPENCV_CAPTURE_WAIT_TIMEOUT_MS = 1600;
-const ID_COUNTDOWN_SECONDS = 0;
+const ID_COUNTDOWN_SECONDS = 3;
 const ID_HIGH_RES_CONSTRAINTS = {
   width: { ideal: 1280, max: 1920 },
   height: { ideal: 720, max: 1080 },
@@ -72,6 +72,74 @@ type QualityCheckResult = {
   code?: QualityFailCode;
 };
 
+type GuideTone = "neutral" | "warning" | "success";
+type GuideStatus = {
+  title: string;
+  detail: string;
+  tone: GuideTone;
+};
+
+type DetectionResult = {
+  points: { x: number; y: number }[];
+  pointsVideo: { x: number; y: number }[];
+  ok: boolean;
+  quality: number;
+  guideStatus: GuideStatus;
+};
+
+const sameGuideStatus = (a: GuideStatus | null, b: GuideStatus | null) =>
+  a?.title === b?.title && a?.detail === b?.detail && a?.tone === b?.tone;
+
+const sampleRegionMetrics = (
+  pixels: Uint8ClampedArray,
+  width: number,
+  height: number,
+  region: { x: number; y: number; width: number; height: number },
+  step = 2
+) => {
+  const xStart = clamp(Math.floor(region.x), 1, Math.max(1, width - 2));
+  const yStart = clamp(Math.floor(region.y), 1, Math.max(1, height - 2));
+  const xEnd = clamp(Math.floor(region.x + region.width), xStart + 1, width - 1);
+  const yEnd = clamp(Math.floor(region.y + region.height), yStart + 1, height - 1);
+
+  let sampleCount = 0;
+  let luminanceSum = 0;
+  let luminanceSqSum = 0;
+  let edgeSum = 0;
+  let edgeCount = 0;
+
+  for (let y = yStart; y < yEnd; y += step) {
+    for (let x = xStart; x < xEnd; x += step) {
+      const idx = (y * width + x) * 4;
+      const leftIdx = (y * width + (x - 1)) * 4;
+      const topIdx = ((y - 1) * width + x) * 4;
+
+      const lum =
+        0.2126 * pixels[idx] + 0.7152 * pixels[idx + 1] + 0.0722 * pixels[idx + 2];
+      const leftLum =
+        0.2126 * pixels[leftIdx] +
+        0.7152 * pixels[leftIdx + 1] +
+        0.0722 * pixels[leftIdx + 2];
+      const topLum =
+        0.2126 * pixels[topIdx] + 0.7152 * pixels[topIdx + 1] + 0.0722 * pixels[topIdx + 2];
+
+      luminanceSum += lum;
+      luminanceSqSum += lum * lum;
+      edgeSum += Math.abs(lum - leftLum) + Math.abs(lum - topLum);
+      edgeCount += 2;
+      sampleCount += 1;
+    }
+  }
+
+  const safeSamples = Math.max(1, sampleCount);
+  const mean = luminanceSum / safeSamples;
+  const variance = Math.max(0, luminanceSqSum / safeSamples - mean * mean);
+  return {
+    contrast: Math.sqrt(variance),
+    edgeStrength: edgeCount > 0 ? edgeSum / edgeCount : 0,
+  };
+};
+
 const usePreviewUrl = (file: File | null) => {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
@@ -103,13 +171,12 @@ const clamp = (value: number, min: number, max: number) =>
 const distance = (a: { x: number; y: number }, b: { x: number; y: number }) =>
   Math.hypot(a.x - b.x, a.y - b.y);
 
-const isTapCaptureBlockedTarget = (target: EventTarget | null) => {
-  if (!(target instanceof Element)) return false;
-  return Boolean(
-    target.closest(
-      "button, a, input, select, textarea, label, .camera-actions, .camera-permission"
-    )
-  );
+const restoreDocumentInteractivity = () => {
+  if (typeof document === "undefined") return;
+  document.body.style.overflow = "";
+  document.body.style.touchAction = "";
+  document.documentElement.style.overflow = "";
+  document.documentElement.style.touchAction = "";
 };
 
 export default function IdCaptureModule({
@@ -135,18 +202,14 @@ export default function IdCaptureModule({
   const [captureFlash, setCaptureFlash] = useState(false);
   const [captureBusy, setCaptureBusy] = useState(false);
   const [useFrontCamera, setUseFrontCamera] = useState(false);
+  const [guideStatus, setGuideStatus] = useState<GuideStatus | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const opencvReadyRef = useRef(false);
   const opencvLoadingRef = useRef<Promise<void> | null>(null);
-  const idQuadRef = useRef<{
-    points: { x: number; y: number }[];
-    pointsVideo: { x: number; y: number }[];
-    ok: boolean;
-    quality: number;
-  } | null>(null);
+  const idQuadRef = useRef<DetectionResult | null>(null);
   const lastAutoCaptureAtRef = useRef(0);
   const countdownTargetRef = useRef<"front" | "back" | null>(null);
   const countdownRafRef = useRef<number | null>(null);
@@ -161,8 +224,13 @@ export default function IdCaptureModule({
 
   const frontPreviewUrl = usePreviewUrl(idFront);
   const backPreviewUrl = usePreviewUrl(idBack);
-  const autoCaptureEnabled = !MANUAL_ID_CAPTURE_ONLY && (activeTarget === "front" || activeTarget === "back");
+  const autoCaptureEnabled =
+    !MANUAL_ID_CAPTURE_ONLY && (activeTarget === "front" || activeTarget === "back");
   const requiresBackCapture = idType !== "passport";
+  const isMilitaryCac = idType === "military_id";
+  const frontDocumentLabel = isMilitaryCac ? "Military CAC front" : "ID front";
+  const backDocumentLabel = isMilitaryCac ? "Military CAC back" : "ID back";
+  const documentCardLabel = isMilitaryCac ? "Military CAC" : "ID";
 
   const showCameraEnable = !cameraReady && !cameraStarting;
   const cameraCtaLabel = cameraPermission === "granted" ? "Start camera" : "Enable camera";
@@ -185,11 +253,15 @@ export default function IdCaptureModule({
           ? `Capturing in ${countdown}…`
           : null;
       return {
-        title: "Front of ID",
+        title: isMilitaryCac ? "Front of Military CAC" : "Front of ID",
         body:
           countdownText ||
-          "Fill the frame with the entire front. Keep it sharp and centered, then tap anywhere on screen to capture.",
-        tips: baseTips,
+          `Align the full ${documentCardLabel.toLowerCase()} front inside the guide. We will auto-capture once the card is steady and the date of birth area looks sharp.`,
+        tips: baseTips.concat(
+          isMilitaryCac
+            ? "Keep the printed birth date readable and avoid covering rank or barcode zones."
+            : "Keep the date of birth crisp and all four corners visible."
+        ),
       };
     }
     if (activeTarget === "back") {
@@ -198,11 +270,13 @@ export default function IdCaptureModule({
           ? `Capturing in ${countdown}…`
           : null;
       return {
-        title: "Back of ID (Barcode)",
+        title: isMilitaryCac ? "Back of Military CAC (Barcode)" : "Back of ID (Barcode)",
         body:
           countdownText ||
-          "Align only the barcode inside the guide box, then tap anywhere on screen to capture.",
-        tips: baseTips,
+          "Align the full barcode area inside the guide box. We will auto-capture as soon as the barcode is sharp enough to read the encoded date of birth.",
+        tips: baseTips.concat(
+          "Keep glare off the barcode and do not cover the back edge with your fingers."
+        ),
       };
     }
     return null;
@@ -383,11 +457,26 @@ export default function IdCaptureModule({
     (target: CaptureTarget) => {
       setCameraError(null);
       setIdDetectError(null);
+      setGuideStatus(null);
+      qualityRejectCountsRef.current[target] = 0;
       cancelCountdown();
       activeTargetStartedAtRef.current = Date.now();
       setActiveTarget(target);
     },
     [cancelCountdown]
+  );
+
+  const clearCapture = useCallback(
+    (target: CaptureTarget) => {
+      setIdDetectError(null);
+      setGuideStatus(null);
+      if (target === "back") {
+        onBackChange(null);
+      } else {
+        onFrontChange(null);
+      }
+    },
+    [onBackChange, onFrontChange]
   );
 
   const triggerCaptureFlash = useCallback(() => {
@@ -765,7 +854,8 @@ export default function IdCaptureModule({
           return {
             ok: false,
             code: "front_unclear",
-            message: "Front of ID is not clear enough. Hold steady and retake.",
+            message:
+              "The ID looks aligned, but the date of birth area is not sharp enough yet. Move a little closer and hold steady.",
           };
         }
 
@@ -781,7 +871,8 @@ export default function IdCaptureModule({
     []
   );
 
-  const captureFrame = useCallback(async () => {
+  const captureFrame = useCallback(
+    async (captureMode: "auto" | "manual" = "manual") => {
     if (captureInFlightRef.current) return;
     captureInFlightRef.current = true;
     setCaptureBusy(true);
@@ -854,30 +945,53 @@ export default function IdCaptureModule({
         qualityRejectCountsRef.current[activeTarget] = nextRejectCount;
         const softFail =
           qualityResult.code !== "dark" && qualityResult.code !== "overexposed";
+        const allowFallback = captureMode === "manual";
         const allowFrontFallback =
           activeTarget === "front" &&
+          allowFallback &&
           softFail &&
           nextRejectCount >= 1;
         const allowBackFallback =
           activeTarget === "back" &&
+          allowFallback &&
           softFail &&
           nextRejectCount >= 2;
-        const allowAnyFallback = nextRejectCount >= 2;
+        const allowAnyFallback = allowFallback && nextRejectCount >= 2;
         if (allowFrontFallback || allowBackFallback || allowAnyFallback) {
           qualityRejectCountsRef.current[activeTarget] = 0;
           setIdDetectError(
             "Photo accepted with fallback quality checks. Continue if details are readable."
           );
+          setGuideStatus({
+            title: "Fallback capture accepted",
+            detail: "Check that the date of birth or barcode is clearly readable before continuing.",
+            tone: "warning",
+          });
         } else {
           setIdDetectError(
             qualityResult.message || "Capture is not readable. Please retake your photo."
           );
+          setGuideStatus({
+            title: activeTarget === "back" ? "Barcode not sharp enough" : "DOB area not sharp enough",
+            detail:
+              qualityResult.message ||
+              "Adjust the card, reduce glare, and hold steady until the details become crisp.",
+            tone: "warning",
+          });
           lastAutoCaptureAtRef.current = Date.now();
           return;
         }
       }
       qualityRejectCountsRef.current[activeTarget] = 0;
       setIdDetectError(null);
+      setGuideStatus({
+        title: activeTarget === "back" ? "Barcode captured" : "ID captured",
+        detail:
+          activeTarget === "back"
+            ? "Barcode image looks clear enough for verification."
+            : "Front of ID looks clear enough for date-of-birth verification.",
+        tone: "success",
+      });
       const targetName =
         activeTarget === "back"
           ? "idBack.jpg"
@@ -885,49 +999,21 @@ export default function IdCaptureModule({
       const file = new File([blob], targetName, { type: "image/jpeg" });
       if (activeTarget === "back") onBackChange(file);
       else onFrontChange(file);
+      restoreDocumentInteractivity();
       setActiveTarget(null);
     } finally {
       captureInFlightRef.current = false;
       setCaptureBusy(false);
     }
-  }, [
-    activeTarget,
-    ensureOpenCv,
-    onBackChange,
-    onFrontChange,
-    analyzeCaptureQuality,
-    tryPerspectiveCapture,
-  ]);
-
-  const triggerMobileTapCapture = useCallback(() => {
-    if (!active || !cameraReady || captureBusy || !activeTarget) return;
-    if (activeTarget !== "front" && activeTarget !== "back") return;
-    lastAutoCaptureAtRef.current = Date.now();
-    triggerCaptureFlash();
-    void captureFrame();
-  }, [active, activeTarget, cameraReady, captureBusy, captureFrame, triggerCaptureFlash]);
-
-  const handleOverlayPointerDown = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (event.pointerType !== "touch") return;
-      if (Date.now() - lastTouchActionRef.current < 500) return;
-      if (isTapCaptureBlockedTarget(event.target)) return;
-      event.preventDefault();
-      lastTouchActionRef.current = Date.now();
-      triggerMobileTapCapture();
     },
-    [triggerMobileTapCapture]
-  );
-
-  const handleOverlayTouchStart = useCallback(
-    (event: ReactTouchEvent<HTMLDivElement>) => {
-      if (Date.now() - lastTouchActionRef.current < 500) return;
-      if (isTapCaptureBlockedTarget(event.target)) return;
-      event.preventDefault();
-      lastTouchActionRef.current = Date.now();
-      triggerMobileTapCapture();
-    },
-    [triggerMobileTapCapture]
+    [
+      activeTarget,
+      analyzeCaptureQuality,
+      ensureOpenCv,
+      onBackChange,
+      onFrontChange,
+      tryPerspectiveCapture,
+    ]
   );
 
   const startCountdown = useCallback(() => {
@@ -939,7 +1025,7 @@ export default function IdCaptureModule({
       countdownTargetRef.current = activeTarget;
       lastAutoCaptureAtRef.current = Date.now();
       triggerCaptureFlash();
-      void captureFrame().finally(() => {
+      void captureFrame("auto").finally(() => {
         cancelCountdown();
       });
       return;
@@ -958,7 +1044,7 @@ export default function IdCaptureModule({
         if (active) {
           lastAutoCaptureAtRef.current = Date.now();
           triggerCaptureFlash();
-          void captureFrame();
+          void captureFrame("auto");
         }
         return;
       }
@@ -978,6 +1064,23 @@ export default function IdCaptureModule({
     void startStream();
     return () => stopStream();
   }, [active, startStream, stopStream]);
+
+  useEffect(() => {
+    if (active) {
+      if (typeof document !== "undefined") {
+        document.body.style.overflow = "hidden";
+        document.body.style.touchAction = "none";
+        document.documentElement.style.overflow = "hidden";
+        document.documentElement.style.touchAction = "none";
+      }
+    } else {
+      restoreDocumentInteractivity();
+    }
+
+    return () => {
+      restoreDocumentInteractivity();
+    };
+  }, [active]);
 
   useEffect(() => {
     if (requiresBackCapture) return;
@@ -1038,10 +1141,13 @@ export default function IdCaptureModule({
   useEffect(() => {
     if (!active) {
       setIdDetectError(null);
+      setGuideStatus(null);
+      lastTouchActionRef.current = 0;
       if (countdownTargetRef.current) {
         cancelCountdown();
       }
       setCaptureBusy(false);
+      restoreDocumentInteractivity();
       return;
     }
     let raf = 0;
@@ -1049,17 +1155,10 @@ export default function IdCaptureModule({
     let stableOkFrames = 0;
     let stableLossAt = 0;
     let lastDetectAt = 0;
-    let lastQuad:
-      | {
-          points: { x: number; y: number }[];
-          pointsVideo: { x: number; y: number }[];
-          ok: boolean;
-          quality: number;
-        }
-      | null = null;
+    let lastQuad: DetectionResult | null = null;
     const detectCanvas = document.createElement("canvas");
     const detectCtx = detectCanvas.getContext("2d", { willReadFrequently: true });
-      const detectionEnabled = autoCaptureEnabled;
+    const detectionEnabled = autoCaptureEnabled;
 
     const runDetection = () => {
       const video = videoRef.current;
@@ -1071,6 +1170,7 @@ export default function IdCaptureModule({
       detectCanvas.width = w;
       detectCanvas.height = h;
       detectCtx.drawImage(video, 0, 0, w, h);
+      const framePixels = detectCtx.getImageData(0, 0, w, h).data;
       const src = cv.imread(detectCanvas);
       let gray = new cv.Mat();
       try {
@@ -1171,7 +1271,51 @@ export default function IdCaptureModule({
           x: point.x * (video.videoWidth || 1280),
           y: point.y * (video.videoHeight || 720),
         }));
-        return { points, pointsVideo, ok, quality };
+        let guideStatus: GuideStatus;
+        if (mean < 38) {
+          guideStatus = {
+            title: "Need more light",
+            detail: "The barcode area is too dark. Move into brighter light before we auto-capture.",
+            tone: "warning",
+          };
+        } else if (mean > 230) {
+          guideStatus = {
+            title: "Reduce glare",
+            detail: "Tilt the card slightly so the barcode is not washed out by reflection.",
+            tone: "warning",
+          };
+        } else if (edgeDensity <= 0.08) {
+          guideStatus = {
+            title: "Move closer to the barcode",
+            detail: "Keep the barcode fully inside the box and fill more of the guide area.",
+            tone: "warning",
+          };
+        } else if (verticalStripeBias <= 1.02) {
+          guideStatus = {
+            title: "Flatten the barcode",
+            detail: "Keep the barcode horizontal and avoid angling the card too aggressively.",
+            tone: "warning",
+          };
+        } else if (contrast <= 11) {
+          guideStatus = {
+            title: "Hold steady for clarity",
+            detail: "The barcode is aligned, but it is not crisp enough yet for DOB reading.",
+            tone: "warning",
+          };
+        } else if (ok) {
+          guideStatus = {
+            title: "Barcode locked",
+            detail: "Looks good. Hold steady while we capture the barcode automatically.",
+            tone: "success",
+          };
+        } else {
+          guideStatus = {
+            title: "Align the barcode",
+            detail: "Keep the full barcode inside the box and let the camera settle.",
+            tone: "neutral",
+          };
+        }
+        return { points, pointsVideo, ok, quality, guideStatus };
       }
 
       const contours = new cv.MatVector();
@@ -1276,16 +1420,73 @@ export default function IdCaptureModule({
         clamp((0.88 - centerY) / 0.2, 0, 1);
       const perspectiveScore =
         clamp((widthBalance - 0.5) / 0.35, 0, 1) * clamp((heightBalance - 0.5) / 0.35, 0, 1);
-      const quality =
+      const detailRegion = {
+        x: (minX + width * 0.12) * w,
+        y: (minY + height * 0.28) * h,
+        width: width * w * 0.76,
+        height: height * h * 0.58,
+      };
+      const detailMetrics = sampleRegionMetrics(framePixels, w, h, detailRegion, 2);
+      const clarityScore =
+        clamp((detailMetrics.edgeStrength - 4.2) / 3.6, 0, 1) * 0.7 +
+        clamp((detailMetrics.contrast - 12) / 13, 0, 1) * 0.3;
+      const alignmentQuality =
         sizeScore * 0.33 + aspectScore * 0.24 + centerScore * 0.23 + perspectiveScore * 0.2;
+      const quality = alignmentQuality * 0.62 + clarityScore * 0.38;
 
       const sizeOk = areaRatio > 0.1 && areaRatio < 0.9;
       const aspectOk = rectAspect > 0.95 && rectAspect < 2.55;
       const centerOk = centerX > 0.1 && centerX < 0.9 && centerY > 0.12 && centerY < 0.88;
       const perspectiveOk = widthBalance > 0.5 && heightBalance > 0.5;
-      const ok = sizeOk && aspectOk && centerOk && perspectiveOk && quality >= ID_MIN_DETECT_QUALITY;
+      const clarityOk = detailMetrics.edgeStrength > 4.8 && detailMetrics.contrast > 13;
+      const ok =
+        sizeOk &&
+        aspectOk &&
+        centerOk &&
+        perspectiveOk &&
+        alignmentQuality >= ID_MIN_DETECT_QUALITY &&
+        clarityOk;
 
-      return { points: ordered, pointsVideo, ok, quality };
+      let guideStatus: GuideStatus;
+      if (!sizeOk) {
+        guideStatus = {
+          title: "Move the ID closer",
+          detail: "Fill more of the frame so the date of birth area can be read clearly.",
+          tone: "warning",
+        };
+      } else if (!centerOk) {
+        guideStatus = {
+          title: "Center the ID",
+          detail: "Keep the full card inside the guide with all four corners visible.",
+          tone: "warning",
+        };
+      } else if (!perspectiveOk) {
+        guideStatus = {
+          title: "Flatten the card",
+          detail: "Straighten the ID so the camera sees the front face evenly.",
+          tone: "warning",
+        };
+      } else if (!clarityOk) {
+        guideStatus = {
+          title: "Hold steady for DOB clarity",
+          detail: "The ID is aligned, but the text is not sharp enough yet for date-of-birth reading.",
+          tone: "warning",
+        };
+      } else if (ok) {
+        guideStatus = {
+          title: "ID locked",
+          detail: "Looks good. Hold steady while we capture the front automatically.",
+          tone: "success",
+        };
+      } else {
+        guideStatus = {
+          title: "Align the front of your ID",
+          detail: "Keep the card steady inside the guide and let the camera focus.",
+          tone: "neutral",
+        };
+      }
+
+      return { points: ordered, pointsVideo, ok, quality, guideStatus };
     };
 
     const loop = () => {
@@ -1302,13 +1503,13 @@ export default function IdCaptureModule({
         try {
           lastQuad = runDetection();
           if (lastQuad === null) {
-            lastQuad = { points: [], pointsVideo: [], ok: false, quality: 0 };
+            lastQuad = null;
           }
         } catch {
           if (!cancelled) {
             setIdDetectError("ID edge detection failed. Try again.");
           }
-          lastQuad = { points: [], pointsVideo: [], ok: false, quality: 0 };
+          lastQuad = null;
         }
       } else if (!canDetect) {
         lastQuad = null;
@@ -1318,8 +1519,24 @@ export default function IdCaptureModule({
       const detectQuality = lastQuad?.quality ?? 0;
       if (lastQuad) {
         idQuadRef.current = lastQuad;
+        setGuideStatus((prev) =>
+          sameGuideStatus(prev, lastQuad?.guideStatus || null) ? prev : lastQuad!.guideStatus
+        );
       } else {
         idQuadRef.current = null;
+        const fallbackStatus: GuideStatus =
+          activeTarget === "back"
+            ? {
+                title: "Find the barcode",
+                detail: "Place the barcode inside the green box and keep the card steady.",
+                tone: "neutral",
+              }
+            : {
+                title: "Find the front of your ID",
+                detail: "Place the full card inside the guide so we can lock onto it.",
+                tone: "neutral",
+              };
+        setGuideStatus((prev) => (sameGuideStatus(prev, fallbackStatus) ? prev : fallbackStatus));
       }
       const stableThreshold =
         activeTarget === "back"
@@ -1389,6 +1606,32 @@ export default function IdCaptureModule({
             drawCorner(guideX, guideY + guideH, 1, -1);
             drawCorner(guideX + guideW, guideY + guideH, -1, -1);
           }
+
+          if (lastQuad?.pointsVideo?.length === 4) {
+            const polygonColor = lastQuad.ok
+              ? "rgba(34, 197, 94, 0.96)"
+              : lastQuad.quality >= 0.55
+                ? "rgba(251, 191, 36, 0.96)"
+                : "rgba(96, 165, 250, 0.88)";
+            octx.save();
+            octx.strokeStyle = polygonColor;
+            octx.lineWidth = 3;
+            octx.setLineDash(lastQuad.ok ? [] : [10, 6]);
+            octx.beginPath();
+            octx.moveTo(lastQuad.pointsVideo[0].x, lastQuad.pointsVideo[0].y);
+            for (let i = 1; i < lastQuad.pointsVideo.length; i += 1) {
+              octx.lineTo(lastQuad.pointsVideo[i].x, lastQuad.pointsVideo[i].y);
+            }
+            octx.closePath();
+            octx.stroke();
+            octx.fillStyle = polygonColor;
+            lastQuad.pointsVideo.forEach((point) => {
+              octx.beginPath();
+              octx.arc(point.x, point.y, 4.5, 0, Math.PI * 2);
+              octx.fill();
+            });
+            octx.restore();
+          }
         }
       }
 
@@ -1445,11 +1688,15 @@ export default function IdCaptureModule({
       <div className="capture-grid">
         <div className="capture-card">
           <div>
-            <strong>Step 3: ID Front</strong>
-            <p>Use the rear camera. Full card in frame.</p>
+            <strong>{`Step 3: ${frontDocumentLabel}`}</strong>
+            <p>
+              {isMilitaryCac
+                ? "Use the rear camera. Keep the full CAC in frame with the birth date readable."
+                : "Use the rear camera. Keep the full card in frame and readable."}
+            </p>
           </div>
           {frontPreviewUrl ? (
-            <img className="capture-preview" src={frontPreviewUrl} alt="ID front" />
+            <img className="capture-preview" src={frontPreviewUrl} alt={frontDocumentLabel} />
           ) : (
             <div className="capture-placeholder">No photo yet</div>
           )}
@@ -1457,14 +1704,16 @@ export default function IdCaptureModule({
             <button
               className="btn ghost"
               type="button"
-              onClick={() => {
-                openCapture("front");
-              }}
+              {...withTouchAction(() => openCapture("front"))}
             >
               {idFront ? "Retake" : "Take photo"}
             </button>
             {idFront && (
-              <button className="btn ghost" type="button" onClick={() => onFrontChange(null)}>
+              <button
+                className="btn ghost"
+                type="button"
+                {...withTouchAction(() => clearCapture("front"))}
+              >
                 Clear
               </button>
             )}
@@ -1474,11 +1723,15 @@ export default function IdCaptureModule({
         {requiresBackCapture && (
           <div className="capture-card">
             <div>
-              <strong>ID Back (Barcode)</strong>
-              <p>Capture the barcode side for backup verification.</p>
+              <strong>{`${backDocumentLabel} (Barcode)`}</strong>
+              <p>
+                {isMilitaryCac
+                  ? "Capture the CAC barcode side clearly so the encoded birth date stays readable."
+                  : "Capture the barcode side clearly for backup verification."}
+              </p>
             </div>
             {backPreviewUrl ? (
-              <img className="capture-preview" src={backPreviewUrl} alt="ID back" />
+              <img className="capture-preview" src={backPreviewUrl} alt={backDocumentLabel} />
             ) : (
               <div className="capture-placeholder">No photo yet</div>
             )}
@@ -1486,14 +1739,16 @@ export default function IdCaptureModule({
               <button
                 className="btn ghost"
                 type="button"
-                onClick={() => {
-                  openCapture("back");
-                }}
+                {...withTouchAction(() => openCapture("back"))}
               >
                 {idBack ? "Retake" : "Take photo"}
               </button>
               {idBack && (
-                <button className="btn ghost" type="button" onClick={() => onBackChange(null)}>
+                <button
+                  className="btn ghost"
+                  type="button"
+                  {...withTouchAction(() => clearCapture("back"))}
+                >
                   Clear
                 </button>
               )}
@@ -1504,11 +1759,7 @@ export default function IdCaptureModule({
 
       {active && (
         <div className="camera-overlay fullscreen id-capture-overlay" role="dialog" aria-modal="true">
-          <div
-            className="camera-panel camera-modal"
-            onPointerDown={handleOverlayPointerDown}
-            onTouchStart={handleOverlayTouchStart}
-          >
+          <div className="camera-panel camera-modal">
             {captureFlash && <div className="capture-flash" aria-hidden="true" />}
             {(() => {
               const prompt = getPromptContent();
@@ -1525,14 +1776,23 @@ export default function IdCaptureModule({
                 </div>
               );
             })()}
+            {guideStatus && (
+              <div className={`id-status id-status--${guideStatus.tone}`}>
+                <strong>{guideStatus.title}</strong>
+                <span>{guideStatus.detail}</span>
+              </div>
+            )}
             <div className={`camera-frame ${cameraReady ? "ready" : ""}`}>
               <video ref={videoRef} playsInline muted autoPlay className="camera-video" />
               <canvas ref={overlayRef} className="camera-overlay-canvas" />
               {activeTarget === "front" && (
-                <div className="id-guide id-guide-front" aria-hidden="true" />
+                <div className="id-guide id-guide-front" aria-hidden="true">
+                  <div className="id-guide-grid" />
+                </div>
               )}
               {activeTarget === "back" && (
                 <div className="id-guide id-guide-barcode" aria-hidden="true">
+                  <div className="id-guide-grid" />
                   <span>Align barcode inside box</span>
                 </div>
               )}
@@ -1586,15 +1846,18 @@ export default function IdCaptureModule({
                 className="icon-button icon-capture"
                 type="button"
                 disabled={captureBusy}
-                {...withTouchAction(() => captureFrame())}
+                {...withTouchAction(() => captureFrame("manual"))}
               >
                 <span className="icon">◎</span>
-                <span className="icon-label">Capture</span>
+                <span className="icon-label">Capture now</span>
               </button>
               <button
                 className="icon-button icon-cancel"
                 type="button"
-                {...withTouchAction(() => setActiveTarget(null))}
+                {...withTouchAction(() => {
+                  restoreDocumentInteractivity();
+                  setActiveTarget(null);
+                })}
               >
                 <span className="icon">✖</span>
                 <span className="icon-label">Cancel</span>

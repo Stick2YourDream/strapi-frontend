@@ -1,7 +1,16 @@
 // src/pages/Friends.tsx
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Users, X } from "lucide-react";
+import {
+  Activity,
+  Heart,
+  ImageIcon,
+  MapPin,
+  ScrollText,
+  UserCheck,
+  Users,
+  X,
+} from "lucide-react";
 import "../css/dashboard.css";
 import "../css/friends.css";
 import "../css/media-lightbox.css";
@@ -10,6 +19,7 @@ import { useChat } from "../context/ChatContext";
 import { useUserPreferences } from "../context/UserPreferencesContext";
 import { useVideoCall, type VideoCallInvitee } from "../context/VideoCallContext";
 import api from "../api/strapi";
+import PopupModal from "../components/PopupModal";
 import Sidebar from "../components/Sidebar";
 import RightSidebarShell from "../components/RightSidebarShell";
 import TopbarSearch from "../components/TopbarSearch";
@@ -100,6 +110,8 @@ type FriendRequestItem = {
   createdAt?: string;
 };
 
+type FriendStatsModalView = "connected" | "favorites" | "active" | "requests";
+
 const extractFirstUrl = (text: string) => {
   const match = String(text || "").match(/(https?:\/\/[^\s]+|www\.[^\s]+)/i);
   if (!match) return "";
@@ -189,6 +201,21 @@ const formatLastSeen = (value?: string) => {
   )}`;
 };
 
+const formatCompactDate = (value?: string) => {
+  if (!value) return "";
+  const time = new Date(value).getTime();
+  if (!Number.isFinite(time)) return "";
+  return new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(
+    new Date(time)
+  );
+};
+
+const splitProfileValues = (value?: string) =>
+  String(value || "")
+    .split(/[\n,•,]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
 export default function Friends() {
   const { user } = useAuth();
   const { openChat } = useChat();
@@ -232,6 +259,7 @@ export default function Friends() {
   const [requestActionBusy, setRequestActionBusy] = useState<Record<string, boolean>>({});
   const [refreshToken, setRefreshToken] = useState(0);
   const [mobileFriendPickerOpen, setMobileFriendPickerOpen] = useState(false);
+  const [friendStatsModal, setFriendStatsModal] = useState<FriendStatsModalView | null>(null);
 
   const normalize = (entry: any) => entry?.attributes ?? entry ?? {};
   const getEntity = (entry: any) => entry?.data ?? entry ?? null;
@@ -743,6 +771,33 @@ export default function Friends() {
     selectedFriend?.userId && postsByOwner[selectedFriend.userId]
       ? postsByOwner[selectedFriend.userId]
       : [];
+  const favoriteFriends = useMemo(
+    () => profiles.filter((profile) => Boolean(profile.favorite)),
+    [profiles]
+  );
+  const onlineFriends = useMemo(
+    () =>
+      profiles.filter(
+        (profile) => typeof profile.userId === "number" && onlineUserIds.has(profile.userId)
+      ),
+    [profiles, onlineUserIds]
+  );
+  const spotlightFriends = useMemo(() => {
+    const preferred = filteredFriends.filter((friend) => Boolean(friend.favorite));
+    return (preferred.length ? preferred : filteredFriends).slice(0, 4);
+  }, [filteredFriends]);
+  const pendingRequestCount = incomingRequests.length + outgoingRequests.length;
+  const selectedDisplayName =
+    `${selectedFriend?.firstName || ""} ${selectedFriend?.lastName || ""}`.trim() ||
+    `@${selectedFriend?.handle || "friend"}`;
+  const selectedLocation = [
+    selectedFriend?.city,
+    selectedFriend?.state,
+    selectedFriend?.country,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  const selectedInterests = splitProfileValues(selectedFriend?.hobbies).slice(0, 3);
   const blockedEntry = selectedFriend?.userId
     ? blockEntries.find((entry) => entry.userId === selectedFriend.userId) || null
     : null;
@@ -1004,6 +1059,277 @@ export default function Friends() {
     );
   };
 
+  const handleSelectFriendFromModal = (profile: FriendProfile) => {
+    handleSelectFriend(profile);
+    setFriendStatsModal(null);
+  };
+
+  const renderFriendStatRows = (
+    items: FriendProfile[],
+    emptyTitle: string,
+    emptyCopy: string,
+    badgeFor?: (profile: FriendProfile) => { label: string; tone?: string }
+  ) => {
+    if (!items.length) {
+      return (
+        <div className="friends-empty-state friends-empty-state--modal">
+          <p className="eyebrow">Nothing here yet</p>
+          <strong>{emptyTitle}</strong>
+          <span>{emptyCopy}</span>
+        </div>
+      );
+    }
+
+    return (
+      <div className="friends-stats-modal__list">
+        {items.map((profile) => {
+          const name = `${profile.firstName || ""} ${profile.lastName || ""}`.trim();
+          const displayName = name || profile.handle || "Friend";
+          const badge = badgeFor?.(profile);
+          return (
+            <button
+              key={`friend-stat-${String(profile.id)}-${profile.userId || profile.handle}`}
+              type="button"
+              className={`friends-stats-modal__friend${
+                profile.userId === selectedFriendId ? " is-active" : ""
+              }`}
+              onClick={() => handleSelectFriendFromModal(profile)}
+            >
+              {renderAvatar(profile, 48)}
+              <span className="friends-stats-modal__friend-copy">
+                <strong>{displayName}</strong>
+                <span>@{profile.handle || "friend"}</span>
+                <small>
+                  {profile.city || profile.state || profile.country
+                    ? [profile.city, profile.state, profile.country].filter(Boolean).join(", ")
+                    : profile.occupation || "Select to open in spotlight"}
+                </small>
+              </span>
+              <span className="friends-stats-modal__friend-side">
+                {badge ? (
+                  <span
+                    className={`friends-stats-modal__badge${
+                      badge.tone ? ` is-${badge.tone}` : ""
+                    }`}
+                  >
+                    {badge.label}
+                  </span>
+                ) : null}
+                <span className="friends-stats-modal__friend-action">Open spotlight</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const renderRequestSections = () => {
+    if (requestsLoading) {
+      return <p className="status">Loading friend requests...</p>;
+    }
+
+    if (incomingRequests.length === 0 && outgoingRequests.length === 0) {
+      return (
+        <div className="friends-empty-state friends-empty-state--modal">
+          <p className="eyebrow">All clear</p>
+          <strong>No pending friend requests.</strong>
+          <span>Your newest activity will appear here as people connect with you.</span>
+        </div>
+      );
+    }
+
+    return (
+      <div className="friend-requests-sections">
+        {incomingRequests.length > 0 && (
+          <section className="friend-requests-group">
+            <div className="friend-requests-group__header">
+              <h4>Incoming</h4>
+              <span>{incomingRequests.length}</span>
+            </div>
+            <ul className="friend-requests-list">
+              {incomingRequests.map((request) => {
+                const acceptKey = friendRequestActionKey("accept", request);
+                const removeKey = friendRequestActionKey("remove-incoming", request);
+                const accepting = Boolean(requestActionBusy[acceptKey]);
+                const removing = Boolean(requestActionBusy[removeKey]);
+                const busy = accepting || removing;
+                return (
+                  <li key={`incoming-${String(request.id)}`} className="friend-request-item">
+                    <div className="friend-request-main">
+                      {renderRequestAvatar(request.requesterName, request.requesterAvatarUrl)}
+                      <div className="friend-request-meta">
+                        <strong>{request.requesterName}</strong>
+                        {request.requesterHandle ? (
+                          <span>@{request.requesterHandle}</span>
+                        ) : null}
+                        <span className="friend-request-stamp">
+                          {request.createdAt
+                            ? `Sent ${formatCompactDate(request.createdAt)}`
+                            : "Waiting for your reply"}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="friend-request-actions">
+                      <button
+                        type="button"
+                        className="btn primary tiny"
+                        onClick={() => void handleAcceptRequest(request)}
+                        disabled={busy}
+                      >
+                        {accepting ? "Accepting..." : "Accept"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn ghost tiny"
+                        onClick={() => void handleRemoveRequest(request, "incoming")}
+                        disabled={busy}
+                      >
+                        {removing ? "Declining..." : "Decline"}
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
+        {outgoingRequests.length > 0 && (
+          <section className="friend-requests-group">
+            <div className="friend-requests-group__header">
+              <h4>Outgoing</h4>
+              <span>{outgoingRequests.length}</span>
+            </div>
+            <ul className="friend-requests-list">
+              {outgoingRequests.map((request) => {
+                const removeKey = friendRequestActionKey("remove-outgoing", request);
+                const removing = Boolean(requestActionBusy[removeKey]);
+                return (
+                  <li key={`outgoing-${String(request.id)}`} className="friend-request-item">
+                    <div className="friend-request-main">
+                      {renderRequestAvatar(request.targetName, request.targetAvatarUrl)}
+                      <div className="friend-request-meta">
+                        <strong>{request.targetName}</strong>
+                        {request.targetHandle ? <span>@{request.targetHandle}</span> : null}
+                        <span className="friend-request-stamp">
+                          {request.createdAt
+                            ? `Sent ${formatCompactDate(request.createdAt)}`
+                            : "Invitation sent"}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="friend-request-actions">
+                      <button
+                        type="button"
+                        className="btn ghost tiny"
+                        onClick={() => void handleRemoveRequest(request, "outgoing")}
+                        disabled={removing}
+                      >
+                        {removing ? "Canceling..." : "Cancel"}
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
+      </div>
+    );
+  };
+
+  const friendStatsModalTitle =
+    friendStatsModal === "connected"
+      ? "Connected friends"
+      : friendStatsModal === "favorites"
+      ? "Favorite friends"
+      : friendStatsModal === "active"
+      ? "Active now"
+      : friendStatsModal === "requests"
+      ? "Friend requests"
+      : "";
+
+  const renderFriendStatsModalContent = () => {
+    if (friendStatsModal === "connected") {
+      return (
+        <>
+          <div className="friends-stats-modal__intro">
+            <p className="eyebrow">Connections</p>
+            <p>
+              Everyone currently in your circle. Select a friend to load them into the spotlight
+              view.
+            </p>
+          </div>
+          {renderFriendStatRows(
+            profiles,
+            "No friends connected yet.",
+            "Once connections are accepted, they will appear here.",
+            (profile) => ({
+              label:
+                typeof profile.userId === "number" && onlineUserIds.has(profile.userId)
+                  ? "Active now"
+                  : formatLastSeen(profile.lastSeenAt),
+              tone:
+                typeof profile.userId === "number" && onlineUserIds.has(profile.userId)
+                  ? "success"
+                  : undefined,
+            })
+          )}
+        </>
+      );
+    }
+
+    if (friendStatsModal === "favorites") {
+      return (
+        <>
+          <div className="friends-stats-modal__intro">
+            <p className="eyebrow">Pinned favorites</p>
+            <p>Your priority contacts live here for faster access and quicker replies.</p>
+          </div>
+          {renderFriendStatRows(
+            favoriteFriends,
+            "No favorites saved yet.",
+            "Star a friend in the spotlight card to pin them here.",
+            () => ({ label: "Favorite", tone: "warm" })
+          )}
+        </>
+      );
+    }
+
+    if (friendStatsModal === "active") {
+      return (
+        <>
+          <div className="friends-stats-modal__intro">
+            <p className="eyebrow">Live presence</p>
+            <p>Friends currently showing online presence appear here in real time.</p>
+          </div>
+          {renderFriendStatRows(
+            onlineFriends,
+            "No friends are active right now.",
+            "Check back later or message someone from your connected list.",
+            () => ({ label: "Live now", tone: "success" })
+          )}
+        </>
+      );
+    }
+
+    if (friendStatsModal === "requests") {
+      return (
+        <>
+          <div className="friends-stats-modal__intro">
+            <p className="eyebrow">Invites</p>
+            <p>Review incoming and outgoing connection requests without leaving the page.</p>
+          </div>
+          {requestsError && <p className="status status-error">{requestsError}</p>}
+          {requestNotice && <p className="status">{requestNotice}</p>}
+          {renderRequestSections()}
+        </>
+      );
+    }
+
+    return null;
+  };
+
   const handleShowProfile = () => {
     if (!selectedFriend?.userId) return;
     navigate(`/friends/${selectedFriend.userId}`);
@@ -1038,16 +1364,19 @@ export default function Friends() {
     <>
       {!loading && profiles.length > 0 && (
         <div className="friend-search">
-          <label className="friend-search-label" htmlFor={searchInputId}>
-            Search Friends
-          </label>
+          <div className="friend-search__header">
+            <label className="friend-search-label" htmlFor={searchInputId}>
+              Browse friends
+            </label>
+            <span className="friend-search-count">{filteredFriends.length}</span>
+          </div>
           <input
             id={searchInputId}
             className="friend-search-input"
             type="search"
             value={friendQuery}
             onChange={(e) => setFriendQuery(e.target.value)}
-            placeholder="Find Your Friends"
+            placeholder="Search by @handle or name"
           />
         </div>
       )}
@@ -1065,6 +1394,9 @@ export default function Friends() {
               const handle = friend.handle || "friend";
               const displayName = name || handle;
               const isActive = friend.userId === selectedFriendId;
+              const isOnline =
+                typeof friend.userId === "number" && onlineUserIds.has(friend.userId);
+              const statusLabel = isOnline ? "Active now" : formatLastSeen(friend.lastSeenAt);
               return (
                 <li key={friend.id} className="friend-mini-item">
                   <button
@@ -1077,8 +1409,20 @@ export default function Friends() {
                   >
                     {renderAvatar(friend, 32)}
                     <span className="friend-mini-meta">
-                      <span className="friend-mini-name">{displayName}</span>
+                      <span className="friend-mini-topline">
+                        <span className="friend-mini-name">{displayName}</span>
+                        {friend.favorite ? (
+                          <span className="friend-mini-badge">Favorite</span>
+                        ) : null}
+                      </span>
                       {name && handle ? <span className="friend-mini-tag">@{handle}</span> : null}
+                      <span
+                        className={`friend-mini-presence${
+                          isOnline ? " is-online" : ""
+                        }`}
+                      >
+                        {statusLabel}
+                      </span>
                     </span>
                   </button>
                 </li>
@@ -1190,123 +1534,172 @@ export default function Friends() {
         )}
 
         {error && <p className="status status-error">{error}</p>}
-        <section className="panel friend-requests-panel">
-          <div className="panel-header">
-            <div>
-              <p className="eyebrow">Connections</p>
-              <h3>Friend Requests</h3>
+        <section className="panel friends-hero">
+          <div className="friends-hero__content">
+            <div className="friends-hero__intro">
+              <p className="eyebrow">Connections hub</p>
+              <h2>My Friends</h2>
+              <p className="friends-hero__copy">
+                Keep your closest connections easy to reach with a cleaner overview of who is
+                active, who needs a reply, and what your friends have shared recently.
+              </p>
+            </div>
+            <div className="friends-hero__actions">
+              <button
+                type="button"
+                className="btn ghost friends-hero__mobile-browse"
+                onClick={handleOpenMobileFriendPicker}
+              >
+                Browse friends
+              </button>
+              {selectedFriend ? (
+                <button
+                  type="button"
+                  className="btn primary"
+                  onClick={() => handleOpenChat(selectedFriend)}
+                  disabled={isBlocked}
+                >
+                  Message {selectedFriend.firstName || "friend"}
+                </button>
+              ) : null}
             </div>
           </div>
-          {requestsError && <p className="status status-error">{requestsError}</p>}
-          {requestNotice && <p className="status">{requestNotice}</p>}
-          {requestsLoading ? (
-            <p className="status">Loading friend requests...</p>
-          ) : incomingRequests.length === 0 && outgoingRequests.length === 0 ? (
-            <p className="status">No pending friend requests.</p>
-          ) : (
-            <div className="friend-requests-sections">
-              {incomingRequests.length > 0 && (
-                <section className="friend-requests-group">
-                  <h4>Incoming</h4>
-                  <ul className="friend-requests-list">
-                    {incomingRequests.map((request) => {
-                      const acceptKey = friendRequestActionKey("accept", request);
-                      const removeKey = friendRequestActionKey("remove-incoming", request);
-                      const accepting = Boolean(requestActionBusy[acceptKey]);
-                      const removing = Boolean(requestActionBusy[removeKey]);
-                      const busy = accepting || removing;
-                      return (
-                        <li key={`incoming-${String(request.id)}`} className="friend-request-item">
-                          <div className="friend-request-main">
-                            {renderRequestAvatar(
-                              request.requesterName,
-                              request.requesterAvatarUrl
-                            )}
-                            <div className="friend-request-meta">
-                              <strong>{request.requesterName}</strong>
-                              {request.requesterHandle ? (
-                                <span>@{request.requesterHandle}</span>
-                              ) : null}
-                            </div>
-                          </div>
-                          <div className="friend-request-actions">
-                            <button
-                              type="button"
-                              className="btn primary tiny"
-                              onClick={() => void handleAcceptRequest(request)}
-                              disabled={busy}
-                            >
-                              {accepting ? "Accepting..." : "Accept"}
-                            </button>
-                            <button
-                              type="button"
-                              className="btn ghost tiny"
-                              onClick={() => void handleRemoveRequest(request, "incoming")}
-                              disabled={busy}
-                            >
-                              {removing ? "Declining..." : "Decline"}
-                            </button>
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </section>
-              )}
-              {outgoingRequests.length > 0 && (
-                <section className="friend-requests-group">
-                  <h4>Outgoing</h4>
-                  <ul className="friend-requests-list">
-                    {outgoingRequests.map((request) => {
-                      const removeKey = friendRequestActionKey("remove-outgoing", request);
-                      const removing = Boolean(requestActionBusy[removeKey]);
-                      return (
-                        <li key={`outgoing-${String(request.id)}`} className="friend-request-item">
-                          <div className="friend-request-main">
-                            {renderRequestAvatar(
-                              request.targetName,
-                              request.targetAvatarUrl
-                            )}
-                            <div className="friend-request-meta">
-                              <strong>{request.targetName}</strong>
-                              {request.targetHandle ? (
-                                <span>@{request.targetHandle}</span>
-                              ) : null}
-                            </div>
-                          </div>
-                          <div className="friend-request-actions">
-                            <button
-                              type="button"
-                              className="btn ghost tiny"
-                              onClick={() => void handleRemoveRequest(request, "outgoing")}
-                              disabled={removing}
-                            >
-                              {removing ? "Canceling..." : "Cancel"}
-                            </button>
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </section>
-              )}
+
+          <div className="friends-hero__stats">
+            <button
+              type="button"
+              className="friends-stat-card"
+              onClick={() => setFriendStatsModal("connected")}
+            >
+              <span className="friends-stat-card__icon">
+                <Users size={18} />
+              </span>
+              <div>
+                <span className="friends-stat-card__label">Connected</span>
+                <strong>{profiles.length}</strong>
+                <p>People currently in your circle</p>
+                <span className="friends-stat-card__cta">Open list</span>
+              </div>
+            </button>
+            <button
+              type="button"
+              className="friends-stat-card"
+              onClick={() => setFriendStatsModal("favorites")}
+            >
+              <span className="friends-stat-card__icon is-warm">
+                <Heart size={18} />
+              </span>
+              <div>
+                <span className="friends-stat-card__label">Favorites</span>
+                <strong>{favoriteFriends.length}</strong>
+                <p>Priority contacts pinned to the top</p>
+                <span className="friends-stat-card__cta">Open list</span>
+              </div>
+            </button>
+            <button
+              type="button"
+              className="friends-stat-card"
+              onClick={() => setFriendStatsModal("active")}
+            >
+              <span className="friends-stat-card__icon is-success">
+                <Activity size={18} />
+              </span>
+              <div>
+                <span className="friends-stat-card__label">Active now</span>
+                <strong>{onlineFriends.length}</strong>
+                <p>Friends showing live presence</p>
+                <span className="friends-stat-card__cta">Open list</span>
+              </div>
+            </button>
+            <button
+              type="button"
+              className="friends-stat-card"
+              onClick={() => setFriendStatsModal("requests")}
+            >
+              <span className="friends-stat-card__icon is-violet">
+                <UserCheck size={18} />
+              </span>
+              <div>
+                <span className="friends-stat-card__label">Friend requests</span>
+                <strong>{pendingRequestCount}</strong>
+                <p>Incoming and outgoing invites</p>
+                <span className="friends-stat-card__cta">Open list</span>
+              </div>
+            </button>
+          </div>
+
+          {spotlightFriends.length > 0 && (
+            <div className="friends-hero__quick-section">
+              <div className="friends-hero__quick-copy">
+                <p className="eyebrow">Quick picks</p>
+                <span>Jump straight to a favorite or recently active friend.</span>
+              </div>
+              <div className="friends-quick-picks">
+                {spotlightFriends.map((friend) => {
+                  const name = `${friend.firstName || ""} ${friend.lastName || ""}`.trim();
+                  const displayName = name || friend.handle || "Friend";
+                  const isOnline =
+                    typeof friend.userId === "number" && onlineUserIds.has(friend.userId);
+                  const isActive = friend.userId === selectedFriendId;
+                  return (
+                    <button
+                      key={`quick-${String(friend.id)}`}
+                      type="button"
+                      className={`friends-quick-pick${isActive ? " is-active" : ""}`}
+                      onClick={() => handleSelectFriend(friend)}
+                    >
+                      {renderAvatar(friend, 42)}
+                      <span className="friends-quick-pick__meta">
+                        <strong>{displayName}</strong>
+                        <span>@{friend.handle || "friend"}</span>
+                      </span>
+                      <span
+                        className={`friends-quick-pick__status${
+                          isOnline ? " is-online" : ""
+                        }`}
+                      >
+                        {isOnline ? "Active" : "Recent"}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           )}
         </section>
 
+        <PopupModal
+          open={friendStatsModal !== null}
+          title={friendStatsModalTitle}
+          onClose={() => setFriendStatsModal(null)}
+          className="friends-stats-modal"
+          bodyClassName="friends-stats-modal-body"
+        >
+          {renderFriendStatsModalContent()}
+        </PopupModal>
+
+        <div className="friends-content-grid">
         <div className="friends-spotlight-grid">
-          <section className="panel">
+          <section className="panel friends-spotlight-panel">
             <div className="panel-header">
               <div>
                 <p className="eyebrow">Spotlight</p>
                 <h3>Friend Activity</h3>
+                <p className="panel-sub">
+                  Focus on one profile at a time for messages, gallery, and recent posts.
+                </p>
               </div>
             </div>
             {!selectedFriend ? (
-              <p className="status">Select a friend to see their recent posts.</p>
+              <div className="friends-empty-state friends-empty-state--spotlight">
+                <p className="eyebrow">Choose a friend</p>
+                <strong>Select someone from the browser to see their recent activity.</strong>
+                <span>Messages, gallery items, and posts will appear here.</span>
+              </div>
             ) : (
-                <div className="friend-detail">
-                  <div className="friend-header">
+              <div className="friend-detail">
+                <div className="friend-overview-card">
+                  <div className="friend-overview-card__main">
                     <button
                       type="button"
                       className="friend-avatar-trigger"
@@ -1314,85 +1707,158 @@ export default function Friends() {
                       aria-label="Choose a different friend"
                       title="Choose a different friend"
                     >
-                      {renderAvatar(selectedFriend, 48)}
+                      {renderAvatar(selectedFriend, 58)}
                     </button>
                     <div className="friend-header-meta">
                       <div className="friend-header-title">
-                      <strong>
-                        {`${selectedFriend.firstName || ""} ${selectedFriend.lastName || ""}`.trim() ||
-                          `@${selectedFriend.handle || "friend"}`}
-                      </strong>
-                      <button
-                        className={`friend-favorite-star${
-                          selectedFriend.favorite ? " is-active" : ""
-                        }`}
-                        type="button"
-                        onClick={() => handleToggleFavorite(selectedFriend)}
-                        aria-label={
-                          selectedFriend.favorite
-                            ? "Remove favorite"
-                            : "Mark as favorite"
-                        }
-                        title={
-                          selectedFriend.favorite
-                            ? "Remove favorite"
-                            : "Mark as favorite"
-                        }
-                        disabled={isBlocked}
-                      >
-                        <span aria-hidden="true">
-                          {selectedFriend.favorite ? "★" : "☆"}
-                        </span>
-                      </button>
-                    </div>
-                    <span className="friend-name">
-                      @{selectedFriend.handle || "friend"}
-                    </span>
-                    {canShowSelectedActivity && (
-                      <span className="friend-activity">{selectedActivityLabel}</span>
-                    )}
-                    {(isBlocked || isMuted) && (
-                      <div className="friend-status-row">
-                        {isBlocked && <span className="friend-status-pill is-blocked">Blocked</span>}
-                        {isMuted && <span className="friend-status-pill is-muted">Muted</span>}
+                        <strong>{selectedDisplayName}</strong>
+                        <button
+                          className={`friend-favorite-star${
+                            selectedFriend.favorite ? " is-active" : ""
+                          }`}
+                          type="button"
+                          onClick={() => handleToggleFavorite(selectedFriend)}
+                          aria-label={
+                            selectedFriend.favorite
+                              ? "Remove favorite"
+                              : "Mark as favorite"
+                          }
+                          title={
+                            selectedFriend.favorite
+                              ? "Remove favorite"
+                              : "Mark as favorite"
+                          }
+                          disabled={isBlocked}
+                        >
+                          <span aria-hidden="true">
+                            {selectedFriend.favorite ? "★" : "☆"}
+                          </span>
+                        </button>
                       </div>
-                    )}
+                      <span className="friend-name">@{selectedFriend.handle || "friend"}</span>
+                      {canShowSelectedActivity && (
+                        <span
+                          className={`friend-activity-badge${
+                            selectedOnline ? " is-online" : ""
+                          }`}
+                        >
+                          {selectedActivityLabel}
+                        </span>
+                      )}
+                      {selectedInterests.length > 0 && (
+                        <div className="friend-interest-list">
+                          {selectedInterests.map((interest) => (
+                            <span key={interest} className="friend-interest-pill">
+                              {interest}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {(isBlocked || isMuted) && (
+                        <div className="friend-status-row">
+                          {isBlocked && (
+                            <span className="friend-status-pill is-blocked">Blocked</span>
+                          )}
+                          {isMuted && (
+                            <span className="friend-status-pill is-muted">Muted</span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="friend-detail-actions">
+                    <button
+                      className="btn primary"
+                      type="button"
+                      onClick={() => handleOpenChat(selectedFriend)}
+                      disabled={isBlocked}
+                    >
+                      Message
+                    </button>
+                    <button
+                      className="btn ghost friend-video-call"
+                      type="button"
+                      onClick={() => handleVideoCall(selectedFriend)}
+                      disabled={isBlocked}
+                    >
+                      Video call
+                    </button>
+                    <button
+                      className="btn ghost"
+                      type="button"
+                      onClick={handleShowProfile}
+                      disabled={!selectedFriend?.userId}
+                    >
+                      Show Profile
+                    </button>
                   </div>
                 </div>
-                <p className="comment-body">
-                  {canShowSelectedBio
-                    ? selectedFriend.bio || "No bio yet."
-                    : "Bio hidden by privacy settings."}
-                </p>
-                <div className="friend-detail-actions">
-                  <button
-                    className="btn primary"
-                    type="button"
-                    onClick={() => handleOpenChat(selectedFriend)}
-                    disabled={isBlocked}
-                  >
-                    Message
-                  </button>
-                  <button
-                    className="btn ghost friend-video-call"
-                    type="button"
-                    onClick={() => handleVideoCall(selectedFriend)}
-                    disabled={isBlocked}
-                  >
-                    Video call
-                  </button>
-                  <button
-                    className="btn ghost"
-                    type="button"
-                    onClick={handleShowProfile}
-                    disabled={!selectedFriend?.userId}
-                  >
-                    Show Profile
-                  </button>
+
+                <div className="friend-summary-grid">
+                  <article className="friend-summary-card">
+                    <span className="friend-summary-card__icon">
+                      <MapPin size={16} />
+                    </span>
+                    <div>
+                      <p>Location</p>
+                      <strong>{selectedLocation || "Not shared yet"}</strong>
+                    </div>
+                  </article>
+                  <article className="friend-summary-card">
+                    <span className="friend-summary-card__icon is-cyan">
+                      <ImageIcon size={16} />
+                    </span>
+                    <div>
+                      <p>Gallery items</p>
+                      <strong>{friendMedia.length}</strong>
+                    </div>
+                  </article>
+                  <article className="friend-summary-card">
+                    <span className="friend-summary-card__icon is-violet">
+                      <ScrollText size={16} />
+                    </span>
+                    <div>
+                      <p>Recent posts</p>
+                      <strong>{selectedPosts.length}</strong>
+                    </div>
+                  </article>
+                  <article className="friend-summary-card">
+                    <span className="friend-summary-card__icon is-warm">
+                      <Heart size={16} />
+                    </span>
+                    <div>
+                      <p>About them</p>
+                      <strong>
+                        {selectedFriend.occupation ||
+                          selectedFriend.religion ||
+                          selectedInterests[0] ||
+                          "Still getting to know them"}
+                      </strong>
+                    </div>
+                  </article>
                 </div>
-                <div className="friend-media">
+
+                <div className="friend-bio-card">
+                  <p className="eyebrow">About</p>
+                  <p className="comment-body">
+                    {canShowSelectedBio
+                      ? selectedFriend.bio || "No bio yet."
+                      : "Bio hidden by privacy settings."}
+                  </p>
+                </div>
+
+                {actionError && <p className="status status-error">{actionError}</p>}
+                {actionNotice && <p className="status">{actionNotice}</p>}
+
+                <div className="friend-content-grid">
+                  <div className="friend-media friend-surface-card">
                   <div className="friend-media__header">
-                    <h4>Gallery</h4>
+                    <div>
+                      <h4>Gallery</h4>
+                      <p className="panel-sub">
+                        Photos and videos shared by this friend.
+                      </p>
+                    </div>
                     <div className="friend-media__tabs">
                       <button
                         type="button"
@@ -1508,13 +1974,17 @@ export default function Friends() {
                       })}
                     </div>
                   )}
-                </div>
-                {actionError && <p className="status status-error">{actionError}</p>}
-                {actionNotice && <p className="status">{actionNotice}</p>}
-                <div className="comments">
-                  <div className="friend-posts-header">
-                    <p className="eyebrow">Most recent posts</p>
                   </div>
+                  <div className="comments friend-posts-section friend-surface-card">
+                    <div className="friend-posts-header">
+                      <div>
+                        <p className="eyebrow">Most recent posts</p>
+                        <p className="panel-sub">
+                          Stay current with what {selectedFriend.firstName || "your friend"} has
+                          shared.
+                        </p>
+                      </div>
+                    </div>
                   {!canViewPosts ? (
                     <p className="status">
                       {isBlocked
@@ -1540,10 +2010,12 @@ export default function Friends() {
                   ) : (
                     <p className="status">No posts yet.</p>
                   )}
+                  </div>
                 </div>
-                </div>
+              </div>
               )}
           </section>
+        </div>
         </div>
 
       </div>

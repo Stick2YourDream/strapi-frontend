@@ -31,6 +31,8 @@ export type LivenessResult = {
   livenessStartedAt: string | null;
 };
 
+export const LIVENESS_SELFIE_TOTAL = 3;
+
 type LivenessModuleProps = {
   initialValue?: Partial<LivenessResult>;
   onChange?: (data: LivenessResult) => void;
@@ -49,10 +51,9 @@ const DEFAULT_DATA: LivenessResult = {
 };
 
 const LIVENESS_PROMPTS = [
+  "Look straight ahead.",
   "Look left.",
-  "Look up.",
   "Look right.",
-  "Look down.",
 ] as const;
 
 const SELFIE_COUNTDOWN_SECONDS = 0;
@@ -122,18 +123,19 @@ const LANDMARK_INDEX = {
   CHIN: 152,
 } as const;
 
-const shufflePrompts = (prompts: readonly string[]) => {
-  const next = [...prompts];
-  for (let i = next.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [next[i], next[j]] = [next[j], next[i]];
-  }
-  return next;
-};
+const getPromptSequence = (prompts: readonly string[]) => [...prompts];
 
 const hasPromptOrder = (prompts: readonly string[]) =>
   prompts.length === LIVENESS_PROMPTS.length &&
-  LIVENESS_PROMPTS.every((prompt) => prompts.includes(prompt));
+  LIVENESS_PROMPTS.every((prompt, index) => prompts[index] === prompt);
+
+const restoreDocumentInteractivity = () => {
+  if (typeof document === "undefined") return;
+  document.body.style.overflow = "";
+  document.body.style.touchAction = "";
+  document.documentElement.style.overflow = "";
+  document.documentElement.style.touchAction = "";
+};
 
 const usePreviewUrl = (file: File | null) => {
   const [url, setUrl] = useState<string | null>(null);
@@ -314,14 +316,11 @@ export default function LivenessModule({
   const selfiePreview1 = usePreviewUrl(selfies[0] ?? null);
   const selfiePreview2 = usePreviewUrl(selfies[1] ?? null);
   const selfiePreview3 = usePreviewUrl(selfies[2] ?? null);
-  const selfiePreview4 = usePreviewUrl(selfies[3] ?? null);
-  const selfiePreviews = [selfiePreview1, selfiePreview2, selfiePreview3, selfiePreview4];
+  const selfiePreviews = [selfiePreview1, selfiePreview2, selfiePreview3];
   const promptDirection = useMemo(() => {
     const prompt = (activeSelfiePrompt || "").toLowerCase();
     if (prompt.includes("look left") || prompt.includes("head left")) return "left";
     if (prompt.includes("look right") || prompt.includes("head right")) return "right";
-    if (prompt.includes("look up")) return "up";
-    if (prompt.includes("look down")) return "down";
     return null;
   }, [activeSelfiePrompt]);
   const displayPromptDirection = useMemo(() => {
@@ -335,19 +334,16 @@ export default function LivenessModule({
     const raw = (activeSelfiePrompt || livenessPrompts[0] || "").trim();
     const lower = raw.toLowerCase();
     let action = raw || "Follow the prompt below.";
-    let key: "left" | "right" | "up" | "down" | null = null;
-    if (lower.includes("look left") || lower.includes("head left")) {
+    let key: "straight" | "left" | "right" | null = null;
+    if (lower.includes("straight") || lower.includes("ahead")) {
+      action = "Look straight ahead.";
+      key = "straight";
+    } else if (lower.includes("look left") || lower.includes("head left")) {
       action = "Look left.";
       key = "left";
     } else if (lower.includes("look right") || lower.includes("head right")) {
       action = "Look right.";
       key = "right";
-    } else if (lower.includes("look up")) {
-      action = "Look up.";
-      key = "up";
-    } else if (lower.includes("look down")) {
-      action = "Look down.";
-      key = "down";
     }
     return { raw, action, key };
   }, [activeSelfiePrompt, livenessPrompts]);
@@ -644,7 +640,7 @@ export default function LivenessModule({
       if (prev.selfies.length >= selfieTotal) return prev;
       const mergedPrompts = hasPromptOrder(prev.livenessPrompts)
         ? prev.livenessPrompts
-        : shufflePrompts(LIVENESS_PROMPTS);
+        : getPromptSequence(LIVENESS_PROMPTS);
       return {
         ...prev,
         selfies: [...prev.selfies, file],
@@ -652,20 +648,11 @@ export default function LivenessModule({
         livenessStartedAt: prev.livenessStartedAt || startedAt,
       };
     });
-
-    if (nextCount < selfieTotal) {
-      const message = "Complete";
-      if (!pendingMessage || pendingMessage !== message) {
-        const duration = 800;
-      triggerCompletionNotice(message, duration);
-      }
-    }
   }, [
     livenessStartedAt,
     selfieCount,
     selfieTotal,
     triggerCaptureFlash,
-    triggerCompletionNotice,
     updateData,
   ]);
 
@@ -681,8 +668,6 @@ export default function LivenessModule({
     setCountdown(durationSeconds);
     setCountdownProgress(1);
     const currentCount = selfieCountRef.current;
-    const isFinalCapture = currentCount + 1 >= selfieTotal;
-    const nextMessage = isFinalCapture ? null : "Complete";
     const tick = (now: number) => {
       const elapsed = now - startAt;
       const remainingMs = Math.max(0, durationSeconds * 1000 - elapsed);
@@ -698,10 +683,6 @@ export default function LivenessModule({
           if (currentCount < selfieTotal) {
             const nextCount = Math.min(currentCount + 1, selfieTotal);
             setPendingSelfieTarget(nextCount);
-            if (nextMessage) {
-              pendingCompletionRef.current = nextMessage;
-              triggerCompletionNotice(nextMessage, 800);
-            }
             triggerCaptureFlash();
             void captureFrame();
           }
@@ -717,7 +698,6 @@ export default function LivenessModule({
     captureFrame,
     selfieTotal,
     triggerCaptureFlash,
-    triggerCompletionNotice,
   ]);
 
   const captureMotionProof = useCallback(async () => {
@@ -842,7 +822,7 @@ export default function LivenessModule({
     updateData((prev) => {
       const prompts = hasPromptOrder(prev.livenessPrompts)
         ? prev.livenessPrompts
-        : shufflePrompts(LIVENESS_PROMPTS);
+        : getPromptSequence(LIVENESS_PROMPTS);
       return {
         ...prev,
         livenessPrompts: prompts,
@@ -979,7 +959,7 @@ export default function LivenessModule({
     if (hasPromptOrder(livenessPrompts)) return;
     updateData((prev) => ({
       ...prev,
-      livenessPrompts: shufflePrompts(LIVENESS_PROMPTS),
+      livenessPrompts: getPromptSequence(LIVENESS_PROMPTS),
       livenessStartedAt: prev.livenessStartedAt || new Date().toISOString(),
     }));
   }, [active, livenessPrompts, updateData]);
@@ -1008,6 +988,7 @@ export default function LivenessModule({
     }
     selfieCloseTimerRef.current = window.setTimeout(() => {
       selfieCloseTimerRef.current = null;
+      restoreDocumentInteractivity();
       setActive(false);
     }, 900);
     onComplete?.(data);
@@ -1082,6 +1063,7 @@ export default function LivenessModule({
         selfieCloseTimerRef.current = null;
       }
       cancelPrep();
+      restoreDocumentInteractivity();
     };
   }, [cancelPrep]);
 
@@ -1362,13 +1344,13 @@ export default function LivenessModule({
       // to map user-left/right to prompt-left/right.
       const yawForPrompt = -yaw;
       let satisfied = false;
-      if (prompt.includes("look left") || prompt.includes("head left")) {
+      if (prompt.includes("straight") || prompt.includes("ahead")) {
+        satisfied = Math.abs(yawForPrompt) < 0.05 && pitch > 0.35 && pitch < 0.58;
+      } else if (prompt.includes("look left") || prompt.includes("head left")) {
         satisfied = yawForPrompt < -0.08;
       } else if (prompt.includes("look right") || prompt.includes("head right")) {
         satisfied = yawForPrompt > 0.08;
       }
-      else if (prompt.includes("look up")) satisfied = pitch < 0.35;
-      else if (prompt.includes("look down")) satisfied = pitch > 0.6;
 
       if (promptSatisfiedRef.current !== satisfied) {
         promptSatisfiedRef.current = satisfied;
@@ -1674,8 +1656,6 @@ export default function LivenessModule({
                 <div className={`prompt-arrow ${displayPromptDirection}`}>
                   {displayPromptDirection === "left" && "←"}
                   {displayPromptDirection === "right" && "→"}
-                  {displayPromptDirection === "up" && "↑"}
-                  {displayPromptDirection === "down" && "↓"}
                 </div>
               )}
             </div>
@@ -1822,6 +1802,7 @@ export default function LivenessModule({
                     selfieCloseTimerRef.current = null;
                   }
                   setCompletionNotice(null);
+                  restoreDocumentInteractivity();
                   setActive(false);
                 })}
               >

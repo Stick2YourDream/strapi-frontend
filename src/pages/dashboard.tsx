@@ -506,7 +506,7 @@ const MAX_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024;
 const MAX_VIDEO_UPLOAD_LABEL = "100 MB";
 const MAX_POST_MEDIA_FILES = 10;
 const MAX_COMMENT_MEDIA_FILES = 4;
-const DASHBOARD_DESKTOP_SIDEBAR_KEY = "dashboard:desktop-sidebar-collapsed";
+const DASHBOARD_DESKTOP_SIDEBAR_KEY = "dashboard:desktop-sidebar-collapsed:v2";
 const USERS_POST_POPULATE =
   "populate[0]=Users_Pictures&populate[1]=owner&populate[2]=feedbackTarget&populate[3]=trustedCircle";
 const GROUP_POST_POPULATE = "populate[0]=media&populate[1]=owner&populate[2]=group";

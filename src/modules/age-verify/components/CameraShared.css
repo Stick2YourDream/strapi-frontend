@@ -46,6 +46,13 @@
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+  position: relative;
+  z-index: 2;
+}
+
+.capture-actions .btn {
+  pointer-events: auto;
+  touch-action: manipulation;
 }
 
 .motion-panel {

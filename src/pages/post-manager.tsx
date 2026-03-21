@@ -10,6 +10,7 @@ import {
 } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
+import { Eye, FolderClosed, Link2 } from "lucide-react";
 import api from "../api/strapi";
 import Sidebar from "../components/Sidebar";
 import TopbarSearch from "../components/TopbarSearch";
@@ -1817,6 +1818,10 @@ export default function PostManagerPage(): JSX.Element {
                 const postUrl = extractFirstUrl(post.text);
                 const preview = postUrl ? previewCache[postUrl] : undefined;
                 const previewImage = preview?.image;
+                const visibilityLabel = post.visibility
+                  ? `Visibility: ${post.visibility}`
+                  : "Visibility: friends";
+                const sourceLabel = preview?.siteName ? `Source: ${preview.siteName}` : "Source";
                 return (
                   <article
                     key={postKey}
@@ -1884,27 +1889,48 @@ export default function PostManagerPage(): JSX.Element {
                         {formatPostUpdateLabel(post.createdAt || "")}
                       </p>
                       <p className="post-manager-card-text">{post.text || "No caption."}</p>
-                      <div className="post-manager-card-meta">
+                      <div className="post-manager-card-meta post-manager-card-meta--icons">
                         <button
                           type="button"
-                          className="post-manager-pill post-manager-pill-action post-manager-pill--visibility"
+                          className="post-manager-icon-btn"
+                          data-pm-tooltip={visibilityLabel}
+                          aria-label={visibilityLabel}
+                          title={visibilityLabel}
                           onClick={(event) => openVisibilityEditor(post, event)}
                           onTouchStart={(event) => event.stopPropagation()}
                           onTouchEnd={(event) => event.stopPropagation()}
                         >
-                          {post.visibility ? `Visibility: ${post.visibility}` : "Visibility: friends"}
+                          <Eye size={16} aria-hidden="true" />
                         </button>
                         <button
                           type="button"
-                          className="post-manager-pill post-manager-pill-action"
+                          className="post-manager-icon-btn"
+                          data-pm-tooltip={`Folder: ${folderLabel}`}
+                          aria-label={`Folder: ${folderLabel}`}
+                          title={`Folder: ${folderLabel}`}
                           onClick={(event) => openFolderEditor(postKey, event)}
                           onTouchStart={(event) => event.stopPropagation()}
                           onTouchEnd={(event) => event.stopPropagation()}
                         >
-                          {`Folder: ${folderLabel}`}
+                          <FolderClosed size={16} aria-hidden="true" />
                         </button>
                         {!post.media && preview?.siteName && (
-                          <span className="post-manager-pill">Source: {preview.siteName}</span>
+                          <button
+                            type="button"
+                            className="post-manager-icon-btn post-manager-icon-btn--source"
+                            data-pm-tooltip={sourceLabel}
+                            aria-label={sourceLabel}
+                            title={sourceLabel}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              if (!postUrl) return;
+                              window.open(postUrl, "_blank", "noopener,noreferrer");
+                            }}
+                            onTouchStart={(event) => event.stopPropagation()}
+                            onTouchEnd={(event) => event.stopPropagation()}
+                          >
+                            <Link2 size={16} aria-hidden="true" />
+                          </button>
                         )}
                       </div>
                     </div>

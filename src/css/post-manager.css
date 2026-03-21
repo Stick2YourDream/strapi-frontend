@@ -179,7 +179,7 @@
 .post-manager-card {
   border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: 16px;
-  overflow: hidden;
+  overflow: visible;
   background: linear-gradient(155deg, rgba(9, 18, 34, 0.94), rgba(7, 10, 22, 0.98));
   box-shadow: 0 16px 28px rgba(4, 8, 20, 0.38);
   display: grid;
@@ -201,6 +201,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
+  border-top-left-radius: 15px;
+  border-top-right-radius: 15px;
 }
 
 .post-manager-card-menu-btn {
@@ -293,6 +296,124 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.post-manager-card-meta--icons {
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  overflow: visible;
+}
+
+.post-manager-icon-btn {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 12px;
+  border: 1px solid rgba(96, 165, 250, 0.42);
+  background:
+    radial-gradient(130% 140% at 0% 0%, rgba(56, 189, 248, 0.2), rgba(56, 189, 248, 0)),
+    linear-gradient(145deg, rgba(9, 18, 36, 0.96), rgba(4, 10, 24, 0.96));
+  color: #dbeafe;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease,
+    background 0.16s ease;
+}
+
+.post-manager-icon-btn:hover,
+.post-manager-icon-btn:focus-visible {
+  transform: translateY(-1px);
+  border-color: rgba(125, 211, 252, 0.82);
+  box-shadow: 0 6px 12px rgba(4, 10, 24, 0.34);
+  background:
+    radial-gradient(130% 140% at 0% 0%, rgba(56, 189, 248, 0.28), rgba(56, 189, 248, 0)),
+    linear-gradient(145deg, rgba(12, 24, 46, 0.98), rgba(6, 12, 28, 0.98));
+}
+
+.post-manager-icon-btn:focus-visible {
+  outline: 2px solid rgba(125, 211, 252, 0.6);
+  outline-offset: 2px;
+}
+
+.post-manager-icon-btn--source {
+  border-color: rgba(129, 140, 248, 0.44);
+  color: #c7d2fe;
+}
+
+.post-manager-icon-btn--source:hover,
+.post-manager-icon-btn--source:focus-visible {
+  border-color: rgba(165, 180, 252, 0.78);
+}
+
+.post-manager-icon-btn[data-pm-tooltip]::before,
+.post-manager-icon-btn[data-pm-tooltip]::after {
+  position: absolute;
+  left: 50%;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.12s ease, transform 0.12s ease, visibility 0s linear 0.12s;
+  z-index: 12;
+}
+
+.post-manager-icon-btn[data-pm-tooltip]::before {
+  content: "";
+  bottom: calc(100% + 6px);
+  width: 8px;
+  height: 8px;
+  transform: translate(-50%, 6px) rotate(45deg);
+  background: linear-gradient(145deg, rgba(19, 34, 67, 0.98), rgba(8, 15, 34, 0.98));
+  border-left: 1px solid rgba(125, 211, 252, 0.45);
+  border-top: 1px solid rgba(125, 211, 252, 0.45);
+  box-shadow: 0 10px 20px rgba(3, 8, 20, 0.45);
+}
+
+.post-manager-icon-btn[data-pm-tooltip]::after {
+  content: attr(data-pm-tooltip);
+  bottom: calc(100% + 12px);
+  transform: translate(-50%, 6px) scale(0.98);
+  min-width: max-content;
+  max-width: 230px;
+  padding: 7px 11px;
+  border-radius: 11px;
+  border: 1px solid rgba(125, 211, 252, 0.5);
+  background:
+    radial-gradient(130% 140% at 0% 0%, rgba(56, 189, 248, 0.22), rgba(56, 189, 248, 0)),
+    linear-gradient(145deg, rgba(14, 28, 58, 0.98), rgba(7, 14, 30, 0.98));
+  color: #e6f2ff;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  line-height: 1.25;
+  white-space: nowrap;
+  box-shadow:
+    0 14px 28px rgba(3, 8, 20, 0.58),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.post-manager-icon-btn[data-pm-tooltip]:hover::before,
+.post-manager-icon-btn[data-pm-tooltip]:hover::after,
+.post-manager-icon-btn[data-pm-tooltip]:focus-visible::before,
+.post-manager-icon-btn[data-pm-tooltip]:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 0.02s;
+}
+
+.post-manager-icon-btn[data-pm-tooltip]:hover::before,
+.post-manager-icon-btn[data-pm-tooltip]:focus-visible::before {
+  transform: translate(-50%, 0) rotate(45deg);
+}
+
+.post-manager-icon-btn[data-pm-tooltip]:hover::after,
+.post-manager-icon-btn[data-pm-tooltip]:focus-visible::after {
+  transform: translate(-50%, -2px) scale(1);
 }
 
 .post-manager-pill {

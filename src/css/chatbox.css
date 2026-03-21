@@ -11,7 +11,8 @@
   );
   position: fixed;
   bottom: 18px;
-  right: 18px;
+  left: auto;
+  right: calc(var(--right-sidebar-width, 0px) + var(--right-sidebar-gap, 0px) + 18px);
   width: 360px;
   max-height: 90vh;
   background: var(--chat-panel-fill);

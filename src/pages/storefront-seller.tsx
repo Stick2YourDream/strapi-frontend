@@ -12,6 +12,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import "../css/dashboard.css";
 import "../css/storefront-seller.css";
 import "../css/mobile-storefront-seller.css";
+import "../css/storefront-seller-dashboard.css";
 import Sidebar from "../components/Sidebar";
 import StorefrontSellerDashboard from "../components/storefront-seller/StorefrontSellerDashboard";
 import SellerChatModal from "../components/storefront-seller/modals/SellerChatModal";
@@ -252,7 +253,7 @@ type DraftProduct = {
 
 type VerificationItem = {
   label: string;
-  status: "verified" | "pending" | "optional";
+  status: "verified" | "pending" | "optional" | "saved";
   detail: string;
 };
 
@@ -605,6 +606,14 @@ const getStatusTone = (value?: string | null) => {
   return "is-neutral";
 };
 
+const formatStatusLabel = (value?: string | null) => {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "Unknown";
+  return normalized
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (token) => token.toUpperCase());
+};
+
 const SETUP_ACTION_LABELS: Record<SetupChecklistItem["id"], string> = {
   listing: "List a product",
   payout: "Add payout method",
@@ -612,7 +621,8 @@ const SETUP_ACTION_LABELS: Record<SetupChecklistItem["id"], string> = {
 
 const buildSellerVerification = (
   status?: VerificationStatus | null,
-  ageVerified?: boolean
+  ageVerified?: boolean,
+  hasPayoutMethod?: boolean
 ): VerificationItem[] => [
   {
     label: "Age verification",
@@ -623,8 +633,15 @@ const buildSellerVerification = (
   },
   {
     label: "Payout method",
-    status: normalizeStatus(status?.sellerPayoutStatus),
-    detail: "Optional payout verification",
+    status:
+      normalizeStatus(status?.sellerPayoutStatus) === "verified"
+        ? "verified"
+        : hasPayoutMethod
+        ? "saved"
+        : "pending",
+    detail: hasPayoutMethod
+      ? "Payout method saved for seller payouts."
+      : "Add a payout method to receive StoreFront earnings.",
   },
   {
     label: "Activity history",
@@ -940,6 +957,46 @@ export default function StorefrontSeller(): JSX.Element {
   }, [isListingView]);
 
   useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get("messages") !== "1" || isListingView) return;
+    setPopoutMinimized(true);
+    setStorefrontChatOpen(true);
+    params.delete("messages");
+    navigate(
+      {
+        pathname: location.pathname,
+        search: params.toString() ? `?${params.toString()}` : "",
+        hash: location.hash,
+      },
+      { replace: true }
+    );
+  }, [
+    isListingView,
+    location.hash,
+    location.pathname,
+    location.search,
+    navigate,
+    setPopoutMinimized,
+  ]);
+
+  useEffect(() => {
+    if (isListingView) return;
+    const params = new URLSearchParams(location.search);
+    const requestedModule = String(params.get("dashboard") || "").trim();
+    if (!requestedModule) return;
+    setActiveDashboardModule(requestedModule);
+    params.delete("dashboard");
+    navigate(
+      {
+        pathname: location.pathname,
+        search: params.toString() ? `?${params.toString()}` : "",
+        hash: location.hash,
+      },
+      { replace: true }
+    );
+  }, [isListingView, location.hash, location.pathname, location.search, navigate]);
+
+  useEffect(() => {
     if (!accountMenuOpen) return;
     const handleClick = (event: Event) => {
       if (!accountMenuRef.current) return;
@@ -1235,7 +1292,9 @@ export default function StorefrontSeller(): JSX.Element {
 
   const loadSelfVerification = useCallback(async () => {
     try {
-      const res = await api.get("/marketplace-verifications/me");
+      const res = await api.get("/marketplace-verifications/me", {
+        params: { _: Date.now() },
+      });
       const entry = res.data?.data;
       setSelfVerification(entry ? (normalize(entry) as VerificationStatus) : null);
     } catch {
@@ -1499,6 +1558,7 @@ export default function StorefrontSeller(): JSX.Element {
         setVerificationNotice("Your age is already verified.");
         return;
       }
+      setActiveDashboardModule(null);
       const params = new URLSearchParams(location.search);
       params.set("ageVerify", "1");
       setVerificationNotice("Starting age verification...");
@@ -2536,16 +2596,6 @@ export default function StorefrontSeller(): JSX.Element {
     [isMockMode, disputes, sellerDashboardMockData?.disputes]
   );
 
-  const sellerVerificationItems = useMemo(
-    () =>
-      buildSellerVerification(
-        isMockMode ? sellerDashboardMockData?.verification ?? null : selfVerification,
-        user?.ageVerified === true
-      ),
-    [isMockMode, sellerDashboardMockData?.verification, selfVerification, user?.ageVerified]
-  );
-
-
   const sellerListings = useMemo(
     () => dashboardProducts.filter((product) => product.seller.userId === user?.id),
     [dashboardProducts, user?.id]
@@ -2559,6 +2609,21 @@ export default function StorefrontSeller(): JSX.Element {
   const sellerIdVerified =
     sellerAgeVerified || normalizeStatus(verificationSource?.sellerIdStatus) === "verified";
   const sellerPayoutVerified = normalizeStatus(verificationSource?.sellerPayoutStatus) === "verified";
+  const sellerHasPayoutMethod = Boolean(
+    verificationSource?.paypalMerchantIdInPayPal ||
+      verificationSource?.payoutEmail ||
+      payoutEmail.trim()
+  );
+
+  const sellerVerificationItems = useMemo(
+    () =>
+      buildSellerVerification(
+        verificationSource,
+        user?.ageVerified === true,
+        sellerHasPayoutMethod
+      ),
+    [sellerHasPayoutMethod, user?.ageVerified, verificationSource]
+  );
 
   const sellerIsVerified = useMemo(() => {
     return sellerIdVerified && sellerPayoutVerified;
@@ -2573,18 +2638,7 @@ export default function StorefrontSeller(): JSX.Element {
   const sellerFeePercent = sellerIsVerified ? 2 : 4;
 
   const setupChecklist = useMemo<SetupChecklistItem[]>(() => {
-    const payoutStatus = normalizeStatus(verificationSource?.sellerPayoutStatus);
-    const payoutHasMethod = Boolean(
-      verificationSource?.paypalMerchantIdInPayPal ||
-        verificationSource?.payoutEmail ||
-        payoutEmail.trim()
-    );
-    const payoutState =
-      payoutStatus === "verified"
-        ? "done"
-        : payoutHasMethod
-        ? "pending"
-        : "required";
+    const payoutState = sellerHasPayoutMethod || sellerPayoutVerified ? "done" : "required";
     return [
       {
         id: "listing",
@@ -2598,10 +2652,9 @@ export default function StorefrontSeller(): JSX.Element {
       },
     ];
   }, [
-    payoutEmail,
     sellerListings.length,
-    verificationSource?.payoutEmail,
-    verificationSource?.sellerPayoutStatus,
+    sellerHasPayoutMethod,
+    sellerPayoutVerified,
   ]);
 
   const sellerListingIds = useMemo(
@@ -2789,6 +2842,12 @@ export default function StorefrontSeller(): JSX.Element {
     async (order: MarketplaceOrder) => {
       if (!canRefundOrder(order)) return;
       if (orderActionLoading[order.id]) return;
+      if (typeof window !== "undefined") {
+        const confirmed = window.confirm(
+          `Refund ${formatCurrency(order.amount, order.currency)} to ${order.buyerName} for "${order.listingTitle}"?`
+        );
+        if (!confirmed) return;
+      }
       setOrderActionError(null);
       setOrderActionNotice(null);
       setOrderActionLoading((prev) => ({ ...prev, [order.id]: true }));
@@ -2809,7 +2868,7 @@ export default function StorefrontSeller(): JSX.Element {
         });
       }
     },
-    [canRefundOrder, loadOrders, orderActionLoading]
+    [canRefundOrder, formatCurrency, loadOrders, orderActionLoading]
   );
 
   const handleMessageReplyToggle = useCallback((threadKey: string) => {
@@ -2944,6 +3003,29 @@ export default function StorefrontSeller(): JSX.Element {
     [buyerPayments]
   );
 
+  const snapshotSalesSeries = useMemo(() => {
+    const now = new Date();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const start = new Date(now.getTime() - revenueRange * dayMs);
+    start.setHours(0, 0, 0, 0);
+
+    return buyerPayments
+      .map((order) => {
+        const date = new Date(order.createdAt);
+        if (Number.isNaN(date.getTime()) || date < start) return null;
+        return {
+          ts: date.getTime(),
+          label: date.toLocaleDateString("en-US", {
+            month: "short",
+            day: "numeric",
+          }),
+          total: Number(order.net || order.amount || 0),
+        };
+      })
+      .filter((point): point is { ts: number; label: string; total: number } => Boolean(point))
+      .sort((a, b) => a.ts - b.ts);
+  }, [buyerPayments, revenueRange]);
+
   const earningsSeries = useMemo(() => {
     const now = new Date();
     const dayMs = 24 * 60 * 60 * 1000;
@@ -2983,33 +3065,62 @@ export default function StorefrontSeller(): JSX.Element {
     [earningsSeries]
   );
   const snapshotChart = useMemo(() => {
-    const source = trendPreviewSeries.length
+    const periodSource = trendPreviewSeries.length
       ? trendPreviewSeries
       : [{ label: "Now", total: 0 }];
-    const max = Math.max(...source.map((point) => Number(point.total) || 0), 1);
-    const points = source.map((point, index) => {
-      const x = source.length === 1 ? 50 : (index / (source.length - 1)) * 100;
-      const y = 100 - ((Number(point.total) || 0) / max) * 100;
-      return { x, y };
+    const plotSource = snapshotSalesSeries.length ? snapshotSalesSeries : periodSource;
+    const max = Math.max(...plotSource.map((point) => Number(point.total) || 0), 1);
+    const leftBound = 6;
+    const rightBound = 94;
+    const topBound = 10;
+    const bottomBound = 90;
+    const chartHeight = bottomBound - topBound;
+    const points = plotSource.map((point, index) => {
+      const total = Number(point.total) || 0;
+      const x =
+        plotSource.length === 1
+          ? 50
+          : leftBound + (index / (plotSource.length - 1)) * (rightBound - leftBound);
+      const y = bottomBound - (total / max) * chartHeight;
+      return { x, y, label: point.label, total };
     });
     const linePath = points
       .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`)
       .join(" ");
-    const areaPath = `${linePath} L 100 100 L 0 100 Z`;
+    const tickIndexes =
+      plotSource.length <= 3
+        ? plotSource.map((_, index) => index)
+        : [0, Math.floor((plotSource.length - 1) / 2), plotSource.length - 1];
+    const xTicks = Array.from(
+      new Set(tickIndexes.map((index) => plotSource[index]?.label ?? "").filter(Boolean))
+    );
+    const yTicks = [max, max * 0.5, 0].map((value, index) =>
+      index === 2 ? 0 : Number(value.toFixed(2))
+    );
+    const latestPoint = periodSource[periodSource.length - 1];
+    const previousPoint = periodSource[periodSource.length - 2] ?? latestPoint;
     return {
       points,
       linePath,
-      areaPath,
+      xTicks,
+      yTicks,
+      rangeStartLabel: periodSource[0]?.label ?? latestPoint?.label ?? "Now",
+      latestLabel: latestPoint?.label ?? "Now",
+      latestValue: Number(latestPoint?.total) || 0,
+      previousValue: Number(previousPoint?.total) || 0,
+      maxValue: max,
+      topBound,
+      bottomBound,
     };
-  }, [trendPreviewSeries]);
+  }, [snapshotSalesSeries, trendPreviewSeries]);
 
   const payoutPending = useMemo(
     () =>
       sellerOrders.filter((order) => {
         const payoutStatus = String(order.payoutStatus || "").toLowerCase();
         const orderStatus = String(order.status || "").toLowerCase();
-        const isPaidOrder = ["paid", "approved", "completed", "delivered"].includes(orderStatus);
-        return payoutStatus === "pending" && isPaidOrder;
+        const blockedStatuses = ["cancelled", "canceled", "refunded", "failed", "disputed"];
+        return payoutStatus === "pending" && !blockedStatuses.includes(orderStatus);
       }),
     [sellerOrders]
   );
@@ -3152,6 +3263,21 @@ export default function StorefrontSeller(): JSX.Element {
     }
   };
 
+  const getSetupActionLabel = useCallback(
+    (id: SetupChecklistItem["id"]) => {
+      if (id === "listing") {
+        return sellerListings.length > 0 ? "Manage listings" : SETUP_ACTION_LABELS.listing;
+      }
+      if (id === "payout") {
+        return sellerHasPayoutMethod || sellerPayoutVerified
+          ? "Payment methods"
+          : SETUP_ACTION_LABELS.payout;
+      }
+      return SETUP_ACTION_LABELS[id];
+    },
+    [sellerHasPayoutMethod, sellerListings.length, sellerPayoutVerified]
+  );
+
   const baseCardBg = useMemo(
     () => toRgba(dashboardTheme.cardBg, dashboardTheme.cardOpacity),
     [dashboardTheme]
@@ -3288,28 +3414,116 @@ export default function StorefrontSeller(): JSX.Element {
       case "payouts":
         {
           const isEmpty = payoutPending.length === 0;
+          const refundablePendingCount = payoutPending.filter((order) =>
+            canRefundOrder(order)
+          ).length;
           return (
-            <div className="storefront-widget-list">
-              {!isEmpty && <p>{payoutPending.length} pending payouts</p>}
+            <div className="seller-payout-panel">
+              <div className="seller-payout-hero">
+                <div className="seller-payout-hero-copy">
+                  <span className="seller-panel-eyebrow">Pending balance</span>
+                  <h4>{formatCurrency(pendingPayoutAmount, "USD")}</h4>
+                  <p>
+                    {isEmpty
+                      ? "No payouts are waiting to settle right now."
+                      : `${payoutPending.length} payout${
+                          payoutPending.length === 1 ? "" : "s"
+                        } currently waiting to settle.`}
+                  </p>
+                </div>
+                <div className="seller-payout-summary">
+                  <div className="seller-payout-stat">
+                    <span>Pending payouts</span>
+                    <strong>{payoutPending.length}</strong>
+                  </div>
+                  <div className="seller-payout-stat">
+                    <span>Refund available</span>
+                    <strong>{refundablePendingCount}</strong>
+                  </div>
+                </div>
+              </div>
+              {orderActionError && <p className="storefront-form-error">{orderActionError}</p>}
+              {orderActionNotice && <p className="storefront-status success">{orderActionNotice}</p>}
               {isEmpty && (
-                <div className="seller-empty">
+                <div className="seller-empty seller-payout-empty">
                   <p>No pending payouts.</p>
-                  <button
-                    className="btn secondary small"
-                    type="button"
-                    onClick={() => handleSetupAction("payout")}
-                  >
-                    Add payout method
-                  </button>
+                  <div className="seller-row-actions">
+                    <button
+                      className="btn ghost small"
+                      type="button"
+                      onClick={() => navigate("/storefront/seller#list")}
+                    >
+                      Create your first listing
+                    </button>
+                    <button
+                      className="btn primary small"
+                      type="button"
+                      onClick={() => handleSetupAction("payout")}
+                    >
+                      Payment methods
+                    </button>
+                  </div>
                 </div>
               )}
               {!isEmpty &&
-                payoutPending.slice(0, 4).map((order) => (
-                  <div key={order.id} className="storefront-widget-row">
-                    <span>{order.listingTitle}</span>
-                    <strong>{formatCurrency(order.net, order.currency)}</strong>
-                  </div>
-                ))}
+                <div className="seller-payout-list">
+                  {payoutPending.slice(0, 8).map((order) => {
+                    const refundable = canRefundOrder(order);
+                    return (
+                      <article key={order.id} className="seller-payout-card">
+                        <div className="seller-payout-card-head">
+                          <div className="seller-payout-card-title">
+                            <strong>{order.listingTitle}</strong>
+                            <span>
+                              Buyer: {order.buyerName} {" · "} {formatRelativeTime(order.createdAt)}
+                            </span>
+                          </div>
+                          <div className="seller-payout-card-amount">
+                            <span>Seller receives</span>
+                            <strong>{formatCurrency(order.net || order.amount, order.currency)}</strong>
+                          </div>
+                        </div>
+                        <div className="seller-payout-card-meta">
+                          <span className={`seller-status-chip ${getStatusTone(order.status)}`}>
+                            {formatStatusLabel(order.status)}
+                          </span>
+                          <span
+                            className={`seller-status-chip ${getStatusTone(
+                              order.payoutStatus || "pending"
+                            )}`}
+                          >
+                            {formatStatusLabel(order.payoutStatus || "pending")}
+                          </span>
+                        </div>
+                        <div className="seller-payout-card-foot">
+                          <p className="seller-payout-card-note">
+                            Gross {formatCurrency(order.amount, order.currency)} {" · "} Platform fee{" "}
+                            {formatCurrency(order.fee, order.currency)}
+                          </p>
+                          <div className="seller-row-actions">
+                            <button
+                              className="btn ghost small"
+                              type="button"
+                              onClick={() => handleSetupAction("payout")}
+                            >
+                              Payment methods
+                            </button>
+                            {refundable && (
+                              <button
+                                className="btn danger small"
+                                type="button"
+                                onClick={() => void handleRefundOrder(order)}
+                                disabled={Boolean(orderActionLoading[order.id])}
+                              >
+                                {orderActionLoading[order.id] ? "Refunding..." : "Refund buyer"}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>}
             </div>
           );
         }
@@ -3396,10 +3610,24 @@ export default function StorefrontSeller(): JSX.Element {
                     className="storefront-widget-row storefront-widget-row--listing"
                   >
                     <div className="seller-row-main">
-                      <span>{listing.title}</span>
-                      <span className="seller-row-sub">
-                        {listing.location || "Location not set"}
-                      </span>
+                      <div className="seller-row-preview" aria-hidden="true">
+                        {listing.images?.[0] ? (
+                          <img
+                            src={listing.images[0]}
+                            alt=""
+                            loading="lazy"
+                            decoding="async"
+                          />
+                        ) : (
+                          <span>{String(listing.title || "L").trim().charAt(0).toUpperCase()}</span>
+                        )}
+                      </div>
+                      <div className="seller-row-main-copy">
+                        <span>{listing.title}</span>
+                        <span className="seller-row-sub">
+                          {listing.location || "Location not set"}
+                        </span>
+                      </div>
                     </div>
                     <div className="seller-row-actions">
                       <strong>{formatPrice(listing.price)}</strong>
@@ -3834,6 +4062,22 @@ export default function StorefrontSeller(): JSX.Element {
                   );
                 })}
               </div>
+              <div className="seller-row-actions seller-verification-actions">
+                <button
+                  className={`btn ${nextChecklistItem?.id === "payout" ? "primary" : "ghost"} small`}
+                  type="button"
+                  onClick={() => handleSetupAction("payout")}
+                >
+                  {getSetupActionLabel("payout")}
+                </button>
+                <button
+                  className={`btn ${nextChecklistItem?.id === "listing" ? "primary" : "ghost"} small`}
+                  type="button"
+                  onClick={() => handleSetupAction("listing")}
+                >
+                  {getSetupActionLabel("listing")}
+                </button>
+              </div>
             </div>
           );
         })();
@@ -3940,12 +4184,34 @@ export default function StorefrontSeller(): JSX.Element {
                     : item.status === "pending"
                     ? "is-warning"
                     : "is-danger";
+                const detail =
+                  item.id === "listing"
+                    ? sellerListings.length > 0
+                      ? `Edit or publish from your ${sellerListings.length} listing${
+                          sellerListings.length === 1 ? "" : "s"
+                        }.`
+                      : "Create your first listing to start selling in StoreFront."
+                    : sellerHasPayoutMethod || sellerPayoutVerified
+                    ? "Open payment methods to review or change your payout setup."
+                    : "Add a payout method so completed orders can be paid out.";
                 return (
                   <li key={item.id} className={`seller-setup-item ${item.status}`}>
-                    <span className="seller-setup-name">{item.label}</span>
-                    <span className={`seller-status-chip ${statusClass}`}>
-                      {statusLabel}
-                    </span>
+                    <div className="seller-setup-main">
+                      <span className="seller-setup-name">{item.label}</span>
+                      <span className="seller-setup-detail">{detail}</span>
+                    </div>
+                    <div className="seller-row-actions seller-setup-actions">
+                      <span className={`seller-status-chip ${statusClass}`}>
+                        {statusLabel}
+                      </span>
+                      <button
+                        className={`btn ${item.status === "done" ? "ghost" : "primary"} small`}
+                        type="button"
+                        onClick={() => handleSetupAction(item.id)}
+                      >
+                        {getSetupActionLabel(item.id)}
+                      </button>
+                    </div>
                   </li>
                 );
               })}
@@ -4764,7 +5030,13 @@ export default function StorefrontSeller(): JSX.Element {
 
   return (
     <div className="dashboard-shell storefront-shell" style={pageBackground}>
-      <Sidebar active="storefront" />
+      <Sidebar
+        active="storefront"
+        onMobileMessagesOpen={handleOpenStorefrontChat}
+        mobileMessagesFallbackText="Storefront buyer messages"
+        mobileMessagesEmptyTitle="No new storefront messages"
+        mobileMessagesEmptySubtitle="Open storefront inbox"
+      />
       <div className="main-content storefront-page">
         {isListingView ? (
           <section className="storefront-layout is-single storefront-layout--listing">
@@ -4813,6 +5085,34 @@ export default function StorefrontSeller(): JSX.Element {
               );
               if (!listing) return;
               handleEditListing(listing);
+            }}
+            openOffers={openOffers}
+            offerActionError={offerActionError}
+            offerActionNotice={offerActionNotice}
+            offerActionLoading={offerActionLoading}
+            offerCounterDrafts={offerCounterDrafts}
+            offerCounterNotes={offerCounterNotes}
+            isOfferActionable={isOfferActionable}
+            onOfferDraftChange={(offerId, value) =>
+              setOfferCounterDrafts((prev) => ({
+                ...prev,
+                [offerId]: value,
+              }))
+            }
+            onOfferNoteChange={(offerId, value) =>
+              setOfferCounterNotes((prev) => ({
+                ...prev,
+                [offerId]: value,
+              }))
+            }
+            onAcceptOffer={(offerId) => {
+              void handleOfferStatusUpdate(offerId, "accepted");
+            }}
+            onDeclineOffer={(offerId) => {
+              void handleOfferStatusUpdate(offerId, "declined");
+            }}
+            onCounterOffer={(offerId) => {
+              void handleOfferCounter(offerId);
             }}
             totalEarningsValue={totalEarningsValue}
             snapshotChart={snapshotChart}

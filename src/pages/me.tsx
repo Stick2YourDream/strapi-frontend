@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { FileText, Images, PencilLine, Settings2 } from "lucide-react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import "../css/dashboard.css";
 import "../css/profile.css";
@@ -774,6 +775,7 @@ const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
   friendsNotificationsEnabled: true,
   groupsNotificationsEnabled: true,
   forumsNotificationsEnabled: true,
+  storefrontNotificationsEnabled: true,
 };
 
 const DEFAULT_TIME_LIMIT_SETTINGS: TimeLimitSettings = {
@@ -897,6 +899,7 @@ const normalizeNotificationSettings = (settings?: NotificationSettings | null) =
   friendsNotificationsEnabled: settings?.friendsNotificationsEnabled !== false,
   groupsNotificationsEnabled: settings?.groupsNotificationsEnabled !== false,
   forumsNotificationsEnabled: settings?.forumsNotificationsEnabled !== false,
+  storefrontNotificationsEnabled: settings?.storefrontNotificationsEnabled !== false,
 });
 
 const resolveFieldVisibility = (
@@ -1290,6 +1293,7 @@ export default function Me() {
   const [privacyError, setPrivacyError] = useState<string | null>(null);
   const [privacySuccess, setPrivacySuccess] = useState<string | null>(null);
   const [notificationSaving, setNotificationSaving] = useState(false);
+  const [notificationSyncing, setNotificationSyncing] = useState(false);
   const [notificationError, setNotificationError] = useState<string | null>(null);
   const [notificationSuccess, setNotificationSuccess] = useState<string | null>(null);
   const [timeLimitSaving, setTimeLimitSaving] = useState(false);
@@ -3295,9 +3299,24 @@ export default function Me() {
     setNotificationError(null);
     setNotificationSuccess(null);
     setPushError(null);
+    setNotificationSyncing(false);
     setNotificationSaving(true);
     try {
-      if (pushEnabled && phoneVerified !== true) {
+      const normalizedNotificationSettings = normalizeNotificationSettings(
+        profile.notificationSettings
+      );
+      const nextPushEnabled = Boolean(normalizedNotificationSettings.pushEnabled);
+      const previousPushEnabled = Boolean(
+        normalizeNotificationSettings(profileSnapshotRef.current?.notificationSettings)
+          .pushEnabled
+      );
+      const pushPreferenceChanged = nextPushEnabled !== previousPushEnabled;
+      const normalizedProfile: Profile = {
+        ...profile,
+        notificationSettings: normalizedNotificationSettings,
+      };
+
+      if (nextPushEnabled && phoneVerified !== true) {
         setPushError(
           phoneVerified === null
             ? "Checking phone verification status. Try again in a moment."
@@ -3306,22 +3325,41 @@ export default function Me() {
         setNotificationSaving(false);
         return;
       }
-      await persistProfileSettings(profile);
-      const pushResult = await syncPushSubscription({
-        enable: Boolean(profile.notificationSettings.pushEnabled),
-        requestPermission: true,
-      });
-      setPushStatus(pushResult.status);
-      if (pushResult.status === "error") {
-        setPushError(pushResult.error || "Unable to enable push notifications.");
-      }
-      if (pushResult.status === "denied") {
-        setPushError("Push notifications are blocked in your browser.");
-      }
-      if (pushResult.status === "unsupported") {
-        setPushError("Push notifications are not supported on this device.");
-      }
+
+      await persistProfileSettings(normalizedProfile);
       setNotificationSuccess("Notification settings saved.");
+
+      if (!pushPreferenceChanged) {
+        return;
+      }
+
+      setNotificationSyncing(true);
+      void (async () => {
+        try {
+          const pushResult = await syncPushSubscription({
+            enable: nextPushEnabled,
+            requestPermission: nextPushEnabled,
+          });
+          setPushStatus(pushResult.status);
+          if (pushResult.status === "enabled") {
+            setPushError(null);
+            setNotificationSuccess("Notification settings saved. Push notifications are enabled.");
+          } else if (pushResult.status === "disabled") {
+            setPushError(null);
+            setNotificationSuccess("Notification settings saved. Push notifications are off.");
+          } else if (pushResult.status === "denied") {
+            setPushError("Push notifications are blocked in your browser.");
+          } else if (pushResult.status === "unsupported") {
+            setPushError("Push notifications are not supported on this device.");
+          } else if (pushResult.status === "error") {
+            setPushError(pushResult.error || "Unable to enable push notifications.");
+          }
+        } catch {
+          setPushError("Unable to update push notifications.");
+        } finally {
+          setNotificationSyncing(false);
+        }
+      })();
     } catch (err) {
       if (axios.isAxiosError(err)) {
         const msg =
@@ -5369,16 +5407,15 @@ export default function Me() {
             : "Add hobbies"}
         </button>
         {hobbyList.length ? (
-          <ul className="profile-list">
+          <ul className="hobby-picker-list">
             {hobbyList.map((hobby) => (
-              <li key={hobby} style={{ marginBottom: 6 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <li key={hobby} className="hobby-picker-item">
+                <div className="hobby-picker-item-label">
                   <span>{hobby}</span>
                   <button
-                    className="btn ghost"
+                    className="btn ghost hobby-picker-remove"
                     type="button"
                     onClick={() => removeHobby(hobby)}
-                    style={{ padding: "2px 10px", fontSize: 12 }}
                   >
                     Remove
                   </button>
@@ -5387,11 +5424,11 @@ export default function Me() {
             ))}
           </ul>
         ) : (
-          <p style={{ margin: "8px 0 0", color: "#9ca3af" }}>
+          <p className="hobby-picker-empty">
             No hobbies added yet.
           </p>
         )}
-        <small style={{ color: "#9ca3af" }}>
+        <small className="profile-field-note">
           Choose up to {MAX_HOBBIES} hobbies.
         </small>
       </div>
@@ -5962,6 +5999,25 @@ export default function Me() {
     setEditing(false);
   };
 
+  const openProfileEditInModal = () => {
+    setSettingsMenuOpen(false);
+    setSettingsView("profile");
+    setProfileView("overview");
+    setError(null);
+    setErrorModal(null);
+    setEditing(true);
+    setProfileInfoOpen(true);
+  };
+
+  const openProfilePhotoStudio = () => {
+    setSettingsMenuOpen(false);
+    setDeleteAccountOpen(false);
+    setActiveHobbyModal(null);
+    setError(null);
+    setErrorModal(null);
+    setPhotoModalOpen(true);
+  };
+
   const handleDeleteAccount = async () => {
     if (!user) return;
     setDeleteAccountError(null);
@@ -6153,27 +6209,94 @@ export default function Me() {
     new Date(accountStatus?.deactivatedUntil as string).getTime() > Date.now();
   const exportOs = useMemo(() => detectDesktopOs(), []);
   const exportHint = useMemo(() => getExportInstructions(exportOs), [exportOs]);
-  const leftInfo = [
-    ["First Name", profile.firstName],
-    ["Last Name", profile.lastName],
-    ["Age", profile.age],
-    ["Birthday", birthdayDisplay],
-    ["Religion", profile.religion],
-    ["Gender", profile.gender],
-  ] as const;
   const phoneInfo: Array<[string, string | undefined]> = profile.showPhoneOnProfile
     ? [["Phone", phoneDisplay || profile.phone]]
     : [];
-  const rightInfo: Array<[string, string | undefined]> = [
+  const locationMapQuery =
+    locationDisplay || [profile.state, profile.country].filter(Boolean).join(", ");
+  const hasLocationMap = Boolean(String(locationMapQuery || "").trim());
+  const locationMapEmbedUrl = hasLocationMap
+    ? `https://www.google.com/maps?q=${encodeURIComponent(locationMapQuery)}&z=12&output=embed`
+    : "";
+  const locationMapHref = hasLocationMap
+    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(locationMapQuery)}`
+    : "";
+  const profileCompletionFields = [
+    profile.firstName,
+    profile.lastName,
+    displayHandle,
+    profile.age,
+    profile.birthday,
+    profile.gender,
+    profile.country,
+    profile.state,
+    profile.city,
+    profile.hobbies,
+    profile.occupation,
+    profile.bio,
+  ];
+  const completedProfileFields = profileCompletionFields.filter((value) =>
+    Boolean(String(value || "").trim())
+  ).length;
+  const profileCompletionPercent = Math.round(
+    (completedProfileFields / profileCompletionFields.length) * 100
+  );
+  const profileHeaderHighlights = [
+    {
+      label: "Home base",
+      value: locationDisplay || "Add location",
+    },
+    {
+      label: "Interests",
+      value: hobbiesDisplay.length ? `${hobbiesDisplay.length} selected` : "Add interests",
+    },
+    {
+      label: "Occupation",
+      value: profile.occupation || "Add occupation",
+    },
+    {
+      label: "Visibility",
+      value: visibilityLabelFor(profile.profileVisibility),
+    },
+  ];
+  const profileSummaryCards = [
+    {
+      label: "Profile completion",
+      value: `${profileCompletionPercent}%`,
+      meta: `${completedProfileFields}/${profileCompletionFields.length} essentials filled in`,
+    },
+    {
+      label: "Audience",
+      value: visibilityLabelFor(profile.profileVisibility),
+      meta: `Previewing as ${previewAudienceLabel}`,
+    },
+    {
+      label: "Location",
+      value: locationDisplay || "Add your location",
+      meta: locationDisplay
+        ? "Helps discovery and mutual connections"
+        : "City, state, and country make your profile easier to place",
+    },
+    {
+      label: "Interests",
+      value: hobbiesDisplay.length ? `${hobbiesDisplay.length} interests` : "Add interests",
+      meta: profile.occupation
+        ? `Occupation: ${profile.occupation}`
+        : "Hobbies and work help tell your story",
+    },
+  ];
+  const identityInfo: Array<[string, string | undefined]> = [
+    ["First Name", profile.firstName],
+    ["Last Name", profile.lastName],
     ["Handle", displayHandle],
     ...phoneInfo,
-    ["Location", locationDisplay],
-    ["Country", profile.country],
-    [stateLabel, profile.state],
-    ["City", profile.city],
-    ["Hobbies", profile.hobbies],
+    ["Age", profile.age],
+    ["Birthday", birthdayDisplay],
+    ["Gender", profile.gender],
+  ];
+  const personalInfo: Array<[string, string | undefined]> = [
+    ["Religion", profile.religion],
     ["Occupation", profile.occupation],
-    ["Bio", profile.bio],
   ];
   const hasVisibleProfileData = Boolean(
     String(profile.firstName || "").trim() ||
@@ -6274,35 +6397,62 @@ export default function Me() {
           <p className="profile-header-bio">
             {profile.bio || "Share a quick bio to help friends recognize you."}
           </p>
+          <div className="profile-header-highlights">
+            {profileHeaderHighlights.map((item) => (
+              <div className="profile-header-highlight" key={`profile-highlight-${item.label}`}>
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+              </div>
+            ))}
+          </div>
           <div className="profile-header-actions">
-            <button
-              className="btn primary profile-header-action-button"
-              type="button"
-              onClick={() => {
-                setSettingsMenuOpen(false);
-                setSettingsView("profile");
-                setEditing(true);
-                setProfileInfoOpen(true);
-                setProfileView("overview");
-                navigate("/me");
-                window.scrollTo({ top: 0, behavior: "smooth" });
-              }}
+            <div
+              className="profile-header-action-shell"
+              data-tooltip="Open your full profile editor to update identity details, story, and visibility."
             >
-              Edit Profile
-            </button>
-            <div className="profile-settings-dropdown">
               <button
-                className={`btn primary profile-header-action-button profile-settings-trigger${
+                className="btn primary profile-header-action-button profile-header-action-button--feature"
+                type="button"
+                onClick={() => {
+                  setSettingsMenuOpen(false);
+                  setSettingsView("profile");
+                  setEditing(true);
+                  setProfileInfoOpen(true);
+                  setProfileView("overview");
+                  navigate("/me");
+                  window.scrollTo({ top: 0, behavior: "smooth" });
+                }}
+              >
+                <span className="profile-header-action-icon" aria-hidden="true">
+                  <PencilLine size={18} />
+                </span>
+                <span className="profile-header-action-copy">
+                  <span className="profile-header-action-title">Edit Profile</span>
+                  <span className="profile-header-action-meta">Open profile editor</span>
+                </span>
+              </button>
+            </div>
+            <div
+              className="profile-settings-dropdown profile-header-action-shell"
+              data-tooltip="Jump into appearance, privacy, notifications, storefront, security, and other account settings."
+            >
+              <button
+                className={`btn primary profile-header-action-button profile-header-action-button--feature profile-settings-trigger${
                   settingsMenuOpen ? " is-open" : ""
                 }`}
                 type="button"
                 aria-haspopup="dialog"
                 aria-expanded={settingsMenuOpen}
                 aria-label={`Settings menu. Current section: ${settingsMenuLabel}.`}
-                title={`Current section: ${settingsMenuLabel}`}
                 onClick={() => setSettingsMenuOpen(true)}
               >
-                <span className="profile-settings-trigger-label">Settings:</span>
+                <span className="profile-header-action-icon" aria-hidden="true">
+                  <Settings2 size={18} />
+                </span>
+                <span className="profile-header-action-copy">
+                  <span className="profile-settings-trigger-label">Settings</span>
+                  <span className="profile-settings-trigger-value">{settingsMenuLabel}</span>
+                </span>
                 <span
                   className={`profile-settings-trigger-caret${
                     settingsMenuOpen ? " is-open" : ""
@@ -6322,30 +6472,72 @@ export default function Me() {
                 </span>
               </button>
             </div>
-            <button
-              className="btn ghost profile-header-action-button"
-              type="button"
-              onClick={() => {
-                setSettingsMenuOpen(false);
-                setProfileView("overview");
-                navigate(isGalleryPage ? "/me" : "/my-gallery");
-                window.scrollTo({ top: 0, behavior: "smooth" });
-              }}
+            <div
+              className="profile-header-action-shell"
+              data-tooltip={
+                isGalleryPage
+                  ? "Return to your main profile overview."
+                  : "Open your gallery to browse photos, albums, and visual highlights."
+              }
             >
-              {isGalleryPage ? "Back to Profile" : "My Gallery"}
-            </button>
-            <button
-              className="btn ghost profile-header-action-button"
-              type="button"
-              onClick={() => {
-                setSettingsMenuOpen(false);
-                setProfileView("overview");
-                navigate(isPostsPage ? "/me" : "/my-posts");
-                window.scrollTo({ top: 0, behavior: "smooth" });
-              }}
+              <button
+                className={`btn ghost profile-header-action-button profile-header-action-button--surface${
+                  isGalleryPage ? " is-current" : ""
+                }`}
+                type="button"
+                onClick={() => {
+                  setSettingsMenuOpen(false);
+                  setProfileView("overview");
+                  navigate(isGalleryPage ? "/me" : "/my-gallery");
+                  window.scrollTo({ top: 0, behavior: "smooth" });
+                }}
+              >
+                <span className="profile-header-action-icon" aria-hidden="true">
+                  <Images size={18} />
+                </span>
+                <span className="profile-header-action-copy">
+                  <span className="profile-header-action-title">
+                    {isGalleryPage ? "Back to Profile" : "My Gallery"}
+                  </span>
+                  <span className="profile-header-action-meta">
+                    {isGalleryPage ? "Return to overview" : "Photos and albums"}
+                  </span>
+                </span>
+              </button>
+            </div>
+            <div
+              className="profile-header-action-shell"
+              data-tooltip={
+                isPostsPage
+                  ? "Return to your main profile overview."
+                  : "Open your posts to review updates, writing, and your recent activity."
+              }
             >
-              {isPostsPage ? "Back to Profile" : "My Posts"}
-            </button>
+              <button
+                className={`btn ghost profile-header-action-button profile-header-action-button--surface${
+                  isPostsPage ? " is-current" : ""
+                }`}
+                type="button"
+                onClick={() => {
+                  setSettingsMenuOpen(false);
+                  setProfileView("overview");
+                  navigate(isPostsPage ? "/me" : "/my-posts");
+                  window.scrollTo({ top: 0, behavior: "smooth" });
+                }}
+              >
+                <span className="profile-header-action-icon" aria-hidden="true">
+                  <FileText size={18} />
+                </span>
+                <span className="profile-header-action-copy">
+                  <span className="profile-header-action-title">
+                    {isPostsPage ? "Back to Profile" : "My Posts"}
+                  </span>
+                  <span className="profile-header-action-meta">
+                    {isPostsPage ? "Return to overview" : "Updates and writing"}
+                  </span>
+                </span>
+              </button>
+            </div>
           </div>
         </div>
       </section>
@@ -6497,6 +6689,573 @@ export default function Me() {
         )}
       </div>
     </div>
+  );
+
+  const profileInfoLauncherCards = profileSummaryCards.slice(0, 3);
+  const profileEditHandle = lockedUniqueHandle
+    ? `@${String(lockedUniqueHandle).replace(/^@+/, "")}`
+    : "Locked handle";
+  const profileEditLocationSummary = [profile.city, profile.state, profile.country]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join(", ");
+  const profileEditAvatarInitials =
+    `${String(profile.firstName || "").trim().charAt(0)}${String(profile.lastName || "")
+      .trim()
+      .charAt(0)}`.toUpperCase() || "Y";
+  const profileEditSummaryCards = [
+    {
+      label: "Handle",
+      value: profileEditHandle,
+      meta: "Your unique profile identity stays locked after setup.",
+    },
+    {
+      label: "Location",
+      value: profileEditLocationSummary || "Add your location",
+      meta: isLocationLocked
+        ? "This was set during registration and is currently locked."
+        : "Used for discovery, context, and profile map placement.",
+    },
+    {
+      label: "Interests",
+      value: hobbyList.length ? `${hobbyList.length}/${MAX_HOBBIES} hobbies` : "Add interests",
+      meta: "Hobbies, occupation, and bio help people understand you faster.",
+    },
+  ];
+
+  const profileInfoModalToolbar = (
+    <div className="profile-info-modal-toolbar">
+      <div className="profile-info-modal-mode">
+        <span className="profile-info-modal-mode-label">{editing ? "Edit mode" : "Overview"}</span>
+        <strong>{editing ? "Update your profile without leaving this modal" : "Review your profile and edit it here"}</strong>
+        <p>
+          {editing
+            ? "The same profile modal now handles your full edit flow, including save and cancel."
+            : "Open the editor directly from this popup and keep the same centered profile UI."}
+        </p>
+      </div>
+      <div className="profile-info-modal-toolbar-actions">
+        {editing ? (
+          <button className="btn ghost" type="button" onClick={cancelEdit}>
+            Cancel editing
+          </button>
+        ) : (
+          <button className="btn primary" type="button" onClick={openProfileEditInModal}>
+            Edit profile
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
+  const profileInfoModalContent = editing ? (
+    <>
+      {profileInfoModalToolbar}
+      <div className="profile-edit-shell">
+        <section className="profile-edit-hero">
+          <div className="profile-edit-hero-copy">
+            <p className="eyebrow">Profile editor</p>
+            <h4>Refine how your profile looks and reads</h4>
+            <p>
+              Update your identity, location, interests, and profile photo from one focused
+              workspace designed for quick edits and clear review.
+            </p>
+          </div>
+          <div className="profile-edit-hero-cards">
+            {profileEditSummaryCards.map((card) => (
+              <article className="profile-edit-hero-card" key={`profile-edit-${card.label}`}>
+                <span className="profile-edit-hero-card-label">{card.label}</span>
+                <strong className="profile-edit-hero-card-value">{card.value}</strong>
+                <span className="profile-edit-hero-card-meta">{card.meta}</span>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <div className="profile-edit-grid">
+          <section className="profile-edit-section">
+            <div className="profile-edit-section-head">
+              <p className="eyebrow">Identity</p>
+              <h4>Core details</h4>
+              <p>Update your personal basics while keeping locked setup fields visible for context.</p>
+            </div>
+            <div className="profile-edit-field-grid">
+              <label className="profile-field">
+                <span className="profile-field-label">First Name</span>
+                <input
+                  className="auth-input"
+                  maxLength={64}
+                  value={profile.firstName}
+                  onChange={(e) => setProfile({ ...profile, firstName: e.target.value })}
+                  disabled={isFirstNameLocked}
+                />
+                {isFirstNameLocked && (
+                  <small className="profile-lock-note">
+                    Locked after setup. Contact support to update.
+                  </small>
+                )}
+              </label>
+
+              <label className="profile-field">
+                <span className="profile-field-label">Last Name</span>
+                <input
+                  className="auth-input"
+                  maxLength={64}
+                  value={profile.lastName}
+                  onChange={(e) => setProfile({ ...profile, lastName: e.target.value })}
+                  disabled={isLastNameLocked}
+                />
+                {isLastNameLocked && (
+                  <small className="profile-lock-note">
+                    Locked after setup. Contact support to update.
+                  </small>
+                )}
+              </label>
+
+              <label className="profile-field">
+                <span className="profile-field-label">Age</span>
+                <select
+                  className="auth-input"
+                  value={profile.age}
+                  onChange={(e) => setProfile({ ...profile, age: e.target.value })}
+                  disabled={isAgeLocked}
+                >
+                  <option value="">Select age</option>
+                  {AGE_OPTIONS.map((age) => (
+                    <option key={age} value={age}>
+                      {age}
+                    </option>
+                  ))}
+                </select>
+                {isAgeLocked && (
+                  <small className="profile-lock-note">
+                    Locked after setup. Contact support to update.
+                  </small>
+                )}
+              </label>
+
+              <label className="profile-field">
+                <span className="profile-field-label">Birthday</span>
+                <input
+                  className="auth-input"
+                  type="date"
+                  max={todayInput}
+                  value={profile.birthday}
+                  onChange={(e) => setProfile({ ...profile, birthday: e.target.value })}
+                  disabled={isBirthdayLocked}
+                />
+                {isBirthdayLocked && (
+                  <small className="profile-lock-note">
+                    Set during registration. Contact support to update.
+                  </small>
+                )}
+              </label>
+
+              <label className="profile-field">
+                <span className="profile-field-label">Religion</span>
+                <select
+                  className="auth-input"
+                  value={profile.religion}
+                  onChange={(e) => setProfile({ ...profile, religion: e.target.value })}
+                >
+                  <option value="">Select religion</option>
+                  {RELIGION_OPTIONS.map((religion) => (
+                    <option key={religion} value={religion}>
+                      {religion}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="profile-field">
+                <span className="profile-field-label">Gender</span>
+                <select
+                  className="auth-input"
+                  value={profile.gender}
+                  onChange={(e) => setProfile({ ...profile, gender: e.target.value })}
+                >
+                  <option value="">Select gender</option>
+                  <option value="Male">Male</option>
+                  <option value="Female">Female</option>
+                </select>
+              </label>
+            </div>
+          </section>
+
+          <section className="profile-edit-section">
+            <div className="profile-edit-section-head">
+              <p className="eyebrow">Account</p>
+              <h4>Contact and identity</h4>
+              <p>Keep your public handle readable and make sure contact details stay current.</p>
+            </div>
+            <div className="profile-edit-field-grid">
+              <label className="profile-field">
+                <span className="profile-field-label">Handle</span>
+                <input
+                  className="auth-input"
+                  value={lockedUniqueHandle}
+                  readOnly
+                  disabled
+                  tabIndex={-1}
+                  onFocus={(e) => e.target.blur()}
+                  style={{ pointerEvents: "none", userSelect: "none", opacity: 0.7 }}
+                />
+                <small className="profile-field-note">
+                  Locked and unique to your account.
+                </small>
+              </label>
+
+              <label className="profile-field">
+                <span className="profile-field-label">Phone</span>
+                <div className="profile-phone-row">
+                  <select
+                    className="auth-input profile-phone-code"
+                    value={effectivePhoneDialCode}
+                    onChange={(e) =>
+                      setProfile({
+                        ...profile,
+                        phoneDialCode: normalizeDialCode(e.target.value),
+                      })
+                    }
+                    disabled={isPhoneLocked}
+                  >
+                    <option value="">Code</option>
+                    {dialCodeOptions.map((option) => (
+                      <option key={`${option.value}-${option.label}`} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    className="auth-input profile-phone-number"
+                    type="tel"
+                    maxLength={14}
+                    placeholder="(555) 123-4567"
+                    value={profile.phone || ""}
+                    onChange={(e) =>
+                      setProfile({
+                        ...profile,
+                        phone: formatPhoneInput(e.target.value, effectivePhoneDialCode),
+                      })
+                    }
+                    disabled={isPhoneLocked}
+                  />
+                </div>
+                {isPhoneLocked && (
+                  <small className="profile-lock-note">
+                    Set during registration. Use Login phone number settings to update.
+                  </small>
+                )}
+              </label>
+            </div>
+          </section>
+
+          <section className="profile-edit-section profile-edit-section--full">
+            <div className="profile-edit-section-head">
+              <p className="eyebrow">Location</p>
+              <h4>Discovery and placement</h4>
+              <p>Country, region, and city help place you correctly across profile, maps, and discovery.</p>
+            </div>
+            <div className="profile-edit-field-grid profile-edit-field-grid--three">
+              <label className="profile-field">
+                <span className="profile-field-label">Country</span>
+                <select
+                  className="auth-input"
+                  value={profile.country}
+                  onChange={(e) => handleCountryChange(e.target.value)}
+                  disabled={isCountryLocked}
+                >
+                  <option value="">Select country</option>
+                  {countryOptions.map((country) => (
+                    <option key={country.code || country.name} value={country.name}>
+                      {country.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="profile-field">
+                <span className="profile-field-label">{stateLabel}</span>
+                <select
+                  className="auth-input"
+                  value={profile.state}
+                  onChange={(e) => handleStateChange(e.target.value)}
+                  disabled={
+                    isStateLocked || isCountryLocked || !profile.countryCode || !stateOptions.length
+                  }
+                >
+                  <option value="">
+                    {!profile.countryCode
+                      ? "Select country first"
+                      : needsState
+                      ? `Select ${stateLabel.toLowerCase()}`
+                      : "No regions"}
+                  </option>
+                  {stateOptions.map((state) => (
+                    <option key={state.code || state.name} value={state.name}>
+                      {state.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="profile-field">
+                <span className="profile-field-label">City</span>
+                <select
+                  className="auth-input"
+                  value={profile.city}
+                  onChange={(e) => handleCityChange(e.target.value)}
+                  disabled={
+                    isCityLocked ||
+                    isCountryLocked ||
+                    !profile.countryCode ||
+                    (stateOptions.length > 0 && !profile.stateCode)
+                  }
+                >
+                  <option value="">
+                    {!profile.countryCode
+                      ? "Select country first"
+                      : needsState && !profile.stateCode
+                      ? `Select ${stateLabel.toLowerCase()} first`
+                      : "Select city"}
+                  </option>
+                  {cityOptions.map((city) => (
+                    <option key={city.code || city.name} value={city.name}>
+                      {city.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            {isLocationLocked && (
+              <p className="profile-lock-note">
+                Location set during registration is locked. Contact support to update.
+              </p>
+            )}
+            {locationError && <p className="profile-location-error">{locationError}</p>}
+          </section>
+
+          <section className="profile-edit-section">
+            <div className="profile-edit-section-head">
+              <p className="eyebrow">Story</p>
+              <h4>Interests and biography</h4>
+              <p>Make the profile easier to scan by giving people context about your interests and work.</p>
+            </div>
+            <div className="profile-edit-field-stack">
+              {renderHobbyPicker("profile")}
+
+              <label className="profile-field">
+                <span className="profile-field-label">Occupation</span>
+                <input
+                  className="auth-input"
+                  maxLength={64}
+                  value={profile.occupation}
+                  onChange={(e) => setProfile({ ...profile, occupation: e.target.value })}
+                />
+              </label>
+
+              <label className="profile-field">
+                <span className="profile-field-label">Bio</span>
+                <textarea
+                  className="auth-input"
+                  value={profile.bio}
+                  onChange={(e) => setProfile({ ...profile, bio: e.target.value })}
+                  maxLength={500}
+                  rows={4}
+                />
+                <small className="profile-field-note">{profile.bio.length}/500 characters</small>
+              </label>
+            </div>
+          </section>
+
+          <div className="profile-edit-stack">
+            <section className="profile-edit-section profile-edit-section--media">
+              <div className="profile-edit-section-head">
+                <p className="eyebrow">Media</p>
+                <h4>Profile photo</h4>
+                <p>Use the photo studio to crop, enhance, and schedule profile avatars.</p>
+              </div>
+              <div className="profile-edit-media-card">
+                <div className="profile-edit-avatar-preview" aria-hidden="true">
+                  {profile.avatarUrl ? (
+                    <img src={profile.avatarUrl} alt="" />
+                  ) : (
+                    <span>{profileEditAvatarInitials}</span>
+                  )}
+                </div>
+                <div className="profile-edit-media-copy">
+                  <strong>
+                    {profile.avatarUrl ? "Profile photo ready" : "Add a profile photo"}
+                  </strong>
+                  <p>
+                    A strong avatar makes the profile easier to recognize across comments, chats,
+                    and community surfaces.
+                  </p>
+                </div>
+                <button
+                  className="btn primary profile-avatar-editor-button"
+                  type="button"
+                  onClick={openProfilePhotoStudio}
+                >
+                  {profile.avatarUrl ? "Edit profile photo" : "Add profile photo"}
+                </button>
+              </div>
+            </section>
+
+            <section className="profile-delete-zone">
+              <div className="profile-delete-zone-head">
+                <span className="profile-delete-kicker">Danger zone</span>
+                <h4 className="profile-delete-title">Delete profile</h4>
+                <p className="profile-delete-note">
+                  Permanently removing your profile deletes your account access, posts, and related
+                  personal data from Your Social Place.
+                </p>
+              </div>
+              <ul className="profile-delete-list">
+                <li>Your access to the platform is removed.</li>
+                <li>Posts, profile details, and connected activity are deleted.</li>
+                <li>This action cannot be undone later.</li>
+              </ul>
+              <div className="profile-delete-zone-actions">
+                <button
+                  className="profile-delete-button"
+                  type="button"
+                  onClick={() => {
+                    setDeleteAccountError(null);
+                    setDeleteAccountOpen(true);
+                  }}
+                >
+                  Delete your profile
+                </button>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <div className="profile-edit-footer">
+          <div className="profile-edit-footer-copy">
+            <strong>Save when you're ready</strong>
+            <p>
+              Locked fields remain visible for context. Everything else updates with the same save
+              flow you already use.
+            </p>
+          </div>
+          <div className="profile-actions">
+            <button className="btn ghost" type="button" onClick={cancelEdit}>
+              Cancel
+            </button>
+            <button className="btn primary" type="button" onClick={() => saveProfile()}>
+              Save Profile
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
+  ) : (
+    <>
+      {profileInfoModalToolbar}
+      <div className="profile-overview">
+        <div className="profile-summary-grid">
+          {profileSummaryCards.map((item) => (
+            <article className="profile-summary-card" key={`profile-summary-${item.label}`}>
+              <span className="profile-summary-label">{item.label}</span>
+              <strong className="profile-summary-value">{item.value}</strong>
+              <p className="profile-summary-meta">{item.meta}</p>
+            </article>
+          ))}
+        </div>
+
+        <div className="profile-overview-grid">
+          <section className="profile-info-group">
+            <div className="profile-info-group-head">
+              <p className="eyebrow">Identity</p>
+              <h4>Core details</h4>
+              <p>Name, handle, and personal basics at a glance.</p>
+            </div>
+            <div className="profile-card-grid">
+              {identityInfo.map(([label, value]) => renderInfoCard(label, value))}
+            </div>
+          </section>
+
+          <section className="profile-info-group">
+            <div className="profile-info-group-head">
+              <p className="eyebrow">Location</p>
+              <h4>Where people can place you</h4>
+              <p>Helpful for mutual friends, discovery, and community context.</p>
+            </div>
+            <div className="profile-location-map">
+              {hasLocationMap ? (
+                <>
+                  <iframe
+                    className="profile-location-map__frame"
+                    src={locationMapEmbedUrl}
+                    title={`Map showing ${locationMapQuery}`}
+                    loading="lazy"
+                    referrerPolicy="no-referrer-when-downgrade"
+                  />
+                  <div className="profile-location-map__badge">
+                    <span className="profile-location-map__pin" aria-hidden="true" />
+                    <span>{locationMapQuery}</span>
+                  </div>
+                  <a
+                    className="profile-location-map__link"
+                    href={locationMapHref}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open in Maps
+                  </a>
+                </>
+              ) : (
+                <div className="profile-location-map__empty">
+                  <span className="profile-location-map__pin" aria-hidden="true" />
+                  <div>
+                    <strong>Add your location</strong>
+                    <p>Country, region, and city are needed before a pin can be placed.</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="profile-info-group profile-info-group--story">
+            <div className="profile-info-group-head">
+              <p className="eyebrow">Story</p>
+              <h4>What rounds out your profile</h4>
+              <p>Interests, work, and a short bio make the page easier to understand.</p>
+            </div>
+            <div className="profile-story-grid">
+              <article className="profile-story-card">
+                <span className="profile-story-label">Bio</span>
+                <p className="profile-story-text">
+                  {profile.bio ||
+                    "Add a short bio so visitors can understand who you are in a sentence or two."}
+                </p>
+              </article>
+              <article className="profile-story-card">
+                <span className="profile-story-label">Hobbies</span>
+                {hobbiesDisplay.length ? (
+                  <div className="profile-story-tags">
+                    {hobbiesDisplay.map((hobby) => (
+                      <span className="profile-story-tag" key={`profile-hobby-${hobby}`}>
+                        {hobby}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="profile-story-empty">
+                    Add a few interests to make your profile more relatable.
+                  </p>
+                )}
+              </article>
+            </div>
+            <div className="profile-card-grid">
+              {personalInfo.map(([label, value]) => renderInfoCard(label, value))}
+            </div>
+          </section>
+        </div>
+      </div>
+    </>
   );
 
   const onboardingTitle = onboardingSteps[onboardingStep] || "Profile setup";
@@ -6973,38 +7732,18 @@ export default function Me() {
       </PopupModal>
 
       {deleteAccountOpen && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.6)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1000,
-          }}
-        >
-          <div
-            style={{
-              background: "#0f172a",
-              padding: "24px",
-              borderRadius: "12px",
-              boxShadow: "0 12px 40px rgba(0,0,0,0.35)",
-              maxWidth: "520px",
-              width: "90%",
-              border: "1px solid rgba(248, 113, 113, 0.35)",
-            }}
-          >
-            <h3 style={{ margin: "0 0 12px", color: "#f87171" }}>Delete Your Profile</h3>
-            <p style={{ margin: "0 0 16px", color: "#e5e7eb" }}>
-              Are you sure you want to delete your entire profile, you will loose access to Your
-              Social Place and all of your personal data that you have posted on Your Social Place.
-              Once deleted, it cannot be undone, so make sure this is what you really want.
+        <div className="profile-delete-overlay">
+          <div className="profile-delete-modal">
+            <span className="profile-delete-kicker">Danger zone</span>
+            <h3 className="profile-delete-modal__title">Delete your profile</h3>
+            <p className="profile-delete-modal__text">
+              This permanently removes access to Your Social Place and deletes your profile data,
+              posts, and related activity. Once the deletion begins, it cannot be undone.
             </p>
             {deleteAccountError && (
-              <p style={{ margin: "0 0 12px", color: "#fecaca" }}>{deleteAccountError}</p>
+              <p className="profile-delete-modal__error">{deleteAccountError}</p>
             )}
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px" }}>
+            <div className="profile-delete-modal__actions">
               <button
                 className="btn ghost"
                 type="button"
@@ -7964,30 +8703,48 @@ export default function Me() {
 
         {!isSettingsView && !isPostsPage && !isGalleryPage && (
         <div className="panel-grid">
-          <section className="panel">
-            <div
-              className={`panel-header profile-info-header${
-                profileInfoOpen ? "" : " is-collapsed"
-              }`}
-            >
-              <button
-                className="profile-info-toggle"
-                type="button"
-                onClick={() => setProfileInfoOpen((prev) => !prev)}
-                aria-expanded={profileInfoOpen}
-                aria-controls="profile-info-content"
-              >
+          <section className="panel profile-info-launcher-panel">
+            <div className="profile-info-launcher">
+              <div className="profile-info-launcher-copy">
+                <p className="eyebrow">Profile hub</p>
                 <h3>Your Profile</h3>
-                <span
-                  className={`profile-info-chevron${profileInfoOpen ? " is-open" : ""}`}
-                  aria-hidden="true"
-                >
-                  <svg viewBox="0 0 20 20">
+              </div>
+              <div className="profile-info-launcher-summary">
+                {profileInfoLauncherCards.map((item) => (
+                  <article
+                    className="profile-info-launcher-card"
+                    key={`profile-launcher-${item.label}`}
+                  >
+                    <span className="profile-info-launcher-card-label">{item.label}</span>
+                    <strong className="profile-info-launcher-card-value">{item.value}</strong>
+                    <span className="profile-info-launcher-card-meta">{item.meta}</span>
+                  </article>
+                ))}
+              </div>
+              <button
+                className="profile-info-open-button"
+                type="button"
+                aria-haspopup="dialog"
+                aria-expanded={profileInfoOpen}
+                onClick={() => setProfileInfoOpen(true)}
+              >
+                <span className="profile-info-open-button-copy">
+                  <span className="profile-info-open-button-label">
+                    {editing ? "Continue editing" : "Open profile"}
+                  </span>
+                  <span className="profile-info-open-button-meta">
+                    {editing
+                      ? "Resume your draft changes"
+                      : "Review details and edit in one place"}
+                  </span>
+                </span>
+                <span className="profile-info-open-button-icon" aria-hidden="true">
+                  <svg viewBox="0 0 20 20" focusable="false" aria-hidden="true">
                     <path
-                      d="M5 7.5 10 12.5 15 7.5"
+                      d="M7 5.5 12 10l-5 4.5"
                       fill="none"
                       stroke="currentColor"
-                      strokeWidth="1.6"
+                      strokeWidth="1.8"
                       strokeLinecap="round"
                       strokeLinejoin="round"
                     />
@@ -7996,7 +8753,7 @@ export default function Me() {
               </button>
             </div>
 
-            {profileInfoOpen && (
+            {false && profileInfoOpen && (
             <div id="profile-info-content">
             {editing ? (
               <>
@@ -8275,7 +9032,7 @@ export default function Me() {
                     <button
                       className="btn primary profile-avatar-editor-button"
                       type="button"
-                      onClick={() => setPhotoModalOpen(true)}
+                      onClick={openProfilePhotoStudio}
                     >
                       {profile.avatarUrl ? "Edit Profile Photo" : "Add Profile Photo"}
                     </button>
@@ -8312,18 +9069,120 @@ export default function Me() {
 
               </>
             ) : (
-              <div className="profile-columns">
-                <div className="profile-column">
-                  {leftInfo.map(([label, value]) => renderInfoCard(label, value))}
+              <div className="profile-overview">
+                <div className="profile-summary-grid">
+                  {profileSummaryCards.map((item) => (
+                    <article className="profile-summary-card" key={`profile-summary-${item.label}`}>
+                      <span className="profile-summary-label">{item.label}</span>
+                      <strong className="profile-summary-value">{item.value}</strong>
+                      <p className="profile-summary-meta">{item.meta}</p>
+                    </article>
+                  ))}
                 </div>
-                <div className="profile-column">
-                  {rightInfo.map(([label, value]) => renderInfoCard(label, value))}
+
+                <div className="profile-overview-grid">
+                  <section className="profile-info-group">
+                    <div className="profile-info-group-head">
+                      <p className="eyebrow">Identity</p>
+                      <h4>Core details</h4>
+                      <p>Name, handle, and personal basics at a glance.</p>
+                    </div>
+                    <div className="profile-card-grid">
+                      {identityInfo.map(([label, value]) => renderInfoCard(label, value))}
+                    </div>
+                  </section>
+
+                  <section className="profile-info-group">
+                    <div className="profile-info-group-head">
+                      <p className="eyebrow">Location</p>
+                      <h4>Where people can place you</h4>
+                      <p>Helpful for mutual friends, discovery, and community context.</p>
+                    </div>
+                    <div className="profile-location-map">
+                      {hasLocationMap ? (
+                        <>
+                          <iframe
+                            className="profile-location-map__frame"
+                            src={locationMapEmbedUrl}
+                            title={`Map showing ${locationMapQuery}`}
+                            loading="lazy"
+                            referrerPolicy="no-referrer-when-downgrade"
+                          />
+                          <div className="profile-location-map__badge">
+                            <span className="profile-location-map__pin" aria-hidden="true" />
+                            <span>{locationMapQuery}</span>
+                          </div>
+                          <a
+                            className="profile-location-map__link"
+                            href={locationMapHref}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Open in Maps
+                          </a>
+                        </>
+                      ) : (
+                        <div className="profile-location-map__empty">
+                          <span className="profile-location-map__pin" aria-hidden="true" />
+                          <div>
+                            <strong>Add your location</strong>
+                            <p>Country, region, and city are needed before a pin can be placed.</p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </section>
+
+                  <section className="profile-info-group profile-info-group--story">
+                    <div className="profile-info-group-head">
+                      <p className="eyebrow">Story</p>
+                      <h4>What rounds out your profile</h4>
+                      <p>Interests, work, and a short bio make the page easier to understand.</p>
+                    </div>
+                    <div className="profile-story-grid">
+                      <article className="profile-story-card">
+                        <span className="profile-story-label">Bio</span>
+                        <p className="profile-story-text">
+                          {profile.bio ||
+                            "Add a short bio so visitors can understand who you are in a sentence or two."}
+                        </p>
+                      </article>
+                      <article className="profile-story-card">
+                        <span className="profile-story-label">Hobbies</span>
+                        {hobbiesDisplay.length ? (
+                          <div className="profile-story-tags">
+                            {hobbiesDisplay.map((hobby) => (
+                              <span className="profile-story-tag" key={`profile-hobby-${hobby}`}>
+                                {hobby}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="profile-story-empty">
+                            Add a few interests to make your profile more relatable.
+                          </p>
+                        )}
+                      </article>
+                    </div>
+                    <div className="profile-card-grid">
+                      {personalInfo.map(([label, value]) => renderInfoCard(label, value))}
+                    </div>
+                  </section>
                 </div>
               </div>
             )}
             </div>
             )}
           </section>
+          <PopupModal
+            open={profileInfoOpen}
+            title={editing ? "Edit Your Profile" : "Your Profile"}
+            onClose={() => setProfileInfoOpen(false)}
+            className="profile-info-modal"
+            bodyClassName="profile-info-modal-body"
+          >
+            <div className="profile-info-modal-content">{profileInfoModalContent}</div>
+          </PopupModal>
           <section className="panel trusted-circle-panel">
             <div
               className={`panel-header profile-info-header${
@@ -10109,6 +10968,11 @@ export default function Me() {
             </div>
             {notificationError && (
               <p className="status status-error">{notificationError}</p>
+            )}
+            {notificationSyncing && !notificationError && (
+              <p className="security-muted">
+                Finalizing push notification setup in the background…
+              </p>
             )}
             {notificationSuccess && (
               <p className="status status-success">{notificationSuccess}</p>

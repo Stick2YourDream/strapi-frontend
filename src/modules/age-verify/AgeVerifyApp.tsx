@@ -11,7 +11,10 @@ import {
 import { Route, Routes, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { QRCodeCanvas } from "qrcode.react";
 import IdCaptureModule from "./components/IdCaptureModule";
-import LivenessModule, { type LivenessResult } from "./components/LivenessModule";
+import LivenessModule, {
+  LIVENESS_SELFIE_TOTAL,
+  type LivenessResult,
+} from "./components/LivenessModule";
 import SetupTutorial from "./components/SetupTutorial";
 import SetupSettings from "./components/SetupSettings";
 import { usePageMeta } from "../../hooks/usePageMeta";
@@ -227,6 +230,14 @@ const FRONTEND_FACE_MATCH_MIN_SCORE = Number(
 const FRONTEND_FACE_MATCH_MAX_DISTANCE = Number(
   import.meta.env.VITE_AGE_VERIFY_FACE_MATCH_MAX_DISTANCE || "0.13"
 );
+const FRONTEND_FACE_MATCH_REVIEW_MIN_SCORE = Number(
+  import.meta.env.VITE_AGE_VERIFY_FACE_MATCH_REVIEW_MIN_SCORE ||
+    Math.max(0, FRONTEND_FACE_MATCH_MIN_SCORE * 0.78).toFixed(4)
+);
+const FRONTEND_FACE_MATCH_REVIEW_MAX_DISTANCE = Number(
+  import.meta.env.VITE_AGE_VERIFY_FACE_MATCH_REVIEW_MAX_DISTANCE ||
+    (FRONTEND_FACE_MATCH_MAX_DISTANCE * 1.18).toFixed(4)
+);
 
 const ageVerifyLog = (...args: any[]) => {
   // eslint-disable-next-line no-console
@@ -247,6 +258,23 @@ const clampFaceMatchTimeoutMs = (value: unknown) => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 7000;
   return Math.min(15000, Math.max(3000, Math.round(parsed)));
+};
+
+const classifyFrontendFaceMatch = ({
+  score,
+  distance,
+}: {
+  score: number;
+  distance: number;
+}): "pass" | "uncertain" | "fail" => {
+  const strictPass =
+    score >= FRONTEND_FACE_MATCH_MIN_SCORE &&
+    distance <= FRONTEND_FACE_MATCH_MAX_DISTANCE;
+  if (strictPass) return "pass";
+  const reviewPass =
+    score >= FRONTEND_FACE_MATCH_REVIEW_MIN_SCORE &&
+    distance <= FRONTEND_FACE_MATCH_REVIEW_MAX_DISTANCE;
+  return reviewPass ? "uncertain" : "fail";
 };
 
 const formatElapsedDuration = (seconds: number) => {
@@ -518,6 +546,9 @@ type SessionResponse = {
   reason?: string | null;
   token?: string | null;
   returnUrl?: string | null;
+  faceMatchDecision?: string | null;
+  faceMatchSource?: string | null;
+  edgeCaseTags?: string[] | null;
 };
 
 type FaceMatchPayload = {
@@ -527,7 +558,13 @@ type FaceMatchPayload = {
   comparedCount: number;
 };
 
-type FaceMatchClientStatus = "pass" | "fail" | "timeout" | "error" | "skipped";
+type FaceMatchClientStatus =
+  | "pass"
+  | "uncertain"
+  | "fail"
+  | "timeout"
+  | "error"
+  | "skipped";
 
 const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -554,6 +591,7 @@ const recoverUploadResult = async (
   intervalMs = 2500
 ): Promise<
   | { kind: "verified"; session: SessionResponse }
+  | { kind: "review"; session: SessionResponse }
   | { kind: "final"; session: SessionResponse }
   | null
 > => {
@@ -566,6 +604,9 @@ const recoverUploadResult = async (
       const status = String(session?.status || "").toLowerCase();
       if (session && status === "verified" && session.token) {
         return { kind: "verified" as const, session };
+      }
+      if (session && status === "uncertain") {
+        return { kind: "review" as const, session };
       }
       if (session && (status === "failed" || status === "denied")) {
         return { kind: "final" as const, session };
@@ -946,6 +987,11 @@ const MobileSession = () => {
     livenessPrompts: [],
     livenessStartedAt: null,
   });
+  const [edgeCaseSelections, setEdgeCaseSelections] = useState({
+    glasses: false,
+    hat: false,
+    age_drift: false,
+  });
   const [status, setStatus] = useState<string>("ready");
   const [verifyStartedAt, setVerifyStartedAt] = useState<number | null>(null);
   const [verifyElapsed, setVerifyElapsed] = useState(0);
@@ -1014,7 +1060,7 @@ const MobileSession = () => {
 
   const hasMotionProof = livenessData.motionFrames.length >= 2;
   const livenessComplete =
-    livenessData.selfies.length >= 4 && hasMotionProof;
+    livenessData.selfies.length >= LIVENESS_SELFIE_TOTAL && hasMotionProof;
   const step1Complete = livenessComplete;
   const step2Complete = Boolean(idType);
   const requiresBackCapture = idType !== "passport";
@@ -1029,6 +1075,13 @@ const MobileSession = () => {
   const canSubmit = useMemo(
     () => hasReadableIdInputs && livenessComplete,
     [hasReadableIdInputs, livenessComplete]
+  );
+  const edgeCaseTags = useMemo(
+    () =>
+      Object.entries(edgeCaseSelections)
+        .filter(([, selected]) => selected)
+        .map(([tag]) => tag),
+    [edgeCaseSelections]
   );
   const showStepHeader = !LIVENESS_ONLY;
   const showStep1 = LIVENESS_ONLY || mobileStep === 1;
@@ -1045,28 +1098,62 @@ const MobileSession = () => {
 
   useEffect(() => {
     const shouldWarm =
+      !isMobile &&
       Boolean(idFront) &&
       livenessData.selfies.length > 0 &&
-      (LIVENESS_ONLY || mobileStep >= 3);
+      (LIVENESS_ONLY || mobileStep >= 4);
     if (!shouldWarm || warmupStartedRef.current) return;
     warmupStartedRef.current = true;
-    ageVerifyLog("face match warmup start", {
-      sessionId,
-      mobileStep,
-      livenessSelfies: livenessData.selfies.length,
-    });
-    void warmupFaceMatchModel({
-      log: (event, payload) => {
-        ageVerifyLog(`face-match warmup ${event}`, payload || {});
-      },
-    })
-      .then(() => {
-        ageVerifyLog("face match warmup complete", { sessionId });
-      })
-      .catch((error) => {
-        ageVerifyWarn("face match warmup failed", error);
+    const runWarmup = () => {
+      ageVerifyLog("face match warmup start", {
+        sessionId,
+        mobileStep,
+        livenessSelfies: livenessData.selfies.length,
       });
-  }, [idFront, livenessData.selfies.length, mobileStep, sessionId]);
+      void warmupFaceMatchModel({
+        log: (event, payload) => {
+          ageVerifyLog(`face-match warmup ${event}`, payload || {});
+        },
+      })
+        .then(() => {
+          ageVerifyLog("face match warmup complete", { sessionId });
+        })
+        .catch((error) => {
+          ageVerifyWarn("face match warmup failed", error);
+        });
+    };
+
+    let idleHandle: number | null = null;
+    let timeoutHandle: number | null = null;
+    if (typeof window !== "undefined" && "requestIdleCallback" in window) {
+      idleHandle = (window as Window & {
+        requestIdleCallback: (callback: IdleRequestCallback, options?: IdleRequestOptions) => number;
+        cancelIdleCallback: (handle: number) => void;
+      }).requestIdleCallback(
+        () => {
+          runWarmup();
+        },
+        { timeout: 1500 }
+      );
+    } else {
+      timeoutHandle = globalThis.setTimeout(runWarmup, 700);
+    }
+
+    return () => {
+      if (
+        idleHandle !== null &&
+        typeof window !== "undefined" &&
+        "cancelIdleCallback" in window
+      ) {
+        (window as Window & {
+          cancelIdleCallback: (handle: number) => void;
+        }).cancelIdleCallback(idleHandle);
+      }
+      if (timeoutHandle !== null) {
+        globalThis.clearTimeout(timeoutHandle);
+      }
+    };
+  }, [LIVENESS_ONLY, idFront, isMobile, livenessData.selfies.length, mobileStep, sessionId]);
 
   const handleSubmit = async () => {
     if (!sessionId) return;
@@ -1095,7 +1182,6 @@ const MobileSession = () => {
       selfie1: selfies[0]?.size || 0,
       selfie2: selfies[1]?.size || 0,
       selfie3: selfies[2]?.size || 0,
-      selfie4: selfies[3]?.size || 0,
       motion1: motionFrames[0]?.size || 0,
       motion2: motionFrames[1]?.size || 0,
       motion3: motionFrames[2]?.size || 0,
@@ -1104,6 +1190,7 @@ const MobileSession = () => {
     ageVerifyLog("submit verification clicked", {
       sessionId,
       idType,
+      edgeCaseTags,
       requiresBackCapture,
       livenessSelfies: selfies.length,
       livenessMotionFrames: motionFrames.length,
@@ -1111,7 +1198,7 @@ const MobileSession = () => {
       faceMatchTimeoutMsUsed: boundedFaceMatchTimeoutMs,
       totalBytes: originalTotalBytes,
     });
-    const [selfie, selfieAlt, selfieThird, selfieFourth] = selfies;
+    const [selfie, selfieAlt, selfieThird] = selfies;
     const idFrontFile = idFront;
     if (!idFrontFile) {
       setStatus("error");
@@ -1123,6 +1210,7 @@ const MobileSession = () => {
     let faceMatchResult: FaceMatchPayload | null = null;
     let faceMatchClientStatus: FaceMatchClientStatus = "skipped";
     let useServerFaceMatchFallback = false;
+    const shouldDeferFaceMatchToServer = isMobile;
     const hasRequiredIdEvidence =
       (idType !== "passport" && Boolean(idBack)) ||
       (idType === "passport" && Boolean(idFront));
@@ -1131,70 +1219,80 @@ const MobileSession = () => {
       setError(
         idType === "passport"
           ? "Capture the passport photo page."
-          : "Capture both the front and back of your ID before submitting."
+          : idType === "military_id"
+            ? "Capture both the front and back of your Military CAC before submitting."
+            : "Capture both the front and back of your ID before submitting."
       );
       setVerifyStage("Missing ID evidence");
       uploadAbortRef.current = null;
       return;
     }
     try {
-      if (skipFaceMatch) {
-        setVerifyNote("Face match skip override is ignored for live verification.");
+      if (shouldDeferFaceMatchToServer) {
+        useServerFaceMatchFallback = true;
+        setVerifyStage("Preparing server face match");
+        setVerifyNote(
+          "Using server-side face match on mobile for reliability. Uploading your verification now..."
+        );
+      } else {
+        if (skipFaceMatch) {
+          setVerifyNote("Face match skip override is ignored for live verification.");
+        }
+        setVerifyStage("Running face match");
+        const faceMatchSelfieCount = Math.max(
+          1,
+          Math.min(3, selfies.filter(Boolean).length)
+        );
+        setVerifyNote(`Running face match on ID + ${faceMatchSelfieCount} selfie(s)...`);
+        await new Promise<void>((resolve) => {
+          window.requestAnimationFrame(() => resolve());
+        });
+        const faceMatchStartedAt = Date.now();
+        let timeoutHandle: number | null = null;
+        const timeoutPromise = new Promise<null>((resolve) => {
+          timeoutHandle = window.setTimeout(() => {
+            ageVerifyWarn("face match timeout reached", {
+              sessionId,
+              timeoutMs: boundedFaceMatchTimeoutMs,
+            });
+            resolve(null);
+          }, boundedFaceMatchTimeoutMs);
+        });
+        ageVerifyLog("face match start", {
+          sessionId,
+          timeoutMs: boundedFaceMatchTimeoutMs,
+          idFrontBytes: idFrontFile.size,
+          selfieCount: selfies.filter(Boolean).length,
+        });
+        faceMatchResult = await Promise.race([
+          computeFaceMatch(idFrontFile, selfies, {
+            maxSelfies: faceMatchSelfieCount,
+            budgetMs: Math.max(4000, boundedFaceMatchTimeoutMs + 1500),
+            log: (event, payload) => {
+              ageVerifyLog(`face-match ${event}`, payload || {});
+              const progress = getFaceMatchProgressMessage(
+                event,
+                payload as Record<string, unknown> | undefined,
+                faceMatchSelfieCount
+              );
+              if (progress) {
+                setVerifyStage(progress.stage);
+                setVerifyNote(progress.note);
+              }
+              setVerifyElapsed(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
+            },
+          }),
+          timeoutPromise,
+        ]);
+        if (timeoutHandle) {
+          window.clearTimeout(timeoutHandle);
+        }
+        ageVerifyLog("face match finished", {
+          sessionId,
+          elapsedMs: Date.now() - faceMatchStartedAt,
+          hasResult: Boolean(faceMatchResult),
+        });
       }
-      setVerifyStage("Running face match");
-      const faceMatchSelfieCount = Math.max(
-        1,
-        Math.min(3, selfies.filter(Boolean).length)
-      );
-      setVerifyNote(`Running face match on ID + ${faceMatchSelfieCount} selfie(s)...`);
-      await new Promise<void>((resolve) => {
-        window.requestAnimationFrame(() => resolve());
-      });
-      const faceMatchStartedAt = Date.now();
-      let timeoutHandle: number | null = null;
-      const timeoutPromise = new Promise<null>((resolve) => {
-        timeoutHandle = window.setTimeout(() => {
-          ageVerifyWarn("face match timeout reached", {
-            sessionId,
-            timeoutMs: boundedFaceMatchTimeoutMs,
-          });
-          resolve(null);
-        }, boundedFaceMatchTimeoutMs);
-      });
-      ageVerifyLog("face match start", {
-        sessionId,
-        timeoutMs: boundedFaceMatchTimeoutMs,
-        idFrontBytes: idFrontFile.size,
-        selfieCount: selfies.filter(Boolean).length,
-      });
-      faceMatchResult = await Promise.race([
-        computeFaceMatch(idFrontFile, selfies, {
-          maxSelfies: faceMatchSelfieCount,
-          budgetMs: Math.max(4000, boundedFaceMatchTimeoutMs + 1500),
-          log: (event, payload) => {
-            ageVerifyLog(`face-match ${event}`, payload || {});
-            const progress = getFaceMatchProgressMessage(
-              event,
-              payload as Record<string, unknown> | undefined,
-              faceMatchSelfieCount
-            );
-            if (progress) {
-              setVerifyStage(progress.stage);
-              setVerifyNote(progress.note);
-            }
-            setVerifyElapsed(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
-          },
-        }),
-        timeoutPromise,
-      ]);
-      if (timeoutHandle) {
-        window.clearTimeout(timeoutHandle);
-      }
-      ageVerifyLog("face match finished", {
-        sessionId,
-        elapsedMs: Date.now() - faceMatchStartedAt,
-        hasResult: Boolean(faceMatchResult),
-      });
     } catch (err) {
       ageVerifyWarn("face match failed", err);
       faceMatchClientStatus = "error";
@@ -1203,32 +1301,46 @@ const MobileSession = () => {
       setVerifyNote("Client face match errored. Uploading now and matching on the server...");
     }
     if (!faceMatchResult) {
-      if (faceMatchClientStatus === "skipped") {
-        faceMatchClientStatus = "timeout";
-      }
-      useServerFaceMatchFallback = true;
-      setVerifyStage("Running server face match fallback");
-      setVerifyNote(
-        "Client face match timed out. Uploading now and completing face match on the server..."
-      );
-    }
-    const resolvedFaceMatch = faceMatchResult;
-    if (resolvedFaceMatch) {
-      const faceMatchPass =
-        resolvedFaceMatch.distance <= FRONTEND_FACE_MATCH_MAX_DISTANCE &&
-        resolvedFaceMatch.score >= FRONTEND_FACE_MATCH_MIN_SCORE;
-      if (!faceMatchPass) {
-        faceMatchClientStatus = "fail";
+      if (shouldDeferFaceMatchToServer) {
         useServerFaceMatchFallback = true;
         setVerifyStage("Running server face match fallback");
         setVerifyNote(
-          `Client face match score ${resolvedFaceMatch.score.toFixed(2)} (distance ${resolvedFaceMatch.distance.toFixed(3)}). Uploading for server-side fallback...`
+          "Mobile verification is uploading now. The server will complete face match and document checks."
+        );
+      } else if (faceMatchClientStatus === "skipped") {
+        faceMatchClientStatus = "timeout";
+      }
+      if (!shouldDeferFaceMatchToServer) {
+        useServerFaceMatchFallback = true;
+        setVerifyStage("Running server face match fallback");
+        setVerifyNote(
+          "Client face match timed out. Uploading now and completing face match on the server..."
+        );
+      }
+    }
+    const resolvedFaceMatch = faceMatchResult;
+    if (resolvedFaceMatch) {
+      const clientDecision = classifyFrontendFaceMatch({
+        score: resolvedFaceMatch.score,
+        distance: resolvedFaceMatch.distance,
+      });
+      if (clientDecision !== "pass") {
+        faceMatchClientStatus = clientDecision;
+        useServerFaceMatchFallback = true;
+        setVerifyStage("Running server face match fallback");
+        setVerifyNote(
+          clientDecision === "uncertain"
+            ? `Client face match is borderline at ${resolvedFaceMatch.score.toFixed(2)} / ${resolvedFaceMatch.distance.toFixed(3)}. Uploading for server-side review fallback...`
+            : `Client face match score ${resolvedFaceMatch.score.toFixed(2)} (distance ${resolvedFaceMatch.distance.toFixed(3)}). Uploading for server-side fallback...`
         );
         ageVerifyWarn("face match below threshold", {
           score: resolvedFaceMatch.score,
           distance: resolvedFaceMatch.distance,
+          decision: clientDecision,
           minScore: FRONTEND_FACE_MATCH_MIN_SCORE,
           maxDistance: FRONTEND_FACE_MATCH_MAX_DISTANCE,
+          reviewMinScore: FRONTEND_FACE_MATCH_REVIEW_MIN_SCORE,
+          reviewMaxDistance: FRONTEND_FACE_MATCH_REVIEW_MAX_DISTANCE,
         });
       } else {
         faceMatchClientStatus = "pass";
@@ -1262,11 +1374,6 @@ const MobileSession = () => {
       "selfie",
       "selfie-3.jpg"
     );
-    const uploadSelfieFourth = await optimizeUploadImage(
-      selfieFourth,
-      "selfie",
-      "selfie-4.jpg"
-    );
     const uploadMotionFrames = (
       await Promise.all(
         motionFrames.slice(0, 3).map((frame, index) =>
@@ -1280,7 +1387,6 @@ const MobileSession = () => {
       selfie1: uploadSelfie?.size || 0,
       selfie2: uploadSelfieAlt?.size || 0,
       selfie3: uploadSelfieThird?.size || 0,
-      selfie4: uploadSelfieFourth?.size || 0,
       motion1: uploadMotionFrames[0]?.size || 0,
       motion2: uploadMotionFrames[1]?.size || 0,
       motion3: uploadMotionFrames[2]?.size || 0,
@@ -1306,7 +1412,6 @@ const MobileSession = () => {
     if (uploadSelfie) form.append("selfie", uploadSelfie);
     if (uploadSelfieAlt) form.append("selfieAlt", uploadSelfieAlt);
     if (uploadSelfieThird) form.append("selfieThird", uploadSelfieThird);
-    if (uploadSelfieFourth) form.append("selfieFourth", uploadSelfieFourth);
     form.append("faceMatchClientStatus", faceMatchClientStatus);
     if (useServerFaceMatchFallback) {
       form.append("faceMatchFallback", "1");
@@ -1327,8 +1432,10 @@ const MobileSession = () => {
     if (livenessPrompts[0]) form.append("livenessPrompt", livenessPrompts[0]);
     if (livenessPrompts[1]) form.append("livenessPromptAlt", livenessPrompts[1]);
     if (livenessPrompts[2]) form.append("livenessPromptThird", livenessPrompts[2]);
-    if (livenessPrompts[3]) form.append("livenessPromptFourth", livenessPrompts[3]);
     if (livenessStartedAt) form.append("livenessStartedAt", livenessStartedAt);
+    if (edgeCaseTags.length) {
+      form.append("edgeCaseTags", edgeCaseTags.join(","));
+    }
     ageVerifyLog("upload started", {
       sessionId,
       idFront: Boolean(idFront),
@@ -1337,6 +1444,7 @@ const MobileSession = () => {
       motionFrames: motionFrames.length,
       faceMatchClientStatus,
       faceMatchFallback: useServerFaceMatchFallback,
+      edgeCaseTags,
     });
     try {
       const url = `${apiBase}/session/${sessionId}/upload`;
@@ -1372,6 +1480,21 @@ const MobileSession = () => {
         hasToken: Boolean(responseToken),
       });
       if (responseStatus !== "verified" || !responseToken) {
+        if (responseStatus === "uncertain") {
+          setStatus("review");
+          setResultToken(null);
+          setReturnUrl(data?.data?.returnUrl || null);
+          setVerifyStage("Needs manual review");
+          setVerifyNote(data?.data?.reason || "Face match is uncertain. Review is required.");
+          uploadAbortRef.current = null;
+          setUploadDebug(null);
+          ageVerifyWarn("upload completed with uncertain review status", {
+            sessionId,
+            responseStatus,
+            faceMatchDecision: data?.data?.faceMatchDecision || null,
+          });
+          return;
+        }
         const message =
           data?.data?.reason ||
           (responseStatus === "denied"
@@ -1418,6 +1541,23 @@ const MobileSession = () => {
           uploadAbortRef.current = null;
           setUploadDebug(null);
           ageVerifyLog("upload recovered via session poll", {
+            sessionId,
+            status: recovered.session.status,
+          });
+          return;
+        }
+        if (recovered?.kind === "review") {
+          setStatus("review");
+          setResultToken(null);
+          setReturnUrl(recovered.session.returnUrl || null);
+          setVerifyStage("Needs manual review");
+          setVerifyNote(
+            recovered.session.reason ||
+              "Face match is uncertain. Review is required before approval."
+          );
+          uploadAbortRef.current = null;
+          setUploadDebug(null);
+          ageVerifyWarn("upload recovered via session poll to review status", {
             sessionId,
             status: recovered.session.status,
           });
@@ -1582,7 +1722,7 @@ const MobileSession = () => {
                   <option value="driver_license">Driver’s license</option>
                   <option value="state_id">State ID</option>
                   <option value="passport">Passport</option>
-                  <option value="military_id">Military ID</option>
+                  <option value="military_id">Military CAC / ID</option>
                 </select>
               </div>
             </label>
@@ -1603,6 +1743,75 @@ const MobileSession = () => {
 
         {showStep4 && (
           <div className={`mobile-step ${isMobile ? "active" : ""}`}>
+            <div className="edge-case-panel">
+              <strong>Optional calibration tags</strong>
+              <p>
+                These do not change approval rules. They help us tune face-match review thresholds
+                against real mobile captures.
+              </p>
+              <label className={`edge-case-switch${edgeCaseSelections.glasses ? " is-on" : ""}`}>
+                <input
+                  className="edge-case-switch-input"
+                  type="checkbox"
+                  checked={edgeCaseSelections.glasses}
+                  onChange={(e) =>
+                    setEdgeCaseSelections((prev) => ({
+                      ...prev,
+                      glasses: e.target.checked,
+                    }))
+                  }
+                />
+                <span className="edge-case-switch-copy">
+                  <strong>Glasses</strong>
+                  <span>I am wearing glasses during verification.</span>
+                </span>
+                <span className="edge-case-switch-track" aria-hidden="true">
+                  <span className="edge-case-switch-thumb" />
+                </span>
+              </label>
+              <label className={`edge-case-switch${edgeCaseSelections.hat ? " is-on" : ""}`}>
+                <input
+                  className="edge-case-switch-input"
+                  type="checkbox"
+                  checked={edgeCaseSelections.hat}
+                  onChange={(e) =>
+                    setEdgeCaseSelections((prev) => ({
+                      ...prev,
+                      hat: e.target.checked,
+                    }))
+                  }
+                />
+                <span className="edge-case-switch-copy">
+                  <strong>Hat or head covering</strong>
+                  <span>I am wearing a hat or other head covering.</span>
+                </span>
+                <span className="edge-case-switch-track" aria-hidden="true">
+                  <span className="edge-case-switch-thumb" />
+                </span>
+              </label>
+              <label
+                className={`edge-case-switch${edgeCaseSelections.age_drift ? " is-on" : ""}`}
+              >
+                <input
+                  className="edge-case-switch-input"
+                  type="checkbox"
+                  checked={edgeCaseSelections.age_drift}
+                  onChange={(e) =>
+                    setEdgeCaseSelections((prev) => ({
+                      ...prev,
+                      age_drift: e.target.checked,
+                    }))
+                  }
+                />
+                <span className="edge-case-switch-copy">
+                  <strong>Age drift</strong>
+                  <span>My ID photo is older and I look noticeably older now.</span>
+                </span>
+                <span className="edge-case-switch-track" aria-hidden="true">
+                  <span className="edge-case-switch-thumb" />
+                </span>
+              </label>
+            </div>
             <div className="actions">
               <button className="btn primary" disabled={!canSubmit} onClick={handleSubmit}>
                 {status === "uploading" ? "Verifying..." : "Verify age"}
@@ -1675,6 +1884,15 @@ const MobileSession = () => {
                     Continue to Your Social Place
                   </button>
                 )}
+              </div>
+            )}
+            {status === "review" && (
+              <div className="review-notice">
+                <strong>Verification needs review.</strong>
+                <p>
+                  Your document appears valid, but the face match was not confident enough for an
+                  automatic approval. Retry with brighter light or continue later after review.
+                </p>
               </div>
             )}
           </div>

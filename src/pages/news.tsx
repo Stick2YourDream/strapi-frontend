@@ -31,6 +31,7 @@ const IMAGE_LOOKUP_LIMIT = 12;
 const NEWS_LOADING_GAME_DELAY_MS = 5000;
 const SNAKE_GRID_SIZE = 16;
 const SNAKE_TICK_MS = 135;
+const NEWS_CARD_LOD_ROOT_MARGIN = "280px 0px";
 
 const QUICK_TOPICS = [
   "Community",
@@ -482,6 +483,100 @@ function NewsLoadingSnakeModal({
   );
 }
 
+type LazyNewsCardProps = {
+  article: NewsArticle;
+  isTop?: boolean;
+  onOpen: (article: NewsArticle) => void;
+};
+
+function LazyNewsCard({ article, isTop = false, onOpen }: LazyNewsCardProps) {
+  const cardRef = useRef<HTMLElement | null>(null);
+  const [isVisible, setIsVisible] = useState(false);
+
+  useEffect(() => {
+    if (isVisible) return;
+    const node = cardRef.current;
+    if (!node) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setIsVisible(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (!entry) return;
+        if (entry.isIntersecting || entry.intersectionRatio > 0) {
+          setIsVisible(true);
+          observer.disconnect();
+        }
+      },
+      {
+        root: null,
+        rootMargin: NEWS_CARD_LOD_ROOT_MARGIN,
+        threshold: 0.01,
+      }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [isVisible]);
+
+  const cardClassName = `news-card${isTop ? " is-top" : ""}${!isVisible ? " is-lod-pending" : ""}`;
+
+  if (!isVisible) {
+    return (
+      <article ref={cardRef} className={cardClassName} aria-hidden="true">
+        <div className="news-card-lod-placeholder">
+          <div className="news-card-lod-media" />
+          <div className="news-card-lod-body">
+            <span className="news-card-lod-line news-card-lod-line--meta" />
+            <span className="news-card-lod-line news-card-lod-line--title" />
+            <span className="news-card-lod-line news-card-lod-line--title-short" />
+            <span className="news-card-lod-line news-card-lod-line--summary" />
+            <span className="news-card-lod-line news-card-lod-line--summary-short" />
+            <span className="news-card-lod-line news-card-lod-line--cta" />
+          </div>
+        </div>
+      </article>
+    );
+  }
+
+  const metaParts = [article.source, article.provider].filter(Boolean);
+  const metaLine = metaParts.length ? metaParts.join(" | ") : "The Current Scope";
+  const timeLabel = formatNewsTime(article.publishedAt);
+
+  return (
+    <article className={cardClassName}>
+      <button
+        type="button"
+        className="news-card-link"
+        onClick={() => onOpen(article)}
+      >
+        <div className="news-card-media">
+          {article.image ? (
+            <img
+              src={article.image}
+              alt={article.title}
+              loading="lazy"
+              decoding="async"
+            />
+          ) : (
+            <div className="news-card-fallback">NEWS</div>
+          )}
+        </div>
+        <div className="news-card-body">
+          <div className="news-card-meta">
+            <span>{metaLine}</span>
+            {timeLabel && <span>{timeLabel}</span>}
+          </div>
+          <h3>{article.title}</h3>
+          {article.summary && <p>{article.summary}</p>}
+          <span className="news-card-cta">Read story -&gt;</span>
+        </div>
+      </button>
+    </article>
+  );
+}
+
 export default function News() {
   const navigate = useNavigate();
   const { user, profile, appSettings } = useAuth();
@@ -810,7 +905,12 @@ export default function News() {
     setSource("");
     setStartDate("");
     setEndDate("");
+    setSortOrder("newest");
   };
+
+  const canResetFilters = Boolean(
+    query || provider || source || startDate || endDate || sortOrder !== "newest"
+  );
 
   const renderFilters = (variant: "sidebar" | "inline" | "right") => {
     const idPrefix =
@@ -905,8 +1005,13 @@ export default function News() {
               onChange={(e) => setEndDate(e.target.value)}
             />
           </label>
-          <button className="btn ghost" type="button" onClick={clearFilters}>
-            Clear filters
+          <button
+            className="btn ghost"
+            type="button"
+            onClick={clearFilters}
+            disabled={!canResetFilters}
+          >
+            Reset filters
           </button>
         </div>
         <div className="news-topics">
@@ -1533,43 +1638,14 @@ export default function News() {
 
                   {topStories.length > 0 && (
                     <div className="news-top-grid">
-                      {topStories.map((article) => {
-                        const metaParts = [article.source, article.provider].filter(Boolean);
-                        const metaLine = metaParts.length
-                          ? metaParts.join(" | ")
-                          : "The Current Scope";
-                        const timeLabel = formatNewsTime(article.publishedAt);
-                        return (
-                          <article key={article.id} className="news-card is-top">
-                            <button
-                              type="button"
-                              className="news-card-link"
-                              onClick={() => setActiveArticle(article)}
-                            >
-                              <div className="news-card-media">
-                                {article.image ? (
-                                  <img
-                                    src={article.image}
-                                    alt={article.title}
-                                    loading="lazy"
-                                  />
-                                ) : (
-                                  <div className="news-card-fallback">NEWS</div>
-                                )}
-                              </div>
-                              <div className="news-card-body">
-                                <div className="news-card-meta">
-                                  <span>{metaLine}</span>
-                                  {timeLabel && <span>{timeLabel}</span>}
-                                </div>
-                                <h3>{article.title}</h3>
-                                {article.summary && <p>{article.summary}</p>}
-                                <span className="news-card-cta">Read story -&gt;</span>
-                              </div>
-                            </button>
-                          </article>
-                        );
-                      })}
+                      {topStories.map((article) => (
+                        <LazyNewsCard
+                          key={article.id}
+                          article={article}
+                          isTop
+                          onOpen={setActiveArticle}
+                        />
+                      ))}
                     </div>
                   )}
 
@@ -1586,43 +1662,13 @@ export default function News() {
                   )}
 
                   <div className="news-grid">
-                    {(topStories.length > 0 ? mainArticles : articles).map((article) => {
-                      const metaParts = [article.source, article.provider].filter(Boolean);
-                      const metaLine = metaParts.length
-                        ? metaParts.join(" | ")
-                        : "The Current Scopel";
-                      const timeLabel = formatNewsTime(article.publishedAt);
-                      return (
-                        <article key={article.id} className="news-card">
-                          <button
-                            type="button"
-                            className="news-card-link"
-                            onClick={() => setActiveArticle(article)}
-                          >
-                            <div className="news-card-media">
-                              {article.image ? (
-                                <img
-                                  src={article.image}
-                                  alt={article.title}
-                                  loading="lazy"
-                                />
-                              ) : (
-                                <div className="news-card-fallback">NEWS</div>
-                              )}
-                            </div>
-                            <div className="news-card-body">
-                              <div className="news-card-meta">
-                                <span>{metaLine}</span>
-                                {timeLabel && <span>{timeLabel}</span>}
-                              </div>
-                              <h3>{article.title}</h3>
-                              {article.summary && <p>{article.summary}</p>}
-                              <span className="news-card-cta">Read story -&gt;</span>
-                            </div>
-                          </button>
-                        </article>
-                      );
-                    })}
+                    {(topStories.length > 0 ? mainArticles : articles).map((article) => (
+                      <LazyNewsCard
+                        key={article.id}
+                        article={article}
+                        onOpen={setActiveArticle}
+                      />
+                    ))}
                   </div>
 
                   {totalPages > 1 && (

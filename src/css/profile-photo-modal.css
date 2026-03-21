@@ -1,7 +1,7 @@
 .profile-photo-modal {
   position: fixed;
   inset: 0;
-  z-index: 3000;
+  z-index: 21010;
   display: grid;
   place-items: center;
   padding: max(12px, env(safe-area-inset-top, 12px))

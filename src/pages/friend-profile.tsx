@@ -834,6 +834,66 @@ export default function FriendProfilePage() {
   );
 
   const visibleInfoItems = infoItems.filter((item) => item.show);
+  const friendRelationshipLabel = isFriend ? "Friend" : "Public profile";
+  const friendHeaderHighlights = [
+    {
+      label: "Connection",
+      value: friendRelationshipLabel,
+    },
+    {
+      label: "Location",
+      value: canShowLocation ? locationLabel || "Not shared" : "Private",
+    },
+    {
+      label: "Interests",
+      value: canShowBase
+        ? hobbies.length
+          ? `${hobbies.length} shared`
+          : "Not shared"
+        : "Private",
+    },
+    {
+      label: "Activity",
+      value: canShowActivity ? formatLastSeen(profile?.lastSeenAt) : "Hidden",
+    },
+  ];
+  const friendSummaryCards = [
+    {
+      label: "Connection",
+      value: friendRelationshipLabel,
+      meta: isFriend
+        ? "Messaging and calling are available"
+        : "Add as a friend for richer profile access",
+    },
+    {
+      label: "Shared details",
+      value: `${visibleInfoItems.length}`,
+      meta:
+        visibleInfoItems.length > 0
+          ? "Quick facts are visible to you now"
+          : "This profile is sharing very little at the moment",
+    },
+    {
+      label: "Location",
+      value: canShowLocation ? locationLabel || "Not shared" : "Private",
+      meta: canShowLocation
+        ? "Based on the details this person has chosen to share"
+        : "Location is hidden by privacy settings",
+    },
+    {
+      label: "Interests",
+      value: canShowBase
+        ? hobbies.length
+          ? `${hobbies.length} interests`
+          : "Not shared"
+        : "Private",
+      meta: canShowBase
+        ? hobbies.length
+          ? "Shared hobbies make connection easier"
+          : "No hobbies added yet"
+        : "Visible only to approved audiences",
+    },
+  ];
 
   const handleMessage = () => {
     if (!profile?.userId) return;
@@ -1013,6 +1073,14 @@ export default function FriendProfilePage() {
                     ? profile.bio || "No bio shared yet."
                     : "Bio hidden by privacy settings."}
                 </p>
+                <div className="profile-header-highlights friend-profile-highlights">
+                  {friendHeaderHighlights.map((item) => (
+                    <div className="profile-header-highlight" key={`friend-highlight-${item.label}`}>
+                      <span>{item.label}</span>
+                      <strong>{item.value}</strong>
+                    </div>
+                  ))}
+                </div>
                 <div className="profile-header-actions friend-profile-actions">
                   <button
                     type="button"
@@ -1033,6 +1101,16 @@ export default function FriendProfilePage() {
                 </div>
               </div>
             </section>
+
+            <div className="profile-summary-grid friend-profile-summary-grid">
+              {friendSummaryCards.map((item) => (
+                <article className="profile-summary-card" key={`friend-summary-${item.label}`}>
+                  <span className="profile-summary-label">{item.label}</span>
+                  <strong className="profile-summary-value">{item.value}</strong>
+                  <p className="profile-summary-meta">{item.meta}</p>
+                </article>
+              ))}
+            </div>
 
             <div className="panel-grid friend-profile-grid">
               <section className="panel friend-profile-panel">

@@ -22,6 +22,7 @@ import {
   RefreshCcw,
   Settings,
   Shield,
+  ShoppingCart,
   Store,
   Timer,
   User,
@@ -157,17 +158,18 @@ const RECENT_LOGINS_KEY = "auth:recent-logins";
 const MAX_RECENT_LOGINS = 4;
 const NOTIFICATION_SOURCE_FILTERS_KEY = "notifications-source-filters-v1";
 const MOBILE_MENU_VARIANT_KEY = "sidebar:mobile-menu-variant-v1";
-const DESKTOP_SIDEBAR_COLLAPSE_KEY = "dashboard:desktop-sidebar-collapsed";
+const DESKTOP_SIDEBAR_COLLAPSE_KEY = "dashboard:desktop-sidebar-collapsed:v2";
 
 type MobileMenuVariant = "panel" | "drawer";
 
-type NotificationSourceKey = "friends" | "groups" | "forums";
+type NotificationSourceKey = "friends" | "groups" | "forums" | "storefront";
 type NotificationSourceFilters = Record<NotificationSourceKey, boolean>;
 
 const DEFAULT_NOTIFICATION_SOURCE_FILTERS: NotificationSourceFilters = {
   friends: true,
   groups: true,
   forums: true,
+  storefront: true,
 };
 
 const normalizeMobileMenuVariant = (value: unknown): MobileMenuVariant =>
@@ -179,9 +181,9 @@ const readMobileMenuVariant = (): MobileMenuVariant => {
 };
 
 const readDesktopSidebarCollapsed = (): boolean => {
-  if (typeof window === "undefined") return true;
+  if (typeof window === "undefined") return false;
   const stored = window.localStorage.getItem(DESKTOP_SIDEBAR_COLLAPSE_KEY);
-  if (stored === null) return true;
+  if (stored === null) return false;
   return stored === "1";
 };
 
@@ -191,6 +193,7 @@ const normalizeNotificationSourceFilters = (value: unknown): NotificationSourceF
     friends: typeof raw.friends === "boolean" ? raw.friends : true,
     groups: typeof raw.groups === "boolean" ? raw.groups : true,
     forums: typeof raw.forums === "boolean" ? raw.forums : true,
+    storefront: typeof raw.storefront === "boolean" ? raw.storefront : true,
   };
 };
 
@@ -200,6 +203,7 @@ const getNotificationSourceFiltersFromSettings = (
   friends: settings?.friendsNotificationsEnabled !== false,
   groups: settings?.groupsNotificationsEnabled !== false,
   forums: settings?.forumsNotificationsEnabled !== false,
+  storefront: settings?.storefrontNotificationsEnabled !== false,
 });
 
 const readStoredNotificationSourceFilters = (
@@ -261,6 +265,12 @@ type SidebarProps = {
   enableDesktopCollapse?: boolean;
   desktopCollapsed?: boolean;
   onDesktopCollapsedChange?: (collapsed: boolean) => void;
+  onMobileMessagesOpen?: () => void;
+  mobileMessagesFallbackText?: string;
+  mobileMessagesEmptyTitle?: string;
+  mobileMessagesEmptySubtitle?: string;
+  storefrontCartCount?: number;
+  onStorefrontCartOpen?: () => void;
 };
 
 const trimPreviewText = (value?: string, max = 72) => {
@@ -380,6 +390,12 @@ export default function Sidebar({
   enableDesktopCollapse = true,
   desktopCollapsed,
   onDesktopCollapsedChange,
+  onMobileMessagesOpen,
+  mobileMessagesFallbackText = "Messages from friends",
+  mobileMessagesEmptyTitle = "No new friend messages",
+  mobileMessagesEmptySubtitle = "Open friends inbox",
+  storefrontCartCount,
+  onStorefrontCartOpen,
 }: SidebarProps) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -517,6 +533,7 @@ export default function Sidebar({
     profile?.notificationSettings?.friendsNotificationsEnabled,
     profile?.notificationSettings?.groupsNotificationsEnabled,
     profile?.notificationSettings?.forumsNotificationsEnabled,
+    profile?.notificationSettings?.storefrontNotificationsEnabled,
   ]);
 
   // Close mobile menu when the active page changes
@@ -721,6 +738,28 @@ export default function Sidebar({
     setMenuOpen(false);
   };
 
+  const isStorefrontLandingPage = active === "storefront" && location.pathname === "/storefront";
+  const showStorefrontCartBrand =
+    isStorefrontLandingPage && typeof storefrontCartCount === "number";
+  const storefrontCartCountLabel =
+    typeof storefrontCartCount === "number"
+      ? storefrontCartCount > 99
+        ? "99+"
+        : String(Math.max(0, storefrontCartCount))
+      : "0";
+
+  const handleStorefrontCartClick = () => {
+    setShowProfileMenu(false);
+    setShowNotifications(false);
+    setMenuOpen(false);
+    if (onStorefrontCartOpen) {
+      onStorefrontCartOpen();
+      return;
+    }
+    handleRouteIntent("/storefront/cart");
+    navigate("/storefront/cart");
+  };
+
   const handleRouteIntent = (path: string) => {
     preloadCriticalRouteForPath(path);
   };
@@ -731,6 +770,17 @@ export default function Sidebar({
     setShowProfileMenu(false);
     setShowNotifications(false);
     setMenuOpen(false);
+  };
+
+  const handleMobileMessagesAction = () => {
+    if (!onMobileMessagesOpen) {
+      handleProfileAction("/messages");
+      return;
+    }
+    setShowProfileMenu(false);
+    setShowNotifications(false);
+    setMenuOpen(false);
+    onMobileMessagesOpen();
   };
 
   const openSwitchProfileModal = () => {
@@ -1120,14 +1170,14 @@ export default function Sidebar({
 
   const mobileMessagePreviewText = useMemo(() => {
     if (counts.messages <= 0) return "";
-    if (!previews.messages) return "Messages from friends";
+    if (!previews.messages) return mobileMessagesFallbackText;
     const sender = String(previews.messages.senderName || "A friend").trim();
     const snippet = trimPreviewText(previews.messages.body, 44);
     if (snippet) return `${sender}: ${snippet}`;
     const listingTitle = trimPreviewText(previews.messages.listingTitle, 32);
     if (listingTitle) return `${sender} messaged you about "${listingTitle}"`;
     return `${sender} sent you a message`;
-  }, [counts.messages, previews.messages]);
+  }, [counts.messages, mobileMessagesFallbackText, previews.messages]);
 
   const drawerFriendMessages = useMemo(() => {
     if (!previews.messages) return [];
@@ -1178,6 +1228,15 @@ export default function Sidebar({
   }, [counts.security, previews.security]);
 
   const securityTarget = "/me?view=settings&section=security";
+  const storefrontNotificationPreviewText = useMemo(() => {
+    if (counts.marketplace <= 0) return "";
+    if (!previews.marketplace) return "New StoreFront activity is waiting.";
+    const snippet = trimPreviewText(previews.marketplace.message, 72);
+    if (snippet) return snippet;
+    const actor = previews.marketplace.actorName;
+    return actor ? `${actor} sent a StoreFront update.` : "New StoreFront update received.";
+  }, [counts.marketplace, previews.marketplace]);
+  const storefrontNotificationsTarget = "/storefront";
 
   const likesPreviewText = useMemo(() => {
     if (counts.likes <= 0) return "";
@@ -1195,13 +1254,16 @@ export default function Sidebar({
     counts.likes;
   const groupsNotificationTotal = counts.groupUpdates;
   const forumsNotificationTotal = counts.forums;
+  const storefrontNotificationTotal = counts.marketplace;
   const enabledSourceCount = Number(notificationSourceFilters.friends) +
     Number(notificationSourceFilters.groups) +
-    Number(notificationSourceFilters.forums);
+    Number(notificationSourceFilters.forums) +
+    Number(notificationSourceFilters.storefront);
   const filteredNotificationTotal =
     (notificationSourceFilters.friends ? friendsNotificationTotal : 0) +
     (notificationSourceFilters.groups ? groupsNotificationTotal : 0) +
     (notificationSourceFilters.forums ? forumsNotificationTotal : 0) +
+    (notificationSourceFilters.storefront ? storefrontNotificationTotal : 0) +
     counts.security;
 
   const persistNotificationSourceFilters = async (next: NotificationSourceFilters) => {
@@ -1216,6 +1278,7 @@ export default function Sidebar({
             friendsNotificationsEnabled: next.friends,
             groupsNotificationsEnabled: next.groups,
             forumsNotificationsEnabled: next.forums,
+            storefrontNotificationsEnabled: next.storefront,
           },
         },
       });
@@ -1300,12 +1363,25 @@ export default function Sidebar({
             <span>Forums</span>
             <span className="sidebar-notification-filter-chip-count">{forumsNotificationTotal}</span>
           </button>
+          <button
+            type="button"
+            className={`sidebar-notification-filter-chip${
+              notificationSourceFilters.storefront ? " is-active" : ""
+            }`}
+            onClick={() => toggleNotificationSourceFilter("storefront")}
+            aria-pressed={notificationSourceFilters.storefront}
+          >
+            <span>StoreFront</span>
+            <span className="sidebar-notification-filter-chip-count">
+              {storefrontNotificationTotal}
+            </span>
+          </button>
         </div>
         <div className="sidebar-notification-filter-actions">
           <button
             type="button"
             className="sidebar-notification-filter-action"
-            disabled={enabledSourceCount === 3}
+            disabled={enabledSourceCount === 4}
             onClick={() => {
               setNotificationSourceFilters(DEFAULT_NOTIFICATION_SOURCE_FILTERS);
               void persistNotificationSourceFilters(DEFAULT_NOTIFICATION_SOURCE_FILTERS);
@@ -1322,6 +1398,7 @@ export default function Sidebar({
                 friends: false,
                 groups: false,
                 forums: false,
+                storefront: false,
               };
               setNotificationSourceFilters(next);
               void persistNotificationSourceFilters(next);
@@ -1572,6 +1649,26 @@ export default function Sidebar({
         </div>
       )}
 
+      {notificationSourceFilters.storefront && (
+        <div className="sidebar-notification-group">
+          <button
+            type="button"
+            className="sidebar-notification-item is-action"
+            onClick={() => handleNotificationAction(storefrontNotificationsTarget)}
+          >
+            <span>StoreFront activity</span>
+            <span className="sidebar-notification-count">{counts.marketplace}</span>
+          </button>
+          {counts.marketplace > 0 && storefrontNotificationPreviewText && (
+            <div className="sidebar-notification-preview">
+              <span className="sidebar-notification-preview-text">
+                {storefrontNotificationPreviewText}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="sidebar-notification-group">
         <button
           type="button"
@@ -1595,6 +1692,25 @@ export default function Sidebar({
     </div>
   );
 
+  const renderBrandContent = () =>
+    showStorefrontCartBrand ? (
+      <>
+        <span className="brand-mark brand-mark--storefront-cart" aria-hidden="true">
+          <ShoppingCart size={20} strokeWidth={2.2} />
+          <span className="brand-cart-count" aria-hidden="true">
+            {storefrontCartCountLabel}
+          </span>
+        </span>
+      </>
+    ) : (
+      <>
+        <span className="brand-mark" aria-hidden="true">
+          <img src="/logo2.png" alt="" />
+        </span>
+        <span className="brand-text">Your Social Place</span>
+      </>
+    );
+
   return (
     <>
       <ProfilePhotoModal open={photoModalOpen} onClose={() => setPhotoModalOpen(false)} />
@@ -1604,11 +1720,27 @@ export default function Sidebar({
         }`}
       >
       <div className="sidebar-topbar">
-        <button className="brand" type="button" onClick={handleLogoClick} style={{ cursor: "pointer" }}>
-          <span className="brand-mark" aria-hidden="true">
-            <img src="/logo2.png" alt="Your Social Place Logo" />
-          </span>
-          <span className="brand-text">Your Social Place</span>
+        <button
+          className={`brand${showStorefrontCartBrand ? " brand--storefront-cart" : ""}`}
+          type="button"
+          onClick={showStorefrontCartBrand ? handleStorefrontCartClick : handleLogoClick}
+          style={{ cursor: "pointer" }}
+          aria-label={
+            showStorefrontCartBrand
+              ? `Open cart with ${storefrontCartCountLabel} item${
+                  storefrontCartCountLabel === "1" ? "" : "s"
+                }`
+              : "Go to dashboard"
+          }
+          title={
+            showStorefrontCartBrand
+              ? `Cart: ${storefrontCartCountLabel} item${
+                  storefrontCartCountLabel === "1" ? "" : "s"
+                }`
+              : "Your Social Place"
+          }
+        >
+          {renderBrandContent()}
         </button>
         <div className="mobile-topbar-actions">
           <button
@@ -1656,6 +1788,7 @@ export default function Sidebar({
               onLogout={handleDrawerLogout}
               onNotificationsClick={handleDrawerNotifications}
               onEditProfilePicture={handleDrawerEditProfilePicture}
+              onMessagesOpen={onMobileMessagesOpen}
               user={{
                 name: nameForDisplay,
                 avatarUrl: profileCard?.avatarUrl,
@@ -1667,6 +1800,8 @@ export default function Sidebar({
               customCommunityContent={active === "groups" ? sidebarContent : undefined}
               storefrontEnabled={storefrontEnabled}
               newsroomEnabled={newsroomEnabled}
+              emptyMessagesTitle={mobileMessagesEmptyTitle}
+              emptyMessagesSubtitle={mobileMessagesEmptySubtitle}
             />
           )}
           {menuOpen && effectiveMobileMenuVariant !== "drawer" && (
@@ -1848,7 +1983,7 @@ export default function Sidebar({
                     }`}
                     type="button"
                     data-accent="dashboard"
-                    onClick={() => handleProfileAction("/messages")}
+                    onClick={handleMobileMessagesAction}
                   >
                     <span className="sidebar-nav-icon" aria-hidden="true">
                       <MessageCircle size={18} />
@@ -1856,7 +1991,7 @@ export default function Sidebar({
                     <span className="mobile-profile-item-copy">
                       <span>Messages</span>
                       <span className="mobile-profile-item-subtext">
-                        {mobileMessagePreviewText || "Messages from friends"}
+                        {mobileMessagePreviewText || mobileMessagesFallbackText}
                       </span>
                     </span>
                     {counts.messages > 0 && (
@@ -2438,11 +2573,27 @@ export default function Sidebar({
 
       <aside className="dash-nav">
         <div className="sidebar-brand-row">
-          <button className="brand" type="button" onClick={handleLogoClick} style={{ cursor: "pointer" }}>
-            <span className="brand-mark" aria-hidden="true">
-              <img src="/logo2.png" alt="" />
-            </span>
-            <span className="brand-text">Your Social Place</span>
+          <button
+            className={`brand${showStorefrontCartBrand ? " brand--storefront-cart" : ""}`}
+            type="button"
+            onClick={showStorefrontCartBrand ? handleStorefrontCartClick : handleLogoClick}
+            style={{ cursor: "pointer" }}
+            aria-label={
+              showStorefrontCartBrand
+                ? `Open cart with ${storefrontCartCountLabel} item${
+                    storefrontCartCountLabel === "1" ? "" : "s"
+                  }`
+                : "Go to dashboard"
+            }
+            title={
+              showStorefrontCartBrand
+                ? `Cart: ${storefrontCartCountLabel} item${
+                    storefrontCartCountLabel === "1" ? "" : "s"
+                  }`
+                : "Your Social Place"
+            }
+          >
+            {renderBrandContent()}
           </button>
           {enableDesktopCollapse && (
             <button

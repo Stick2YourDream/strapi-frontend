@@ -2,12 +2,12 @@ import { useEffect, useState, type ReactNode } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import "../css/right-friends-sidebar.css";
 
-const RIGHT_SIDEBAR_COLLAPSE_KEY = "dashboard:right-sidebar-collapsed";
+const RIGHT_SIDEBAR_COLLAPSE_KEY = "dashboard:right-sidebar-collapsed:v2";
 
 const readDesktopCollapsed = () => {
-  if (typeof window === "undefined") return true;
+  if (typeof window === "undefined") return false;
   const stored = window.localStorage.getItem(RIGHT_SIDEBAR_COLLAPSE_KEY);
-  if (stored === null) return true;
+  if (stored === null) return false;
   return stored === "1";
 };
 

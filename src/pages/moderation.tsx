@@ -1,5 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Database,
+  Flag,
+  LayoutDashboard,
+  Search,
+  Shield,
+  SlidersHorizontal,
+  Store,
+  Users,
+} from "lucide-react";
 import api from "../api/strapi";
 import PopupModal from "../components/PopupModal";
 import Sidebar from "../components/Sidebar";
@@ -331,6 +343,13 @@ const statusLabel = (entry?: ModerationUser | null) => {
   return "Active";
 };
 
+const userStatusTone = (entry?: ModerationUser | null) => {
+  if (isAgeLocked(entry)) return "age";
+  if (isModerationBanned(entry)) return "banned";
+  if (isModerationBlocked(entry)) return "blocked";
+  return "active";
+};
+
 const usernameLabel = (entry: ModerationUser) => {
   const username = String(entry.username || "").trim();
   if (username) return username;
@@ -556,6 +575,36 @@ export default function Moderation() {
   }, [reportFilter, reports]);
 
   const userPageTokens = useMemo(() => buildPageTokens(page, pageCount), [page, pageCount]);
+  const reportCounts = useMemo(
+    () => ({
+      total: reports.length,
+      open: reports.filter((report) => report.status === "open").length,
+      reviewed: reports.filter((report) => report.status === "reviewed").length,
+      dismissed: reports.filter((report) => report.status === "dismissed").length,
+    }),
+    [reports]
+  );
+  const visibleUserStatusCounts = useMemo(
+    () => ({
+      active: userResults.filter(
+        (entry) =>
+          !isAgeLocked(entry) && !isModerationBanned(entry) && !isModerationBlocked(entry)
+      ).length,
+      blocked: userResults.filter((entry) => isModerationBlocked(entry)).length,
+      banned: userResults.filter((entry) => isModerationBanned(entry)).length,
+      ageLocked: userResults.filter((entry) => isAgeLocked(entry)).length,
+    }),
+    [userResults]
+  );
+  const activePlatformSurfaceCount = [storefrontEnabled, newsroomEnabled].filter(Boolean).length;
+  const activeSandboxSurfaceCount = [
+    storefrontDemoEnabled,
+    sellerDashboardMockEnabled,
+  ].filter(Boolean).length;
+  const reportFilterLabel =
+    reportFilter === "all"
+      ? "All reports"
+      : `${reportFilter.charAt(0).toUpperCase()}${reportFilter.slice(1)} only`;
 
   const updateReportStatus = async (reportId: number, status: ReportItem["status"]) => {
     if (reportUpdating[reportId]) return;
@@ -908,32 +957,130 @@ export default function Moderation() {
       <Sidebar active="moderation" mobileMenuVariant={mobileMenuVariant} />
       <div className="main-content moderation-content">
         <section className="panel moderation-hero">
-          <div>
-            <p className="eyebrow">Moderation</p>
-            <h2 className="moderation-title">Reports and account controls</h2>
-            <p className="panel-sub">
-              Review user reports and apply account restrictions when needed.
-            </p>
+          <div className="moderation-hero-head">
+            <div className="moderation-hero-copy">
+              <p className="eyebrow">Moderation</p>
+              <h2 className="moderation-title">Safety command center</h2>
+              <p className="panel-sub moderation-hero-sub">
+                Review live reports, manage user risk states, and control platform access from one
+                responsive operations workspace.
+              </p>
+            </div>
+            <div className="moderation-hero-badges">
+              <span className={`moderation-hero-chip ${storefrontEnabled ? "is-live" : "is-muted"}`}>
+                <Store size={14} />
+                StoreFront {storefrontEnabled ? "Live" : "Paused"}
+              </span>
+              <span className={`moderation-hero-chip ${newsroomEnabled ? "is-live" : "is-muted"}`}>
+                <CheckCircle2 size={14} />
+                Newsroom {newsroomEnabled ? "Live" : "Paused"}
+              </span>
+              <span className="moderation-hero-chip is-neutral">
+                <SlidersHorizontal size={14} />
+                Mobile {mobileMenuVariant === "drawer" ? "Drawer" : "Panel"}
+              </span>
+              <span
+                className={`moderation-hero-chip ${
+                  activeSandboxSurfaceCount ? "is-warn" : "is-neutral"
+                }`}
+              >
+                <Database size={14} />
+                Sandbox {activeSandboxSurfaceCount ? `${activeSandboxSurfaceCount} active` : "Idle"}
+              </span>
+            </div>
+          </div>
+          <div className="moderation-hero-stats">
+            <article className="moderation-stat-card moderation-stat-card--reports">
+              <div className="moderation-stat-top">
+                <span className="moderation-stat-icon" aria-hidden="true">
+                  <AlertTriangle size={18} />
+                </span>
+                <span className="moderation-stat-label">Open reports</span>
+              </div>
+              <strong>{reportCounts.open}</strong>
+              <p>{reportCounts.total ? "Awaiting moderator review" : "No active report load"}</p>
+            </article>
+            <article className="moderation-stat-card moderation-stat-card--queue">
+              <div className="moderation-stat-top">
+                <span className="moderation-stat-icon" aria-hidden="true">
+                  <Flag size={18} />
+                </span>
+                <span className="moderation-stat-label">Current queue</span>
+              </div>
+              <strong>{filteredReports.length}</strong>
+              <p>{reportFilterLabel}</p>
+            </article>
+            <article className="moderation-stat-card moderation-stat-card--users">
+              <div className="moderation-stat-top">
+                <span className="moderation-stat-icon" aria-hidden="true">
+                  <Users size={18} />
+                </span>
+                <span className="moderation-stat-label">At-risk users</span>
+              </div>
+              <strong>
+                {visibleUserStatusCounts.blocked +
+                  visibleUserStatusCounts.banned +
+                  visibleUserStatusCounts.ageLocked}
+              </strong>
+              <p>{activeQuery ? `Matching "${activeQuery}"` : "Across the current page of results"}</p>
+            </article>
+            <article className="moderation-stat-card moderation-stat-card--platform">
+              <div className="moderation-stat-top">
+                <span className="moderation-stat-icon" aria-hidden="true">
+                  <Shield size={18} />
+                </span>
+                <span className="moderation-stat-label">Platform surfaces</span>
+              </div>
+              <strong>{activePlatformSurfaceCount}/2</strong>
+              <p>{settingsSaving ? "Saving environment state" : "Live access controls ready"}</p>
+            </article>
           </div>
         </section>
 
         <div className="panel-grid moderation-grid">
-          <section className="panel moderation-panel">
+          <div className="moderation-grid-column moderation-grid-column--main">
+            <section className="panel moderation-panel moderation-panel--reports">
             <div className="moderation-panel-header">
-              <div>
+              <div className="moderation-panel-heading">
+                <span className="moderation-section-kicker">
+                  <Flag size={14} />
+                  Community inbox
+                </span>
                 <h3 className="moderation-panel-title">Reports</h3>
                 <p className="panel-sub">All reports submitted by community members.</p>
               </div>
-              <select
-                className="auth-input moderation-filter"
-                value={reportFilter}
-                onChange={(event) => setReportFilter(event.target.value as ReportFilter)}
-              >
-                <option value="open">Open</option>
-                <option value="reviewed">Reviewed</option>
-                <option value="dismissed">Dismissed</option>
-                <option value="all">All</option>
-              </select>
+              <label className="moderation-select-wrap">
+                <span>View</span>
+                <select
+                  className="auth-input moderation-filter"
+                  value={reportFilter}
+                  onChange={(event) => setReportFilter(event.target.value as ReportFilter)}
+                >
+                  <option value="open">Open</option>
+                  <option value="reviewed">Reviewed</option>
+                  <option value="dismissed">Dismissed</option>
+                  <option value="all">All</option>
+                </select>
+              </label>
+            </div>
+
+            <div className="moderation-mini-grid">
+              <article className="moderation-mini-card">
+                <span>Open</span>
+                <strong>{reportCounts.open}</strong>
+              </article>
+              <article className="moderation-mini-card">
+                <span>Reviewed</span>
+                <strong>{reportCounts.reviewed}</strong>
+              </article>
+              <article className="moderation-mini-card">
+                <span>Dismissed</span>
+                <strong>{reportCounts.dismissed}</strong>
+              </article>
+              <article className="moderation-mini-card">
+                <span>Showing</span>
+                <strong>{filteredReports.length}</strong>
+              </article>
             </div>
 
             {reportsLoading && <div className="status">Loading reports...</div>}
@@ -943,9 +1090,15 @@ export default function Moderation() {
             )}
             <div className="moderation-report-list">
               {filteredReports.map((report) => (
-                <div key={report.id} className="moderation-report-card">
+                <article key={report.id} className="moderation-report-card">
                   <div className="moderation-report-header">
-                    <div>
+                    <div className="moderation-report-heading">
+                      <div className="moderation-report-topline">
+                        <span className="moderation-surface-chip moderation-surface-chip--soft">
+                          {report.targetType}
+                        </span>
+                        <span className="moderation-report-meta">Target #{report.targetId}</span>
+                      </div>
                       <strong className="moderation-report-title">
                         {report.reason}
                       </strong>
@@ -960,14 +1113,24 @@ export default function Moderation() {
                       {report.status}
                     </span>
                   </div>
-                  <div className="moderation-report-meta">
-                    Reported by: {report.reporter?.label || "Unknown"}
-                    {report.reporter?.email ? ` (${report.reporter.email})` : ""}
+                  <div className="moderation-report-snapshot">
+                    <div className="moderation-report-snapshot-item">
+                      <span className="moderation-detail-label">Reporter</span>
+                      <strong>{report.reporter?.label || "Unknown"}</strong>
+                      <span>{report.reporter?.email || "No email shared"}</span>
+                    </div>
+                    <div className="moderation-report-snapshot-item">
+                      <span className="moderation-detail-label">Filed</span>
+                      <strong>{formatDateTime(report.createdAt) || "-"}</strong>
+                      <span>Report #{report.id}</span>
+                    </div>
                   </div>
                   {report.details && <p className="moderation-report-details">{report.details}</p>}
                   <div className="moderation-report-footer">
                     <span className="moderation-report-meta">
-                      {formatDateTime(report.createdAt)}
+                      {report.status === "open"
+                        ? "Use the actions below to resolve this report."
+                        : "You can reopen this report at any time."}
                     </span>
                     <div className="moderation-action-row">
                       <button
@@ -996,14 +1159,18 @@ export default function Moderation() {
                       </button>
                     </div>
                   </div>
-                </div>
+                </article>
               ))}
             </div>
-          </section>
+            </section>
 
-          <section className="panel moderation-panel">
+            <section className="panel moderation-panel moderation-panel--users">
             <div className="moderation-panel-header">
-              <div>
+              <div className="moderation-panel-heading">
+                <span className="moderation-section-kicker">
+                  <Users size={14} />
+                  Account actions
+                </span>
                 <h3 className="moderation-panel-title">User restrictions</h3>
                 <p className="panel-sub">
                   Search by name, handle, email, or user ID.
@@ -1012,16 +1179,38 @@ export default function Moderation() {
             </div>
 
             <form className="moderation-search" onSubmit={handleUserSearch}>
-              <input
-                className="auth-input"
-                placeholder="Search users..."
-                value={userQuery}
-                onChange={(event) => setUserQuery(event.target.value)}
-              />
+              <label className="moderation-search-input">
+                <Search size={16} aria-hidden="true" />
+                <input
+                  className="auth-input"
+                  placeholder="Search users..."
+                  value={userQuery}
+                  onChange={(event) => setUserQuery(event.target.value)}
+                />
+              </label>
               <button className="btn primary" type="submit" disabled={userLoading}>
                 {userLoading ? "Searching..." : "Search"}
               </button>
             </form>
+
+            <div className="moderation-mini-grid moderation-mini-grid--users">
+              <article className="moderation-mini-card">
+                <span>Active</span>
+                <strong>{visibleUserStatusCounts.active}</strong>
+              </article>
+              <article className="moderation-mini-card">
+                <span>Blocked</span>
+                <strong>{visibleUserStatusCounts.blocked}</strong>
+              </article>
+              <article className="moderation-mini-card">
+                <span>Banned</span>
+                <strong>{visibleUserStatusCounts.banned}</strong>
+              </article>
+              <article className="moderation-mini-card">
+                <span>Age locked</span>
+                <strong>{visibleUserStatusCounts.ageLocked}</strong>
+              </article>
+            </div>
 
             {userLoading && <div className="status">Loading users...</div>}
             {userError && <div className="status status-error">{userError}</div>}
@@ -1087,15 +1276,47 @@ export default function Moderation() {
             </div>
             <div className="moderation-user-list">
               {userResults.map((entry) => (
-                <div key={entry.id} className="moderation-user-card">
-                  <div>
-                    <button
-                      type="button"
-                      className="moderation-user-trigger"
-                      onClick={() => setSelectedUser(entry)}
-                    >
-                      {usernameLabel(entry)}
-                    </button>
+                <article key={entry.id} className="moderation-user-card">
+                  <div className="moderation-user-card-head">
+                    <div className="moderation-user-identity">
+                      <div className="moderation-user-identity-top">
+                        <button
+                          type="button"
+                          className="moderation-user-trigger"
+                          onClick={() => setSelectedUser(entry)}
+                        >
+                          {usernameLabel(entry)}
+                        </button>
+                        <span
+                          className={`moderation-user-status moderation-user-status--${userStatusTone(
+                            entry
+                          )}`}
+                        >
+                          {statusLabel(entry)}
+                        </span>
+                      </div>
+                      <div className="moderation-user-meta-line">
+                        <span>{entry.displayName || "No display name"}</span>
+                        {entry.profile?.handle && (
+                          <span>@{String(entry.profile.handle).replace(/^@+/, "")}</span>
+                        )}
+                        {entry.email && <span>{entry.email}</span>}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="moderation-user-facts">
+                    <span className="moderation-surface-chip">Role {entry.appRole || "user"}</span>
+                    <span className="moderation-surface-chip">
+                      Warnings {Number(entry.moderation?.warningCount || 0)}
+                    </span>
+                    <span className="moderation-surface-chip">
+                      Strikes {Number(entry.moderation?.strikeLevel || 0)}
+                    </span>
+                    {entry.ageVerificationDueAt && (
+                      <span className="moderation-surface-chip">
+                        Age due {formatDateTime(entry.ageVerificationDueAt)}
+                      </span>
+                    )}
                   </div>
                   <div className="moderation-action-row">
                     <button
@@ -1147,14 +1368,20 @@ export default function Moderation() {
                       {userActionNotice[entry.id]}
                     </div>
                   )}
-                </div>
+                </article>
               ))}
             </div>
-          </section>
+            </section>
+          </div>
 
-          <section className="panel moderation-panel moderation-demo-panel">
+          <div className="moderation-grid-column moderation-grid-column--side">
+            <section className="panel moderation-panel moderation-panel--utility moderation-demo-panel">
             <div className="moderation-panel-header">
-              <div>
+              <div className="moderation-panel-heading">
+                <span className="moderation-section-kicker">
+                  <Database size={14} />
+                  Sandbox tools
+                </span>
                 <h3 className="moderation-panel-title">Demo user data</h3>
                 <p className="panel-sub">
                   Seed or remove demo accounts, posts, comments, and messages.
@@ -1188,11 +1415,15 @@ export default function Moderation() {
               </button>
             </div>
             {demoStatus && <div className="status">{demoStatus}</div>}
-          </section>
+            </section>
 
-          <section className="panel moderation-panel moderation-demo-panel">
+            <section className="panel moderation-panel moderation-panel--utility moderation-demo-panel">
             <div className="moderation-panel-header">
-              <div>
+              <div className="moderation-panel-heading">
+                <span className="moderation-section-kicker">
+                  <Store size={14} />
+                  StoreFront sandbox
+                </span>
                 <h3 className="moderation-panel-title">StoreFront mock listings</h3>
                 <p className="panel-sub">
                   Manage demo listings that appear on the StoreFront cards.
@@ -1238,11 +1469,15 @@ export default function Moderation() {
               Extra demo listings: {storefrontDemoCount}
             </div>
             {storefrontDemoStatus && <div className="status">{storefrontDemoStatus}</div>}
-          </section>
+            </section>
 
-          <section className="panel moderation-panel moderation-demo-panel">
+            <section className="panel moderation-panel moderation-panel--utility moderation-demo-panel">
             <div className="moderation-panel-header">
-              <div>
+              <div className="moderation-panel-heading">
+                <span className="moderation-section-kicker">
+                  <LayoutDashboard size={14} />
+                  Seller sandbox
+                </span>
                 <h3 className="moderation-panel-title">Seller dashboard mock data</h3>
                 <p className="panel-sub">
                   Paste mock data for My Dashboard. Applies to this browser only.
@@ -1269,7 +1504,7 @@ export default function Moderation() {
               </label>
             </div>
             <textarea
-              className="auth-input"
+              className="auth-input moderation-json-editor"
               rows={10}
               value={sellerDashboardMockPayload}
               onChange={(event) => setSellerDashboardMockPayload(event.target.value)}
@@ -1288,11 +1523,15 @@ export default function Moderation() {
             {sellerDashboardMockStatus && (
               <div className="status">{sellerDashboardMockStatus}</div>
             )}
-          </section>
+            </section>
 
-          <section className="panel moderation-panel moderation-settings-panel">
+            <section className="panel moderation-panel moderation-panel--utility moderation-settings-panel">
             <div className="moderation-panel-header">
-              <div>
+              <div className="moderation-panel-heading">
+                <span className="moderation-section-kicker">
+                  <SlidersHorizontal size={14} />
+                  Platform controls
+                </span>
                 <h3 className="moderation-panel-title">Platform settings</h3>
                 <p className="panel-sub">
                   Control access to StoreFront and Newsroom routes + sidebar buttons.
@@ -1368,7 +1607,8 @@ export default function Moderation() {
               </>
             )}
             {settingsError && <div className="status status-error">{settingsError}</div>}
-          </section>
+            </section>
+          </div>
         </div>
       </div>
       <PopupModal
@@ -1379,6 +1619,29 @@ export default function Moderation() {
       >
         {selectedUser && (
           <>
+            <div className="moderation-user-modal-hero">
+              <div className="moderation-user-modal-copy">
+                <span className="moderation-section-kicker">
+                  <Shield size={14} />
+                  Moderation record
+                </span>
+                <h4>{usernameLabel(selectedUser)}</h4>
+                <p>
+                  {selectedUser.displayName || "No display name"}
+                  {selectedUser.email ? ` · ${selectedUser.email}` : ""}
+                  {selectedUser.profile?.handle
+                    ? ` · @${String(selectedUser.profile.handle).replace(/^@+/, "")}`
+                    : ""}
+                </p>
+              </div>
+              <span
+                className={`moderation-user-status moderation-user-status--${userStatusTone(
+                  selectedUser
+                )}`}
+              >
+                {statusLabel(selectedUser)}
+              </span>
+            </div>
             <div className="moderation-user-modal-grid">
               <div className="moderation-user-detail">
                 <span className="moderation-user-detail-label">Username</span>
@@ -1433,7 +1696,55 @@ export default function Moderation() {
                 <strong>{selectedUser.id}</strong>
               </div>
             </div>
+            {userActionNotice[selectedUser.id] && (
+              <div className="moderation-user-action-notice">
+                {userActionNotice[selectedUser.id]}
+              </div>
+            )}
             <div className="moderation-action-row">
+              <button
+                className="btn ghost"
+                type="button"
+                disabled={userAction[selectedUser.id] || isModerationBanned(selectedUser)}
+                onClick={() => handleRestrictUser(selectedUser.id, "block-7")}
+              >
+                Block 7 days
+              </button>
+              <button
+                className="btn ghost"
+                type="button"
+                disabled={userAction[selectedUser.id] || isModerationBanned(selectedUser)}
+                onClick={() => handleRestrictUser(selectedUser.id, "block-30")}
+              >
+                Block 30 days
+              </button>
+              <button
+                className="btn ghost"
+                type="button"
+                disabled={userAction[selectedUser.id]}
+                onClick={() => {
+                  const isBanned = isModerationBanned(selectedUser);
+                  const isBlocked = isModerationBlocked(selectedUser);
+                  const nextAction = isBanned ? "unban" : isBlocked ? "unblock" : "ban";
+                  handleRestrictUser(selectedUser.id, nextAction);
+                }}
+              >
+                {isModerationBanned(selectedUser)
+                  ? "Unban"
+                  : isModerationBlocked(selectedUser)
+                  ? "Unblock"
+                  : "Ban"}
+              </button>
+              {isAgeLocked(selectedUser) && (
+                <button
+                  className="btn ghost"
+                  type="button"
+                  disabled={userAction[selectedUser.id]}
+                  onClick={() => handleRestrictUser(selectedUser.id, "age-unlock")}
+                >
+                  Unlock age lock
+                </button>
+              )}
               <button
                 className="btn ghost"
                 type="button"
